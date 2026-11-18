@@ -30,6 +30,7 @@ import { wrapLng } from "../../runtime/unitMotion.js";
 import { normalizeUnitTypes, unitTypeOf } from "../../runtime/unitTypes.js";
 import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { ORDER_MAX_CHARS } from "../../multiplayer/game/messages.js";
 
 // A turn reads world.json when it starts and writes it back whole when it
 // lands, so a unit placed, disbanded or moved in between would be undone
@@ -617,18 +618,30 @@ export const deployUnit = async ({ type, strength, name, composition, lng, lat }
 // said the order could not be saved whatever the host had answered (the gap
 // audit of 2026-11-18), as deployUnit and disbandUnit already said why.
 // i18n-ignore: the order as the model reads it.
+const unitOrderWording = (unit, request) => `Orders requested for ${unit.name} (${unit.type}, owner ${unit.ownerCode}), ` +
+  `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
+  `carry this out over the coming period as far as the era, terrain, logistics and the wider ` +
+  `situation allow, or explain in an event why it could not be done.`;
+// How many characters of their own a player may ask of a formation in a shared
+// game: what the host's order request takes (game/messages.js), less the words
+// the order is wrapped in. The card's box holds it; null in single player,
+// whose orders are free text.
+export const unitOrderRoom = (unitId) => {
+  const unit = getUnitById(unitId);
+  return unit && inSharedGame() ? Math.max(0, ORDER_MAX_CHARS - unitOrderWording(unit, "").length) : null;
+};
 export const requestUnitOrders = async (unitId, text) => {
   const request = String(text ?? "").trim();
   const unit = getUnitById(unitId);
   if (!unit || !request) return { ok: false, error: ORDER_NOT_SAVED };
-  const wording = `Orders requested for ${unit.name} (${unit.type}, owner ${unit.ownerCode}), ` +
-    `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
-    `carry this out over the coming period as far as the era, terrain, logistics and the wider ` +
-    `situation allow, or explain in an event why it could not be done.`;
+  const wording = unitOrderWording(unit, request);
   // In a shared game an order is asked of the host, like any other
-  // (multiplayer/): the same words, under this player's country.
+  // (multiplayer/): the same words, under this player's country. Whole: it was
+  // cut to what the request takes without a word, and the card cleared its box
+  // once the host took the rest (the review of 2026-11-18, door 4). One too
+  // long is refused in words, and stays in the box.
   if (inSharedGame()) {
-    const answer = await requestFromHost("order", { text: wording.slice(0, 1500) });
+    const answer = await requestFromHost("order", { text: wording });
     return answer.ok ? { ok: true } : { ok: false, error: answer.error || ORDER_NOT_SAVED };
   }
   return (await queueOrder(wording)) ? { ok: true } : { ok: false, error: ORDER_NOT_SAVED };

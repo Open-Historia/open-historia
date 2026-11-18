@@ -31,6 +31,15 @@ const NOTICES_KEPT = 20;
 // the request when the round landed, and a player who did it again did it twice.
 export const REQUEST_WAIT_MS = 20 * 60 * 1000;
 
+// A request this page built that its own schema refuses is never sent, and the
+// player is told why in words; the schema's ("$.text: longer than 2000") went
+// into a letter's error bubble as they were, and are kept for the log
+// (`detail`). The schemas hold the limits (game/messages.js), and the screens
+// read the same ones: a text longer than a request carries is refused whole,
+// never cut (the review of 2026-11-18, door 4).
+export const tooLongWords = (most) => `Too long for a shared game: ${most} characters at most.`;
+const unsentWords = (checked) => (checked.longest ? tooLongWords(checked.longest) : "This could not be sent to the host.");
+
 export const createGameClient = ({
   send,
   applyView = () => false,
@@ -116,7 +125,7 @@ export const createGameClient = ({
       const message = { t, id, ...fields };
       const schema = PLAYER_REQUESTS[t];
       const checked = schema ? validate(schema, message) : { ok: false, error: `unknown request ${t}` };
-      if (!checked.ok) return Promise.resolve({ ok: false, error: checked.error });
+      if (!checked.ok) return Promise.resolve({ ok: false, error: unsentWords(checked), detail: checked.error });
       return new Promise((resolve) => {
         const timer = timers.setTimeout(() => settle(id, { ok: false, error: "The host did not answer." }), requestTimeoutMs);
         pending.set(id, { resolve, timer, message: checked.value, held: false });

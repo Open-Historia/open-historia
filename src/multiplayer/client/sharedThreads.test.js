@@ -149,7 +149,12 @@ test("both shared-game sends shut the composer until the ack and follow a thread
   const group = chat.slice(chat.indexOf("const runGroupTurn = async "), chat.indexOf("setIsLoading(true);\n            // The player's line"));
   assert.match(group, /await sayToHost\(chatOverride \|\| chat, text, nextMessages\);/);
   const submit = chat.slice(chat.indexOf("const submitPlayerText = async "), chat.indexOf("const moment = await readSeenChatMoment(gameDate);"));
-  assert.match(submit, /if \(inSharedGame\(\)\) \{\s*await sayToHost\(chat, text, messagesRef\.current, \{ fromDraft, demand, poll \}\);\s*return;/);
+  assert.match(submit, /if \(inSharedGame\(\)\) \{\s*return sayToHost\(chat, text, messagesRef\.current, \{ fromDraft, demand, poll \}\);\s*\}/);
+  // The composer keeps a shared game's line until the host has taken it: a refused letter was gone with the box.
+  const composer = chat.slice(chat.indexOf("const handlePlayerSubmit = async "), chat.indexOf("const submitPlayerText = async "));
+  assert.match(composer, /if \(!shared\) setPlayerInput\(""\);/);
+  assert.match(composer, /if \(taken === true\) setPlayerInput\(/);
+  assert.match(helper, /return false;[\s\S]*return true;/, "sayToHost says whether the line was taken");
   assert.equal((chat.match(/requestFromHost\("say"/g) ?? []).length, 1, "no other path says a line to the host");
   // The composer is only drawn while nothing is loading.
   assert.match(chat, /\) : !isLoading \? \(\s*<div data-diplomacy-composer="modern"/);

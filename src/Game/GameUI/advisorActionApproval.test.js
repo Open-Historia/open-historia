@@ -163,6 +163,21 @@ test("an advisor's change or withdrawal of a queued order is asked of the host a
   }
 });
 
+test("a proposal longer than the host's order takes goes whole and is refused in words; a title taken from its words is cut as a label", async () => {
+  // Proceed answered "$.text: longer than 1500" for a proposal of up to 12,000
+  // characters (the review of 2026-11-18, door 4).
+  const { proposals } = actionProposalsFromReply([{ text: "Mobilise the reserves along the eastern border. ".repeat(60) }], messageId);
+  const [kind, fields] = hostRequestForProposal(proposals[0]);
+  assert.equal(kind, "order");
+  assert.equal(fields.text, proposals[0].text, "never cut");
+  assert.ok(fields.title.length <= 240);
+  const { createGameClient, tooLongWords } = await import("../../multiplayer/client/gameClient.js");
+  const client = createGameClient({ send: () => assert.fail("never sent") });
+  assert.ok(fields.text.length > 1500);
+  assert.equal((await client.request(kind, fields)).error, tooLongWords(1500));
+  client.close();
+});
+
 test("a valid reviewed Action after a rejected model entry retains its source position", async () => {
   const ctx = setup();
   const { proposals, problems } = actionProposalsFromReply([

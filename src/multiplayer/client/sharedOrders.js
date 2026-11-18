@@ -7,7 +7,7 @@
 // opens a conversation lost whom it invites and its opening line. It now goes
 // as the panel would have saved it.
 
-import { ORDER_ID_MAX, ORDER_MAX_CHARS, ORDER_TITLE_MAX } from "../game/messages.js";
+import { ORDER_ID_MAX, ORDER_TITLE_MAX } from "../game/messages.js";
 import { SAY_RECIPIENTS_MAX } from "./sharedThreads.js";
 
 const ORDER_SOURCES = new Set(["manual", "suggested", "advisor"]);
@@ -16,8 +16,15 @@ const text = (value) => (typeof value === "string" ? value.trim() : "");
 // The "order" request for an order as the page made it (runtime/gameState.js
 // normalizeActionEntry): its own id, title and source, and a conversation it
 // opens. `typed`: the words, when the order has none of its own.
+//
+// The words go whole. They were cut to the request's limit (ORDER_MAX_CHARS)
+// without a word, and the screen cleared its box once the host took what was
+// left: the rest of the order was gone. One longer than a request carries is
+// refused, in words, and stays in its box (client/gameClient.js); the box holds
+// the same limit (`maxLength`). A title is the order's label, cut as the game
+// cuts one.
 export const orderRequestFor = (action, typed = "") => {
-  const words = (text(action?.text) || text(action?.title) || text(typed)).slice(0, ORDER_MAX_CHARS);
+  const words = text(action?.text) || text(action?.title) || text(typed);
   const id = text(action?.id);
   const title = text(action?.title);
   const chat = action?.kind === "chat";
@@ -29,7 +36,7 @@ export const orderRequestFor = (action, typed = "") => {
     ...(chat ? {
       kind: "chat",
       invitees: (Array.isArray(action.invitees) ? action.invitees : []).map(text).filter(Boolean).slice(0, SAY_RECIPIENTS_MAX),
-      chatStarter: text(action.chatStarter).slice(0, ORDER_MAX_CHARS),
+      chatStarter: text(action.chatStarter),
     } : {}),
   };
 };

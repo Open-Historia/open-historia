@@ -23,6 +23,7 @@ import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { orderRequestFor } from "../../multiplayer/client/sharedOrders.js";
+import { ORDER_MAX_CHARS } from "../../multiplayer/game/messages.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { uiString } from "../../runtime/translator.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
@@ -1435,6 +1436,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         className="actions-composer"
         // A phone's keyboard has no Shift+Enter to speak of.
         placeholder={isTouch ? "Enter your action…" : "Enter your action…  (Shift+Enter for a new line)"}
+        // In a shared game an order is held to what the host's request takes
+        // (game/messages.js), the box and the request alike; single player's
+        // are free text.
+        maxLength={sharedGame ? ORDER_MAX_CHARS : undefined}
         value={inputValue}
         enterKeyHint="enter"
         onChange={(event) => setInputValue(event.target.value)}
@@ -1491,6 +1496,11 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         >
         {isImproving ? <StopIcon /> : <SparkleIcon />}
         </button>
+        {sharedGame && inputValue.length > ORDER_MAX_CHARS * 0.8 ? (
+            <span aria-live="polite" style={{ bottom: "0.2rem", color: inputValue.length > ORDER_MAX_CHARS ? "#fca5a5" : "rgba(255,255,255,0.45)", fontSize: "0.55rem", pointerEvents: "none", position: "absolute", right: "0.4rem" }}>
+            {`${inputValue.length}/${ORDER_MAX_CHARS}`}
+            </span>
+        ) : null}
         </div>
 
         <button

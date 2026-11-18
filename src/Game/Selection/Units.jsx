@@ -17,6 +17,7 @@ import {
   getPlayerCode,
   disbandUnit,
   requestUnitOrders,
+  unitOrderRoom,
   ORDER_NOT_SAVED,
 } from "../Map/unitsController.js";
 import { useEventsById } from "./eventLookup.js";
@@ -467,6 +468,9 @@ const UnitPopup = () => {
                   the next jump. Nothing on the map moves now. */}
               <textarea
                 value={request}
+                // A shared game's order is held to what the host's request
+                // takes, here as there (unitsController.js unitOrderRoom).
+                maxLength={unitOrderRoom(unit.id) ?? undefined}
                 onChange={(e) => {
                   setRequest(e.target.value);
                   if (requestState === "queued") setRequestState("idle");

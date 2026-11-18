@@ -8,6 +8,7 @@ import {
   advisorRecipientType,
 } from "../../runtime/advisorThreads.js";
 import { planApprovedAdvisorAction, planCancelApprovedAdvisorAction, recordAdvisorActionReceipt } from "./advisorActionReview.js";
+import { ORDER_TITLE_MAX } from "../../multiplayer/game/messages.js";
 
 // What the host is asked for an approved proposal or a cancellation, in a
 // shared game: an order by the proposal's own id (the host queues it once,
@@ -16,9 +17,12 @@ import { planApprovedAdvisorAction, planCancelApprovedAdvisorAction, recordAdvis
 export const hostRequestForProposal = (proposal, { cancel = false } = {}) => {
   if (cancel) return ["unorder", { order: proposal.actionId }];
   if (proposal.operation === "create") {
+    // The words go whole: a proposal longer than the host's order takes is
+    // refused in words (client/gameClient.js), never cut. Its title is a label,
+    // cut as the game cuts one, also when it is taken from the words.
     return ["order", {
       text: proposal.text || proposal.title,
-      title: proposal.title || proposal.text,
+      title: String(proposal.title || proposal.text || "").slice(0, ORDER_TITLE_MAX),
       ref: proposal.actionId,
       source: "advisor",
       kind: proposal.kind === "chat" ? "chat" : "action",

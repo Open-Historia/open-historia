@@ -69,6 +69,7 @@ import { buildLifecycleReplyRevealPlan } from "./institutionLifecyclePresentatio
 import { inSharedGame, requestFromHost, sharedGamePeople, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 import { afterSharedSay, followSharedThread, pendingSharedThread, sayRequestFor, sharedFollowStep } from "../../multiplayer/client/sharedThreads.js";
 import { ownReplyAsked } from "../../multiplayer/client/ownReplies.js";
+import { SAY_MAX_CHARS } from "../../multiplayer/game/messages.js";
 import { answerOnThisDevice, dismissOwnReply, retryOwnReply, useOwnReply } from "./ownTableReplies.js";
 import { askHostForInstitution } from "../../runtime/sharedInstitutions.js";
 import { setOpenConversation } from "../../runtime/openConversation.js";
@@ -1287,6 +1288,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         if (last?.id && String(last.id) !== ownReply.line) dismissOwnReply(chat.id);
     }, [ownReply, messages, chat.id]);
     const [playerInput, setPlayerInput]         = useState("");
+    // The composer of a shared game, whose lines the host takes (handlePlayerSubmit).
+    const sharedComposer = inSharedGame();
     const draftFromRef = useRef("");
     const [pollComposerOpen, setPollComposerOpen] = useState(false);
     const [pollQuestion, setPollQuestion] = useState("");
@@ -1856,6 +1859,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 if (own) void answerOnThisDevice({ ...own, text, playerCountry });
                 if (outcome.kind === "refused") {
                     pushMessages([...baseMessages, { role: "error", speaker: "System", text: outcome.error || "The host did not take the message.", time: gameDate }]);
+                    return false;
                 } else if (outcome.kind === "follow" && onSharedThreadOpened) {
                     waiting = true;
                     onSharedThreadOpened(outcome.thread);
@@ -1863,6 +1867,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     waiting = true;
                     onBack?.();
                 }
+                // Taken: the composer may let go of it (handlePlayerSubmit).
+                return true;
             } finally {
                 if (!waiting) setIsLoading(false);
             }
@@ -2243,12 +2249,18 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (!text || isLoading || writingOwnReply) return;
             const fromDraft = draftFromRef.current;
             draftFromRef.current = "";
-            setPlayerInput("");
+            // In a shared game the line is the host's to take: the composer
+            // keeps it until it is taken, and one refused (too long, say: the
+            // host takes what game/messages.js SAY_MAX_CHARS allows) stays to be
+            // changed and sent again. It was cleared first, and a refused letter
+            // was gone with it (the review of 2026-11-18, door 4).
+            const shared = inSharedGame();
+            if (!shared) setPlayerInput("");
             // "Make this a demand" — only offered to an Overlord writing to its
             // own Puppet, and only for this one message.
             const asDemand = canDemand && makeDemand;
             setMakeDemand(false);
-            await submitPlayerText(text, {
+            const taken = await submitPlayerText(text, {
                 fromDraft,
                 ...(asDemand ? { demand: { op: "make" } } : {}),
                 // Rejecting an alternative from the card is demanding again; so is
@@ -2265,6 +2277,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     })].filter(Boolean))
                     : null,
             });
+            if (!shared) return;
+            // Taken: the box lets go of it, unless the player has written on meanwhile.
+            if (taken === true) setPlayerInput((current) => (current.trim() === text ? "" : current));
+            else draftFromRef.current = fromDraft;
         };
 
         // Sends a line as the player and gets the table's answer: the composer's
@@ -2286,8 +2302,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             // view holds it; a host that does not say which it opened leaves the
             // player at the list, where it arrives.
             if (inSharedGame()) {
-                await sayToHost(chat, text, messagesRef.current, { fromDraft, demand, poll });
-                return;
+                return sayToHost(chat, text, messagesRef.current, { fromDraft, demand, poll });
             }
             // What the world did since this thread last spoke, told to the
             // leaders with the player's line and kept on it (AI/conversationCatchUp.js
@@ -2726,6 +2741,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     ref={composerRef}
                     placeholder={canDemand && makeDemand ? `Your demand of ${countries[0]?.name}…` : isInstitutionCouncil ? "Address the council…" : isLifecycleConversation ? "Address the accession table…" : "Send a diplomatic message…"}
                     rows={1} value={playerInput}
+                    // A shared game's line is held to what the host's request
+                    // takes (game/messages.js), the box and the request alike.
+                    maxLength={sharedComposer ? SAY_MAX_CHARS : undefined}
                     enterKeyHint="enter"
                     onChange={e => setPlayerInput(e.target.value)}
                     onKeyDown={e => { if (isComposerSendKey(e, { touch: isTouch })) { e.preventDefault(); handlePlayerSubmit(); } }}
@@ -2745,7 +2763,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     style={{ backgroundColor: playerInput.trim() ? (isInstitutionCouncil ? "var(--oh-grey-raised)" : "var(--oh-ui-active, rgba(96,165,250,.24))") : (isInstitutionCouncil ? "rgba(255,255,255,.04)" : "var(--oh-ui-overlay-card, rgba(255,255,255,.05))"), border: isInstitutionCouncil ? "1px solid var(--oh-grey-border-strong)" : "none", borderRadius: "10px", minWidth: isInstitutionCouncil ? "4.3rem" : isTouch ? "2.75rem" : "2.5rem", height: "2.5rem", padding: isInstitutionCouncil ? "0 .7rem" : 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: playerInput.trim() ? "pointer" : "not-allowed", flexShrink: 0, fontSize: isInstitutionCouncil ? ".66rem" : "1rem", fontWeight: 800, color: "white", transition: "background-color 0.2s" }}
                     >{isInstitutionCouncil ? "Send ↗" : <SendIcon />}</button>
                 </div>
-                <div style={{ marginTop: ".28rem", fontSize: isInstitutionCouncil ? ".5rem" : ".54rem", color: "rgba(255,255,255,.26)" }}>Enter to send · Shift+Enter for a new line</div>
+                <div style={{ marginTop: ".28rem", fontSize: isInstitutionCouncil ? ".5rem" : ".54rem", color: "rgba(255,255,255,.26)" }}><span>Enter to send · Shift+Enter for a new line</span>{sharedComposer && playerInput.length > SAY_MAX_CHARS * 0.8 ? <span aria-live="polite">{` · ${playerInput.length}/${SAY_MAX_CHARS}`}</span> : null}</div>
                 </div>
             ) : null}
 
