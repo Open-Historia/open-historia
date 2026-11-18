@@ -28,6 +28,7 @@ import {
   ratedScaleOf,
   readMilitaryRating,
   readMilitaryRatings,
+  unratedOf,
   wantsRating,
 } from "./militaryRating.js";
 
@@ -159,6 +160,30 @@ test("the countries at war whose people or figures nobody knows are the ones a w
   assert.deepEqual(militaryTargets(world, { skip: ["aland"] }), ["Cisland", "Dorland"]);
   // A group at war is its scenario designer's to rate, never given a sheet of its own here.
   assert.deepEqual(militaryTargets({ ...world, groups: { Dorland: { name: "Dorland" } } }), ["Aland", "Cisland"]);
+});
+
+// A shared game's host rates only what a player's Stats pane asks of it that still has none (multiplayer/host/gameHost.js
+// "ratings"): the ranking of a shared game stayed empty, since a page rated nothing (the gap audit of 2026-11-18).
+test("of the countries asked, those with no figures or no people known are the ones still to rate", () => {
+  const world = {
+    countryStats: { Borduria: { population: { total: 9e6 }, military: FULL }, Esland: { population: { total: 2e6 }, military: { quality: 50 } } },
+    polityOverrides: { Cisland: { name: "Cisland", population: 3e6 } },
+    groups: { "The Free Company": { name: "The Free Company" } },
+  };
+  assert.deepEqual(unratedOf(world, ["Borduria", "Cisland", "Esland", "Aland", " aland ", "The Free Company", ""]), ["Cisland", "Esland", "Aland"]);
+  assert.deepEqual(unratedOf(world, []), []);
+});
+
+// gameplay.js cannot be loaded under node, so where the rating's figures go is pinned from its source: written by the
+// game's own door (takeMilitaryRatings, only what a country had none of), or handed to whoever asked (`commit`).
+test("a rating's figures are written only where a country had none, or handed to whoever asked for them", () => {
+  const gameplay = fs.readFileSync(path.join(here, "gameplay.js"), "utf8").split("\r\n").join("\n");
+  const take = gameplay.slice(gameplay.indexOf("export const takeMilitaryRatings = async"), gameplay.indexOf("export const ensureMilitaryFigures = "));
+  assert.match(take, /const missing = Object\.fromEntries\(Object\.entries\(military \?\? \{\}\)\.filter\(\(\[field\]\) => had\[field\] === undefined \|\| had\[field\] === null\)\);/);
+  assert.match(take, /military: ratedFigures\(entry\?\.military\)/, "a device's figures are held to what the game keeps");
+  const ensure = gameplay.slice(gameplay.indexOf("export const ensureMilitaryFigures = "), gameplay.indexOf("// `rateIntelligence`"));
+  assert.match(ensure, /if \(typeof commit === "function"\) \{\n\s*await commit\(read\);/);
+  assert.match(ensure, /kept\.push\(\.\.\.await takeMilitaryRatings\(read, \{ campaign \}\)\);/);
 });
 
 test("in the Workshop, the AI fills only the fields the designer left empty, rated against the scenario's others", () => {

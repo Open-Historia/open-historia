@@ -171,6 +171,8 @@ const setup = (options = {}) => {
       store.docs.world = { ...store.docs.world, countryStats: { ...store.docs.world.countryStats, [info.country]: info.sheet } };
       return { taken: true };
     },
+    ...(options.rateMilitary ? { rateMilitary: options.rateMilitary } : {}),
+    ...(options.takeRatings ? { takeRatings: options.takeRatings } : {}),
     ...(options.readChart ? { readChart: options.readChart } : {}),
     ...(options.readCities ? { readCities: options.readCities } : {}),
     ...(options.setFlag ? { setFlag: options.setFlag } : {}),
@@ -1125,6 +1127,47 @@ test("a player changes their own country's flag, and the host also those of the 
   assert.deepEqual(set, [{ country: RUSSIA, image }, { country: ESTONIA, image: "" }]);
   // Only an image, and only so big.
   assert.equal(validate(PLAYER_REQUESTS.flag, { t: "flag", id: id(7), country: RUSSIA, image: "javascript:alert(1)" }).ok, false);
+});
+
+// The ranking of a shared game stayed empty: a page rated nothing, and the host only the countries at war after a
+// round (the gap audit of 2026-11-18).
+test("countries' military figures are rated for a player's Stats pane, by the host's AI, only where a country of this game has none", async () => {
+  const rated = [];
+  const s = setup({ rateMilitary: async (info) => { rated.push(info); } });
+  s.store.docs.world.countryStats = { [ESTONIA]: { population: { total: 1.3e6 }, military: { quality: 60, technology: 60, land: 40, sea: 30, air: 30, spending: 55, manpowerShare: 8, cavalryShare: 0.1, siegeShare: 0.1 } } };
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "ratings", id: id(2), countries: [ESTONIA, LATVIA, RUSSIA, "Atlantis"] });
+  assert.equal(s.ack(s.guest, id(2)).ok, true);
+  assert.deepEqual(rated, [{ countries: [LATVIA, RUSSIA] }], "Estonia is rated already, and Atlantis no country of this game");
+  // Nothing left to rate, nothing asked.
+  await s.request(s.guest, { t: "ratings", id: id(3), countries: [ESTONIA] });
+  assert.equal(rated.length, 1);
+  assert.equal(validate(PLAYER_REQUESTS.ratings, { t: "ratings", id: id(4), countries: Array.from({ length: 301 }, (_, n) => `C${n}`) }).ok, false, "a list held to its size");
+});
+
+test("with each player's own AI, countries' figures are left to the asking device, and taken from it once, only for what it was left", async () => {
+  const taken = [];
+  const s = setup({ settings: { replies: "own" }, rateMilitary: async () => assert.fail("the host's AI is not asked"), takeRatings: async (ratings) => { taken.push(...ratings); } });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "ratings", id: id(2), countries: [ESTONIA, LATVIA, RUSSIA] });
+  const answer = s.ack(s.guest, id(2));
+  assert.equal(validate(HOST_MESSAGES.ack, answer).ok, true);
+  assert.deepEqual(answer.result, { answer: "own", countries: [ESTONIA, RUSSIA] }, "the host's country is the host's own device's to rate");
+  const figures = { quality: 55, technology: 50, land: 60, sea: 20, air: 30, spending: 45, manpowerShare: 10, cavalryShare: 0.1, siegeShare: 0.1 };
+  // Figures for a country not left to it are refused; those left to it are taken once.
+  await s.request(s.guest, { t: "ownRatings", id: id(3), ratings: [{ country: LATVIA, military: figures }] });
+  assert.match(s.ack(s.guest, id(3)).error, /not left to your device/);
+  await s.request(s.guest, { t: "ownRatings", id: id(4), ratings: [{ country: ESTONIA, military: figures, population: 1.3e6 }, { country: LATVIA, military: figures }] });
+  assert.equal(s.ack(s.guest, id(4)).ok, true);
+  assert.deepEqual(taken, [{ name: ESTONIA, military: figures, population: 1.3e6 }]);
+  await s.request(s.guest, { t: "ownRatings", id: id(5), ratings: [{ country: ESTONIA, military: figures }] });
+  assert.match(s.ack(s.guest, id(5)).error, /not left to your device/, "once");
 });
 
 test("a country's parties are filled in once, by the host's AI or the asker's own, as a stat sheet is", async () => {

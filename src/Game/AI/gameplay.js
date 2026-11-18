@@ -32,7 +32,7 @@ import { MILITARY_CHANGE_RULE, describeMilitaryStanding } from "../../runtime/mi
 import { warSettingsOf } from "../../runtime/warSettings.js";
 import { STATS_BACKEND_FIELD, conflictSheetTargets, hasStatsBackend, readableFigure, statsBackendInstruction, statsBackendOf, statsBackendPatch, statsBackendTurnRule } from "../../runtime/statsBackend.js";
 import { CONFLICT_BACKENDS_MOST, conflictBackendsRequest, readConflictBackends } from "./conflictBackends.js";
-import { MILITARY_BATCH_MOST, militaryRatingRequest, militaryTargets, ratedScaleOf, readMilitaryRatings, wantsRating } from "./militaryRating.js";
+import { MILITARY_BATCH_MOST, militaryRatingRequest, militaryTargets, ratedFigures, ratedScaleOf, readMilitaryRatings, wantsRating } from "./militaryRating.js";
 import { peopleFor } from "../../runtime/militaryPower.js";
 import {
   createApplicationReceipt,
@@ -13918,10 +13918,46 @@ export const ensureConflictBackends = (targets, { reason = "" } = {}) => {
 // where nobody knew them. A scenario whose designer had every country rated
 // (GameUI/ScenarioMilitaryPanel.jsx) asks nothing here.
 // (A country is asked of once a sitting: one the AI left out is not asked of again every time the pane is drawn.)
+// `commit(read)`, where given, is handed each request's figures ([{ name, military?, population? }]) instead of
+// their being written here: the host of a shared game writes them in its one order, and a player's device whose
+// host left them to it sends them to the host (multiplayer/host/gameHost.js "ratings", Game/AI/gameplayLazy.js).
 const militaryWanted = new Map();
 const militaryTried = new Set();
 const triedKey = (name) => `${activeCampaignId()}|${name.toLowerCase()}`;
-export const ensureMilitaryFigures = (targets, { reason = "" } = {}) => {
+// The figures a rating brought, kept on each one's sheet: only those it had none of, field by field, and its people
+// where nobody knew them, so a rating never writes over figures that stand (the host takes a device's this way too).
+// Resolves the sheets' keys it wrote.
+export const takeMilitaryRatings = async (read, { campaign = activeCampaignId() } = {}) => {
+  const kept = [];
+  const rows = normalizeArray(read).map((entry) => ({
+    name: normalizeString(entry?.name),
+    military: ratedFigures(entry?.military),
+    population: Math.max(0, Math.round(Number(entry?.population) || 0)),
+  })).filter((entry) => entry.name && (entry.military || entry.population > 0));
+  if (rows.length === 0) return kept;
+  await beginStatsWrite(campaign);
+  try {
+    await mutateWorldState((latest) => {
+      const own = militaryLookup(latest);
+      let changed = false;
+      for (const { name, military, population } of rows) {
+        const had = own(name) ?? {};
+        const missing = Object.fromEntries(Object.entries(military ?? {}).filter(([field]) => had[field] === undefined || had[field] === null));
+        const people = population > 0 && !(peopleFor(latest, name) > 0) ? { population: { total: population } } : {};
+        if (Object.keys(missing).length === 0 && !people.population) continue;
+        const key = canonicalStatsPolity(name, latest) || name;
+        applyCountryStatPatchToWorld(latest, key, { ...(Object.keys(missing).length > 0 ? { military: missing } : {}), ...people });
+        kept.push(key);
+        changed = true;
+      }
+      return changed ? latest : null;
+    }, { emitEvents: false });
+  } finally {
+    endSimulation();
+  }
+  return kept;
+};
+export const ensureMilitaryFigures = (targets, { reason = "", commit = null } = {}) => {
   for (const target of normalizeArray(targets)) {
     const name = normalizeString(target);
     if (name && !militaryWanted.has(name.toLowerCase()) && !militaryTried.has(triedKey(name))) militaryWanted.set(name.toLowerCase(), name);
@@ -13977,26 +14013,12 @@ export const ensureMilitaryFigures = (targets, { reason = "" } = {}) => {
         if (read.length === 0) break;
       }
       if (read.length === 0) continue;
-      await beginStatsWrite(campaign);
-      try {
-        await mutateWorldState((latest) => {
-          const own = militaryLookup(latest);
-          let changed = false;
-          for (const { name, military, population } of read) {
-            const had = own(name) ?? {};
-            const missing = Object.fromEntries(Object.entries(military ?? {}).filter(([field]) => had[field] === undefined || had[field] === null));
-            const people = population > 0 && !(peopleFor(latest, name) > 0) ? { population: { total: population } } : {};
-            if (Object.keys(missing).length === 0 && !people.population) continue;
-            const key = canonicalStatsPolity(name, latest) || name;
-            applyCountryStatPatchToWorld(latest, key, { ...(Object.keys(missing).length > 0 ? { military: missing } : {}), ...people });
-            kept.push(key);
-            changed = true;
-          }
-          return changed ? latest : null;
-        }, { emitEvents: false });
-      } finally {
-        endSimulation();
+      if (typeof commit === "function") {
+        await commit(read);
+        kept.push(...read.map((entry) => entry.name));
+        continue;
       }
+      kept.push(...await takeMilitaryRatings(read, { campaign }));
     }
     if (kept.length > 0) logDebugEvent("turn", `Military figures for ${kept.length} countr${kept.length === 1 ? "y were" : "ies were"} rated against the others.`, { countries: kept });
     return kept;

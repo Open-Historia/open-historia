@@ -203,6 +203,21 @@ export const ratedScaleOf = (entries, asking = []) => {
   return [...shown.filter((entry) => !wantsRating(entry.military)), ...shown.filter((entry) => wantsRating(entry.military))];
 };
 
+// Of `names`, those the game has no figures for yet: a polity whose figures were never rated, or whose people nobody
+// knows (gameplay.js ensureMilitaryFigures asks for these). Groups are left out: a group's figures are its scenario
+// designer's, and a group is no country with a sheet. Exact names, each once, in the order given.
+export const unratedOf = (world, names) => {
+  const lookup = militaryLookup(world);
+  const groups = new Set(Object.keys(world?.groups && typeof world.groups === "object" ? world.groups : {}).map(fold));
+  const seen = new Set();
+  return list(names).map(clean).filter((name) => {
+    const key = fold(name);
+    if (!key || seen.has(key) || groups.has(key)) return false;
+    seen.add(key);
+    return wantsRating(lookup(name)) || !(peopleFor(world, name) > 0);
+  });
+};
+
 // The countries at war whose people or figures nobody knows yet (the members of a war not ended, and the sides of a
 // battlefield still open), but those in `skip` (asked of already) and groups (theirs are their scenario designer's:
 // a group is no country with a sheet): what the game needs rated before their war is fought much further. Exact

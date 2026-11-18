@@ -55,6 +55,7 @@ import { transportFiguresOf } from "../../runtime/militaryStats.js";
 import { eraSettingOf } from "../../runtime/warSettings.js";
 import { humanCountriesOf } from "../../runtime/humanPolities.js";
 import { playerDiplomacy } from "../../Game/AI/warAndPeace.js";
+import { unratedOf } from "../../Game/AI/militaryRating.js";
 import { warBetween } from "../../runtime/peaceTerms.js";
 import { answerTreaty, proposeTreaty } from "../../runtime/treatyOffers.js";
 import { featureRefusal } from "./featureGates.js";
@@ -76,7 +77,12 @@ const AT_ONCE = new Set(["ready", "revealed", "viewed", "paid", "payLookup"]);
 // Their thinking is the AI's, done outside the queue so it holds nobody up;
 // what they write is put in the queue (a stat sheet under the game's own lock,
 // an institution's business by the desk, engineMain.js).
-const THINKING = new Set(["sheet", "parties", "institution"]);
+const THINKING = new Set(["sheet", "parties", "institution", "ratings"]);
+// With settings.replies "own": the most countries one "ratings" answer leaves
+// to a device at a time (three of its requests). The ranking asks again for
+// the rest when the figures come in, so the readings left to devices are not
+// filled by one long list.
+const RATINGS_LEFT_MOST = 60;
 // Lines whose answer a player's own device is writing (settings.replies "own"):
 // the newest this many are remembered.
 const OWN_LINES_KEPT = 200;
@@ -219,6 +225,12 @@ export const createGameHost = ({
   // rating }): resolves { taken } (false when the country had its figures
   // already), or rejects with the reason when it is no whole sheet.
   takeSheet = async () => ({ taken: false }),
+  // Countries' military figures rated on the host's AI (gameplay.js
+  // ensureMilitaryFigures, twenty to a request, each country once a sitting),
+  // and figures a player's own device rated, kept where a country had none
+  // (gameplay.js takeMilitaryRatings): [{ name, military?, population? }].
+  rateMilitary = async () => {},
+  takeRatings = async () => [],
   // The host's own chart of the map (runtime/warRoomChart.js: where the sea
   // is, whose the ground), which the war room's fortified lines and fleets
   // are held to; resolves with null when the map could not be read.
@@ -1184,6 +1196,50 @@ export const createGameHost = ({
       } catch (failure) {
         return clean(failure?.message || failure).slice(0, 280) || "The host could not take those figures.";
       }
+      round.touch(seat.country);
+      return "";
+    },
+    // Countries' military figures, where a player's Stats pane has none to
+    // rank or show (Game/AI/militaryRating.js). In a shared game a page rated
+    // nothing and the host only the countries at war after a round, so the
+    // ranking stayed empty (the gap audit of 2026-11-18). Whose AI rates them
+    // is the host's setting, as for a sheet (the owner's decision 3): the
+    // host's own, twenty to a request and each country once a sitting, each
+    // request's figures written in the host's one order as it comes; or each
+    // player's own device, left the countries no other person plays, which
+    // sends the figures ("ownRatings"). Only a country of this game that has
+    // none: what stands is never rated again.
+    ratings: async (connection, { countries }, seat) => {
+      const known = list(countries).map((name) => countriesNow.find((country) => same(country, name))).filter(Boolean);
+      const wanted = known.length ? unratedOf((await store.read())?.world ?? {}, known) : [];
+      if (!wanted.length) return "";
+      if (replies === "own") {
+        const left = wanted.filter((name) => !playedByAnother(name, seat)).slice(0, RATINGS_LEFT_MOST);
+        for (const name of left) leaveReading("military", name, seat);
+        return left.length ? { error: "", result: { answer: "own", countries: left } } : "";
+      }
+      try {
+        await rateMilitary({ countries: wanted });
+      } catch (failure) {
+        return clean(failure?.message || failure).slice(0, 280) || "The host could not rate those figures.";
+      }
+      round.touch(seat.country);
+      return "";
+    },
+    // With settings.replies "own": the figures a player's device rated for
+    // the countries left to it, each taken once, and only where the country
+    // had none (gameplay.js takeMilitaryRatings): a device fills what is
+    // missing and never writes over what stands.
+    ownRatings: async (connection, { ratings }, seat) => {
+      if (replies !== "own") return "The host's AI rates the figures in this game.";
+      const left = list(ratings).filter((entry) => readingLeftTo("military", entry?.country, seat));
+      if (!left.length) return "Those figures were not left to your device.";
+      for (const entry of left) ownReadings.delete(readingKey("military", entry.country));
+      await takeRatings(left.map((entry) => ({
+        name: countriesNow.find((country) => same(country, entry.country)) || clean(entry.country),
+        military: entry.military ?? null,
+        population: Number(entry.population) || 0,
+      })));
       round.touch(seat.country);
       return "";
     },

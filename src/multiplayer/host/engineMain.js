@@ -37,7 +37,7 @@ import { setHostingSharedGame } from "../../runtime/humanPolities.js";
 import { discardHeldTurns, endSimulation, enterSimulation } from "../../Game/AI/simulationStatus.js";
 import { getDebugLogEntries, logDebugEvent, setDebugLogPersistence, subscribeToDebugLog } from "../../runtime/debugLog.js";
 import { GENERATION_COMPLETE_EVENT } from "../../Game/AI/telemetry.js";
-import { applyGameMasterPreview, assessPoliticalLandscape, checkDemandReply, declineInteractiveOffer, hasCompiledParties, hasCountryStatSheet, maybeGeneratePregameHistory, maybeOpenScenarioFronts, previewGameMasterCommand, readCountryForPlayer, runChatActionBatch, setAsideActiveInteractive, simulateTimelineJump, takeCountryStatSheet, takePoliticalLandscape, warRoomChart } from "../../Game/AI/gameplay.js";
+import { applyGameMasterPreview, assessPoliticalLandscape, checkDemandReply, declineInteractiveOffer, ensureMilitaryFigures, hasCompiledParties, hasCountryStatSheet, maybeGeneratePregameHistory, maybeOpenScenarioFronts, previewGameMasterCommand, readCountryForPlayer, runChatActionBatch, setAsideActiveInteractive, simulateTimelineJump, takeCountryStatSheet, takeMilitaryRatings, takePoliticalLandscape, warRoomChart } from "../../Game/AI/gameplay.js";
 import { finishGameStart } from "./gameStart.js";
 import { installRoundCarrier } from "../../Game/AI/roundCarrier.js";
 import { lendBoards, returnBoards } from "./seatBoards.js";
@@ -531,6 +531,15 @@ const boot = async () => {
       hasSheet: async (country) => hasCountryStatSheet(await countryOfGame(country)),
       // The sheet a player's own device wrote, on its own AI key.
       takeSheet: async ({ country, sheet, continuity, rating }) => takeCountryStatSheet({ name: await countryOfGame(country), sheet, continuity, rating }),
+      // Countries' military figures a player's Stats pane wants, rated on the
+      // host's AI: each request's figures written in the host's one order, so
+      // every view follows as they come. And those a player's own device
+      // rated, taken inside the request's own entry.
+      rateMilitary: ({ countries }) => ensureMilitaryFigures(countries, {
+        reason: "a player's Stats pane",
+        commit: (read) => writeInOrder("ratings", () => takeMilitaryRatings(read)),
+      }),
+      takeRatings: (ratings) => takeMilitaryRatings(ratings),
       // The map as this game's own engine reads it, for the war room's lines and fleets.
       readChart: () => warRoomChart(),
       // Its cities, for a city struck from the air: the host's own, never a page's.

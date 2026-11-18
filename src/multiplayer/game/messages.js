@@ -21,6 +21,7 @@ import { POLL_CHOICES_MAX, POLL_CHOICE_MAX_CHARS, SOCIAL_POST_MAX_CHARS } from "
 import { SAY_FROM_DRAFT_MAX, SAY_RECIPIENTS_MAX } from "../client/sharedThreads.js";
 import { TREATY_TERMS_MAX, TREATY_TITLE_MAX, TREATY_TYPES } from "../../runtime/treatyOffers.js";
 import { PLAYER_GOAL_MAX_CHARS } from "../../runtime/playerGoal.js";
+import { MILITARY_BATCH_MOST } from "../../Game/AI/militaryRating.js";
 import { POLL_LABEL_MAX_CHARS, POLL_OPTION_LIMIT, POLL_QUESTION_MAX_CHARS } from "../../runtime/chatThreads.js";
 import { DIFFICULTY_LEVELS } from "../../runtime/difficulty.js";
 
@@ -125,6 +126,9 @@ export const SAY_MAX_CHARS = 2000;
 export const COUNTRY_MAX_CHARS = 200;
 const COUNTRY = NAME(COUNTRY_MAX_CHARS);
 const REQUEST_ID = HEX_ID(8);
+// The most countries one "ratings" request names: every country of a large
+// map's ranking.
+export const RATINGS_ASKED_MOST = 300;
 
 // Taking turns to pay (host/settings.js payment "cycle", host/roundPayers.js):
 // a request of the round, as the host's engine built it, carried by the paying
@@ -250,6 +254,17 @@ export const PLAYER_REQUESTS = Object.freeze({
     t: literal("ownSheet"), id: REQUEST_ID, country: COUNTRY, sheet: json(8),
     continuity: json(5), rating: int(0, 100, { nullable: true }),
   }, ["continuity", "rating"]),
+  // Countries' military figures, where the player's Stats pane has none to
+  // rank or show (Game/AI/militaryRating.js): rated by the host's AI, twenty
+  // to a request, or left to the asker's own device and key by the same
+  // setting as a sheet ({ answer: "own", countries }: the ones left to it).
+  ratings: obj({ t: literal("ratings"), id: REQUEST_ID, countries: list(COUNTRY, RATINGS_ASKED_MOST) }),
+  // With settings.replies "own": those figures, rated on the asker's device.
+  // Figures alone, no key: the host keeps only those a country had none of.
+  ownRatings: obj({
+    t: literal("ownRatings"), id: REQUEST_ID,
+    ratings: list(obj({ country: COUNTRY, military: json(2), population: num(0, 1e11) }, ["military", "population"]), MILITARY_BATCH_MOST),
+  }),
   // War and peace (Game/AI/warAndPeace.js): the player's answer to an offer of
   // peace ("accept", "decline") or to a call to arms ("honour", "refuse"), by
   // its id; or terms of its own put to the other side of a war ("propose", by

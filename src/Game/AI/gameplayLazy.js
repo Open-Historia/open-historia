@@ -16,6 +16,7 @@
 // first turn does not also pay the download.
 
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { RATINGS_ASKED_MOST } from "../../multiplayer/game/messages.js";
 import { readWorldStateView } from "../../runtime/gameState.js";
 
 let modulePromise = null;
@@ -135,7 +136,38 @@ export const applyGameMasterPreview = hostOnly(async (...args) => (await gamepla
 // --- Stats and intelligence -------------------------------------------------
 export const ensureIntelligenceRated = hostQuietly(async (...args) => (await gameplay()).ensureIntelligenceRated(...args));
 // The figures of the countries the game needs and has none for, rated against the others (militaryRating.js).
-export const ensureMilitaryFigures = hostQuietly(async (...args) => (await gameplay()).ensureMilitaryFigures(...args));
+// In a shared game they are the host's to keep, as a stat sheet is: the page asks ("ratings"), and the host rates
+// them on its own AI or, by its setting (the owner's decision 3), leaves them to this device's own key; then this
+// device rates those left to it as single player does, twenty to a request, and hands the figures to the host
+// ("ownRatings") instead of writing them. It was not done at all on a page, so the ranking of a shared game stayed
+// empty (the gap audit of 2026-11-18). Nobody waits on it: what fails settles with nothing.
+const RATINGS_ANSWER_MS = 10 * 60 * 1000;
+const ratingsFromHost = async (targets, options = {}) => {
+  const countries = [...new Set((Array.isArray(targets) ? targets : []).map((name) => String(name ?? "").trim()).filter(Boolean))].slice(0, RATINGS_ASKED_MOST);
+  if (!countries.length) return null;
+  try {
+    const answer = await requestFromHost("ratings", { countries }, { timeoutMs: RATINGS_ANSWER_MS });
+    const left = answer.ok && answer.result?.answer === "own" && Array.isArray(answer.result.countries) ? answer.result.countries : [];
+    if (!left.length) return null;
+    return await (await gameplay()).ensureMilitaryFigures(left, {
+      ...options,
+      commit: async (read) => {
+        const ratings = read.map(({ name, military, population }) => ({
+          country: name,
+          ...(military ? { military } : {}),
+          ...(Number(population) > 0 ? { population: Number(population) } : {}),
+        }));
+        const sent = await requestFromHost("ownRatings", { ratings });
+        if (!sent.ok) throw new Error(sent.error || "The host did not take the figures.");
+      },
+    });
+  } catch {
+    return null;
+  }
+};
+export const ensureMilitaryFigures = async (...args) => (inSharedGame()
+  ? ratingsFromHost(...args)
+  : (await gameplay()).ensureMilitaryFigures(...args));
 export const readOpenedIntercepts = async (...args) => (await gameplay()).readOpenedIntercepts(...args);
 // A stat sheet is the game's own record, so in a shared game the host keeps
 // it: the page asks for a country's figures and reads the sheet out of its next
