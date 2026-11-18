@@ -770,7 +770,15 @@ test("a player whose people found a country plays it from then on, with their qu
       // What only the old government knew, and an agent of its own.
       docs.events.push({ id: "ev-ru-secret", date: "2014-04-02", title: "A mole is found in Pskov", description: "", audience: [RUSSIA] });
       docs.world = { ...docs.world, spies: [{ id: "spy-ru", owner: RUSSIA, target: ESTONIA, status: "active" }] };
+      // Its army, and what it built: a fort on the ground it gave the new country, a depot on the ground it kept.
+      docs.world.units = [{ id: "ru-army", name: "6th Army", type: "infantry", ownerCode: RUSSIA, strength: 90, lng: 28.3, lat: 57.8, status: "idle", source: "player" }];
+      docs.world.markers = [
+        { id: "fort-pskov", name: "Pskov fort", kind: "fort", ownerCode: RUSSIA, lng: 28.3, lat: 57.8 },
+        { id: "depot-moscow", name: "Moscow depot", kind: "depot", ownerCode: RUSSIA, lng: 37.6, lat: 55.7 },
+      ];
     },
+    // The host's own map: west of 30 degrees east is the Pskov Republic's now.
+    readChart: async () => ({ holds: (country, lng) => (lng < 30) === (country === "Pskov Republic") }),
   });
   s.host.join(s.hostPlayer);
   s.host.join(s.guest);
@@ -791,6 +799,9 @@ test("a player whose people found a country plays it from then on, with their qu
   assert.ok(s.shown(s.guest).events.some((event) => event.id === "ev-ru-secret"), "what the old government knew is still theirs");
   assert.ok(!s.shown(s.hostPlayer).events.some((event) => event.id === "ev-ru-secret"));
   assert.equal(s.store.docs.world.spies[0].owner, PSKOV);
+  assert.equal(s.store.docs.world.units[0].ownerCode, PSKOV, "its army goes with it");
+  assert.deepEqual(s.store.docs.world.markers.map((marker) => [marker.id, marker.ownerCode]), [["fort-pskov", PSKOV], ["depot-moscow", RUSSIA]]);
+  assert.ok(s.shown(s.guest).world.units.some((unit) => unit.id === "ru-army" && unit.ownerCode === PSKOV));
   assert.equal(s.store.docs.actions.find((action) => action.id === "order-lv").ownerCode, LATVIA, "the host's past order stays the old name's");
   assert.deepEqual(s.store.docs.game.seatFoundings, [{ from: LATVIA, to: BALTIC }, { from: RUSSIA, to: PSKOV }]);
   const lobby = s.to(s.guest, "lobby").at(-1);

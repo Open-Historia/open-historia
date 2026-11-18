@@ -24,7 +24,7 @@
 import { createRoundMachine } from "./round.js";
 import { createWorldQueue } from "./worldQueue.js";
 import { SEAT_STATUS, createSeatBook } from "./seats.js";
-import { seatFoundings, seatSuccessions, withSeatLetGo, withSeatMoved } from "./foundings.js";
+import { groundHeldBy, seatFoundings, seatSuccessions, withSeatLetGo, withSeatMoved } from "./foundings.js";
 import { sessionRecordOf } from "./sessionRecord.js";
 import { REPLY_MODES, gameMasterAllowed, roundSettingsOf } from "./settings.js";
 import { createHostAnswers, hostAnswersSpent, hostTurnsSpent } from "./hostAnswers.js";
@@ -660,7 +660,8 @@ export const createGameHost = ({
   // own records (host/foundings.js), and the seats moved in one place for all
   // of it: a seat whose people founded a country and gave it their land, or
   // whose country was renamed, follows it, with its queued orders, its board,
-  // its agents and its threads, and the game remembers the old name
+  // its agents, its forces and what it built on the new country's ground, and
+  // its threads, and the game remembers the old name
   // (game.seatFoundings), so what that government knew is still theirs to
   // read (host/projection.js). Before, a rename moved the country's army and
   // records to the new name and left its player's seat on the old one: the AI
@@ -693,6 +694,9 @@ export const createGameHost = ({
     });
     const moves = [...founded, ...successions.renamed.map((move) => ({ ...move, why: "renamed" }))]
       .filter((move) => seats.move(move.from, move.to));
+    // Whose ground a structure or a line of a founder's stands on now, by the
+    // host's own map (a rename moved all of them with the country already).
+    const chart = moves.some((move) => move.why === "founded") ? await Promise.resolve().then(readChart).catch(() => null) : null;
     for (const move of moves) {
       move.host = same(move.from, hostCountry);
       if (move.host) hostCountry = move.to;
@@ -702,7 +706,7 @@ export const createGameHost = ({
         seatFoundings: [...list(game?.seatFoundings), { from: move.from, to: move.to }],
       }));
       await store.updateActions((actions) => withSeatMoved({ actions }, move).actions);
-      await store.updateWorld((world) => withSeatMoved({ world }, move).world);
+      await store.updateWorld((world) => withSeatMoved({ world }, { ...move, onNewGround: groundHeldBy(chart, move.to) }).world);
       await store.updateChats((chats) => withSeatMoved({ chats }, move).chats);
       await store.updateIntercepts?.((intercepts) => withSeatMoved({ intercepts }, move).intercepts);
       log("info", move.why === "founded" ? "a seat followed its people to the country they founded" : "a seat followed its country to its new name", { from: move.from, to: move.to });

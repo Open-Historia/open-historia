@@ -23,6 +23,7 @@
 // Pure.
 
 import { interceptTableOf, withInterceptTable } from "../../runtime/spycraft.js";
+import { AIR_ARM_UNIT, airArmId } from "../../runtime/fronts/airStrike.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const same = (left, right) => Boolean(clean(left)) && clean(left).toLocaleLowerCase() === clean(right).toLocaleLowerCase();
@@ -68,18 +69,80 @@ export const seatFoundings = ({ events = [], actions = [], seated = [], host = "
 export const SEAT_KEYED_WORLD_RECORDS = Object.freeze(["seatBoards", "seatSeals", "playerGoals", "seatAdvice"]);
 const rekeyed = (record, from, to) => Object.fromEntries(Object.entries(record).map(([key, value]) => [same(key, from) ? to : key, value]));
 
+// What the seat's government commands goes with it: the world's rows that name
+// the country they are its by, each by the field that names it. Its formations
+// (and with them their standing orders, world.pendingUnitOrders, which are kept
+// by formation and so follow it by themselves), the air strikes it ordered and
+// has not flown, its agents. A founder played its new country with none of its
+// army: the formations stayed the old name's, which nobody played, and the AI
+// moved them (the gap audit of 2026-11-18, D14).
+export const SEAT_COMMANDED_ROWS = Object.freeze({ units: "ownerCode", airStrikeOrders: "owner", spies: "owner" });
+// What it built stands on the ground: a structure, a fortified line (built only
+// on ground its country holds, fronts/fortifyOps.js). Each is the new
+// country's where it stands on ground that is the new country's now, and stays
+// the old country's on the ground the old country keeps: a fortress inside the
+// old borders is not the founder's to take away. `onNewGround(key, row)` says
+// which (groundHeldBy); without it, nothing that stands moves.
+export const SEAT_GROUND_ROWS = Object.freeze({ markers: "ownerCode", fortifications: "owner" });
+// The war's own records (the wars, their battlefields and the transporters
+// sailing to them) are not here: who fights in a war is its record's to say,
+// which the story writes.
+
+// An air strike order, its owner moved: one for a front's air arm names the arm
+// by its country too (fronts/airStrike.js airArmId), so it is named the new
+// country's arm on the same front. (One kept from before an arm named its
+// country, "air-arm:<front>", is made its owner's by the order's normalizer.)
+const strikeMoved = (order, from, to) => {
+  const tag = airArmId("", from).slice(AIR_ARM_UNIT.length);
+  const unit = clean(order?.unit);
+  const arm = unit.startsWith(AIR_ARM_UNIT) && unit.endsWith(tag)
+    ? airArmId(unit.slice(AIR_ARM_UNIT.length, unit.length - tag.length), to)
+    : order?.unit;
+  return { ...order, owner: to, unit: arm };
+};
+const rowsMoved = (world, key, field, from, to, keep = () => true) => list(world[key]).map((row) => {
+  if (!isRecord(row) || !same(row[field], from) || !keep(key, row)) return row;
+  return key === "airStrikeOrders" ? strikeMoved(row, from, to) : { ...row, [field]: to };
+});
+
+// Whether a thing that stands is on ground `country` holds, by the map's chart
+// (runtime/warRoomChart.js holds): a structure where it stands, a line where
+// every point of its course on land is the country's. A place at sea, or off
+// the chart, is nobody's ground; without a chart, nothing is.
+export const groundHeldBy = (chart, country) => (key, row) => {
+  if (!chart || typeof chart.holds !== "function") return false;
+  const points = key === "fortifications" ? list(row?.points) : [[row?.lng, row?.lat]];
+  let land = 0;
+  for (const point of points) {
+    const held = chart.holds(country, Number(point?.[0]), Number(point?.[1]));
+    if (held === null || held === undefined) continue;
+    if (!held) return false;
+    land += 1;
+  }
+  return land > 0;
+};
+
+// An order of the seat's that carries a formation as it was (host/forces.js
+// disbandFor), moved with the seat: the formation it brings back is the new
+// country's, as the order is.
+const revertMoved = (action, from, to) => (isRecord(action?.unitRevert?.restore) && same(action.unitRevert.restore.ownerCode, from)
+  ? { ...action, unitRevert: { ...action.unitRevert, restore: { ...action.unitRevert.restore, ownerCode: to } } }
+  : action);
+
 // What was the old seat's goes with it: its queued orders, every record the
-// world keeps for it (SEAT_KEYED_WORLD_RECORDS), its agents, the threads it
-// speaks in, and its agents' traffic (a guest's table of the intercepts file,
-// runtime/spycraft.js; the host's table is the game country's, which follows
-// game.country). What concerns the country and not the seat (its treaties,
-// threads others opened with it) stays the country's. What it already did
-// stays done by it: when the host's seat moves, the host's orders that named no
-// owner are written down as the old name's.
-export const withSeatMoved = ({ actions, world, chats, intercepts }, { from, to, host = false }) => ({
+// world keeps for it (SEAT_KEYED_WORLD_RECORDS), what its government commands
+// (SEAT_COMMANDED_ROWS) and what it built on ground now the new country's
+// (SEAT_GROUND_ROWS, `onNewGround`), the threads it speaks in, and its agents'
+// traffic (a guest's table of the intercepts file, runtime/spycraft.js; the
+// host's table is the game country's, which follows game.country). What
+// concerns the country and not the seat (its treaties, threads others opened
+// with it) stays the country's. What it already did stays done by it: when the
+// host's seat moves, the host's orders that named no owner are written down as
+// the old name's.
+export const withSeatMoved = ({ actions, world, chats, intercepts }, { from, to, host = false, onNewGround = () => false }) => ({
   actions: list(actions).map((action) => {
     const planned = clean(action?.status || "planned") === "planned";
-    if (planned) return same(action?.ownerCode, from) ? { ...action, ownerCode: to } : action;
+    if (planned) return same(action?.ownerCode, from) ? revertMoved({ ...action, ownerCode: to }, from, to) : action;
     return host && !clean(action?.ownerCode) ? { ...action, ownerCode: from } : action;
   }),
   world: world && typeof world === "object"
@@ -88,7 +151,12 @@ export const withSeatMoved = ({ actions, world, chats, intercepts }, { from, to,
       ...Object.fromEntries(SEAT_KEYED_WORLD_RECORDS
         .filter((key) => isRecord(world[key]))
         .map((key) => [key, rekeyed(world[key], from, to)])),
-      ...(Array.isArray(world.spies) ? { spies: world.spies.map((spy) => (same(spy?.owner, from) ? { ...spy, owner: to } : spy)) } : {}),
+      ...Object.fromEntries(Object.entries(SEAT_COMMANDED_ROWS)
+        .filter(([key]) => Array.isArray(world[key]))
+        .map(([key, field]) => [key, rowsMoved(world, key, field, from, to)])),
+      ...Object.fromEntries(Object.entries(SEAT_GROUND_ROWS)
+        .filter(([key]) => Array.isArray(world[key]))
+        .map(([key, field]) => [key, rowsMoved(world, key, field, from, to, onNewGround)])),
     }
     : world,
   chats: list(chats).map((chat) => (same(chat?.player, from) ? { ...chat, player: to } : chat)),

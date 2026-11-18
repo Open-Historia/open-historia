@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { SEAT_KEYED_WORLD_RECORDS, formerNamesOf, seatFoundings, seatSuccessions, withSeatLetGo, withSeatMoved } from "./foundings.js";
+import { SEAT_KEYED_WORLD_RECORDS, formerNamesOf, groundHeldBy, seatFoundings, seatSuccessions, withSeatLetGo, withSeatMoved } from "./foundings.js";
 
 const BURGHERS = "The Free Townsmen of Gullhaven";
 const HILL = "Hill folk";
@@ -93,6 +93,58 @@ test("every record the game keeps for a seat follows it, its agents' traffic too
   // The host's own table is the file's top, and follows game.country without moving.
   const host = withSeatMoved({ intercepts: { France: { exchanges: [] } } }, { from: HILL, to: "Hill Kingdom", host: true });
   assert.deepEqual(host.intercepts, { France: { exchanges: [] } });
+});
+
+// A founder played its new country with none of its army: the formations, their standing orders and the strikes it
+// had ordered stayed under a name nobody played, and the AI moved them (the gap audit of 2026-11-18, D14).
+test("a founder's forces go with its seat; what it built goes where it stands on the new country's ground", async () => {
+  const { airArmId } = await import("../../runtime/fronts/airStrike.js");
+  const world = {
+    units: [
+      { id: "u1", name: "Townsmen's Guard", ownerCode: BURGHERS, source: "player" },
+      { id: "u2", name: "Hill Levy", ownerCode: HILL, source: "ai" },
+    ],
+    // Kept by formation, so it follows its formation by itself.
+    pendingUnitOrders: [{ id: "o1", unitId: "u1", kind: "move", toLng: 1, toLat: 1 }],
+    airStrikeOrders: [
+      { id: "s1", unit: "air-1", owner: BURGHERS, kind: "city" },
+      { id: "s2", unit: airArmId("The Gullhaven Front", BURGHERS), owner: BURGHERS, kind: "troops" },
+      { id: "s3", unit: airArmId("The Gullhaven Front", HILL), owner: HILL, kind: "troops" },
+    ],
+    markers: [
+      { id: "m-new", name: "Harbour fort", ownerCode: BURGHERS, lng: 10, lat: 10 },
+      { id: "m-old", name: "Old keep", ownerCode: BURGHERS, lng: 20, lat: 20 },
+      { id: "m-sea", name: "Sea tower", ownerCode: BURGHERS, lng: 30, lat: 30 },
+    ],
+    fortifications: [
+      { id: "w-new", owner: BURGHERS, points: [[10, 10], [11, 11]] },
+      // Half of it on ground the old country keeps: it stays the old country's.
+      { id: "w-split", owner: BURGHERS, points: [[10, 10], [20, 20]] },
+    ],
+  };
+  // The new country's ground about (10, 10); the old one's about (20, 20); the sea about (30, 30).
+  const chart = {
+    holds: (country, lng) => (lng >= 30 ? null : (lng < 15) === (country === "Saltport")),
+  };
+  const moved = withSeatMoved({
+    world,
+    actions: [{ id: "a1", ownerCode: BURGHERS, status: "planned", unitRevert: { unitId: "u9", restore: { id: "u9", ownerCode: BURGHERS } } }],
+  }, { from: BURGHERS, to: "Saltport", onNewGround: groundHeldBy(chart, "Saltport") });
+  assert.deepEqual(moved.world.units.map((unit) => unit.ownerCode), ["Saltport", HILL]);
+  assert.deepEqual(moved.world.pendingUnitOrders, world.pendingUnitOrders);
+  assert.deepEqual(moved.world.airStrikeOrders.map((order) => [order.owner, order.unit]), [
+    ["Saltport", "air-1"],
+    ["Saltport", airArmId("The Gullhaven Front", "Saltport")],
+    [HILL, airArmId("The Gullhaven Front", HILL)],
+  ], "a front's air arm is named the new country's");
+  assert.deepEqual(moved.world.markers.map((marker) => [marker.id, marker.ownerCode]), [["m-new", "Saltport"], ["m-old", BURGHERS], ["m-sea", BURGHERS]]);
+  assert.deepEqual(moved.world.fortifications.map((line) => [line.id, line.owner]), [["w-new", "Saltport"], ["w-split", BURGHERS]]);
+  assert.equal(moved.actions[0].unitRevert.restore.ownerCode, "Saltport", "a stand-down withdrawn brings the formation back as the new country's");
+  // Without the map's chart nothing that stands moves; what the government commands still does.
+  const blind = withSeatMoved({ world }, { from: BURGHERS, to: "Saltport" });
+  assert.equal(blind.world.markers.every((marker) => marker.ownerCode === BURGHERS), true);
+  assert.equal(blind.world.units[0].ownerCode, "Saltport");
+  assert.equal(groundHeldBy(null, "Saltport")("markers", world.markers[0]), false);
 });
 
 test("the list of a seat's records holds every record a view keeps per seat", async () => {
