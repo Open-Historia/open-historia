@@ -1040,3 +1040,105 @@ test("a guest's accession hearing is built for the guest when another seat acts,
   });
   assert.match(one.text, new RegExp(`Human-controlled polity: ${HOST}\\.`));
 });
+
+// Nobody who accepted an AI government's invitation was ever admitted: the
+// invitation's ballot is written in its inviter's name, the invitee holds no
+// vote, so once the members voted yes the accession was held up "for want of
+// explicit player consent". The invitee's own acceptance is that consent.
+const approvalClub = () => {
+  const world = baseWorld();
+  world.institutions = { schemaVersion: 1, byId: { "baltic-club": {
+    id: "baltic-club", name: "Baltic Club", status: "active", kind: "regional_bloc",
+    charter: {
+      votingRule: { type: "simple-majority", quorum: 0.5, eligibleStatuses: ["member"] },
+      lifecycle: { accession: { mode: "approval", allowedStatuses: ["member", "observer"] } },
+    },
+    members: [
+      { polity: "Republic of Estonia", status: "member", role: "leader" },
+      { polity: "Republic of Poland", status: "member", role: "member" },
+    ],
+  } } };
+  return world;
+};
+
+// The members' ballots, as the post-turn pass or a Council casts them.
+const membersVoteYes = async (world, proposalId, { playerCountry, people = null }) => {
+  const { applyInstitutionGovernanceCommand } = await import("./institutionalGovernance.js");
+  let result = { world };
+  for (const polity of ["Republic of Estonia", "Republic of Poland"]) {
+    result = applyInstitutionGovernanceCommand({
+      world: result.world, chats: [], events: [], institutionId: "baltic-club", playerCountry, people, date: "2014-09-10",
+      command: { type: "vote", proposalId, polity, choice: "yes", authority: "npc", finalizeWhenComplete: true, implementWhenPassed: true },
+    });
+  }
+  return result;
+};
+
+test("single player: the player who accepts an AI's invitation is admitted once the members vote yes", async () => {
+  const { applyInstitutionLifecycleImpactBatchCore } = await import("./institutionLifecycleCore.js");
+  const invited = applyInstitutionLifecycleImpactBatchCore({
+    world: approvalClub(), playerCountry: HOST, date: "2014-09-01",
+    ops: [{ op: "invite", actorPolity: "Republic of Estonia", institutionId: "baltic-club", targetPolity: HOST, requestedStatus: "member" }],
+  });
+  const invitation = Object.values(invited.world.institutions.byId["baltic-club"].lifecycleCases).find((entry) => entry.polity === HOST);
+  const accepted = applyInstitutionLifecycleCommandCore({
+    world: invited.world, playerCountry: HOST, date: "2014-09-02",
+    command: { type: "respond", institutionId: "baltic-club", caseId: invitation.id, actorPolity: HOST, decision: "accept", authority: "player" },
+  });
+  assert.equal(accepted.proposal.createdBy, "Republic of Estonia", "the ballot is the inviter's");
+  const voted = await membersVoteYes(accepted.world, accepted.proposal.id, { playerCountry: HOST });
+  const club = voted.world.institutions.byId["baltic-club"];
+  assert.equal(voted.outcome.status, "passed");
+  assert.equal(voted.proposal.implementation.status, "complete");
+  assert.deepEqual(club.members.filter((entry) => entry.polity === HOST).map((entry) => entry.status), ["member"]);
+  assert.equal(club.lifecycleCases[invitation.id].status, "resolved", "the invitation is settled");
+});
+
+test("a shared game's guest who accepts an AI's invitation is admitted by the members' vote after the host's skip", async () => {
+  const { applyInstitutionLifecycleImpactBatchCore } = await import("./institutionLifecycleCore.js");
+  // The host's skip: Estonia invites the guest.
+  const invited = applyInstitutionLifecycleImpactBatchCore({
+    world: approvalClub(), playerCountry: HOST, people: PEOPLE, date: "2014-09-01",
+    ops: [{ op: "invite", actorPolity: "Republic of Estonia", institutionId: "baltic-club", targetPolity: GUEST, requestedStatus: "member" }],
+  });
+  const invitation = Object.values(invited.world.institutions.byId["baltic-club"].lifecycleCases).find((entry) => entry.polity === GUEST);
+  // The guest answers it, as an observer, from its own seat.
+  const accepted = applyInstitutionLifecycleCommandCore({
+    world: invited.world, playerCountry: GUEST, people: PEOPLE, date: "2014-09-02",
+    command: { type: "respond", institutionId: "baltic-club", caseId: invitation.id, actorPolity: GUEST, decision: "seek-observer", authority: "player" },
+  });
+  // The members vote in the post-turn pass, which is written while the host acts.
+  const voted = await membersVoteYes(accepted.world, accepted.proposal.id, { playerCountry: HOST, people: PEOPLE });
+  const club = voted.world.institutions.byId["baltic-club"];
+  assert.equal(voted.proposal.implementation.status, "complete");
+  assert.deepEqual(club.members.filter((entry) => entry.polity === GUEST).map((entry) => entry.status), ["observer"]);
+  assert.equal(club.lifecycleCases[invitation.id].status, "resolved", "the invitation is settled");
+});
+
+test("an accepted invitation consents to its own ballot alone; any other accession of a person still needs their word", async () => {
+  const { applyInstitutionLifecycleImpactBatchCore } = await import("./institutionLifecycleCore.js");
+  const { applyInstitutionGovernanceCommand } = await import("./institutionalGovernance.js");
+  const invited = applyInstitutionLifecycleImpactBatchCore({
+    world: approvalClub(), playerCountry: HOST, date: "2014-09-01",
+    ops: [{ op: "invite", actorPolity: "Republic of Estonia", institutionId: "baltic-club", targetPolity: HOST, requestedStatus: "member" }],
+  });
+  const invitation = Object.values(invited.world.institutions.byId["baltic-club"].lifecycleCases).find((entry) => entry.polity === HOST);
+  const accepted = applyInstitutionLifecycleCommandCore({
+    world: invited.world, playerCountry: HOST, date: "2014-09-02",
+    command: { type: "respond", institutionId: "baltic-club", caseId: invitation.id, actorPolity: HOST, decision: "accept", authority: "player" },
+  });
+  // Another ballot to enrol the player, which the player never sought: still held.
+  const world = structuredClone(accepted.world);
+  world.institutions.byId["baltic-club"].proposals["admit-latvia"] = {
+    id: "admit-latvia", title: "Admit Latvia", type: "accession", status: "passed", createdBy: "Republic of Poland", sponsorPolities: ["Republic of Poland"],
+    consequences: [{ id: "admit", kind: "institution-membership", op: "join", polity: HOST, status: "member" }],
+  };
+  const other = applyInstitutionGovernanceCommand({
+    world, chats: [], institutionId: "baltic-club", playerCountry: HOST, date: "2014-09-10",
+    command: { type: "implement", proposalId: "admit-latvia" },
+  });
+  assert.equal(other.proposal.implementation.status, "blocked");
+  assert.match(other.proposal.implementation.pending[0].blockedReason, /explicit player/i);
+  // An invitation the player has not accepted opens no ballot at all: nothing to carry out.
+  assert.equal(invited.world.institutions.byId["baltic-club"].proposals?.[invitation.proposalId || "none"], undefined);
+});

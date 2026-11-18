@@ -612,6 +612,24 @@ export const closeInstitutionProposalVoting = ({
 
 const normalizeConsequenceKind = (value) => lower(value).replace(/[\s_]+/g, "-");
 
+// A person's own yes to the accession a passed ballot carries out, when it
+// was an invitation they accepted: the lifecycle case this ballot was opened
+// for (its proposalId) is an invitation to them, and they answered it
+// accept or seek-observer. Only a case's own subject answers it
+// (institutionLifecycleCore.js "respond"), and no model answers for a person
+// (lifecycleAuthority), so the case is their word. An invitation's ballot is
+// written in its inviter's name, the invitee is no member and holds no vote,
+// so an accepted invitation passed and was then held up for want of the
+// invitee's consent: where the members vote on newcomers, nobody who
+// accepted one was ever admitted.
+const ACCEPTED_INVITATION_DECISIONS = new Set(["accept", "seek-observer"]);
+const acceptedInvitationTo = (institution, proposal, person) => Object.values(institution?.lifecycleCases || {}).some((entry) => (
+  Boolean(clean(proposal?.id)) && slug(entry?.proposalId) === slug(proposal?.id)
+  && lower(entry?.polity) === lower(person)
+  && ["invitation", "founding-invitation"].includes(lower(entry?.kind))
+  && ACCEPTED_INVITATION_DECISIONS.has(lower(entry?.decision))
+));
+
 export const implementInstitutionProposal = ({
   world: worldInput = {},
   institutionId = "",
@@ -685,6 +703,7 @@ export const implementInstitutionProposal = ({
         || Object.values(proposal?.voting?.ballots || {}).some((ballot) => (
           lower(ballot?.polity) === lower(person) && lower(ballot?.choice) === "yes"
         ))
+        || acceptedInvitationTo(baseInstitution, proposal, person)
       );
       if (targetsPlayerAccession && !playerAffirmed) {
         result = { world, error: "Player accession/restore requires explicit player sponsorship/application or an affirmative player ballot." };
