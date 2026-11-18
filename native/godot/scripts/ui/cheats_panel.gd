@@ -18,7 +18,7 @@ const ROSE := Color("#fda4af")
 const GREEN := Color("#86efac")
 const AMBER := Color("#fbbf24")
 const BLUE_LINK := Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.82)
-const CE_NUMBER_FIELDS := {"populationM": [0.001, INF, 0.1], "gdpB": [0.001, INF, 0.1], "gdpGrowth": [-INF, INF, 0.1], "stability": [0.0, 100.0, 1.0], "inflation": [-1000.0, INF, 0.1], "unemployment": [0.0, 100.0, 0.1], "publicDebt": [0.0, INF, 0.1], "budgetBalance": [-INF, INF, 0.1], "sovereignty": [0.0, 100.0, 1.0], "foodAutonomy": [0.0, 100.0, 1.0], "energyAutonomy": [0.0, 100.0, 1.0], "economicIndependence": [0.0, 100.0, 1.0], "internalSecurity": [0.0, 100.0, 1.0], "internationalReputation": [0.0, 100.0, 1.0]}
+const CE_NUMBER_FIELDS := {"populationM": [0.001, INF, 0.1], "gdpB": [0.0, INF, 0.1], "gdpGrowth": [-INF, INF, 0.1], "annualGrowthRate": [-20.0, 20.0, 0.01], "stability": [0.0, 100.0, 1.0], "inflation": [-1000.0, INF, 0.1], "unemployment": [0.0, 100.0, 0.1], "publicDebt": [0.0, INF, 0.1], "budgetBalance": [-INF, INF, 0.1], "sovereignty": [0.0, 100.0, 1.0], "foodAutonomy": [0.0, 100.0, 1.0], "energyAutonomy": [0.0, 100.0, 1.0], "economicIndependence": [0.0, 100.0, 1.0], "internalSecurity": [0.0, 100.0, 1.0], "internationalReputation": [0.0, 100.0, 1.0]}
 const PUPPET_KINDS := [["protectorate", "Protectorate"], ["satellite", "Puppet state"], ["client", "Client state"]]
 const PUPPET_SECRECY := [["open", "Openly known"], ["covert", "Covert"]]
 const REPRESENTATION_OPTIONS := [["electoral", "Electoral"], ["court_factions", "Court factions"], ["party_state", "Party state"], ["elite_factions", "Elite factions"], ["military_factions", "Military factions"], ["revolutionary_factions", "Revolutionary factions"], ["colonial", "Colonial"], ["none", "None"]]
@@ -85,7 +85,11 @@ var context: Dictionary = {}
 var _open := false
 var _tool := ""
 var _busy := false
-var _status := ""
+var _status_failed := false
+var _status := "":
+	set(value):
+		_status = value
+		_status_failed = false
 var _polities: Array = []
 var _names: Dictionary = {}
 var _game: Dictionary = {}
@@ -233,7 +237,7 @@ func refresh() -> void:
 		_game = result.get("game", {})
 		_groups_on = bool(result.get("groupsOn", true))
 	else:
-		_status = "Failed to load game data: %s" % str(reply.get("error", ""))
+		_fail("Failed to load game data: %s" % str(reply.get("error", "")))
 	if not _tool.is_empty():
 		await _load_tool()
 	_render()
@@ -331,7 +335,7 @@ func _load_into(method: String, args: Dictionary, key: String) -> void:
 		_s[key] = reply["result"]
 	else:
 		_s[key] = {}
-		_status = "Failed: %s" % str(reply.get("error", ""))
+		_fail("Failed: %s" % str(reply.get("error", "")))
 
 
 func _sv(key: String, fallback := "") -> String:
@@ -370,7 +374,7 @@ func _run(method: String, args: Dictionary, done_message := "", writes := true) 
 		if writes:
 			world_changed.emit()
 	else:
-		_status = "Failed: %s" % str(reply.get("error", ""))
+		_fail("Failed: %s" % str(reply.get("error", "")))
 	_busy = false
 	return reply
 
@@ -820,11 +824,16 @@ func _check(text: String, value: bool, on_change: Callable, size := 11) -> Check
 	return node
 
 
+func _fail(text: String) -> void:
+	_status = text
+	_status_failed = true
+
+
 func _status_line(parent: Container) -> void:
 	if _status.is_empty():
 		return
 	parent.add_child(_gap(8))
-	parent.add_child(_note(_status, 12, FAIL_INK if _status.begins_with("Failed") else STATUS_INK))
+	parent.add_child(_note(_status, 12, FAIL_INK if _status_failed else STATUS_INK))
 
 
 func _pill_label(text: String, ink: Color, bg: Color, border: Color, size := 9, weight := 800, spacing := 1) -> PanelContainer:
@@ -1050,7 +1059,7 @@ func _gm_placeholder(mode: String) -> String:
 	if mode == "auto":
 		return "Example: \"A major Berlin bank collapses, triggering a prolonged financial panic. Let the game reflect the consequences over time.\""
 	if mode == "direct":
-		return "Example: \"Germany should have a population of 72 million and GDP of €500 billion. Do not add a timeline event.\""
+		return "Example: \"Germany should have a population of 72 million and GDP of $500 billion. Do not add a timeline event.\""
 	if mode == "exact-event":
 		return "Example: \"On 4 March 1927 Britain and Germany sign a naval consultation accord. Make it major and notable, create the agreement, and set relations to +45.\""
 	return "Example: \"Russia enters a constitutional crisis; Finland gains broad autonomy, Polish unrest spreads, Nicholas II replaces the government, and Russia asks Germany for consultations.\""
@@ -1146,7 +1155,7 @@ func _gm_generate() -> void:
 		var summary := str(result.get("summary", ""))
 		_status = "Preview ready — %s" % summary if not summary.is_empty() else "GM transaction preview ready. Nothing has been applied."
 	else:
-		_status = "Failed: %s" % str(reply.get("error", ""))
+		_fail("Failed: %s" % str(reply.get("error", "")))
 	_set_busy(false)
 
 
@@ -1186,7 +1195,7 @@ func _gm_revise() -> void:
 		var summary := str(result.get("summary", ""))
 		_status = "Edited preview ready - %s" % summary if not summary.is_empty() else "Edited preview ready. Nothing applied."
 	else:
-		_status = "Failed: %s" % str(reply.get("error", ""))
+		_fail("Failed: %s" % str(reply.get("error", "")))
 	_set_busy(false)
 
 
@@ -1248,7 +1257,7 @@ func _gm_apply() -> void:
 		world_changed.emit()
 		refresh()
 	else:
-		_status = "Failed: %s" % str(reply.get("error", ""))
+		_fail("Failed: %s" % str(reply.get("error", "")))
 	_set_busy(false)
 
 
@@ -1718,11 +1727,14 @@ func _render_annex() -> void:
 					return
 				var reply: Dictionary = await engine.request("cheats.annex.country", {"source": source, "owner": owner, "sourceName": _name_of(source), "ownerName": _name_of(owner)})
 				if reply.get("ok", false):
-					_status = str((reply["result"] as Dictionary).get("message", ""))
+					if bool((reply["result"] as Dictionary).get("failed", false)):
+						_fail(str((reply["result"] as Dictionary).get("message", "")))
+					else:
+						_status = str((reply["result"] as Dictionary).get("message", ""))
 					if int((reply["result"] as Dictionary).get("moved", 0)) > 0:
 						world_changed.emit()
 				else:
-					_status = "Failed: %s" % str(reply.get("error", ""))
+					_fail("Failed: %s" % str(reply.get("error", "")))
 			else:
 				if int(job.get("index", -1)) < 0:
 					return
@@ -1731,7 +1743,7 @@ func _render_annex() -> void:
 					_status = str((region_reply["result"] as Dictionary).get("message", ""))
 					world_changed.emit()
 				else:
-					_status = "Failed: %s" % str(region_reply.get("error", ""))))
+					_fail("Failed: %s" % str(region_reply.get("error", "")))))
 	_body.add_child(start)
 	_body.add_child(_gap(8))
 	_body.add_child(_note("The map repaints ownership within ~5 seconds of each change.", 11, Color(1, 1, 1, 0.45)))
@@ -1798,7 +1810,7 @@ func _render_country_editor() -> void:
 					match_code = str(entry.get("code", ""))
 					break
 			if match_code.is_empty():
-				_status = "Failed: that map area does not resolve to an editable country."
+				_fail("Failed: that map area does not resolve to an editable country.")
 				_end_pick()
 				return
 			_status = "Selected %s." % _name_of(match_code)
@@ -1841,6 +1853,14 @@ func _ce_load(code: String) -> void:
 		_s["ce_baseline"] = (result.get("form", {}) as Dictionary).duplicate()
 		_s["ce_components"] = int(result.get("componentCount", 0))
 		_s["ce_per_capita"] = result.get("perCapita")
+		_s["ce_symbol"] = str(result.get("currencySymbol", "$"))
+		_s["ce_unit"] = str(result.get("currencyUnit", ""))
+		_s["ce_stats"] = result.get("stats") if typeof(result.get("stats")) == TYPE_DICTIONARY else {}
+		_s["ce_custom"] = (result.get("customStats", {}) as Dictionary).duplicate()
+		_s["ce_custom_base"] = (result.get("customStats", {}) as Dictionary).duplicate()
+		_s["ce_caps"] = (result.get("capabilities", {}) as Dictionary).duplicate()
+		_s["ce_caps_base"] = (result.get("capabilities", {}) as Dictionary).duplicate()
+		_s["ce_cap_fields"] = result.get("capabilityFields", [])
 		var politics: Variant = result.get("politics")
 		if typeof(politics) == TYPE_DICTIONARY:
 			_s["ce_politics"] = (politics as Dictionary).duplicate(true)
@@ -1849,7 +1869,6 @@ func _ce_load(code: String) -> void:
 			_s.erase("ce_politics")
 			_s.erase("ce_politics_base")
 		_s["ce_registry"] = result.get("registry", [])
-		_s["ce_ideologies"] = result.get("ideologies", [])
 		_s["ce_roles"] = result.get("partyRoles", [])
 		_s.erase("ce_composition")
 		_ce_composition()
@@ -1863,7 +1882,7 @@ func _ce_load(code: String) -> void:
 			for alias in entry.get("aliases", []):
 				_trait_alias[_clean_trait_key(str(alias))] = key
 	else:
-		_status = "Failed: %s" % str(reply.get("error", ""))
+		_fail("Failed: %s" % str(reply.get("error", "")))
 	_render()
 
 
@@ -1895,7 +1914,7 @@ func _ce_per_capita_text() -> String:
 		count += 1
 		if count % 3 == 0 and index > 0:
 			grouped = "," + grouped
-	return "€" + grouped
+	return str(_s.get("ce_symbol", "$")) + grouped
 
 
 func _ce_field(label: String, key: String, refresh_label: Label = null) -> Control:
@@ -1956,8 +1975,17 @@ func _render_country_form(target: String) -> void:
 		var politics_box: Array = _field_box(6)
 		_render_politics(politics_box[1])
 		_body.add_child(politics_box[0])
+	_render_capabilities()
+	var stats_meta := _sd("ce_stats")
 	var components := int(_s.get("ce_components", 0))
-	if components == 0:
+	if bool(stats_meta.get("custom", false)):
+		_render_custom_stats(stats_meta)
+	elif not str(stats_meta.get("error", "")).is_empty():
+		_body.add_child(_gap(10))
+		var failed: Array = _field_box(6)
+		(failed[1] as VBoxContainer).add_child(_note("Stats definition unavailable: %s Identity and Political World editing remain available; national-stat edits are disabled until the scenario Stats definition can be loaded." % str(stats_meta.get("error", "")), 11, FAIL_INK))
+		_body.add_child(failed[0])
+	elif components == 0 or not bool(stats_meta.get("legacy", false)):
 		_body.add_child(_gap(10))
 		var warn: Array = _box(Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.08), Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.24), 10, Vector4(11, 10, 11, 10))
 		(warn[1] as VBoxContainer).add_child(_note("This country does not yet have a component-backed canonical Stats baseline. Identity can be edited now; open Stats → Economy once to establish the national baseline before editing GDP, population, or macro values here.", 11, Color(254 / 255.0, 243 / 255.0, 199 / 255.0, 0.88)))
@@ -1975,7 +2003,11 @@ func _render_country_form(target: String) -> void:
 		var per_capita_label := UI.label(_ce_per_capita_text(), 13, Color(1, 1, 1, 0.62))
 		var grid := _two_columns()
 		grid.add_child(_ce_field("Population (millions) · whole polity", "populationM", per_capita_label))
-		grid.add_child(_ce_field("GDP (€ billions) · whole polity", "gdpB", per_capita_label))
+		grid.add_child(_ce_field("GDP (%s billions) · whole polity" % str(_s.get("ce_symbol", "$")), "gdpB", per_capita_label))
+		var unit_note := _note("Input shown in %s. Saved using canonical USD; domestic currency is separate." % str(_s.get("ce_unit", "")), 10, Color(1, 1, 1, 0.48))
+		baseline_column.add_child(grid)
+		baseline_column.add_child(unit_note)
+		grid = _two_columns()
 		var derived := VBoxContainer.new()
 		derived.add_theme_constant_override("separation", 4)
 		derived.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1986,6 +2018,7 @@ func _render_country_form(target: String) -> void:
 		derived.add_child(derived_box)
 		grid.add_child(derived)
 		grid.add_child(_ce_field("GDP growth (%)", "gdpGrowth"))
+		grid.add_child(_ce_field("Annual population change (%) · optional", "annualGrowthRate"))
 		baseline_column.add_child(grid)
 		var explain: Array = _box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.07), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.18), 8, Vector4(9, 8, 9, 8))
 		(explain[1] as VBoxContainer).add_child(_note("These are whole-polity targets. Changing population proportionally rescales population across every current territorial component. Changing GDP proportionally rescales each component's GDP per capita, preserving existing regional and colonial differences. The displayed GDP/capita is derived from the edited totals, and future simulation can still move all of these values naturally.", 10, Color(219 / 255.0, 234 / 255.0, 254 / 255.0, 0.72)))
@@ -2019,7 +2052,7 @@ func _render_country_form(target: String) -> void:
 	_enable(save, not _busy)
 	save.pressed.connect(func() -> void:
 		var code := _sv("ce_target")
-		var payload := {"code": code, "form": _sd("ce_form"), "baseline": _sd("ce_baseline"), "componentCount": int(_s.get("ce_components", 0)), "fallbackName": _name_of(code)}
+		var payload := {"code": code, "form": _sd("ce_form"), "baseline": _sd("ce_baseline"), "componentCount": int(_s.get("ce_components", 0)), "fallbackName": _name_of(code), "customStats": _sd("ce_custom"), "capabilities": _sd("ce_caps")}
 		if _s.has("ce_politics"):
 			payload["politics"] = _sd("ce_politics")
 			payload["politicsBaseline"] = _sd("ce_politics_base")
@@ -2029,13 +2062,81 @@ func _render_country_form(target: String) -> void:
 			await refresh()
 			await _ce_load(code)
 			_status = message
-			_render())
+		_render())
 	actions.add_child(save)
 	var reset := _btn("Reset")
 	_enable(reset, not _busy)
 	reset.pressed.connect(func() -> void: _ce_load(_sv("ce_target")))
 	actions.add_child(reset)
 	_body.add_child(actions)
+
+
+func _render_capabilities() -> void:
+	_body.add_child(_gap(10))
+	var box: Array = _field_box(6)
+	var column: VBoxContainer = box[1]
+	column.add_child(_section_label("Intelligence & military capabilities"))
+	column.add_child(_note("Edit the live values used by espionage and war simulation. Blank military ratings inherit their scenario defaults. Military Power is calculated from these ratings, population, and wartime conditions - not stored as an independent score. War weariness and resources can change again when time advances. These native capabilities are editable independently of the scenario Stats definition.", 10, Color(1, 1, 1, 0.56)))
+	var stats_meta := _sd("ce_stats")
+	var shared_intelligence := bool(stats_meta.get("hasIntelligence", false))
+	var grid := _two_columns()
+	for field_value in _s.get("ce_cap_fields", []):
+		var field: Dictionary = field_value
+		var key := str(field.get("key", ""))
+		var cell := VBoxContainer.new()
+		cell.add_theme_constant_override("separation", 4)
+		cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		cell.add_child(UI.label(str(field.get("label", key)).to_upper(), 10, Color(1, 1, 1, 0.75), 700, "Arial", 1))
+		var in_custom := key == "intelligence" and shared_intelligence
+		var shown := str(_sd("ce_custom").get("intelligenceService", "")) if in_custom else str(_sd("ce_caps").get(key, ""))
+		var placeholder := "Unrated (default 40)" if key == "intelligence" else "Scenario/default"
+		var input := _number_line(shown, placeholder, float(field.get("minimum", -INF)), float(field.get("maximum", INF)), float(field.get("step", 1.0)), func(text: String) -> void:
+			var target := "ce_custom" if in_custom else "ce_caps"
+			var values := _sd(target)
+			values["intelligenceService" if in_custom else key] = text
+			_s[target] = values)
+		input.editable = not _busy
+		input.tooltip_text = str(field.get("label", key))
+		cell.add_child(input)
+		grid.add_child(cell)
+	column.add_child(grid)
+	_body.add_child(box[0])
+
+
+func _render_custom_stats(stats_meta: Dictionary) -> void:
+	_body.add_child(_gap(10))
+	var box: Array = _field_box(6)
+	var column: VBoxContainer = box[1]
+	column.add_child(_section_label("Scenario-defined national statistics"))
+	column.add_child(_note("These values come from this scenario's canonical Stats definition. Only explicitly changed metrics are saved. A blank metric is unset, not zero. The hidden simulation population/economy backend is independent and is not silently rewritten when similarly named scenario metrics change.", 10, Color(1, 1, 1, 0.58)))
+	for section_value in stats_meta.get("sections", []):
+		var section: Dictionary = section_value
+		column.add_child(_gap(6))
+		var head := str(section.get("icon", ""))
+		column.add_child(UI.label((head + " " + str(section.get("label", ""))).to_upper(), 10, Color(1, 1, 1, 0.72), 850, "Arial", 1))
+		var grid := _two_columns()
+		for stat_value in section.get("stats", []):
+			var stat: Dictionary = stat_value
+			var key := str(stat.get("key", ""))
+			var cell := VBoxContainer.new()
+			cell.add_theme_constant_override("separation", 3)
+			cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			cell.add_child(UI.label(str(stat.get("label", key)).to_upper(), 10, Color(1, 1, 1, 0.75), 700, "Arial", 1))
+			var decimals := int(stat.get("decimals", 0))
+			var minimum: float = float(stat["minimum"]) if stat.get("minimum") != null else -INF
+			var maximum: float = float(stat["maximum"]) if stat.get("maximum") != null else INF
+			var input := _number_line(str(_sd("ce_custom").get(key, "")), "", minimum, maximum, pow(10.0, -decimals) if decimals > 0 else 1.0, func(text: String) -> void:
+				var values := _sd("ce_custom")
+				values[key] = text
+				_s["ce_custom"] = values)
+			input.tooltip_text = str(stat.get("label", key))
+			cell.add_child(input)
+			var described := _note(str(stat.get("description", key)), 9, Color(1, 1, 1, 0.38))
+			described.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
+			cell.add_child(described)
+			grid.add_child(cell)
+		column.add_child(grid)
+	_body.add_child(box[0])
 
 
 func _render_sector_sliders(parent: VBoxContainer) -> void:
@@ -2133,9 +2234,9 @@ func _render_regions() -> void:
 					_s["rg"] = reply["result"]
 					_rg_reset_targets()
 				else:
-					_status = "Failed: %s" % str(reply.get("error", ""))
+					_fail("Failed: %s" % str(reply.get("error", "")))
 			else:
-				_status = "Failed: That map click did not resolve to a region id."
+				_fail("Failed: That map click did not resolve to a region id.")
 			_end_pick()))
 	_body.add_child(pick)
 	if state.is_empty():
@@ -2494,7 +2595,7 @@ func _render_groups() -> void:
 					_status = str((reply["result"] as Dictionary).get("message", ""))
 					world_changed.emit()
 				else:
-					_status = "Failed: %s" % str(reply.get("error", ""))
+					_fail("Failed: %s" % str(reply.get("error", "")))
 				await _load_into("cheats.groups.get", {}, "groups")))
 		area_column.add_child(edit_area)
 		if int(current.get("count", 0)) > 0:
@@ -2933,10 +3034,8 @@ func _render_parties(column: VBoxContainer) -> void:
 		grid.add_child(_cp_entry_line("parties", index, "Native name", "nameNative"))
 		grid.add_child(_cp_entry_line("parties", index, "Native abbreviation", "shortNameNative"))
 		grid.add_child(_cp_entry_line("parties", index, "Leader", "leader"))
-		grid.add_child(_cp_entry_line("parties", index, "Ideology label", "ideology"))
-		grid.add_child(_cp_field("Ideology family", _select(_s.get("ce_ideologies", []), str(party.get("ideologyFamily", "")), "Not specified", func(value: String) -> void:
-			_cp_entry_set("parties", index, "ideologyFamily", value))))
-		grid.add_child(_cp_entry_line("parties", index, "Subideology", "subideology"))
+		grid.add_child(_cp_entry_line("parties", index, "Ideology", "ideology"))
+		grid.add_child(_cp_entry_line("parties", index, "Political position", "politicalPosition"))
 		grid.add_child(_cp_entry_line("parties", index, "Seats held", "seats"))
 		grid.add_child(_cp_entry_line("parties", index, "Founded", "founded"))
 		grid.add_child(_cp_entry_line("parties", index, "Party colour (hex)", "color"))
@@ -2969,7 +3068,7 @@ func _render_parties(column: VBoxContainer) -> void:
 	add.pressed.connect(func() -> void:
 		var politics := _cp()
 		var entries: Array = politics.get("parties", [])
-		entries.append({"_editorKey": "custom-party-row:%s:%s" % [_now_id(), _base36(randi() % 60466176)], "id": "custom-party-" + _now_id(), "name": "New political entity", "shortName": "", "nameNative": "", "shortNameNative": "", "leader": "", "ideology": "", "ideologyFamily": "", "subideology": "", "role": "opposition", "seats": "", "founded": "", "color": "", "publicDescription": "", "publicPrioritiesText": "", "publicForeignPolicyText": "", "supportPercent": "", "influencePercent": "", "influenceLabel": "", "ruling": false, "coalition": false})
+		entries.append({"_editorKey": "custom-party-row:%s:%s" % [_now_id(), _base36(randi() % 60466176)], "id": "custom-party-" + _now_id(), "name": "New political entity", "shortName": "", "nameNative": "", "shortNameNative": "", "leader": "", "ideology": "", "ideologyFamily": "", "subideology": "", "politicalPosition": "", "role": "opposition", "seats": "", "founded": "", "color": "", "publicDescription": "", "publicPrioritiesText": "", "publicForeignPolicyText": "", "supportPercent": "", "influencePercent": "", "influenceLabel": "", "ruling": false, "coalition": false})
 		politics["parties"] = entries
 		_ce_composition()
 		_render())
@@ -3383,7 +3482,7 @@ func _fe_marker_card(marker: Dictionary) -> Control:
 				if str((entry as Array)[0]) == kind:
 					known = true
 			_s["fe_editing"] = key
-			_s["fe_fields"] = {"name": name, "kind": kind if known else "other", "customKind": "" if known else kind, "ownerCode": owner, "status": str(marker.get("status", "active")), "note": str(marker.get("note", "")), "foundedAt": str(marker.get("foundedAt", "")), "lng": str(marker.get("lng", "")), "lat": str(marker.get("lat", ""))}
+			_s["fe_fields"] = {"name": name, "kind": kind if known else "other", "customKind": "" if known else kind, "family": "" if known else str(marker.get("family", "")), "ownerCode": owner, "status": str(marker.get("status", "active")), "note": str(marker.get("note", "")), "foundedAt": str(marker.get("foundedAt", "")), "lng": str(marker.get("lng", "")), "lat": str(marker.get("lat", ""))}
 		_render())
 	row.add_child(edit)
 	var confirming := _sv("fe_confirm") == key
@@ -3464,6 +3563,8 @@ func _fe_marker_form(column: VBoxContainer, marker: Dictionary) -> void:
 	column.add_child(_kind_grid(str(fields.get("kind", "")), "kind"))
 	if str(fields.get("kind", "")) == "other":
 		column.add_child(_line(str(fields.get("customKind", "")), "Custom type, e.g. observatory", func(text: String) -> void: _fe_set("customKind", text)))
+		column.add_child(_field_label("Drawn as"))
+		column.add_child(_select(_sd("features").get("families", []), str(fields.get("family", "")) if not str(fields.get("family", "")).is_empty() else "landmark", "", func(value: String) -> void: _fe_set("family", value)))
 	column.add_child(_field_label("Associated country (optional)"))
 	column.add_child(_polity_select(str(fields.get("ownerCode", "")), "Neutral / no associated country", func(code: String) -> void: _fe_set("ownerCode", code)))
 	column.add_child(_field_label("Lifecycle status"))
@@ -3490,7 +3591,7 @@ func _fe_marker_form(column: VBoxContainer, marker: Dictionary) -> void:
 				_s["fe_fields"] = {}
 				world_changed.emit()
 			else:
-				_status = "Failed: %s" % str(reply.get("error", ""))
+				_fail("Failed: %s" % str(reply.get("error", "")))
 			await _load_into("cheats.features.get", {}, "features")
 			_end_pick()))
 	buttons.add_child(place)
@@ -3604,7 +3705,7 @@ func _fe_city_card(city: Dictionary) -> Control:
 					_s["fe_fields"] = {}
 					world_changed.emit()
 				else:
-					_status = "Failed: %s" % str(reply.get("error", ""))
+					_fail("Failed: %s" % str(reply.get("error", "")))
 				await _load_into("cheats.features.get", {}, "features")
 				_end_pick()))
 		buttons.add_child(place)
@@ -3655,6 +3756,8 @@ func _render_add_feature() -> void:
 	if type == "other":
 		_body.add_child(_gap(6))
 		_body.add_child(_line(str(fields.get("customKind", "")), "Custom type, e.g. observatory", func(text: String) -> void: _fe_set("customKind", text)))
+		_body.add_child(_field_label("Drawn as"))
+		_body.add_child(_select(_sd("features").get("families", []), str(fields.get("family", "")) if not str(fields.get("family", "")).is_empty() else "landmark", "", func(value: String) -> void: _fe_set("family", value)))
 	_body.add_child(_field_label("Name"))
 	var place := _btn("Place on map →", "primary")
 	_body.add_child(_line(str(fields.get("name", "")), "Alexandria" if is_city else "German Military Mission HQ", func(text: String) -> void:
@@ -3708,11 +3811,11 @@ func _af_begin_placement() -> void:
 	var name := str(fields.get("name", "")).strip_edges()
 	var custom_kind := str(fields.get("customKind", "")).strip_edges() if type == "other" else type
 	if name.is_empty():
-		_status = "Failed: Give the feature a name first."
+		_fail("Failed: Give the feature a name first.")
 		_render()
 		return
 	if type == "other" and custom_kind.is_empty():
-		_status = "Failed: Give the custom feature type a name."
+		_fail("Failed: Give the custom feature type a name.")
 		_render()
 		return
 	var is_city := type == "city"
@@ -3733,14 +3836,14 @@ func _af_begin_placement() -> void:
 			var placed := marker.duplicate()
 			placed["lng"] = at.x
 			placed["lat"] = at.y
-			reply = await engine.request("cheats.features.marker_add", {"marker": placed})
+			reply = await engine.request("cheats.features.marker_add", {"marker": placed, "type": type, "family": str(fields.get("family", ""))})
 			if reply.get("ok", false):
 				_status = "%s added as a persistent world feature." % name
 				_s["fe_fields"] = {"addType": type, "status": "active"}
 		if reply.get("ok", false):
 			world_changed.emit()
 		else:
-			_status = "Failed: %s" % str(reply.get("error", ""))
+			_fail("Failed: %s" % str(reply.get("error", "")))
 		await _load_into("cheats.features.get", {}, "features")
 		_end_pick())
 

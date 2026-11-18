@@ -73,88 +73,6 @@ const cleanEditorNumber = (value) => {
   return String(Math.round(number * 1000) / 1000);
 };
 
-const editorNumber = (value, { min = -Infinity, max = Infinity, label = "Value" } = {}) => {
-  if (value === "" || value === null || value === undefined) return null;
-  const number = Number(value);
-  if (!Number.isFinite(number)) throw new Error(`${label} must be a number.`);
-  if (number < min || number > max) throw new Error(`${label} must be between ${min} and ${max}.`);
-  return number;
-};
-
-const INDEX_FIELDS = [
-  ["sovereignty", "Sovereignty"],
-  ["foodAutonomy", "Food autonomy"],
-  ["energyAutonomy", "Energy autonomy"],
-  ["economicIndependence", "Economic independence"],
-  ["internalSecurity", "Internal security"],
-  ["internationalReputation", "International reputation"],
-];
-
-const SECTOR_FIELDS = [
-  ["agriculture", "Agriculture share"],
-  ["industry", "Industry share"],
-  ["services", "Services share"],
-];
-
-const changedEditorFields = (form = {}, loaded = {}) => {
-  const keys = new Set([...Object.keys(form ?? {}), ...Object.keys(loaded ?? {})]);
-  return new Set([...keys].filter((key) => String(form?.[key] ?? "") !== String(loaded?.[key] ?? "")));
-};
-
-const actorLeaderName = (actor) => {
-  const leader = actor?.government?.headOfGovernment || actor?.government?.headOfState || actor?.leader;
-  if (!leader) return "";
-  return String(typeof leader === "string" ? leader : leader?.name || "").trim();
-};
-
-const countryStatPatchFromForm = ({ form = {}, changed = new Set(), politicalActor = null } = {}) => {
-  const number = (key, bounds) => (changed.has(key) ? editorNumber(form[key], bounds) : null);
-  const field = (key) => (changed.has(key) ? String(form[key] ?? "").trim() : "");
-  const populationM = number("populationM", { min: 0.001, max: 20000, label: "Population (millions)" });
-  const gdpB = number("gdpB", { min: 0.001, max: 1000000, label: "GDP (billions)" });
-  const stability = number("stability", { min: 0, max: 100, label: "Stability" });
-  const economy = {};
-  const gdpGrowth = number("gdpGrowth", { min: -1000, max: 1000, label: "GDP growth" });
-  const inflation = number("inflation", { min: -1000, max: 1000, label: "Inflation" });
-  const unemployment = number("unemployment", { min: 0, max: 100, label: "Unemployment" });
-  const publicDebt = number("publicDebt", { min: 0, max: 1000, label: "Public debt" });
-  const budgetBalance = number("budgetBalance", { min: -1000, max: 1000, label: "Budget balance" });
-  if (gdpB != null) economy.gdp = Math.round(gdpB * 1e9);
-  if (gdpGrowth != null) economy.gdpGrowth = gdpGrowth;
-  if (inflation != null) economy.inflation = inflation;
-  if (unemployment != null) economy.unemployment = unemployment;
-  if (publicDebt != null) economy.publicDebt = publicDebt;
-  if (budgetBalance != null) economy.budgetBalance = budgetBalance;
-  if (field("currency")) economy.currency = field("currency");
-  const indices = {};
-  for (const [key, label] of INDEX_FIELDS) {
-    const value = number(key, { min: 0, max: 100, label });
-    if (value != null) indices[key] = value;
-  }
-  let gdpBreakdown = null;
-  if (SECTOR_FIELDS.some(([key]) => changed.has(key))) {
-    const shares = SECTOR_FIELDS.map(([key, label]) => editorNumber(form[key], { min: 0, max: 100, label }));
-    if (shares.some((value) => value != null)) {
-      if (shares.some((value) => value == null)) throw new Error("Set all three GDP-sector shares together.");
-      gdpBreakdown = { agriculture: shares[0], industry: shares[1], services: shares[2] };
-    }
-  }
-  const government = String(politicalActor?.government?.form ?? "").trim();
-  const leader = politicalActor ? actorLeaderName(politicalActor) : "";
-  const patch = {
-    ...(field("capital") ? { capital: field("capital") } : {}),
-    ...(field("continent") ? { continent: field("continent") } : {}),
-    ...(government ? { government } : {}),
-    ...(leader ? { leader } : {}),
-    ...(stability == null ? {} : { stability }),
-    ...(Object.keys(indices).length ? { indices } : {}),
-    ...(populationM == null ? {} : { population: { total: Math.round(populationM * 1e6) } }),
-    ...(Object.keys(economy).length ? { economy } : {}),
-    ...(gdpBreakdown ? { gdpBreakdown } : {}),
-  };
-  return Object.keys(patch).length ? patch : null;
-};
-
 const normalizeGroupColor = (value) => {
   const raw = cleanEventText(value).toLowerCase();
   if (/^#[0-9a-f]{6}$/.test(raw)) return raw;
@@ -358,6 +276,7 @@ export const register = (ctx) => {
 
   const readGame = () => gs.readGameData({ force: true });
   const readWorld = () => gs.readWorldState({ force: true });
+  const editorBaselines = new Map();
 
   const noteGmChange = async (kind, summary, step = null) => {
     try {
@@ -924,7 +843,7 @@ export const register = (ctx) => {
         impacts: {
           markerOps: [{
             op: "build",
-            marker: { name: `${country} National Library Annex`, kind: "landmark", ownerCode: country, status: "active", lat: 48.8336, lng: 2.3755, note: "Opened by the Game Master." },
+            marker: { name: `${country} National Library Annex`, kind: "landmark", family: "infrastructure", ownerCode: country, status: "active", lat: 48.8336, lng: 2.3755, note: "Opened by the Game Master." },
           }],
         },
       };
@@ -1456,7 +1375,7 @@ export const register = (ctx) => {
       if (!source || source === owner) return { moved: 0, message: "" };
       const game = await readGame();
       const count = await transferWholeCountry(source, owner, game);
-      if (count === 0) return { moved: 0, message: `Failed: no regions of ${sourceName || source} were found on the map, so nothing was annexed.` };
+      if (count === 0) return { moved: 0, failed: true, message: `Failed: no regions of ${sourceName || source} were found on the map, so nothing was annexed.` };
       await noteGmChange("territory", `Annexed the whole of ${sourceName || source} into ${ownerName || owner} by hand (${count} regions).`);
       return { moved: count, message: `${sourceName || source} annexed into ${ownerName || owner} (${count} regions). The map updates within a few seconds.` };
     },
@@ -1493,9 +1412,21 @@ export const register = (ctx) => {
     },
 
     "cheats.country.load": async ({ code, fallbackName = "" }) => {
-      const [world, colors] = await Promise.all([readWorld(), readJson(URLS.colors, { defaultValue: {}, force: true }).catch(() => ({}))]);
+      const econ = engine.econCurrency;
+      const [world, game, colors, statsRead] = await Promise.all([
+        readWorld(),
+        readGame(),
+        readJson(URLS.colors, { defaultValue: {}, force: true }).catch(() => ({})),
+        engine.statsSheet.loadStatSheetDefinition().then(
+          (definition) => ({ definition, error: "" }),
+          (error) => ({ definition: null, error: error?.message || "Could not load this scenario's Stats definition." }),
+        ),
+      ]);
+      const statsDefinition = statsRead.definition;
       const polity = world?.polityOverrides?.[code] ?? {};
       const sheet = world?.countryStats?.[code] ?? null;
+      const liveIntelligence = engine.spycraft.isIntelligenceRated(world, code) ? Number(world.intelligence[code]) : null;
+      const displayCurrency = econ.normalizeEconomicDisplayCurrency(game?.economicDisplayCurrency);
       const rgb = colors?.[code];
       const population = Number(sheet?.population?.total);
       const gdp = Number(sheet?.economy?.gdp);
@@ -1509,8 +1440,9 @@ export const register = (ctx) => {
         government: value(sheet?.government),
         leader: value(sheet?.leader),
         populationM: Number.isFinite(population) ? cleanEditorNumber(population / 1e6) : "",
-        gdpB: Number.isFinite(gdp) ? cleanEditorNumber(gdp / 1e9) : "",
+        gdpB: Number.isFinite(gdp) ? String(Number((econ.toDisplayCurrency(gdp, displayCurrency) / 1e9).toPrecision(12))) : "",
         gdpGrowth: value(sheet?.economy?.gdpGrowth),
+        annualGrowthRate: value(sheet?.population?.annualGrowthRate),
         inflation: value(sheet?.economy?.inflation),
         unemployment: value(sheet?.economy?.unemployment),
         publicDebt: value(sheet?.economy?.publicDebt),
@@ -1527,6 +1459,32 @@ export const register = (ctx) => {
         industry: value(sheet?.gdpBreakdown?.industry),
         services: value(sheet?.gdpBreakdown?.services),
       };
+      const customStats = plain(engine.countryEditorStats.countryCustomStatFormFromSheet({ sheet, definition: statsDefinition, liveIntelligence }));
+      const capabilities = plain(engine.countryCapabilities.countryCapabilityFormFromWorld(world, code));
+      const custom = statsDefinition?.custom === true;
+      editorBaselines.set(code, { statsDefinition, liveIntelligence, customStats, capabilities, economicDisplayCurrency: displayCurrency });
+      const stats = {
+        custom,
+        legacy: statsDefinition?.custom === false,
+        error: statsRead.error,
+        liveIntelligence,
+        hasIntelligence: custom && list(statsDefinition?.sections).some((section) => list(section?.stats).some((stat) => stat?.key === "intelligenceService")),
+        sections: custom
+          ? list(statsDefinition.sections).map((section) => ({
+            key: clean(section?.key),
+            label: clean(section?.label),
+            icon: clean(section?.icon),
+            stats: list(section?.stats).filter((stat) => stat?.key !== "intelligenceService").map((stat) => ({
+              key: clean(stat?.key),
+              label: clean(stat?.label),
+              description: clean(stat?.description) || clean(stat?.key),
+              minimum: Number.isFinite(stat?.minimum) ? stat.minimum : null,
+              maximum: Number.isFinite(stat?.maximum) ? stat.maximum : null,
+              decimals: Number(stat?.decimals) || 0,
+            })),
+          }))
+          : [],
+      };
       const politicsApi = engine.countryEditorPolitical;
       const politics = politicsApi?.politicalEditorStateFromWorld ? plain(politicsApi.politicalEditorStateFromWorld(world, code)) : null;
       const snapshot = politicsApi?.politicalDebugSnapshotFromWorld ? plain(politicsApi.politicalDebugSnapshotFromWorld(world, code)) : null;
@@ -1535,9 +1493,14 @@ export const register = (ctx) => {
       return {
         form,
         componentCount: Array.isArray(sheet?.territorialComponents) ? sheet.territorialComponents.length : 0,
-        perCapita: Number.isFinite(perCapita) ? perCapita : null,
+        perCapita: Number.isFinite(perCapita) ? econ.toDisplayCurrency(perCapita, displayCurrency) : null,
+        currencySymbol: econ.economicCurrencySymbol(displayCurrency),
+        currencyUnit: econ.economicDisplayUnitLabel(displayCurrency),
+        stats,
+        customStats,
+        capabilities,
+        capabilityFields: list(engine.countryCapabilities.COUNTRY_CAPABILITY_FIELDS).map((field) => ({ key: field.key, label: field.label, minimum: field.minimum, maximum: field.maximum, step: field.step })),
         politics,
-        ideologies: list(engine.ctPolitics?.IDEOLOGIES).map((ideology) => [ideology.id, ideology.name]),
         partyRoles: Object.entries(engine.ctPolitics?.PARTY_ROLE_LABELS ?? {}),
         registry: list(engine.politicalTraitRegistry?.POLITICAL_TRAIT_REGISTRY).map((entry) => ({
           key: entry.key, label: entry.label, description: entry.description, min: entry.min, max: entry.max, aliases: list(entry.aliases),
@@ -1572,12 +1535,21 @@ export const register = (ctx) => {
         return { text: "", error: error?.message || "Invalid political landscape." };
       }
     },
-    "cheats.country.save": async ({ code, form = {}, baseline = {}, politics = null, politicsBaseline = null, componentCount = 0, fallbackName = "" }) => {
+    "cheats.country.save": async ({ code, form = {}, baseline = {}, politics = null, politicsBaseline = null, componentCount = 0, fallbackName = "", customStats = {}, capabilities = {} }) => {
       if (!code) throw new Error("Pick a country first.");
+      const stats = engine.countryEditorStats;
+      const econ = engine.econCurrency;
+      const loaded = editorBaselines.get(code) ?? {};
       const world = await readWorld();
       const existing = world.polityOverrides?.[code] ?? {};
-      const changed = changedEditorFields(form, baseline);
-      const politicsChanged = Boolean(politics) && JSON.stringify(politics ?? null) !== JSON.stringify(politicsBaseline ?? null);
+      const changed = stats.changedEditorFields(form, baseline);
+      if (changed.has("gdpB")) {
+        const liveGame = await readGame();
+        if (econ.normalizeEconomicDisplayCurrency(liveGame?.economicDisplayCurrency) !== loaded.economicDisplayCurrency) {
+          throw new Error("GDP display currency changed while the Country Editor was open. Reload before editing GDP.");
+        }
+      }
+      const politicsChanged = Boolean(politics) && stats.editorStateChanged(politics, politicsBaseline);
       const requestedName = changed.has("name") ? String(form.name ?? "").trim() : "";
       const colorHex = changed.has("color") ? String(form.color ?? "").trim() : "";
       const nextName = requestedName || existing.name || fallbackName || code;
@@ -1598,9 +1570,30 @@ export const register = (ctx) => {
         capital: String(sheetBefore?.capital ?? "").trim(),
         stability: Number.isFinite(Number(sheetBefore?.stability)) ? Number(sheetBefore.stability) : null,
       };
-      const hasComponentBaseline = Number(componentCount) > 0;
+      const hasCustomStatDefinition = loaded.statsDefinition?.custom === true;
+      const hasComponentBaseline = loaded.statsDefinition?.custom === false && Number(componentCount) > 0;
       let nextSheet = world.countryStats?.[code] ?? null;
-      const patch = hasComponentBaseline ? countryStatPatchFromForm({ form, changed, politicalActor: nextPoliticalActor }) : null;
+      const changedCustom = stats.changedEditorFields(customStats, loaded.customStats);
+      if (hasCustomStatDefinition && changedCustom.has("intelligenceService")) {
+        const ratedNow = engine.spycraft.isIntelligenceRated(world, code);
+        if (ratedNow !== Number.isFinite(loaded.liveIntelligence)
+          || (ratedNow && Number(world.intelligence[code]) !== loaded.liveIntelligence)) {
+          throw new Error("The live intelligence rating changed while this editor was open. Reset the form and try again.");
+        }
+      }
+      const customEdit = hasCustomStatDefinition
+        ? stats.countryCustomStatEditFromForm({ form: customStats, loaded: loaded.customStats, definition: loaded.statsDefinition, liveIntelligence: loaded.liveIntelligence })
+        : { patch: null, intelligenceRating: null };
+      const capabilityPatch = engine.countryCapabilities.countryCapabilityPatchFromForm({ world, country: code, form: capabilities, loaded: loaded.capabilities });
+      const patch = hasCustomStatDefinition ? customEdit.patch : hasComponentBaseline
+        ? stats.countryStatPatchFromForm({
+          form: changed.has("gdpB") && String(form.gdpB ?? "").trim() !== ""
+            ? { ...form, gdpB: econ.fromDisplayCurrency(Number(form.gdpB) * 1e9, loaded.economicDisplayCurrency) / 1e9 }
+            : form,
+          changed,
+          politicalActor: nextPoliticalActor,
+        })
+        : null;
       if (patch) {
         nextSheet = gs.applyCountryStatPatchToWorld(world, code, patch);
         const reputation = Number(nextSheet?.indices?.internationalReputation);
@@ -1608,14 +1601,26 @@ export const register = (ctx) => {
           world.internationalReputation = { ...(world.internationalReputation || {}), [code]: Math.max(0, Math.min(100, Math.round(reputation))) };
         }
       }
+      if (customEdit.intelligenceRating != null) {
+        world.intelligence = { ...(world.intelligence || {}), [code]: customEdit.intelligenceRating };
+      }
+      if (capabilityPatch) engine.countryCapabilities.applyCountryCapabilityPatchToWorld(world, code, capabilityPatch);
       await gs.writeWorldState(world);
       const rgb = hexToRgb(colorHex);
       if (rgb) {
         const colors = await readJson(URLS.colors, { defaultValue: {}, force: true });
         await assets.writeJson(URLS.colors, { ...colors, [code]: rgb }, { pretty: true });
       }
+      const customUpdates = Object.entries(customEdit.patch?.customStats || {});
+      const customNotes = customUpdates.slice(0, 6).map(([key, value]) => `${key}: ${value}`);
+      if (customUpdates.length > customNotes.length) customNotes.push(`and ${customUpdates.length - customNotes.length} more Stats edits`);
       const edits = [
         previousName && previousName !== nextName ? `renamed it from ${previousName}` : "",
+        ...customNotes,
+        customEdit.intelligenceRating != null ? `live intelligence: ${customEdit.intelligenceRating}` : "",
+        ...Object.entries(capabilityPatch?.military || {}).map(([key, value]) => `military ${key}: ${value}`),
+        ...["intelligence", "warWeariness", "warResources"].filter((key) => capabilityPatch?.[key] !== undefined)
+          .map((key) => `${key}: ${capabilityPatch[key]}`),
         ...["leader", "government", "capital"].map((key) => {
           const after = String(nextSheet?.[key] ?? "").trim();
           return after && after !== headlineBefore[key] ? `${key}: ${after}` : "";
@@ -1626,14 +1631,21 @@ export const register = (ctx) => {
       ].filter(Boolean);
       const politicalSummary = [nextPoliticalActor?.government?.form, nextPoliticalActor?.government?.ideology]
         .map((value) => String(value || "").trim()).filter(Boolean).join(" · ");
-      await noteGmChange(hasComponentBaseline ? "stats" : "polity",
+      const wroteStats = Boolean(patch || customEdit.intelligenceRating != null || capabilityPatch);
+      await noteGmChange(wroteStats || (!hasCustomStatDefinition && hasComponentBaseline) ? "stats" : "polity",
         `Edited ${nextName} in the country editor${edits.length ? `: ${edits.join("; ")}` : ""}${politicalSummary ? `${edits.length ? "; " : ": "}Political World ${politicalSummary}` : ""}.`);
       if (typeof globalThis.dispatchEvent === "function" && typeof CustomEvent === "function") {
         globalThis.dispatchEvent(new CustomEvent("oh:country-stats-updated", { detail: { country: code } }));
       }
-      return hasComponentBaseline
-        ? `${nextName} updated. These values are the current baseline; future simulation can change them naturally.`
-        : `${nextName} identity updated. Generate a Stats baseline before editing national statistics.`;
+      return capabilityPatch
+        ? `${nextName} live intelligence/military capabilities updated. Future simulation may change them naturally.`
+        : hasCustomStatDefinition
+          ? wroteStats
+            ? `${nextName} scenario-defined Stats updated. Any hidden population/economy backend not explicitly edited remains unchanged.`
+            : `${nextName} identity or Political World updated; no scenario-defined Stats were changed.`
+          : hasComponentBaseline
+            ? `${nextName} updated. These values are the current baseline; future simulation can change them naturally.`
+            : `${nextName} identity updated. Generate a Stats baseline before editing standard national statistics.`;
     },
 
     "cheats.regions.inspect": async ({ index = -1, id = "" } = {}) => {
@@ -1908,6 +1920,7 @@ export const register = (ctx) => {
           lat: Number(feature?.geometry?.coordinates?.[1]),
         })),
         statuses: list(gs.MARKER_STATUSES),
+        families: list(engine.gmMapFeatureKinds.GM_MAP_FEATURE_FAMILIES).map((family) => [family.id, `${family.icon} ${family.label}`]),
       };
     },
 
@@ -1921,6 +1934,11 @@ export const register = (ctx) => {
       const current = data.markers.find((entry) => entry.id === marker.id) ?? marker;
       const statuses = list(gs.MARKER_STATUSES);
       const statusRaw = String(fields.status ?? current.status ?? "active").trim().toLowerCase();
+      const kinds = engine.gmMapFeatureKinds;
+      const family = kinds.gmFeatureFamily(
+        fields.kind ?? (list(kinds.GM_MAP_FEATURE_KINDS).some((entry) => entry.id === current.kind) ? current.kind : "other"),
+        fields.family ?? current.family,
+      ) || "";
       const next = {
         name: String(fields.name ?? current.name ?? "").trim(),
         kind: (fields.kind === "other" ? String(fields.customKind ?? "").trim() : String(fields.kind ?? current.kind ?? "landmark").trim()) || "landmark",
@@ -1930,6 +1948,7 @@ export const register = (ctx) => {
         note: String(fields.note ?? current.note ?? "").trim(),
         status: statuses.includes(statusRaw) ? statusRaw : "active",
         foundedAt: String(fields.foundedAt ?? current.foundedAt ?? "").trim(),
+        family: family || "landmark",
       };
       if (!next.name) throw new Error("Give the feature a name.");
       if (data.markers.some((entry) => entry.id !== current.id && String(entry.name || "").trim().toLowerCase() === next.name.toLowerCase())) {
@@ -1943,7 +1962,9 @@ export const register = (ctx) => {
       return { name: next.name };
     },
 
-    "cheats.features.marker_add": async ({ marker = {} }) => {
+    "cheats.features.marker_add": async ({ marker: given = {}, type = "", family: picked = "" }) => {
+      const family = type && type !== "city" ? engine.gmMapFeatureKinds.gmFeatureFamily(type, picked) : "";
+      const marker = { ...given, ...(family ? { family } : {}) };
       const name = String(marker.name ?? "").trim();
       const latestWorld = await readWorld();
       if (list(latestWorld?.markers).some((entry) => String(entry?.name ?? "").trim().toLowerCase() === name.toLowerCase())) {

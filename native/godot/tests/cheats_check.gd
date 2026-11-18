@@ -229,6 +229,8 @@ func _run() -> void:
 		_check(stability.text == "100", "and never past its maximum", stability.text)
 	await _shoot("cheats-03-country-numbers")
 	await _country_politics(cheats)
+	await _country_capabilities(cheats)
+	await _drawn_as(cheats)
 
 	await cheats._go("events")
 	await _wait(0.6)
@@ -430,9 +432,13 @@ func _country_politics(cheats: Node) -> void:
 	_check(_field_after(cheats, "LEGISLATURE") != null and _field_after(cheats, "LEGISLATURE") .text == "National Assembly" and _field_after(cheats, "LEGISLATURE SEATS") != null and _field_after(cheats, "LEGISLATURE SEATS").text == "577" and _field_after(cheats, "NEXT ELECTION") != null and _field_after(cheats, "NEXT ELECTION").text == "June 2017", "the government's legislature, its seats and the next election")
 	_check(_has_text(cheats, "Party roles update the government's actual party IDs. Support (%) and legislature seats are separate measures; blank seats mean unknown, while 0 means no seats."), "the parties' note")
 	_check(await _until(func() -> bool: return _has_text(cheats, "Seats assigned: 482 / 577. Unlisted or unassigned: 95. Named party support: 92% (remaining 8% not individually mapped)."), 6.0), "the seats and support add up live")
-	_check(_field_after(cheats, "NATIVE NAME") != null and _field_after(cheats, "NATIVE NAME").text == "Parti socialiste" and _field_after(cheats, "SEATS HELD") != null and _field_after(cheats, "SEATS HELD").text == "286" and _field_after(cheats, "FOUNDED") != null and _field_after(cheats, "PARTY COLOUR (HEX)") != null and _field_after(cheats, "SUBIDEOLOGY") != null and _field_after(cheats, "IDEOLOGY LABEL") != null and _field_after(cheats, "NATIVE ABBREVIATION") != null, "a party's native names, seats, founding and colour")
-	var family := _option_after(cheats, "IDEOLOGY FAMILY")
-	_check(family != null and family.get_item_text(family.selected) == "Social Democracy" and family.get_item_text(0) == "Not specified" and family.item_count == 11, "the ideology family is one of the ten", str(family.item_count) if family else "none")
+	_check(_field_after(cheats, "NATIVE NAME") != null and _field_after(cheats, "NATIVE NAME").text == "Parti socialiste" and _field_after(cheats, "SEATS HELD") != null and _field_after(cheats, "SEATS HELD").text == "286" and _field_after(cheats, "FOUNDED") != null and _field_after(cheats, "PARTY COLOUR (HEX)") != null and _field_after(cheats, "NATIVE ABBREVIATION") != null, "a party's native names, seats, founding and colour")
+	var ideology := _field_after(cheats, "IDEOLOGY")
+	_check(ideology != null and _field_after(cheats, "POLITICAL POSITION") != null and _option_after(cheats, "IDEOLOGY FAMILY") == null and _field_after(cheats, "SUBIDEOLOGY") == null and _field_after(cheats, "IDEOLOGY LABEL") == null, "a party takes a freeform Ideology and Political position", ideology.text if ideology else "none")
+	var position := _field_after(cheats, "POLITICAL POSITION")
+	if position:
+		position.text = "Centre-left"
+		position.text_changed.emit("Centre-left")
 	var role := _option_after(cheats, "PARTY ROLE")
 	_check(role != null and role.get_item_text(role.selected) == "Governing" and role.item_count == 7 and not _has_text(cheats, "Ruling / government"), "a party's role is chosen, not ticked")
 	await _shoot("cheats-03b-country-politics")
@@ -479,6 +485,7 @@ func _country_politics(cheats: Node) -> void:
 	await _until(func() -> bool: return not cheats._busy, 10.0)
 	await _wait(0.4)
 	_check(str(cheats._status).contains("must be a hex colour"), "a party colour must be hex", str(cheats._status))
+	_check(bool(cheats.get("_status_failed")) and _label_color(cheats, str(cheats._status)) == Color("#fca5a5"), "a failure is red because it failed, not because of its words")
 	cheats._s["open:cp_party_0"] = true
 	cheats._render()
 	await _wait(0.3)
@@ -499,7 +506,136 @@ func _country_politics(cheats: Node) -> void:
 	var government: Dictionary = actor.get("government", {})
 	var saved_parties: Array = actor.get("parties", [])
 	var saved_lr: Dictionary = saved_parties[1] if saved_parties.size() > 1 else {}
+	_check(str((saved_parties[0] as Dictionary).get("politicalPosition", "")) == "Centre-left", "a party's political position is saved as written", JSON.stringify(saved_parties[0]).left(200) if not saved_parties.is_empty() else "none")
 	_check(str(government.get("nextElection", "")) == "May 2017" and int(government.get("legislatureSeats", 0)) == 577 and str(saved_lr.get("role", "")) == "coalition" and (government.get("coalitionPartyIds", []) as Array).has("lr") and str((saved_parties[0] as Dictionary).get("color", "")) == "#e4002b", "the edit is saved to France's Political World", JSON.stringify(government).left(300))
+
+
+func _option_below(node: Node, label: String) -> OptionButton:
+	var labels: Array = []
+	_collect_labels(node, label, labels)
+	for found in labels:
+		var holder := (found as Node).get_parent()
+		var parent := holder.get_parent()
+		if parent == null:
+			continue
+		for index in range(holder.get_index() + 1, parent.get_child_count()):
+			var child := parent.get_child(index)
+			if child is OptionButton:
+				return child
+	return null
+
+
+func _label_color(node: Node, wanted: String) -> Color:
+	if node is Label and (node as Label).text == wanted and (node as Label).is_visible_in_tree():
+		return (node as Label).get_theme_color("font_color")
+	for child in node.get_children():
+		var found := _label_color(child, wanted)
+		if found != Color(0, 0, 0, 0):
+			return found
+	return Color(0, 0, 0, 0)
+
+
+func _scroll_to(cheats: Node, label: String) -> void:
+	var labels: Array = []
+	_collect_labels(cheats, label, labels)
+	var scroller := cheats.find_children("*", "ScrollContainer", true, false)
+	if labels.is_empty() or scroller.is_empty():
+		return
+	var scroll := scroller[0] as ScrollContainer
+	scroll.scroll_vertical = int(maxf(0.0, (labels[0] as Control).global_position.y - scroll.get_global_rect().position.y + scroll.scroll_vertical - 24.0))
+	await _wait(0.3)
+
+
+func _country_capabilities(cheats: Node) -> void:
+	var sheet: Dictionary = await main.engine.request("country.sheet", {"target": "France"})
+	_check(sheet.get("ok", false) and str((sheet.get("result", {}) as Dictionary).get("status", "")) == "ready", "France has a Stats baseline to edit", JSON.stringify(sheet).left(200))
+	await cheats._ce_load("France")
+	await _wait(0.8)
+	_check(_has_text(cheats, "INTELLIGENCE & MILITARY CAPABILITIES") and _has_text(cheats, "Edit the live values used by espionage and war simulation. Blank military ratings inherit their scenario defaults."), "the Country Editor's live capabilities, under the Political World")
+	var labels := ["INTELLIGENCE SERVICE", "TROOP QUALITY", "TECHNOLOGY", "SPENDING", "MANPOWER SHARE (%)", "LAND CAPABILITY", "NAVAL CAPABILITY", "AIR CAPABILITY", "WAR WEARINESS", "WAR RESOURCES"]
+	var found := 0
+	for label in labels:
+		if _field_after(cheats, label) != null:
+			found += 1
+	_check(found == labels.size(), "the ten capability fields, beta's order", "%d" % found)
+	var intelligence := _field_after(cheats, "INTELLIGENCE SERVICE")
+	var quality := _field_after(cheats, "TROOP QUALITY")
+	_check(intelligence != null and intelligence.placeholder_text == "Unrated (default 40)" and quality != null and quality.placeholder_text == "Scenario/default", "a blank capability says what it inherits")
+	_check(_has_text(cheats, "GDP ($ BILLIONS) · WHOLE POLITY") and _has_text(cheats, "Input shown in 2026-USD equivalent. Saved using canonical USD; domestic currency is separate.") and _field_after(cheats, "ANNUAL POPULATION CHANGE (%) · OPTIONAL") != null, "the national baseline in dollars, with the annual population change")
+	_check(str(cheats.call("_ce_per_capita_text")).begins_with("$"), "GDP per capita derived in dollars", str(cheats.call("_ce_per_capita_text")))
+	await _scroll_to(cheats, "INTELLIGENCE & MILITARY CAPABILITIES")
+	await _shoot("cheats-03d-country-capabilities")
+	await _scroll_to(cheats, "NATIONAL BASELINE")
+	await _shoot("cheats-03e-country-baseline")
+	if quality:
+		quality.text = "77"
+		quality.text_changed.emit("77")
+	var save := _find_button(cheats, "Save present-state edit")
+	if save:
+		save.pressed.emit()
+	await _until(func() -> bool: return not cheats._busy, 10.0)
+	await _wait(1.0)
+	_check(str(cheats._status) == "France live intelligence/military capabilities updated. Future simulation may change them naturally." and not bool(cheats.get("_status_failed")), "a capability edit is saved and said in blue", str(cheats._status))
+	_check(str((cheats._sd("ce_caps") as Dictionary).get("quality", "")) == "77", "the reloaded editor reads the saved troop quality", str((cheats._sd("ce_caps") as Dictionary).get("quality", "")))
+	var gdp := _field_after(cheats, "GDP ($ BILLIONS) · WHOLE POLITY")
+	var before: Dictionary = await main.engine.request("doc.read", {"key": "world"})
+	var gdp_before := float(((((before.get("result", {}) as Dictionary).get("countryStats", {}) as Dictionary).get("France", {}) as Dictionary).get("economy", {}) as Dictionary).get("gdp", 0.0))
+	if gdp:
+		gdp.text = "3000"
+		gdp.text_changed.emit("3000")
+	save = _find_button(cheats, "Save present-state edit")
+	if save:
+		save.pressed.emit()
+	await _until(func() -> bool: return not cheats._busy, 10.0)
+	await _wait(1.0)
+	var after: Dictionary = await main.engine.request("doc.read", {"key": "world"})
+	var gdp_after := float(((((after.get("result", {}) as Dictionary).get("countryStats", {}) as Dictionary).get("France", {}) as Dictionary).get("economy", {}) as Dictionary).get("gdp", 0.0))
+	_check(absf(gdp_after - 3.0e12) < 1.0e7 and gdp_before != gdp_after, "a GDP typed in dollars is saved as 2026 USD", "%s → %s" % [str(gdp_before), str(gdp_after)])
+
+
+func _drawn_as(cheats: Node) -> void:
+	await cheats._go("add-feature")
+	await _wait(0.6)
+	cheats._fe_set("addType", "other")
+	cheats._render()
+	await _wait(0.3)
+	var drawn := _option_below(cheats, "DRAWN AS")
+	var shown := PackedStringArray()
+	if drawn:
+		for index in range(drawn.item_count):
+			shown.append(drawn.get_item_text(index))
+	_check(drawn != null and drawn.get_item_text(drawn.selected) == "• Landmark" and ", ".join(shown) == "• Landmark, ● Settlement, ▲ Military, ◆ Resource, ■ Infrastructure, ✦ Industry and science, ◇ Diplomatic", "a type of your own is drawn as the family you pick", ", ".join(shown))
+	await _shoot("cheats-12-add-feature-drawn-as")
+	var added: Dictionary = await main.engine.request("cheats.features.marker_add", {"marker": {"name": "Pic du Midi Observatory", "kind": "observatoire", "ownerCode": "France", "status": "active", "note": "", "foundedAt": "", "lng": 0.142, "lat": 42.936}, "type": "other", "family": "industry-science"})
+	var world: Dictionary = await main.engine.request("doc.read", {"key": "world"})
+	var family := ""
+	for marker in ((world.get("result", {}) as Dictionary).get("markers", []) as Array):
+		if str((marker as Dictionary).get("name", "")) == "Pic du Midi Observatory":
+			family = str((marker as Dictionary).get("family", ""))
+	_check(added.get("ok", false) and family == "industry-science", "the structure keeps the family picked for it", family)
+	var built: Dictionary = await main.engine.request("cheats.features.marker_add", {"marker": {"name": "Brest Arsenal", "kind": "military base", "ownerCode": "France", "status": "active", "note": "", "foundedAt": "", "lng": -4.49, "lat": 48.38}, "type": "military base", "family": ""})
+	world = await main.engine.request("doc.read", {"key": "world"})
+	var base_family := ""
+	for marker in ((world.get("result", {}) as Dictionary).get("markers", []) as Array):
+		if str((marker as Dictionary).get("name", "")) == "Brest Arsenal":
+			base_family = str((marker as Dictionary).get("family", ""))
+	_check(built.get("ok", false) and base_family == "military", "a type the tools offer is drawn as its own family", base_family)
+	await cheats._go("edit-feature")
+	await _wait(0.6)
+	var edit_buttons: Array = []
+	var stack: Array = [cheats]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		if node is Button and (node as Button).text == "Edit" and (node as Button).is_visible_in_tree() and _has_text(node.get_parent(), "Pic du Midi Observatory"):
+			edit_buttons.append(node)
+		for child in node.get_children():
+			stack.append(child)
+	if not edit_buttons.is_empty():
+		(edit_buttons[0] as Button).pressed.emit()
+	await _wait(0.4)
+	var edit_drawn := _option_below(cheats, "DRAWN AS")
+	_check(edit_drawn != null and edit_drawn.get_item_text(edit_drawn.selected) == "✦ Industry and science", "editing a structure of your own type shows how it is drawn", edit_drawn.get_item_text(edit_drawn.selected) if edit_drawn else "none")
+	await _shoot("cheats-13-edit-feature-drawn-as")
 
 
 func _console() -> void:
