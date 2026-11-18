@@ -72,7 +72,7 @@ import { roundRulesOf } from "./hostRules.js";
 import { STAND_IN_NOT_SHARED, standInOf } from "../../runtime/standInGames.js";
 import { getResolvedFallbackList, sharedRoundRefusal } from "../../Game/AI/providerConfig.js";
 import { backgroundAiAllowance, requestSettings } from "../../Game/AI/requestBudget.js";
-import { setHostReadsFigures } from "../../runtime/sharedReadings.js";
+import { setHostReadsFigures, setReadingsOrder } from "../../runtime/sharedReadings.js";
 import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 
 const SCREEN = "host-screen";
@@ -690,9 +690,15 @@ const boot = async () => {
     // From here this window is the game's host: the engine reads who people
     // play from the game (runtime/humanPolities.js), and nowhere else does.
     setHostingSharedGame(true, { host });
-    // And every change it makes is applied in the host's one order.
+    // And every change it makes is applied in the host's one order: the
+    // readings the game makes by itself too, each write one entry, held open
+    // until it ends (runtime/sharedReadings.js).
     const hosting = gameHost;
     writeInOrder = (label, write) => hosting.write(label, write);
+    setReadingsOrder((label) => new Promise((entered) => {
+      void hosting.write(`reading:${label}`, () => new Promise((leave) => entered(leave)))
+        .catch((error) => logDebugEvent("shared game", `a reading's write did not run: ${String(error?.message || error)}`, undefined, { problem: true }));
+    }));
     const rulesChanged = () => hosting.control.setRules(readRules());
     window.addEventListener("storage", rulesChanged);
     forgetRules = () => window.removeEventListener("storage", rulesChanged);
@@ -763,6 +769,7 @@ const boot = async () => {
         session = null;
         await stopping.stop();
         writeInOrder = (label, write) => write();
+        setReadingsOrder(null);
         setHostingSharedGame(false);
         setWorldLanguage("");
         setHostReadsFigures(true);

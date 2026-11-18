@@ -188,7 +188,8 @@ test("a rating's figures are written only where a country had none, or handed to
   assert.match(ensure, /waitForRating\(militaryWanted, name, commit\)/);
   assert.match(ensure, /const \{ write, names: wanted \} = nextRatingBatch\(waiting\);/);
   assert.match(ensure, /if \(write\) \{\n\s*await write\(read\);/);
-  assert.match(ensure, /kept\.push\(\.\.\.await takeMilitaryRatings\(read, \{ campaign \}\)\);/);
+  // (A rating it made by itself is written in the host's order while it hosts a shared game: runtime/sharedReadings.js.)
+  assert.match(ensure, /kept\.push\(\.\.\.await takeMilitaryRatings\(read, \{ campaign, inOrder: "ratings" \}\)\);/);
 });
 
 test("in the Workshop, the AI fills only the fields the designer left empty, rated against the scenario's others", () => {

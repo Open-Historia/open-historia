@@ -31,3 +31,22 @@ export const setHostReadsFigures = (value) => {
 
 // Whether the game's own readings are made on this device's AI.
 export const hostReadsFigures = () => hostReads;
+
+// And where they are written. Each reading asks the AI out of turn and then
+// writes what it was told; in the engine hosting a shared game that write was
+// made beside the host's one queue (rule 2: every change to the world is one
+// entry of it), between a player's request and the next (FOLLOWUPS A6). While
+// the engine shares a game it sets `enter(label)`, which resolves when an entry
+// of its queue begins with the function that ends it (host/engineMain.js): the
+// write half of every reading runs inside one (gameplay.js beginStatsWrite,
+// inReadingOrder). Anywhere else, and before and after sharing, there is none
+// and a reading writes at once, as single player always has.
+let enterOrder = null;
+
+export const setReadingsOrder = (enter) => {
+  enterOrder = typeof enter === "function" ? enter : null;
+};
+
+// The entry a reading's write is made in (a promise of the function that ends
+// it), or null when there is no host's order to make it in.
+export const readingEntry = (label) => (enterOrder ? enterOrder(String(label || "reading")) : null);

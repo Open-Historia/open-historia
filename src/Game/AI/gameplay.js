@@ -22,7 +22,7 @@ import { describeBasisAction, describeUnknownBasis, sameRegionChange, screenTerr
 import { GROUP_OP_KINDS, PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, findGroupKey, groupOpKind, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import { hostingSharedGame, humanCountriesOf, humanCountriesWith, orderOwner } from "../../runtime/humanPolities.js";
-import { hostReadsFigures } from "../../runtime/sharedReadings.js";
+import { hostReadsFigures, readingEntry } from "../../runtime/sharedReadings.js";
 import { uiString } from "../../runtime/translator.js";
 import { withTurnSeaBattles } from "../../runtime/naval/record.js";
 import { withFrontFortifications } from "../../runtime/warGeography.js";
@@ -13839,8 +13839,31 @@ const waitForSimulationIdle = async ({ signal, timeoutMs = 10 * 60 * 1000 } = {}
 // so wait for it and take the lock before the first await of the write (#724);
 // and a sheet read from a campaign the player has since left belongs to
 // nobody, since the world endpoint follows the open campaign. Returns holding
-// the lock; the caller ends it once the write is done.
-const beginStatsWrite = async (campaign, signal) => {
+// the lock, with the function that ends the write's entry (`inOrder`, below);
+// the caller ends both once the write is done: endSimulation(), then that.
+//
+// `inOrder`: a reading the game makes by itself out of turn, named. While this
+// engine hosts a shared game its write is one entry of the host's queue
+// (runtime/sharedReadings.js readingEntry), and inside it the queue is the
+// lock: no turn and no other write runs beside it, and the Game Master
+// thinking under the lock is not waited for with every player's request
+// behind it. Never given by a write already inside an entry (the host taking a
+// device's reading: takeCountryStatSheet, takeMilitaryRatings for the host).
+const beginStatsWrite = async (campaign, signal, { inOrder = "" } = {}) => {
+  const entry = inOrder ? readingEntry(inOrder) : null;
+  if (entry) {
+    const leave = await entry;
+    beginSimulation();
+    try {
+      throwIfAborted(signal);
+      assertCampaignUnchanged(campaign, activeCampaignId(), "stat sheet");
+    } catch (error) {
+      endSimulation();
+      leave();
+      throw error;
+    }
+    return leave;
+  }
   // Waited for and taken in one step (simulationStatus.js enterSimulation): a
   // turn, or a shared game's round, that began meanwhile is waited out, and
   // two sheets do not both find the world free at once.
@@ -13851,6 +13874,21 @@ const beginStatsWrite = async (campaign, signal) => {
   } catch (error) {
     endSimulation();
     throw error;
+  }
+  return () => {};
+};
+
+// A reading's write that takes no lock (it waited for the simulation to be
+// idle first), named: one entry of the host's queue while this engine hosts a
+// shared game (beginStatsWrite `inOrder`), at once anywhere else.
+const inReadingOrder = async (label, write) => {
+  const entry = readingEntry(label);
+  if (!entry) return write();
+  const leave = await entry;
+  try {
+    return await write();
+  } finally {
+    leave();
   }
 };
 
@@ -13920,7 +13958,9 @@ export const assessIntelligenceService = async (target, { signal, requestKind } 
 // again: a turn may have rated the service meanwhile (its number wins), and the
 // campaign in front of the player may have changed (then this belongs to
 // nobody).
-const storeFirstIntelligenceRating = async (name, assessment, { campaign, signal = null } = {}) => {
+// `inOrder`: false for the host taking a device's sheet, whose write is in its
+// request's own entry already (beginStatsWrite).
+const storeFirstIntelligenceRating = async (name, assessment, { campaign, signal = null, inOrder = true } = {}) => {
   const rating = normalizeIntelligenceRating(assessment?.intelligence);
   if (rating === null) throw new Error("The assessment carried no rating.");
   await waitForSimulationIdle({ signal });
@@ -13929,13 +13969,14 @@ const storeFirstIntelligenceRating = async (name, assessment, { campaign, signal
   // Applied to the world as it is inside the write queue: a turn may have
   // rated the service meanwhile, and its number wins.
   let ratedMeanwhile = null;
-  await mutateWorldState((latest) => {
+  const write = () => mutateWorldState((latest) => {
     if (isIntelligenceRated(latest, name)) {
       ratedMeanwhile = intelligenceOf(latest, name);
       return null;
     }
     return { ...latest, intelligence: { ...(latest.intelligence ?? {}), [name]: rating } };
   });
+  await (inOrder ? inReadingOrder("intelligence-rating", write) : write());
   if (ratedMeanwhile !== null) return ratedMeanwhile;
   const service = normalizeString(assessment?.service);
   logDebugEvent("espionage", `${name}'s intelligence service rated ${rating}/100 on first inspection${service ? ` (${service})` : ""}.`, {
@@ -14013,7 +14054,7 @@ export const ensureConflictBackends = (targets, { reason = "" } = {}) => {
     const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
     const read = readConflictBackends(response?.toolInput ?? extractJsonPayload(rawText), asked);
     if (read.length === 0) return null;
-    await beginStatsWrite(campaign);
+    const leave = await beginStatsWrite(campaign, null, { inOrder: "conflict-figures" });
     try {
       const kept = [];
       await mutateWorldState((latest) => {
@@ -14036,6 +14077,7 @@ export const ensureConflictBackends = (targets, { reason = "" } = {}) => {
       return kept;
     } finally {
       endSimulation();
+      leave();
     }
   });
 };
@@ -14062,8 +14104,9 @@ const militaryTried = new Set();
 const triedKey = (name) => `${activeCampaignId()}|${name.toLowerCase()}`;
 // The figures a rating brought, kept on each one's sheet: only those it had none of, field by field, and its people
 // where nobody knew them, so a rating never writes over figures that stand (the host takes a device's this way too).
-// Resolves the sheets' keys it wrote.
-export const takeMilitaryRatings = async (read, { campaign = activeCampaignId() } = {}) => {
+// Resolves the sheets' keys it wrote. `inOrder`: a rating the game made by itself, written as one entry of
+// the host's queue while it hosts a shared game (beginStatsWrite); never for the host taking a device's, in its own.
+export const takeMilitaryRatings = async (read, { campaign = activeCampaignId(), inOrder = "" } = {}) => {
   const kept = [];
   const rows = normalizeArray(read).map((entry) => ({
     name: normalizeString(entry?.name),
@@ -14071,7 +14114,7 @@ export const takeMilitaryRatings = async (read, { campaign = activeCampaignId() 
     population: Math.max(0, Math.round(Number(entry?.population) || 0)),
   })).filter((entry) => entry.name && (entry.military || entry.population > 0));
   if (rows.length === 0) return kept;
-  await beginStatsWrite(campaign);
+  const leave = await beginStatsWrite(campaign, null, { inOrder });
   try {
     await mutateWorldState((latest) => {
       const own = militaryLookup(latest);
@@ -14090,6 +14133,7 @@ export const takeMilitaryRatings = async (read, { campaign = activeCampaignId() 
     }, { emitEvents: false });
   } finally {
     endSimulation();
+    leave();
   }
   return kept;
 };
@@ -14156,7 +14200,7 @@ export const ensureMilitaryFigures = (targets, { reason = "", commit = null } = 
         kept.push(...read.map((entry) => entry.name));
         continue;
       }
-      kept.push(...await takeMilitaryRatings(read, { campaign }));
+      kept.push(...await takeMilitaryRatings(read, { campaign, inOrder: "ratings" }));
     }
     if (kept.length > 0) logDebugEvent("turn", `Military figures for ${kept.length} countr${kept.length === 1 ? "y were" : "ies were"} rated against the others.`, { countries: kept });
     return kept;
@@ -14300,7 +14344,7 @@ export const takeCountryStatSheet = async ({ name: target, sheet, continuity = n
     endSimulation();
   }
   if (taken && normalizeIntelligenceRating(rating) !== null) {
-    await storeFirstIntelligenceRating(name, { intelligence: rating }, { campaign }).catch((error) => {
+    await storeFirstIntelligenceRating(name, { intelligence: rating }, { campaign, inOrder: false }).catch((error) => {
       logDebugEvent("espionage", `${name}: the rating that came with a player's stat sheet was not kept: ${error?.message || error}`);
     });
   }
@@ -14366,13 +14410,14 @@ export const assessPoliticalLandscape = async (target, { signal, commit = null }
   throwIfAborted(signal);
   if (activeCampaignId() !== campaign) throw new Error("The campaign changed while the parties were being compiled.");
   let folded = null;
-  await mutateWorldState((latest) => {
+  // (In the host's one order while this engine hosts a shared game: inReadingOrder.)
+  await inReadingOrder("parties", () => mutateWorldState((latest) => {
     const actors = latest?.politicalActors && typeof latest.politicalActors === "object" ? latest.politicalActors : {};
     const byPolity = actors.byPolity && typeof actors.byPolity === "object" ? actors.byPolity : {};
     const key = Object.keys(byPolity).find((entry) => entry.toLowerCase() === name.toLowerCase()) ?? actorKey;
     folded = foldLandscapeIntoActor(byPolity[key] ?? null, entry, { polityKey: key });
     return folded ? { ...latest, politicalActors: { ...actors, byPolity: { ...byPolity, [key]: folded } } } : null;
-  });
+  }));
   return folded;
 };
 
@@ -14536,7 +14581,7 @@ const generateScenarioCustomStatSheet = async ({
     // Existing saves have no custom fingerprint. Seal the current evidence
     // without silently revisiting three years of already-assessed history.
     if (decision.migrate && statCode) {
-      await beginStatsWrite(campaign, signal);
+      const leave = await beginStatsWrite(campaign, signal, { inOrder: "stat-sheet" });
       try {
         await mutateWorldState((world) => {
           applyCountryStatPatchToWorld(world, statCode, {}, { continuity });
@@ -14544,6 +14589,7 @@ const generateScenarioCustomStatSheet = async ({
         }, { emitEvents: false });
       } finally {
         endSimulation();
+        leave();
       }
     }
     console.info(`[stats custom] ${target}: reused persistent baseline (${decision.reason}); no AI request.`);
@@ -14607,7 +14653,7 @@ Reassess existing values only as a response to newly changed canonical evidence.
   if (!statCode || !sheet) return sheet;
   if (commit) return commit({ code: statCode, sheet, continuity });
 
-  await beginStatsWrite(campaign, signal);
+  const leave = await beginStatsWrite(campaign, signal, { inOrder: "stat-sheet" });
   try {
     try {
       const persisted = await persistCountryStatsBackground({
@@ -14655,6 +14701,7 @@ Reassess existing values only as a response to newly changed canonical evidence.
     return nextSheet;
   } finally {
     endSimulation();
+    leave();
   }
 };
 
@@ -15234,7 +15281,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
     };
     if (commit) return commit({ code: statCode, sheet: guarded.sheet, continuity });
 
-    await beginStatsWrite(campaign, signal);
+    const leave = await beginStatsWrite(campaign, signal, { inOrder: "stat-sheet" });
     try {
       const commitStartedAt =
         typeof performance !== "undefined" && performance.now
@@ -15348,6 +15395,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       }
     } finally {
       endSimulation();
+      leave();
     }
   }
 
