@@ -65,8 +65,14 @@ export const covertOperationsBlock = (operations, { people = [] } = {}) => {
   ].join("\n");
 };
 
-export const untracedTargets = (operations) => [...new Set((Array.isArray(operations) ? operations : [])
+// The countries an operation took place in that was never traced to its owner:
+// each service's own (`owner`), whose roster line in that country its brief
+// leaves out for the turn (spycraft.js espionageBrief). Every operation's, with
+// no owner given. A guest's untraced sabotage left the guest's own line in
+// ("has agents in: Morocco") and took the host's out (the review of 2026-11-18).
+export const untracedTargets = (operations, { owner = "" } = {}) => [...new Set((Array.isArray(operations) ? operations : [])
   .filter((operation) => operation.outcome !== "foiled" && !(operation.caught && operation.identified))
+  .filter((operation) => !clean(owner) || clean(operation.owner).toLocaleLowerCase() === clean(owner).toLocaleLowerCase())
   .map((operation) => clean(operation.target))
   .filter(Boolean))];
 

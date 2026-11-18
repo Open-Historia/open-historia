@@ -3264,11 +3264,11 @@ ${pending}`);
       const spymasters = spymastersOf(game);
       const briefs = [];
       for (const owner of spymasters) {
-        const own = regionKey(owner) === regionKey(game?.country);
         const brief = espionageBrief(world, await readOpenedIntercepts({ owner, gameCountry: normalizeString(game?.country) }), {
           playerPolity: owner,
-          // The covert operations the skip plans are the game country's (planCovertOperations).
-          hiddenTargets: own ? normalizeArray(variables.covertHiddenTargets) : [],
+          // Where this service's own operations went untraced (the skip plans
+          // every service's, planCovertOperations): only its own line is left out.
+          hiddenTargets: normalizeArray(variables.covertHiddenTargets?.[owner]),
           // A player's agent inside another player's country: what it knows
           // is told, and that its own player decides what it does with it.
           people: spymasters,
@@ -17055,7 +17055,9 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   }
   // A player's government that learns of an operation decides by its own player's orders.
   const covertBrief = covertOperationsBlock(state.covertOperations, { people: humanCountriesOf(bundle.game) });
-  const covertHiddenTargets = untracedTargets(state.covertOperations);
+  // Each service's own untraced operations, by spymaster: only its own hide its
+  // roster line in that country (covertOperationsDirective.js untracedTargets).
+  const covertHiddenTargets = Object.fromEntries(spymastersOf(bundle.game).map((owner) => [owner, untracedTargets(state.covertOperations, { owner })]));
 
   // Starts at 0 on a fresh jump, and at the failed segment on a retry.
   let segmentIndex = state.nextSegment;
