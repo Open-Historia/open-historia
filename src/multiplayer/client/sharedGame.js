@@ -33,7 +33,7 @@ import { createRoundPayer } from "./roundPayer.js";
 import { createLoopbackScreenSide } from "../transport/loopback.js";
 import { createClientSession } from "../session/client.js";
 import { probeNetwork } from "../transport/peer.js";
-import { hostingHere, joinFailure, scenarioDiffers, scenarioMissing, unreadableFromHost } from "./joinProgress.js";
+import { hostingHere, joinFailure, scenarioDiffers, scenarioMissing, scenarioUnchecked, unreadableFromHost } from "./joinProgress.js";
 import { chooseStandInScenario } from "./standIn.js";
 import { setSharedGameFeatures } from "../../runtime/gameFeatures.js";
 import { setWorldLanguage } from "../../runtime/i18n.js";
@@ -468,7 +468,7 @@ const prepareStandIn = async (owner, lobby) => {
   const hostName = String(lobby?.scenario?.name || "").trim();
   // The copy whose map is the host's (client/standIn.js), by the checksum the
   // host states (server/scenarioFingerprint.js), whatever it is called here.
-  const { scenario, differs } = await chooseStandInScenario({
+  const { scenario, differs, unchecked } = await chooseStandInScenario({
     scenarios: library.scenarios ?? [],
     host: lobby?.scenario ?? {},
     fingerprintOf: (id) => fetch(`/api/scenarios/${encodeURIComponent(id)}/fingerprint`)
@@ -479,6 +479,7 @@ const prepareStandIn = async (owner, lobby) => {
     logDebugEvent("shared game", differs
       ? `this library's copy of the host's scenario has another map: "${hostName}"`
       : `the host's scenario is not in this library: "${hostName}" (${String(lobby?.scenario?.id || "no id")})`, undefined, { problem: true });
+    if (unchecked) throw new Error(scenarioUnchecked(hostName));
     throw new Error(differs ? scenarioDiffers(hostName) : scenarioMissing(hostName));
   }
   const scenarioId = String(scenario.id);

@@ -75,6 +75,8 @@ import { setHostReadsFigures } from "../../runtime/sharedReadings.js";
 import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 
 const SCREEN = "host-screen";
+// Why a game is not shared when its map's checksum cannot be read (openGame).
+const MAP_UNCHECKED = "This game's map could not be read to check it against your guests' copies, so it is not shared: they could see another world. Check that its scenario is still in your library, then share it again.";
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => (Array.isArray(value) ? value : []);
 
@@ -456,7 +458,13 @@ const boot = async () => {
       .then((response) => (response.ok ? response.json() : null))
       .then((answer) => (/^[0-9a-f]{64}$/.test(String(answer?.fingerprint || "")) ? String(answer.fingerprint) : ""))
       .catch(() => "");
-    if (!fingerprint) logDebugEvent("shared game", "this game's map has no checksum: guests' copies are not checked against it", undefined, { problem: true });
+    // A map that cannot be checked is not shared: a host with no checksum
+    // hosted all the same, and each guest drew whatever its library held under
+    // the scenario's id or name (the review of 2026-11-18, wars 10).
+    if (!fingerprint) {
+      logDebugEvent("shared game", "this game's map has no checksum: it is not shared, as no guest's copy could be checked against it", undefined, { problem: true });
+      throw new Error(MAP_UNCHECKED);
+    }
     // What decides each round on this computer beyond the lobby's settings
     // (host/hostRules.js), stated in the lobby: the game's difficulty and this
     // device's AI settings, read again whenever the host changes one in its own

@@ -104,6 +104,10 @@ export const hostingHere = () => "This computer is hosting a shared game. Anothe
 // version, or one changed since (server/scenarioFingerprint.js).
 export const scenarioDiffers = (name) => `Your copy of "${String(name || "the host's scenario").slice(0, 120)}" is not the host's: its map differs, so you would not see the world the game is played in. Import the host's copy of the scenario, then join again.`;
 
+// The host stated no checksum of its map: no copy here can be checked against it, and a game is never drawn on an
+// unchecked copy (the review of 2026-11-18, wars 10). A host of this version never shares a game it cannot check.
+export const scenarioUnchecked = (name) => `The host's map of "${String(name || "its scenario").slice(0, 120)}" came with no checksum, so your copy cannot be checked against it, and you could see another world. Ask the host to share the game again.`;
+
 export const scenarioMissing = (name) => `The host is playing "${String(name || "a scenario").slice(0, 120)}", and that scenario is not in your library, so its map cannot be shown here. Add it from the Community tab, or import the host's copy of it, then join again.`;
 
 // What the host's screen says about people who are not in the player list yet:

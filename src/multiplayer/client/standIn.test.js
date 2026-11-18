@@ -26,13 +26,13 @@ test("the host's scenario by id or name with another map is said to differ; none
   assert.deepEqual(missing, { scenario: null, differs: false });
 });
 
-test("a host that states no checksum is matched by id, then by its one scenario of that name, as before", async () => {
+// A host whose checksum could not be read shared its game all the same, and each guest drew whatever its library held
+// under the host's id or name (the review of 2026-11-18, wars 10). No copy is used unchecked.
+test("a host that states no checksum has no copy here drawn for it, by id or by name", async () => {
   const asked = [];
   const fingerprintOf = async (id) => { asked.push(id); return ""; };
-  assert.equal((await chooseStandInScenario({ scenarios, host: { id: "modern-day", name: "x" }, fingerprintOf })).scenario.id, "modern-day");
-  assert.equal((await chooseStandInScenario({ scenarios, host: { id: "gone", name: "europe 1936" }, fingerprintOf })).scenario.id, "europe-1936");
-  assert.equal((await chooseStandInScenario({ scenarios: [...scenarios, { id: "e2", name: "Europe 1936" }], host: { id: "gone", name: "Europe 1936" }, fingerprintOf })).scenario, null, "two of that name: neither");
-  assert.deepEqual(asked, [], "no checksum asked for");
+  assert.deepEqual(await chooseStandInScenario({ scenarios, host: { id: "modern-day", name: "Modern Day" }, fingerprintOf }), { scenario: null, differs: false, unchecked: true });
+  assert.deepEqual(asked, [], "nothing to check a copy by");
 });
 
 test("a checksum that cannot be read counts as no match, never as a match", async () => {

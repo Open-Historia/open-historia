@@ -14,14 +14,17 @@ const clean = (value) => String(value ?? "").trim();
 const sameName = (left, right) => Boolean(clean(left)) && clean(left).toLocaleLowerCase() === clean(right).toLocaleLowerCase();
 
 // { scenario } the copy to use; { scenario: null, differs } none: `differs` when
-// the host's scenario is here by id or name, and its map is not the host's.
+// the host's scenario is here by id or name, and its map is not the host's;
+// `unchecked` when the host stated no checksum to check a copy by.
 export const chooseStandInScenario = async ({ scenarios = [], host = {}, fingerprintOf = async () => "" } = {}) => {
   const all = scenarios.filter((entry) => clean(entry?.id));
   const byId = all.find((entry) => clean(entry.id) === clean(host.id)) ?? null;
   const named = all.filter((entry) => sameName(entry.name, host.name));
   const hash = clean(host.hash).toLowerCase();
-  // An older host states no checksum: its id, else its one scenario of that name.
-  if (!hash) return { scenario: byId ?? (named.length === 1 ? named[0] : null), differs: false };
+  // No checksum, no copy known to be the host's map: it was matched by id or
+  // name with no check, and drew whatever this library held under them (the
+  // review of 2026-11-18, wars 10). A host never shares without one now.
+  if (!hash) return { scenario: null, differs: false, unchecked: true };
   // The likely copies first, then any other: a copy renamed here is still the map.
   const order = [...new Set([byId, ...named, ...all].filter(Boolean))];
   for (const candidate of order) {

@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { scenarioFilesFingerprint } from "./scenarioFingerprint.js";
 import { mapLogicFingerprint } from "./mapLogicFingerprint.js";
+import { regionFactsOf } from "./regionFacts.js";
 
 const folder = () => fs.mkdtempSync(path.join(os.tmpdir(), "oh-fingerprint-"));
 const write = (dir, name, value) => {
@@ -38,6 +39,33 @@ test("two copies of the same map have the same checksum, wherever and however th
   assert.notEqual(mapLogicFingerprint({ regions, cities: map({ type: "Feature", properties: { name: "Prague" }, geometry: { type: "Point", coordinates: [14.42, 50.08] } }) }), mapLogicFingerprint({ regions }));
   assert.equal(mapLogicFingerprint({ regions, cities: map() }), mapLogicFingerprint({ regions, cities: null }));
   assert.equal(mapLogicFingerprint({ regions, background: {} }), mapLogicFingerprint({ regions }));
+});
+
+// The checksum hashed a region's name and `owner` alone, while the game's catalog takes its starting owner from
+// `country` first, then `owner`, reads `gid0`, whether it is land or sea and what it borders: two copies that
+// differed only there had one checksum, and a guest drew its own starting owners and seas (the review of
+// 2026-11-18, wars 10). One reader serves both (server/regionFacts.js).
+test("every fact of a region the game reads counts: its owner as the catalog takes it, land or sea, what it borders", () => {
+  const feature = (properties) => ({ type: "Feature", id: "bohemia", properties: { name: "Bohemia", ...properties }, geometry: { type: "Polygon", coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] } });
+  const of = (properties) => mapLogicFingerprint({ regions: map(feature(properties)) });
+  const base = { country: "Austria", gid0: "AUT", typeId: "land", adjacencies: ["moravia", "saxony"], tags: ["crown"], claimants: [{ polity: "Bavaria", since: 1618 }] };
+  const same = of(base);
+  for (const [why, changed] of [
+    ["another starting owner by country", { ...base, country: "Bohemia" }],
+    ["an owner where there was none", { ...base, owner: "" }],
+    ["another country code", { ...base, gid0: "CZE" }],
+    ["sea, not land", { ...base, typeId: "sea" }],
+    ["another border", { ...base, adjacencies: ["moravia"] }],
+    ["another tag", { ...base, tags: [] }],
+    ["another claimant", { ...base, claimants: [] }],
+  ]) assert.notEqual(of(changed), same, why);
+  // What is the same, written another way or drawn another way, is the same world.
+  assert.equal(of({ ...base, adjacencies: ["saxony", "moravia"] }), same, "borders in any order");
+  assert.equal(of({ ...base, claimants: [{ since: 1618, polity: "Bavaria" }] }), same, "an object's keys in any order");
+  assert.equal(of({ ...base, centroid: { type: "Point", coordinates: [14.4, 50] } }), same, "where its label sits is not its logic");
+  // The catalog reads the same facts by the same reader: its starting owner is `country`, then `owner`.
+  assert.deepEqual([regionFactsOf(feature(base)).country, regionFactsOf(feature({ owner: "Saxony" })).country, regionFactsOf(feature({ owner: "Saxony" })).owner], ["Austria", "Saxony", "Saxony"]);
+  assert.equal(regionFactsOf({ properties: {} }), null, "no id, no region");
 });
 
 test("cities count by name and place to a hundredth of a degree; the background and own basemaps by what they hold", () => {

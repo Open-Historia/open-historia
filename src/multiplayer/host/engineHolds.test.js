@@ -102,3 +102,11 @@ test("the engine names every country a person plays to the round's espionage, wi
   assert.match(gameplay, /const espionageCandidatesFor = \(person\) => espionageCandidatesAgainst\(canonicalEspionagePolity\(person\), namedAgainst\(person\)\);/);
   assert.match(gameplay, /playerPolity: normalizeString\(baseGame\.country\),\n\s*candidates: espionageCandidates,[\s\S]{0,400}?playerPolities: humanCountriesOf\(baseGame\),\n\s*candidatesFor: espionageCandidatesFor,/);
 });
+
+// A host whose map's checksum could not be read hosted all the same, and its guests drew whatever their libraries held
+// under the scenario's id or name (the review of 2026-11-18, wars 10): it is not shared, and says why.
+test("a game whose map's checksum cannot be read is not shared", () => {
+  const open = engine.slice(engine.indexOf("const openGame = async"), engine.indexOf("gameHost = createGameHost({"));
+  assert.match(open, /if \(!fingerprint\) \{[\s\S]*?throw new Error\(MAP_UNCHECKED\);/);
+  assert.match(engine, /const MAP_UNCHECKED = "This game's map could not be read to check it against your guests' copies, so it is not shared/);
+});

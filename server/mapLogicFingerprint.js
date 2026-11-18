@@ -10,8 +10,12 @@
 // 2026-11-18).
 //
 // What makes two copies one world: the same regions, each by its id (the rule
-// both stores share, server/regionDelta.js), with its name and its starting
-// owner; the same cities, by name and place to a hundredth of a degree; the same
+// both stores share, server/regionDelta.js), with what the game reads of it
+// (server/regionFacts.js, the one reader the game's region catalog uses too):
+// its name, its starting owner as the catalog takes it (`country`, `owner`,
+// `gid0`), land or sea, what it borders, its tags and claimants. It hashed the
+// name and `owner` alone, and two copies that differed in the rest had one
+// checksum (the review of 2026-11-18, wars 10). The same cities, by name and place to a hundredth of a degree; the same
 // background and own basemaps; the same own tiles, by size. Not how finely a
 // border is drawn: a build that ships a lighter outline of the same regions draws
 // the same world. A region split in two, renamed or given to another owner is a
@@ -21,6 +25,7 @@
 // the website's (src/runtime/web/libraryStore.js), so the two cannot drift. Pure.
 import { sha256 } from "@noble/hashes/sha2.js";
 import { regionDeltaKey } from "./regionDelta.js";
+import { regionFactsLine } from "./regionFacts.js";
 
 // The scenario's own tiles, by the keys both stores keep them under.
 export const FINGERPRINT_TILE_KEYS = Object.freeze(["cities", "countries", "regions"]);
@@ -42,7 +47,7 @@ export const canonicalJson = (value) => {
 };
 
 const regionLines = (collection) => featuresOf(collection)
-  .map((feature) => [regionDeltaKey(feature) ?? "", text(feature?.properties?.name), text(feature?.properties?.owner)].join("\t"))
+  .map((feature) => [regionDeltaKey(feature) ?? "", regionFactsLine(feature)].join("\t"))
   .sort();
 const cityLines = (collection) => featuresOf(collection)
   .map((feature) => {
