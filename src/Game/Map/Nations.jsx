@@ -1180,7 +1180,7 @@ const WorldMap = ({ isGlobe = false }) => {
     // why in the Forces banner, for another tap, as a deploy does.
     if (mode.kind === "structure-place") {
       clearInteractionMode();
-      void saveSettledStructure(mode.markerId, { lng: event.lngLat.lng, lat: event.lngLat.lat })
+      void saveSettledStructure(mode.markerId, { lng: clicked.lng, lat: clicked.lat })
         .catch((error) => {
           logDebugEvent("warn", "[map] Moving the structure failed.", error);
           if (getInteractionMode().kind === "idle") setInteractionMode({ ...mode, error: String(error?.message || "") || SETTLE_NOT_SAVED });

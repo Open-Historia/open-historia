@@ -134,3 +134,29 @@ test("in a shared game a settle is asked of the host, and a refusal comes back w
         setSharedRequester(null);
     }
 });
+
+// A click on the world copy east of the date line reports a longitude past 180: the shared game's request refused it
+// in its schema's words ("$.lng: outside -180..180") and single player moved nothing (the review of 2026-11-18, door 5).
+test("a structure moved on a world copy across the date line goes where the click is on Earth, in a shared game and alone", async () => {
+    const { setSharedRequester } = await import("../multiplayer/client/sharedGameBridge.js");
+    const { startRemoteRuntime, stopRemoteRuntime } = await import("../multiplayer/client/remoteRuntime.js");
+    const { PLAYER_REQUESTS } = await import("../multiplayer/game/messages.js");
+    const { validate } = await import("../multiplayer/protocol/validate.js");
+    const asked = [];
+    setSharedRequester(async (t, fields) => {
+        asked.push(validate(PLAYER_REQUESTS[t], { t, id: "0123456789abcdef", ...fields }));
+        return { ok: true, error: "" };
+    });
+    startRemoteRuntime({ publish: () => {}, urlFor: () => "" });
+    try {
+        await saveSettledStructure("structure-1", { lng: 190.25, lat: -17.5 });
+        assert.equal(asked[0].ok, true, "a request the host takes");
+        assert.equal(asked[0].value.lng, -169.75);
+    } finally {
+        stopRemoteRuntime();
+        setSharedRequester(null);
+    }
+    // Alone, the same point is moved to, as moveStructure takes it.
+    const moved = moveStructure([{ id: "structure-1", lng: 1, lat: 1, approximate: { asked: "x", country: "Fiji" } }], "structure-1", { lng: -169.75, lat: -17.5 });
+    assert.deepEqual([moved[0].lng, moved[0].lat], [-169.75, -17.5]);
+});

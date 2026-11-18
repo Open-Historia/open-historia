@@ -14,6 +14,7 @@
 import { livePuppetsFor } from "./puppets.js";
 import { mutateWorldState } from "./gameState.js";
 import { inSharedGame, requestFromHost } from "../multiplayer/client/sharedGameBridge.js";
+import { wrapLng } from "./unitMotion.js";
 
 const text = (value) => String(value ?? "").trim();
 const same = (a, b) => text(a).toLowerCase() === text(b).toLowerCase() && text(a) !== "";
@@ -92,7 +93,14 @@ export const moveStructure = (markers, id, { lng, lat } = {}) => {
 // write that failed with SETTLE_NOT_SAVED, for the card or the map's banner to
 // show where the player pressed (Selection/Features.jsx, Map/Nations.jsx).
 export const SETTLE_NOT_SAVED = "The structure's place could not be saved. Try again.";
-export const saveSettledStructure = async (id, point = null) => {
+//
+// `point` is where the map was clicked, as the map reports it: on a world copy
+// either side of the date line its longitude runs past 180, and is taken back
+// into range here, for both doors alike. The shared game's request refused it in
+// its schema's words, and single player's moveStructure did nothing at all (the
+// review of 2026-11-18, door 5).
+export const saveSettledStructure = async (id, clickedAt = null) => {
+    const point = clickedAt ? { lng: wrapLng(Number(clickedAt.lng)), lat: Number(clickedAt.lat) } : null;
     if (inSharedGame()) {
         const answer = await requestFromHost("settle", {
             marker: String(id ?? ""),
