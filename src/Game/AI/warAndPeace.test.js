@@ -17,7 +17,7 @@ import { TREATY_BROKEN_REPUTATION } from "../../runtime/alliances.js";
 import { normalizeWorldState } from "../../runtime/gameState.js";
 import { TERRITORY_AS_HELD, TERRITORY_RESTORED, readTermsLine, readTreatyLines } from "../../runtime/peaceTerms.js";
 import { WEARINESS_A_YEAR, wearinessOf } from "../../runtime/warWeariness.js";
-import { PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
+import { FILTERED_WORLD_KEY_NAMES, PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
 import { buildPeaceBlock } from "./peacePrompt.js";
 import { playerFronts } from "../GameUI/warRoomData.js";
 import {
@@ -378,7 +378,10 @@ test("a standing is set on the world and on a sheet that carries the figure", ()
 test("the world keeps all of it, every player is shown it, and the turn and a person's answer reach it", () => {
   const kept = normalizeWorldState({});
   assert.deepEqual([kept.warWeariness, kept.peaceOffers, kept.reparations, kept.peaceTreaties, kept.callsToArms], [[], [], [], [], []]);
-  for (const key of ["warWeariness", "peaceOffers", "reparations", "peaceTreaties", "callsToArms"]) assert.ok(PUBLIC_WORLD_KEYS.includes(key), key);
+  for (const key of ["warWeariness", "reparations", "peaceTreaties"]) assert.ok(PUBLIC_WORLD_KEYS.includes(key), key);
+  // An offer of peace and a call to arms are their parties' own until answered, as a treaty's offer is: each player
+  // is shown its own (multiplayer/host/projection.js; the gap audit of 2026-11-18).
+  for (const key of ["peaceOffers", "callsToArms"]) assert.ok(FILTERED_WORLD_KEY_NAMES.includes(key) && !PUBLIC_WORLD_KEYS.includes(key), key);
   const gameplay = read("gameplay.js");
   assert.ok(gameplay.includes("worldWithImpacts = turnWarAndPeace({\n    world: worldWithImpacts,\n    baseWorld,\n    days: turnDays(baseGame, nextGame),"));
   assert.ok(gameplay.indexOf("worldWithImpacts = turnWarAndPeace({") < gameplay.indexOf("const pruned = pruneWarUnits({"), "before the units of a war that has ended leave the map");
