@@ -732,6 +732,7 @@ const PROSE_FILES = [
   "src/multiplayer/client/remoteRuntime.js", "src/multiplayer/client/sharedGame.js",
   "src/multiplayer/client/sharedGameBridge.js", "src/multiplayer/host/gameHost.js",
   "src/multiplayer/host/institutions.js", "src/multiplayer/host/agents.js", "src/multiplayer/host/forces.js",
+  "src/multiplayer/host/featureGates.js",
   "src/multiplayer/host/engineMain.js", "src/multiplayer/host/settings.js", "src/multiplayer/host/advisorDesk.js",
   "src/multiplayer/signaling/publicServers.js",
   // The local server's refusals the Workshop, the hub and Settings show.

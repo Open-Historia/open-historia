@@ -209,6 +209,10 @@ const unavailableError = (entries, store, now, formatTime, cause) => {
 // notice to the player, and not counted as too big. It is not that the entry
 // failed; it was never meant for this call.
 export const NOT_SERVED_MESSAGE = "Nothing in your Fallback list answers this request. An Agent Connection answers time skips only, so add a Connection below it.";
+// Why a Fallback list cannot host a shared game, whose every round the host's
+// computer asks and no Agent Connection answers (providerConfig.js sharedRoundRefusal).
+export const SHARED_GAME_NEEDS_AI_MESSAGE = "Hosting needs an AI on this computer to answer every round: add a Connection with an API key under Settings, AI.";
+export const SHARED_GAME_AGENT_MESSAGE = "Your own Agent does not answer a shared game's rounds, and nothing else in your Fallback list can: add a Connection with an API key under Settings, AI, to host.";
 
 export async function runWithFallback({
     entries: listed,

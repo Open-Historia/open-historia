@@ -61,6 +61,11 @@ import { setWorldLanguage, writingLanguageCode } from "../../runtime/i18n.js";
 import { getActiveFeatures, sharedGameFeaturesOf } from "../../runtime/gameFeatures.js";
 import { credentialFromAddress, installWriteCredential } from "../../runtime/writeCredential.js";
 import { sessionFromRecord } from "./sessionRecord.js";
+import { roundRulesOf } from "./hostRules.js";
+import { STAND_IN_NOT_SHARED, standInOf } from "../../runtime/standInGames.js";
+import { getResolvedFallbackList, sharedRoundRefusal } from "../../Game/AI/providerConfig.js";
+import { requestSettings } from "../../Game/AI/requestBudget.js";
+import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 
 const SCREEN = "host-screen";
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -274,6 +279,8 @@ const boot = async () => {
     read: () => store.read(),
     log: (text, detail) => logDebugEvent("shared game", `${text}: ${detail}`, undefined, { problem: true }),
   });
+  // Stops reading the host's AI settings for the lobby (openGame).
+  let forgetRules = () => {};
 
   const loopback = createLoopbackEngineSide({
     onHello: ({ device, name }) => {
@@ -344,6 +351,14 @@ const boot = async () => {
     const checked = normalizeSettings(input ?? {});
     if (!checked.ok) throw new Error(checked.error);
     const docs = await store.read();
+    // A stand-in shows a shared game this device joined: it is no game to share
+    // (runtime/standInGames.js), whatever it is called.
+    if (standInOf(docs.game)) throw new Error(STAND_IN_NOT_SHARED);
+    // Every round is asked of this computer's AI, which an Agent Connection
+    // never answers there (#1042): a list that cannot answer a round is refused
+    // now, not after everyone has joined a lobby whose every round fails.
+    const noAi = sharedRoundRefusal(getResolvedFallbackList());
+    if (noAi) throw new Error(noAi);
     // The world's language, a rule of the game (host/settings.js `language`):
     // the one the host plays in unless the host chose another, named in the
     // lobby so every screen writes in it, this window's requests first.
@@ -393,6 +408,18 @@ const boot = async () => {
       .then((answer) => (/^[0-9a-f]{64}$/.test(String(answer?.fingerprint || "")) ? String(answer.fingerprint) : ""))
       .catch(() => "");
     if (!fingerprint) logDebugEvent("shared game", "this game's map has no checksum: guests' copies are not checked against it", undefined, { problem: true });
+    // What decides each round on this computer beyond the lobby's settings
+    // (host/hostRules.js), stated in the lobby: the game's difficulty and this
+    // device's AI settings, read again whenever the host changes one in its own
+    // window, which shares this one's storage.
+    const readRules = () => roundRulesOf({
+      difficulty: docs.game?.difficulty,
+      daysPerRound: settings.daysPerRound,
+      noRequestLimit: requestSettings.noRequestLimit(),
+      lookups: getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
+      segmented: getMapSetting(MAP_SETTING_KEYS.chunkLongJumps),
+      limitGeneration: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration),
+    });
     const saved = await store.readShared().catch(() => null);
     const restored = sessionFromRecord(saved, { campaign, hostDevice: identity.id });
     if (restored) logDebugEvent("shared game", `taking up the session saved with this game: round ${restored.round}, ${restored.seats.length} seat(s)`);
@@ -406,6 +433,7 @@ const boot = async () => {
       // must be this map, or it draws another world.
       scenario: { id: clean(entry?.scenarioId).slice(0, 120), name: clean(scenario?.name || entry?.name || "Open Historia").slice(0, 120), hash: fingerprint },
       features: sharedGameFeaturesOf(getActiveFeatures()),
+      rules: readRules(),
       countries: gameCountries(started.world, started.game),
       countriesOf: (now) => gameCountries(now.world, now.game),
       campaign,
@@ -556,6 +584,9 @@ const boot = async () => {
     // And every change it makes is applied in the host's one order.
     const hosting = gameHost;
     writeInOrder = (label, write) => hosting.write(label, write);
+    const rulesChanged = () => hosting.control.setRules(readRules());
+    window.addEventListener("storage", rulesChanged);
+    forgetRules = () => window.removeEventListener("storage", rulesChanged);
     gameHost.start();
     session.start();
     // What of the game's start could not be done, said to the host.
@@ -602,6 +633,7 @@ const boot = async () => {
         // window goes.
         const stopping = gameHost;
         gameHost = null;
+        forgetRules();
         session?.stop();
         session = null;
         await stopping.stop();

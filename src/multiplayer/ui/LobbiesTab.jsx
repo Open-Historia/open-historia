@@ -14,6 +14,8 @@ import { LANGUAGES, readingLanguageName } from "../../runtime/i18n.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { keptSettingsOf } from "../host/sessionRecord.js";
 import { hostSharedGame, joinSharedGame, useSharedGame } from "../client/sharedGame.js";
+import { sharedRoundAnswerer, sharedRoundRefusal } from "../../Game/AI/providerConfig.js";
+import { STAND_IN_NOT_SHARED } from "../../runtime/standInGames.js";
 import PublicLobbies from "./PublicLobbies.jsx";
 
 const card = {
@@ -108,6 +110,11 @@ const InviteBar = ({ onEnterGame }) => {
   );
 };
 
+// What answers a shared game's rounds on this computer (AI/providerConfig.js):
+// an Agent Connection never does, so a list of Agents alone cannot host, and
+// one above a key is passed over.
+const readAi = () => ({ refusal: sharedRoundRefusal(), answerer: sharedRoundAnswerer() });
+
 // "Host a lobby": the game this player has open, shared.
 const HostPanel = ({ onClose, onEnterGame }) => {
   const { activeGame } = useLibraryState();
@@ -118,6 +125,15 @@ const HostPanel = ({ onClose, onEnterGame }) => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [desktop, setDesktop] = useState(null);
+  // Read again whenever the Fallback list changes.
+  const [ai, setAi] = useState(readAi);
+  useEffect(() => {
+    const refresh = () => setAi(readAi());
+    window.addEventListener("ai:fallback-changed", refresh);
+    return () => window.removeEventListener("ai:fallback-changed", refresh);
+  }, []);
+  // A shared game's stand-in shows a game this device joined: never one to share.
+  const standIn = Boolean(activeGame?.standIn);
   // The settings this game kept the last time it was shared (host/sessionRecord.js
   // keptSettingsOf): the form starts from them, so its rules are shown, never
   // quietly reset to the defaults (the gap audit of 2026-11-18).
@@ -177,9 +193,13 @@ const HostPanel = ({ onClose, onEnterGame }) => {
         <p style={note}>Hosting needs the desktop app. You can still join lobbies from here.</p>
       ) : !activeGame ? (
         <p style={note}>Open a game first (the Games tab), then come back to host it.</p>
+      ) : standIn ? (
+        <p style={note}>{STAND_IN_NOT_SHARED}</p>
       ) : (
         <>
           {kept ? <p style={note}>These are this game&apos;s settings from the last time it was shared.</p> : null}
+          {ai.refusal ? <p style={errorText}>{ai.refusal}</p> : null}
+          {!ai.refusal && ai.answerer?.passedAgent ? <p style={note}>{`Your own Agent does not answer a shared game: its rounds go to ${ai.answerer.label}.`}</p> : null}
           <div style={grid}>
             <Field title="Your name"><input style={input} value={name} maxLength={40} onChange={(event) => setName(event.target.value)} placeholder="Host" /></Field>
             <Field title="Lobby name"><input style={input} value={settings.name} maxLength={60} onChange={update("name")} /></Field>
@@ -227,8 +247,8 @@ const HostPanel = ({ onClose, onEnterGame }) => {
         </>
       )}
       <div style={{ display: "flex", gap: "0.6rem", marginTop: "1rem" }}>
-        {activeGame && (desktop !== false || import.meta.env?.DEV) ? (
-          <button type="button" style={primary} disabled={busy || shared.mode !== "off"} onClick={open}>
+        {activeGame && !standIn && (desktop !== false || import.meta.env?.DEV) ? (
+          <button type="button" style={primary} disabled={busy || shared.mode !== "off" || Boolean(ai.refusal)} onClick={open}>
             {busy ? "Opening…" : "Open the lobby"}
           </button>
         ) : null}

@@ -21,7 +21,8 @@ import { battlefieldOn } from "../../runtime/fronts/testKit.js";
 import { HOST_MESSAGES, PLAYER_REQUESTS, REPLY_MAX_CHARS, REPLY_MAX_LINES, VIEW_KEYS } from "../game/messages.js";
 import { validate } from "../protocol/validate.js";
 import { projectForViewer } from "./projection.js";
-import { setActiveFeatures } from "../../runtime/gameFeatures.js";
+import { resolveFeatures, setActiveFeatures } from "../../runtime/gameFeatures.js";
+import { roundRulesOf } from "./hostRules.js";
 import { SOCIAL_POST_MAX_CHARS } from "../../runtime/socialFeed.js";
 import { ownReplyAsked } from "../client/ownReplies.js";
 import { pendingSharedThread } from "../client/sharedThreads.js";
@@ -184,6 +185,7 @@ const setup = (options = {}) => {
     ...(options.countriesOf ? { countriesOf: options.countriesOf } : {}),
     campaign: options.campaign ?? "",
     ...(options.features ? { features: options.features } : {}),
+    ...(options.rules ? { rules: options.rules } : {}),
     restored: options.restored ?? null,
     now: clock.now,
     timers: clock.timers,
@@ -2222,4 +2224,68 @@ test("nobody renames or closes an institution's Council for everyone at it", asy
   const council = s.store.docs.chat.find((chat) => chat.id === "council-1");
   assert.equal(council.title, "Baltic Council");
   assert.notEqual(council.status, "closed");
+});
+
+// The gap audit of 2026-11-18: the host refused no request for a feature its game has off, though every screen hid
+// it; a changed page placed agents with no espionage and sailed fleets with no navies. One gate per request, before
+// it does anything, with the host's reason.
+test("the host refuses a request for what its game has switched off, with its reason, and changes nothing", async () => {
+  const features = resolveFeatures(null, { espionage: { enabled: false }, fronts: { navies: false } });
+  const s = setup({ features });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  const before = JSON.stringify(s.store.docs.world);
+  await s.request(s.guest, { t: "agent", id: id(2), op: "deploy", target: ESTONIA, spy: "", story: "" });
+  assert.equal(s.ack(s.guest, id(2)).error, "This game has no espionage.");
+  await s.request(s.guest, { t: "fleet", id: id(3), op: { op: "posture", unit: "ru-fleet", posture: "withdrawing" } });
+  assert.equal(s.ack(s.guest, id(3)).error, "This game has no navies.");
+  await s.request(s.guest, { t: "deploy", id: id(4), type: "naval", strength: 100, name: "", composition: "", lng: 20, lat: 59 });
+  assert.equal(s.ack(s.guest, id(4)).error, "This game has no navies.");
+  assert.equal(JSON.stringify(s.store.docs.world), before);
+  // What the game does have is taken as ever.
+  await s.request(s.guest, { t: "order", id: id(5), text: "Hold the line at Pskov." });
+  assert.equal(s.ack(s.guest, id(5)).ok, true);
+});
+
+// Rule 7, same inputs: what decides each round beyond the settings is stated in the lobby (host/hostRules.js), and a
+// change the host makes to its AI settings mid-game reaches every screen.
+test("the lobby states the rules every round is played by, and says when the host's AI settings change them", async () => {
+  const rules = roundRulesOf({ difficulty: "hard" });
+  const s = setup({ rules });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.clock.flush();
+  const lobby = s.to(s.guest, "lobby").at(-1);
+  assert.deepEqual(lobby.rules, { difficulty: "hard", requests: 1, most: 1, stallMinutes: 0 });
+  assert.equal(validate(HOST_MESSAGES.lobby, lobby).ok, true);
+  const sent = s.to(s.guest, "lobby").length;
+  assert.equal(s.host.control.setRules(roundRulesOf({ difficulty: "hard" })), false, "nothing changed, nothing said");
+  assert.equal(s.to(s.guest, "lobby").length, sent);
+  assert.equal(s.host.control.setRules(roundRulesOf({ difficulty: "hard", noRequestLimit: true, limitGeneration: true })), true);
+  const told = s.to(s.guest, "lobby").at(-1);
+  assert.equal(told.rules.most > 1, true);
+  assert.equal(told.rules.stallMinutes, 15);
+});
+
+// Item 41: a seat's release to the AI runs in the engine on the host's clock (the leaver's grace), as the lobby says.
+test("a player who leaves keeps their country for the grace, then the AI plays it until they are back, on the host's clock", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  s.host.leave(s.guest);
+  await s.clock.flush();
+  const status = (country) => s.to(s.hostPlayer, "lobby").at(-1).seats.find((seat) => seat.country === country)?.status;
+  assert.equal(status(RUSSIA), "away");
+  await s.clock.advance(45_000);
+  assert.equal(status(RUSSIA), "away", "within the minute's grace");
+  await s.clock.advance(30_000);
+  assert.equal(status(RUSSIA), "ai");
+  assert.ok(s.to(s.hostPlayer, "notice").some((entry) => entry.text.includes(`${RUSSIA} is now played by the AI`)));
+  s.host.join(s.guest);
+  await s.clock.flush();
+  assert.equal(status(RUSSIA), "human", "theirs again when they are back");
 });

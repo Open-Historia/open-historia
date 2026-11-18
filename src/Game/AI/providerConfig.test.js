@@ -758,3 +758,28 @@ test("the Agent Connection kind is offered only where a local server runs", () =
   assert.equal(config.providerOptionsFor({ localServer: true }).some((option) => option.value === "agent"), true);
   assert.equal(config.providerOptionsFor({ localServer: false }).some((option) => option.value === "agent"), false);
 });
+
+// #1042: a shared game's rounds are asked on the host's computer, where an Agent Connection never answers (a shared game
+// never waits on one player's terminal). A list of Agents alone opened a lobby whose every round then failed; one with a
+// key beneath the Agent sent the rounds there without a word. The host is refused before the lobby opens, or told.
+test("a shared game's rounds are answered by the first entry that is no Agent and has its key; a list of Agents alone cannot host", () => {
+  const agent = { provider: "agent", label: "Your Agent", kinds: ["skip", "advisor"], paused: false };
+  const gemini = { provider: "gemini", label: "gemini-3.5-flash-lite (Gemini)", apiKey: "AIzaKEY" };
+  const keyless = { provider: "gemini", label: "gemini-3.5-flash-lite (Spare)", apiKey: "" };
+  assert.deepEqual(config.sharedRoundAnswerer([agent, gemini]), { label: gemini.label, passedAgent: true });
+  assert.deepEqual(config.sharedRoundAnswerer([gemini, agent]), { label: gemini.label, passedAgent: false });
+  assert.equal(config.sharedRoundAnswerer([agent]), null);
+  assert.equal(config.sharedRoundAnswerer([agent, keyless]), null, "an entry with no key answers nothing either");
+  assert.equal(config.sharedRoundRefusal([agent, gemini]), "");
+  assert.equal(config.sharedRoundRefusal([agent]), config.SHARED_GAME_AGENT_MESSAGE);
+  assert.equal(config.sharedRoundRefusal([keyless]), config.SHARED_GAME_NEEDS_AI_MESSAGE);
+  assert.equal(config.sharedRoundRefusal([]), config.SHARED_GAME_NEEDS_AI_MESSAGE);
+  // The device's own list, read as it is stored.
+  store.set("ai_connections", JSON.stringify([{ id: "c-agent", provider: "agent", name: "Claude Code" }]));
+  store.set("ai_fallback_list", JSON.stringify([{ id: "e-agent", connectionId: "c-agent" }]));
+  assert.equal(config.sharedRoundRefusal(), config.SHARED_GAME_AGENT_MESSAGE);
+  store.set("ai_connections", JSON.stringify([{ id: "c-agent", provider: "agent", name: "Claude Code" }, { id: "c-g", provider: "gemini", name: "Gemini", apiKey: "AIzaKEY" }]));
+  store.set("ai_fallback_list", JSON.stringify([{ id: "e-agent", connectionId: "c-agent" }, { id: "e-g", connectionId: "c-g", model: "gemini-3.5-flash-lite" }]));
+  assert.equal(config.sharedRoundRefusal(), "");
+  assert.equal(config.sharedRoundAnswerer().passedAgent, true);
+});

@@ -22,6 +22,9 @@ import { SAY_FROM_DRAFT_MAX, SAY_RECIPIENTS_MAX } from "../client/sharedThreads.
 import { TREATY_TERMS_MAX, TREATY_TITLE_MAX, TREATY_TYPES } from "../../runtime/treatyOffers.js";
 import { PLAYER_GOAL_MAX_CHARS } from "../../runtime/playerGoal.js";
 import { POLL_LABEL_MAX_CHARS, POLL_OPTION_LIMIT, POLL_QUESTION_MAX_CHARS } from "../../runtime/chatThreads.js";
+import { DIFFICULTY_LEVELS } from "../../runtime/difficulty.js";
+
+const DIFFICULTY_IDS = Object.freeze(DIFFICULTY_LEVELS.map((level) => level.id));
 
 // A host and its players must speak the same game: raised whenever these
 // messages or the views (host/projection.js) change in a way an older player's
@@ -334,7 +337,16 @@ export const HOST_MESSAGES = Object.freeze({
     changes: list(obj({ from: COUNTRY, to: COUNTRY, name: str(40) }), 64),
     // The host's feature switches, as its game resolves them (runtime/gameFeatures.js).
     features: json(6),
-  }, ["changes", "features"]),
+    // What decides every round beyond the settings (host/hostRules.js): the
+    // host's game's difficulty, one for every seat, and what a round costs the
+    // host's AI and how long it waits on it.
+    rules: obj({
+      difficulty: str(24, { enum: DIFFICULTY_IDS }),
+      requests: int(1, 64),
+      most: int(1, 64),
+      stallMinutes: int(0, 24 * 60),
+    }),
+  }, ["changes", "features", "rules"]),
   round: obj({
     t: literal("round"),
     phase: str(12, { enum: ["lobby", "planning", "countdown", "resolving", "revealing"] }),

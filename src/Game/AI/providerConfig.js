@@ -1,6 +1,6 @@
 /*! Open Historia — portions (reasoning-effort toggle persistence) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { logDebugEvent, logSettingMessage, setDebugLogContext } from "../../runtime/debugLog.js";
-import { entryStatus } from "./fallbackRunner.js";
+import { SHARED_GAME_NEEDS_AI_MESSAGE, SHARED_GAME_AGENT_MESSAGE, entryStatus } from "./fallbackRunner.js";
 import { FORMER_TASK_KEYS, readUnderTaskKey } from "./formerTaskKeys.js";
 import { BACKGROUND_REQUEST, SKIP_SPENDERS, spenderBase } from "./requestBudget.js";
 
@@ -722,6 +722,27 @@ export function agentHasEntryBelow(at = Date.now()) {
 
 export function isFallbackListConfigured() {
     return getResolvedFallbackList().some(entryIsConfigured);
+}
+
+// What answers a shared game's rounds, which the host's engine window asks
+// (multiplayer/host/engineMain.js): the first entry of the list that serves a
+// round and has what its provider needs, or null. An Agent Connection answers
+// nothing there (entryServesCall: a shared game never waits on one player's
+// terminal; #1042), so a list of Agents alone cannot host: every round failed
+// once the lobby was open. `passedAgent`: an Agent stands above that entry, and
+// the rounds go past it to this one.
+export function sharedRoundAnswerer(list = getResolvedFallbackList()) {
+    const entries = Array.isArray(list) ? list : [];
+    const at = entries.findIndex((entry) => entryServesCall(entry, { spender: "jump", sharedGame: true }) && entryIsConfigured(entry));
+    if (at < 0) return null;
+    return { label: entries[at].label, passedAgent: entries.slice(0, at).some((entry) => entry?.provider === AGENT_PROVIDER) };
+}
+
+// Why a list cannot host a shared game, in its own words, or "" when it can.
+export { SHARED_GAME_NEEDS_AI_MESSAGE, SHARED_GAME_AGENT_MESSAGE };
+export function sharedRoundRefusal(list = getResolvedFallbackList()) {
+    if (sharedRoundAnswerer(list)) return "";
+    return (Array.isArray(list) ? list : []).some((entry) => entry?.provider === AGENT_PROVIDER) ? SHARED_GAME_AGENT_MESSAGE : SHARED_GAME_NEEDS_AI_MESSAGE;
 }
 
 const saveConnections = (connections) => {

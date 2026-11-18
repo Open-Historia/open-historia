@@ -26,6 +26,7 @@ import {
 import { OWN_MAP_NOTE, hostLines, joinStage } from "../client/joinProgress.js";
 import { roundDatesOf } from "../client/roundDates.js";
 import { languageDisplayName } from "../../runtime/i18n.js";
+import { difficultyMeta } from "../../runtime/difficulty.js";
 
 const glass = {
   background: "rgba(19,19,21,0.86)",
@@ -190,6 +191,46 @@ const WorldLanguage = ({ shared }) => {
   return <div style={{ ...small, marginTop: "0.5rem", textAlign: "end" }}>{`The world is written in ${languageDisplayName(code)}.`}</div>;
 };
 
+// What decides every round, as the host states it (game/messages.js lobby
+// `rules`, host/hostRules.js): one difficulty for every player, what a round
+// costs the host's AI and how long it waits on it, how long a leaver's country
+// waits for them, and what a shared game does not do between rounds. On the
+// host's computer alone, these used to be nobody else's to see.
+const roundCostLine = ({ requests, most }) => {
+  if (most > requests) {
+    return requests === 1
+      ? `Each round is one request to the host's AI, up to ${most} when it looks things up.`
+      : `Each round is ${requests} requests to the host's AI, up to ${most} when it looks things up.`;
+  }
+  return requests === 1 ? "Each round is one request to the host's AI." : `Each round is ${requests} requests to the host's AI.`;
+};
+const betweenRoundsLine = (features) => {
+  const letters = features?.idleDiplomacy?.enabled !== false;
+  const agents = features?.espionage?.enabled !== false;
+  if (letters && agents) return "Between rounds no country writes and no agent reports: both come with each round.";
+  if (letters) return "Between rounds no country writes: letters come with each round.";
+  if (agents) return "Between rounds no agent reports: reports come with each round.";
+  return "";
+};
+const GameRules = ({ shared }) => {
+  const lobby = shared.lobby;
+  if (!lobby) return null;
+  const rules = lobby.rules;
+  const grace = Number(lobby.settings?.leaverGraceMinutes) || 0;
+  const lines = [
+    rules ? `Difficulty: ${difficultyMeta(rules.difficulty).label} for every player against the countries the AI plays; between players it favours nobody.` : "",
+    rules ? roundCostLine(rules) : "",
+    rules ? (rules.stallMinutes
+      ? `A round whose AI is silent for ${rules.stallMinutes} minutes fails, and the host can run it again.`
+      : "A round waits for the host's AI as long as it takes, and the host can cancel it.") : "",
+    grace
+      ? `A player who leaves keeps their country for ${grace} minutes; then the AI plays it until they are back.`
+      : "A player who leaves has their country played by the AI until they are back.",
+    betweenRoundsLine(lobby.features),
+  ].filter(Boolean);
+  return lines.map((line) => <div key={line} style={{ ...small, marginTop: "0.35rem", textAlign: "end" }}>{line}</div>);
+};
+
 // The host's invite code, its relays, and who is coming in or could not
 // (client/joinProgress.js): in the lobby, and under Players while the game
 // runs, where a game taken up again opens and its players need the code to
@@ -253,6 +294,7 @@ const Lobby = ({ shared, me }) => {
         <SeatList seats={lobby?.seats} host={role === "host"} />
         <RepliesSetting shared={shared} />
         <WorldLanguage shared={shared} />
+        <GameRules shared={shared} />
       </div>
 
       {!me && lobby && role !== "host" && shared.standIn !== "ready" && !error ? (
@@ -354,6 +396,7 @@ const RoundBar = ({ shared, me, watching = "" }) => {
           {role !== "host" && (me || watching) ? <CountryPicker lobby={shared.lobby} asking={Boolean(me)} /> : null}
           <RepliesSetting shared={shared} />
           <WorldLanguage shared={shared} />
+          <GameRules shared={shared} />
         </div>
       ) : null}
     </div>

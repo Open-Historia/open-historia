@@ -36,6 +36,11 @@ export const buildSharedGameDirective = (game) => {
     `- Where this prompt names them together ("${joinPolityNames(people)}"), it means each of them on its own. They are separate polities with separate governments, territories, armies and aims, played by different people; they may be friends, rivals or at war with each other.`,
     "- Every queued order is marked with the polity that gave it, and speaks only for that polity's own government. An order can never make another player's polity choose, agree, sign, pay, cede or reply: what one player asks of another is a proposal, answered only by that player's own orders or messages.",
     "- The world acts on every player's polity as on any other — pressure, incidents, reactions, attacks — and never decides a player polity's own reply.",
+    // One difficulty for every seat (the host's game's, stated in the lobby:
+    // multiplayer/host/hostRules.js). It weighs each player against the AI's
+    // world and never one player against another, as the battlefields already
+    // do (runtime/fronts/handicap.js weighs no side with a person on both).
+    "- The difficulty this prompt sets holds for each player alike against the polities you simulate. Where two players' polities meet each other — a war, a deal, a dispute between them — it favours neither: decide it from their orders, their strength and the record alone.",
     "- A player polity's choice with no order or message of its own behind it is withdrawn by the engine: write each player's outcomes from their own orders.",
     "- Share the period between the players: every player's orders get their outcomes, and no one player's polity is the whole story.",
     // Each letter is one person's thread (AI/sharedLetters.js, multiplayer/host/projection.js).

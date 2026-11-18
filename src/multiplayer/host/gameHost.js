@@ -54,6 +54,7 @@ import { humanCountriesOf } from "../../runtime/humanPolities.js";
 import { playerDiplomacy } from "../../Game/AI/warAndPeace.js";
 import { warBetween } from "../../runtime/peaceTerms.js";
 import { answerTreaty, proposeTreaty } from "../../runtime/treatyOffers.js";
+import { featureRefusal } from "./featureGates.js";
 
 export const MAX_ORDERS_PER_ROUND = 12;
 // The answers a device's requests were given, kept so that one sent again (the
@@ -178,6 +179,9 @@ export const createGameHost = ({
   // The game's feature switches as the host's game resolves them, which every
   // screen plays by (runtime/gameFeatures.js setSharedGameFeatures).
   features = null,
+  // What decides every round beyond the settings (host/hostRules.js
+  // roundRulesOf): stated in the lobby; the host's engine says when it changes.
+  rules = null,
   countries = [],
   // The game's countries as the world has them now, every one (a country
   // founded mid-game is among them, one dissolved or annexed whole is not):
@@ -270,6 +274,7 @@ export const createGameHost = ({
   const connections = new Map();
   // device → Map(request id → its ack, or null while it is being applied).
   const answers = new Map();
+  let roundRules = rules && typeof rules === "object" ? { ...rules } : null;
   // Who answers a player's message to a government the AI plays (settings.js
   // `replies`): the host's computer, or the writer's own device. The host may
   // change it while the game runs (control.setReplies).
@@ -391,6 +396,7 @@ export const createGameHost = ({
       .map((entry) => ({ from: entry.from, to: entry.to, name: clean(entry.name).slice(0, 40) }))
       .filter((entry) => fits(entry.from) && fits(entry.to)).slice(0, 64),
     ...(features && typeof features === "object" ? { features } : {}),
+    ...(roundRules ? { rules: roundRules } : {}),
   });
 
   const roundMessage = (status) => ({
@@ -1646,9 +1652,12 @@ export const createGameHost = ({
     }
     const seat = seatOf(connection);
     const needsSeat = !["pick", "unpick"].includes(message.t);
+    // A request for what the host's game has switched off (host/featureGates.js).
+    const switchedOff = featureRefusal(message, features);
     let error = "";
     let result = null;
     if (needsSeat && (!seat || seat.status !== SEAT_STATUS.HUMAN)) error = "Take a country first.";
+    else if (switchedOff) error = switchedOff;
     else {
       try {
         // A refusal's words, or { error, result } from a request that made
@@ -1735,6 +1744,15 @@ export const createGameHost = ({
       },
       resolveNow: () => round.resolveNow(),
       setRoundMinutes: (minutes) => round.setRoundMinutes(minutes),
+      // What decides the rounds changed on the host's computer (its AI
+      // settings): every screen is told, in the lobby.
+      setRules(next) {
+        const value = next && typeof next === "object" ? { ...next } : null;
+        if (JSON.stringify(value) === JSON.stringify(roundRules)) return false;
+        roundRules = value;
+        broadcastLobby();
+        return true;
+      },
       // Who answers a player's message to a government the AI plays, from here
       // on (settings.js `replies`). A line already left to its writer's device
       // is still answered from there; an answer the host has begun is finished.
