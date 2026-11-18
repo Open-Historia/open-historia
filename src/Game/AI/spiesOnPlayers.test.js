@@ -31,7 +31,8 @@ test("each player's line is read by the players' exact names; a player not given
 });
 
 test("the skip asks it in the rules and the live records, and reads it per player (gameplay.js)", () => {
-  const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  // (Read as Git checks it out on any system: a Windows checkout's CRLF is not the code's.)
+  const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.match(gameplay, /espionage && spiedOn \? whoSpiesBlock\(humanCountriesOf\(game\)\) : ""/);
   assert.match(gameplay, /if \(spiedOn && !rulesAbove\) blocks\.push\(whoSpiesBlock\(humanCountriesOf\(game\)\)\);/);
   assert.match(gameplay, /const spiesNamedFor = spiedPeople\.length > 1 \? spiesOnPlayersOf\(result\.spiesOnPlayerText, spiedPeople\) : null;/);
