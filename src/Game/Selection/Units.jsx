@@ -318,20 +318,21 @@ const UnitPopup = () => {
     else setOrderError(result?.error || ORDER_NOT_SAVED);
   };
 
-  // A request that could not be saved keeps its text in the box, to try again.
+  // A request that could not be saved keeps its text in the box, to try again,
+  // and says why: in a shared game, the host's own reason.
   const sendRequest = async () => {
     if (!request.trim() || requestState === "sending") return;
     setOrderError("");
     setRequestState("sending");
-    let queued = false;
+    let result = null;
     try {
-      queued = await requestUnitOrders(unit.id, request);
+      result = await requestUnitOrders(unit.id, request);
     } catch (error) {
       console.error("Failed to request unit orders:", error);
     }
-    setRequestState(queued ? "queued" : "idle");
-    if (queued) setRequest("");
-    else setOrderError(ORDER_NOT_SAVED);
+    setRequestState(result?.ok ? "queued" : "idle");
+    if (result?.ok) setRequest("");
+    else setOrderError(result?.error || ORDER_NOT_SAVED);
   };
 
   return createPortal(

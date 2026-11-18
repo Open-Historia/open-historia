@@ -88,7 +88,10 @@ export const moveStructure = (markers, id, { lng, lat } = {}) => {
 //
 // In a shared game the world is the host's: the page asks (request "settle"),
 // the host checks the structure is the player's to settle and writes it, and
-// the next view shows it. A refusal is thrown with the host's reason.
+// the next view shows it. A refusal is thrown with the host's reason, and a
+// write that failed with SETTLE_NOT_SAVED, for the card or the map's banner to
+// show where the player pressed (Selection/Features.jsx, Map/Nations.jsx).
+export const SETTLE_NOT_SAVED = "The structure's place could not be saved. Try again.";
 export const saveSettledStructure = async (id, point = null) => {
     if (inSharedGame()) {
         const answer = await requestFromHost("settle", {
@@ -97,11 +100,15 @@ export const saveSettledStructure = async (id, point = null) => {
             lng: Number(point?.lng) || 0,
             lat: Number(point?.lat) || 0,
         });
-        if (!answer.ok) throw new Error(answer.error || "The host did not settle the structure.");
+        if (!answer.ok) throw new Error(answer.error || SETTLE_NOT_SAVED);
         return;
     }
-    await mutateWorldState((world) => {
-        const markers = point ? moveStructure(world.markers, id, point) : acceptStructure(world.markers, id);
-        return { ...world, markers };
-    });
+    try {
+        await mutateWorldState((world) => {
+            const markers = point ? moveStructure(world.markers, id, point) : acceptStructure(world.markers, id);
+            return { ...world, markers };
+        });
+    } catch (error) {
+        throw new Error(SETTLE_NOT_SAVED, { cause: error });
+    }
 };

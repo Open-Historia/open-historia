@@ -605,27 +605,27 @@ export const deployUnit = async ({ type, strength, name, composition, lng, lat }
 // This is intent, not control: it queues an ordinary action for the AI to weigh
 // against the front, the era and everyone else's plans on the next jump — the
 // same treatment every other action they plan gets. Nothing on the map moves now.
-// Resolves to whether the order was written.
+// Resolves to { ok: true } once the order is written, else { ok: false, error }:
+// in a shared game the host's own reason ("At most 12 orders a round."), which
+// the card shows where the player asked. It kept only whether, and the card
+// said the order could not be saved whatever the host had answered (the gap
+// audit of 2026-11-18), as deployUnit and disbandUnit already said why.
 // i18n-ignore: the order as the model reads it.
 export const requestUnitOrders = async (unitId, text) => {
   const request = String(text ?? "").trim();
   const unit = getUnitById(unitId);
-  if (!unit || !request) return false;
+  if (!unit || !request) return { ok: false, error: ORDER_NOT_SAVED };
+  const wording = `Orders requested for ${unit.name} (${unit.type}, owner ${unit.ownerCode}), ` +
+    `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
+    `carry this out over the coming period as far as the era, terrain, logistics and the wider ` +
+    `situation allow, or explain in an event why it could not be done.`;
   // In a shared game an order is asked of the host, like any other
   // (multiplayer/): the same words, under this player's country.
   if (inSharedGame()) {
-    const wording = `Orders requested for ${unit.name} (${unit.type}, owner ${unit.ownerCode}), ` +
-      `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
-      `carry this out over the coming period as far as the era, terrain, logistics and the wider ` +
-      `situation allow, or explain in an event why it could not be done.`;
-    return (await requestFromHost("order", { text: wording.slice(0, 1500) })).ok;
+    const answer = await requestFromHost("order", { text: wording.slice(0, 1500) });
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error || ORDER_NOT_SAVED };
   }
-  return queueOrder(
-    `Orders requested for ${unit.name} (${unit.type}, owner ${unit.ownerCode}), ` +
-      `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
-      `carry this out over the coming period as far as the era, terrain, logistics and the wider ` +
-      `situation allow, or explain in an event why it could not be done.`,
-  );
+  return (await queueOrder(wording)) ? { ok: true } : { ok: false, error: ORDER_NOT_SAVED };
 };
 
 // The player stands one of their formations down. The unit leaves the map now

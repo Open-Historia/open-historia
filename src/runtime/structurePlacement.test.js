@@ -10,7 +10,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { applyMarkerOps } from "./gameState.js";
-import { STRUCTURE_SEA_KM, acceptStructure, approximateMark, canSettleStructure, moveStructure, structureMoveRefusal } from "./structurePlacement.js";
+import { SETTLE_NOT_SAVED, STRUCTURE_SEA_KM, acceptStructure, approximateMark, canSettleStructure, moveStructure, saveSettledStructure, structureMoveRefusal } from "./structurePlacement.js";
 import { syntheticMap } from "./fronts/syntheticMap.js";
 import { buildWorldGrid } from "./fronts/worldGrid.js";
 import { chartOf } from "./warRoomChart.js";
@@ -107,4 +107,30 @@ test("in a shared game a structure moves onto its own country's land or the sea 
     assert.match(structureMoveRefusal(fort, { lng: -40, lat: 0 }, { chart }), /its own country's land/, "far out at sea, off the map");
     assert.match(structureMoveRefusal(fort, { lng: 1.5, lat: 52.5 }, { chart: null }), /could not be read/);
     assert.ok(STRUCTURE_SEA_KM >= 100);
+});
+
+// A refused settle was written to the diagnostics log alone, and the card and the map said nothing (the gap audit of
+// 2026-11-18): the host's reason is what the save throws, for the card or the map's banner to show.
+test("in a shared game a settle is asked of the host, and a refusal comes back with the host's reason", async () => {
+    const { setSharedRequester } = await import("../multiplayer/client/sharedGameBridge.js");
+    const { startRemoteRuntime, stopRemoteRuntime } = await import("../multiplayer/client/remoteRuntime.js");
+    const asked = [];
+    setSharedRequester(async (t, fields) => {
+        asked.push({ t, ...fields });
+        return fields.move ? { ok: false, error: "A structure is moved onto its own country's land, or to the sea off it." } : { ok: true, error: "" };
+    });
+    startRemoteRuntime({ publish: () => {}, urlFor: () => "" });
+    try {
+        await saveSettledStructure("structure-1");
+        await assert.rejects(saveSettledStructure("structure-1", { lng: 9.5, lat: 52.5 }), /its own country's land/);
+        assert.deepEqual(asked, [
+            { t: "settle", marker: "structure-1", move: false, lng: 0, lat: 0 },
+            { t: "settle", marker: "structure-1", move: true, lng: 9.5, lat: 52.5 },
+        ]);
+        setSharedRequester(async () => ({ ok: false, error: "" }));
+        await assert.rejects(saveSettledStructure("structure-1"), (error) => error.message === SETTLE_NOT_SAVED);
+    } finally {
+        stopRemoteRuntime();
+        setSharedRequester(null);
+    }
 });
