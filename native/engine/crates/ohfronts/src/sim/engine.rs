@@ -2,7 +2,7 @@ use super::air::Wing;
 use super::battle::{create_battle, Battle, Opening};
 use super::climate::ZoneSky;
 use super::walls::WallLine;
-use super::constants::MAX_SIDE_MEMBERS;
+use super::war_record::MAX_WAR_SIDE_MEMBERS;
 use super::game_dates::add_game_days;
 use super::js::{self, OrdMap, Val};
 use super::manpower::men_per_formation;
@@ -115,7 +115,7 @@ pub fn member_list(value: &Val) -> Vec<String> {
     let mut members: Vec<String> = Vec::new();
     for entry in value.array_or_empty() {
         let name = clean(entry, 120);
-        if !name.is_empty() && !members.iter().any(|member| fold_text(member) == fold_text(&name)) && (members.len() as f64) < MAX_SIDE_MEMBERS {
+        if !name.is_empty() && !members.iter().any(|member| fold_text(member) == fold_text(&name)) && (members.len() as f64) < MAX_WAR_SIDE_MEMBERS {
             members.push(name);
         }
     }

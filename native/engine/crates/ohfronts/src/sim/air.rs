@@ -3,6 +3,7 @@ use super::engine::Run;
 use super::js::{self, OrdMap, Val};
 use super::military::air_worth;
 use super::troops::is_live;
+use super::unit_types::unit_figures;
 use super::world_grid::{km_between, measure_of};
 use crate::jsmath;
 
@@ -27,6 +28,9 @@ pub struct Wing {
     pub lat: Option<f64>,
     pub arm: bool,
     pub changed: bool,
+    pub own: bool,
+    pub attack: f64,
+    pub toughness: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,6 +67,25 @@ fn worth_of(run: &Run, name: &str) -> f64 {
     air_worth(&run.military_of(name))
 }
 
+fn own_type_reach(era: usize) -> f64 {
+    let first = AIR_REACH_KM.iter().copied().find(|&km| km > 0.0).unwrap_or(0.0);
+    let reach = AIR_REACH_KM.get(era).copied().unwrap_or(0.0);
+    if reach > 0.0 {
+        reach
+    } else {
+        first
+    }
+}
+
+fn worth_of_wing(run: &Run, wing: &Wing) -> f64 {
+    let worth = worth_of(run, &wing.owner);
+    if wing.own && !(worth > 0.0) {
+        1.0
+    } else {
+        worth
+    }
+}
+
 pub fn assign_wings(run: &Run, day: f64) {
     if run.air_day.get() == Some(day) {
         return;
@@ -70,14 +93,7 @@ pub fn assign_wings(run: &Run, day: f64) {
     run.air_day.set(Some(day));
     run.air_over.borrow_mut().clear();
     let reach = AIR_REACH_KM.get(run.era).copied().unwrap_or(0.0);
-    if !(reach > 0.0) {
-        return;
-    }
-    if run.wings.borrow().is_none() {
-        *run.wings.borrow_mut() = Some(OrdMap::new());
-    }
-    let map = run.input.get("map");
-    let surface = measure_of(map);
+    let types = run.input.get("unitTypes");
     let mut units: Vec<&Val> = run
         .input
         .get("units")
@@ -85,6 +101,14 @@ pub fn assign_wings(run: &Run, day: f64) {
         .iter()
         .filter(|unit| fold(unit.get("type")) == "air" && js::to_number(unit.get("strength")) > 0.0 && js::to_number(unit.get("lng")).is_finite() && js::to_number(unit.get("lat")).is_finite())
         .collect();
+    if !(reach > 0.0) && !units.iter().any(|unit| unit_figures(types, unit).is_some()) {
+        return;
+    }
+    if run.wings.borrow().is_none() {
+        *run.wings.borrow_mut() = Some(OrdMap::new());
+    }
+    let map = run.input.get("map");
+    let surface = measure_of(map);
     js::stable_sort_by(&mut units, |a, b| match js::compare_units(&js::to_string(a.get("id")), &js::to_string(b.get("id"))) {
         std::cmp::Ordering::Less => -1.0,
         std::cmp::Ordering::Greater => 1.0,
@@ -99,6 +123,11 @@ pub fn assign_wings(run: &Run, day: f64) {
     };
     for unit in &units {
         let id = js::to_string(unit.get("id"));
+        let figures = unit_figures(types, unit);
+        let within = if figures.is_some() { own_type_reach(run.era) } else { reach };
+        if !(within > 0.0) {
+            continue;
+        }
         let wing = {
             let mut wings = run.wings.borrow_mut();
             let wings = wings.as_mut().unwrap();
@@ -107,12 +136,24 @@ pub fn assign_wings(run: &Run, day: f64) {
                 let strength = jsmath::min(100.0, js::to_number(unit.get("strength")));
                 wings.set(
                     id.clone(),
-                    Wing { id: id.clone(), owner: if owner.is_nullish() { String::new() } else { js::to_string(&owner) }, strength, began: strength, lng: Some(js::to_number(unit.get("lng"))), lat: Some(js::to_number(unit.get("lat"))), arm: false, changed: false },
+                    Wing {
+                        id: id.clone(),
+                        owner: if owner.is_nullish() { String::new() } else { js::to_string(&owner) },
+                        strength,
+                        began: strength,
+                        lng: Some(js::to_number(unit.get("lng"))),
+                        lat: Some(js::to_number(unit.get("lat"))),
+                        arm: false,
+                        changed: false,
+                        own: figures.is_some(),
+                        attack: figures.map_or(1.0, |figures| figures.attack),
+                        toughness: figures.map_or(1.0, |figures| figures.toughness),
+                    },
                 );
             }
             wings.get(&id).unwrap().clone()
         };
-        if !(wing.strength > 0.0) || worth_of(run, &wing.owner) == 0.0 {
+        if !(wing.strength > 0.0) || worth_of_wing(run, &wing) == 0.0 {
             continue;
         }
         let mut best: Option<(usize, usize, f64)> = None;
@@ -128,7 +169,7 @@ pub fn assign_wings(run: &Run, day: f64) {
             let field = battle.field.as_ref().expect("an active battle with a field");
             let [lng, lat] = battle.place.to_lng_lat(field.cols as f64 / 2.0, field.rows as f64 / 2.0);
             let km = km_between(wing.lng.unwrap_or(f64::NAN), wing.lat.unwrap_or(f64::NAN), lng, lat, surface);
-            if km <= reach && best.map(|best| km < best.2).unwrap_or(true) {
+            if km <= within && best.map(|best| km < best.2).unwrap_or(true) {
                 best = Some((index, side, km));
             }
         }
@@ -136,7 +177,7 @@ pub fn assign_wings(run: &Run, day: f64) {
             push_over(run, index, side, &id);
         }
     }
-    if !run.input.get("airArms").is_true() {
+    if !(reach > 0.0) || !run.input.get("airArms").is_true() {
         return;
     }
     let winged: Vec<String> = units.iter().map(|unit| fold(&owner_of(unit))).collect();
@@ -157,7 +198,7 @@ pub fn assign_wings(run: &Run, day: f64) {
                         let mut wings = run.wings.borrow_mut();
                         let wings = wings.as_mut().unwrap();
                         if !wings.has(&id) {
-                            wings.set(id.clone(), Wing { id: id.clone(), owner: member.clone(), strength: 100.0, began: 100.0, lng: None, lat: None, arm: true, changed: false });
+                            wings.set(id.clone(), Wing { id: id.clone(), owner: member.clone(), strength: 100.0, began: 100.0, lng: None, lat: None, arm: true, changed: false, own: false, attack: 1.0, toughness: 1.0 });
                         }
                         wings.get(&id).unwrap().strength
                     };
@@ -204,7 +245,7 @@ pub fn sky_of_wings(run: &Run, index: usize, day: f64) -> (Option<BattleWings>, 
             let mut sum = 0.0;
             for id in &lists[side] {
                 let wing = wings.get(id).unwrap();
-                sum += if wing.strength > 0.0 { wing.strength * worth_of(run, &wing.owner) } else { 0.0 };
+                sum += if wing.strength > 0.0 { wing.strength * worth_of_wing(run, wing) * wing.attack } else { 0.0 };
             }
             sum * flies
         };
@@ -267,7 +308,7 @@ pub fn wear_wings(run: &Run, battle: &Battle) {
             if !(wing.strength > 0.0) {
                 continue;
             }
-            wing.strength = jsmath::max(0.0, wing.strength - AIR_LOSS * (0.25 + lost) * wear);
+            wing.strength = jsmath::max(0.0, wing.strength - (AIR_LOSS * (0.25 + lost) * wear) / wing.toughness);
             wing.changed = true;
         }
     }

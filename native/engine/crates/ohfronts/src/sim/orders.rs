@@ -662,6 +662,63 @@ pub fn give_way(battle: &mut Battle, side: usize, loss_share: f64, date: &str, r
     }
 }
 
+pub fn fall_back_overland(battle: &mut Battle, side: usize, date: &str, taken_region: i64, reach: f64) {
+    let enemy = 1 - side;
+    for index in 0..battle.troops[side].len() {
+        let field = battle.field.as_ref().unwrap();
+        let troop = &battle.troops[side][index];
+        if !is_live(troop) || stands(field, side as u8, troop.x, troop.y) {
+            continue;
+        }
+        let (cols, rows, size) = (field.cols as i64, field.rows as i64, field.size as i64);
+        let start = troop.y.floor() as i64 * cols + troop.x.floor() as i64;
+        let own_region = if start >= 0 && start < size { battle.arena.region[start as usize] as i64 } else { -1 };
+        let mut steps: std::collections::HashMap<i64, f64> = std::collections::HashMap::new();
+        steps.insert(start, 0.0);
+        let mut queue = vec![start];
+        let mut found: i64 = -1;
+        let mut head = 0;
+        while head < queue.len() && found < 0 {
+            let at = queue[head];
+            head += 1;
+            let step = steps[&at];
+            if step >= reach {
+                continue;
+            }
+            let col = at % cols;
+            let row = (at as f64 / cols as f64).floor() as i64;
+            for next in [if col > 0 { at - 1 } else { -1 }, if col < cols - 1 { at + 1 } else { -1 }, if row > 0 { at - cols } else { -1 }, if row < rows - 1 { at + cols } else { -1 }] {
+                if next < 0 || next >= size || steps.contains_key(&next) || field.play[next as usize] == 0 {
+                    continue;
+                }
+                let holder = field.holders[next as usize] as usize;
+                if holder == side {
+                    found = next;
+                    break;
+                }
+                let region = battle.arena.region[next as usize] as i64;
+                if holder != enemy || (region != taken_region && region != own_region) {
+                    continue;
+                }
+                steps.insert(next, step + 1.0);
+                queue.push(next);
+            }
+        }
+        if found < 0 {
+            let at = describe_point(&battle.arena, troop.x, troop.y);
+            if !at.is_empty() {
+                log(battle, date, "overrun", side, &at);
+            }
+            battle.troops[side][index].strength = 0.0;
+            continue;
+        }
+        let troop = &mut battle.troops[side][index];
+        troop.x = (found % cols) as f64 + 0.5;
+        troop.y = (found / cols) as f64 + 0.5;
+        troop.dig = 0.0;
+    }
+}
+
 fn capture(battle: &mut Battle, side: usize, target: &Place, date: &str) -> bool {
     let mut leader: i64 = -1;
     let mut best = f64::INFINITY;

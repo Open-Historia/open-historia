@@ -25,7 +25,7 @@ use super::march::{march_km_of, march_on, marches_for, send_inland, walk_route, 
 use super::home::{border_cells, home_bounds, home_cells as cells_round_cities, home_name, home_neighbours, way_into, HOME_JOIN_KM, HOME_MARGIN_KM};
 use super::air_strike::bomb_troops;
 use super::closing::live_order;
-use super::orders::{apply_order, assign_order, give_way, land_carried, put_ashore, read_sieges, set_standing_order, standing_of, OrderDay};
+use super::orders::{apply_order, assign_order, fall_back_overland, land_carried, put_ashore, read_sieges, set_standing_order, standing_of, OrderDay};
 use super::record::{fold_battlefield_name, frame_from, is_war_id_name, normalize_battlefields};
 use super::region_types::water_type_ids;
 use super::scenario_fronts::authored_name;
@@ -37,6 +37,7 @@ use super::transports::{airlift_intercepts, bound_for, departures_for, intercept
 use super::troops::{create_troop, is_live, kinds_for, live_count, troops_cap, troops_least, troops_wanted, TroopSeed, STATE_HOLDING};
 use super::unit_motion::year_in_era;
 use super::walls::lines_changed;
+use super::war_record::{mint_war_id, MAX_WAR_SIDE_MEMBERS};
 use super::world_grid::{build_world_grid, km_between, measure_of, place_along, world_sheet_key, GridOptions, Surface, WorldGrid};
 use crate::jsmath;
 use std::collections::{HashMap, HashSet};
@@ -488,6 +489,64 @@ fn land_where_troops_stand(run: &mut Run, war: &War, day: f64) -> Flow<()> {
     Ok(())
 }
 
+fn seat_order(run: &Run, arena: Option<&Arena>, members: &[String]) -> Vec<String> {
+    let list = member_list(&Val::Arr(members.iter().map(|name| Val::str(name)).collect()));
+    if list.len() as f64 <= MAX_SIDE_MEMBERS {
+        return list;
+    }
+    let played: HashSet<String> = run.input.get("players").array_or_empty().iter().map(fold).collect();
+    let mut ground: Vec<(String, f64)> = list.iter().map(|name| (fold_text(name), 0.0)).collect();
+    let has = |ground: &[(String, f64)], name: &str| ground.iter().any(|(key, _)| *key == fold_text(name));
+    if let Some(arena) = arena {
+        for region in 1..arena.ids.len() {
+            let id = &arena.ids[region];
+            let group = run.group_of(id);
+            let owner = if group.is_empty() { String::new() } else { run.group_owner_of(&group) };
+            let holder = if !group.is_empty() && has(&ground, &group) {
+                group
+            } else if !owner.is_empty() && has(&ground, &owner) {
+                owner
+            } else {
+                run.controller_of(id)
+            };
+            let key = fold_text(&holder);
+            if let Some(entry) = ground.iter_mut().find(|(name, _)| *name == key) {
+                let cells = arena.cells.get(region).map(|&cells| cells as f64).unwrap_or(0.0);
+                entry.1 += if cells.is_nan() { 0.0 } else { cells };
+            }
+        }
+    }
+    let army = |name: &str| if run.mech.military() { land_worth(&run.military_of(name)) } else { 0.0 };
+    let mut seats: Vec<(String, f64, f64, f64)> = list
+        .iter()
+        .map(|name| {
+            let key = fold_text(name);
+            let held = ground.iter().find(|(entry, _)| *entry == key).map(|(_, cells)| *cells).unwrap_or(0.0);
+            (name.clone(), if played.contains(&key) { 1.0 } else { 0.0 }, if held != 0.0 && !held.is_nan() { held } else { 0.0 }, army(name))
+        })
+        .collect();
+    js::stable_sort_by(&mut seats, |a, b| {
+        let by = b.1 - a.1;
+        if by != 0.0 && !by.is_nan() {
+            return by;
+        }
+        let by = b.2 - a.2;
+        if by != 0.0 && !by.is_nan() {
+            return by;
+        }
+        let by = b.3 - a.3;
+        if by != 0.0 && !by.is_nan() {
+            return by;
+        }
+        match js::compare_units(&fold_text(&a.0), &fold_text(&b.0)) {
+            std::cmp::Ordering::Less => -1.0,
+            std::cmp::Ordering::Greater => 1.0,
+            std::cmp::Ordering::Equal => 0.0,
+        }
+    });
+    seats.into_iter().map(|(name, ..)| name).collect()
+}
+
 fn examine_war(run: &mut Run, id: &str, day: f64) -> Flow<()> {
     let Some(war) = war_of(run, id) else { return Ok(()) };
     if war.status != "active" || war.sides[0].is_empty() || war.sides[1].is_empty() {
@@ -521,7 +580,12 @@ fn examine_war(run: &mut Run, id: &str, day: f64) -> Flow<()> {
         }
         let Some(frame) = frame_for_contact(contact.bounds, &map) else { continue };
         let Some(arena) = arena_at(run, &frame) else { continue };
-        let Some(mut battle) = open_battle(run, Opened { name: String::new(), war_id: text(&war.id), sides: war.sides.clone(), frame, arena, day, home: false }) else { continue };
+        let sides = [0, 1].map(|side| {
+            let mut seated = seat_order(run, Some(&*arena), &war.sides[side]);
+            seated.truncate(MAX_SIDE_MEMBERS as usize);
+            seated
+        });
+        let Some(mut battle) = open_battle(run, Opened { name: String::new(), war_id: text(&war.id), sides, frame, arena, day, home: false }) else { continue };
         battle.name = name_for(run, &mut battle);
         battle.auto_named = true;
         start_battle(run, battle, day, None);
@@ -906,7 +970,8 @@ fn sync_with_war(run: &mut Run, at: usize) {
         if !left.is_empty() {
             leave_battle(run, &mut battle, &left);
         }
-        join_battle(run, &mut battle, side, &theirs);
+        let seated = seat_order(run, Some(&*battle.arena), &theirs);
+        join_battle(run, &mut battle, side, &seated);
     }
     battle.status = if war.status == "ceasefire" { "frozen".to_string() } else { "active".to_string() };
     give(run, at, battle);
@@ -965,9 +1030,13 @@ fn attack_opens_war(run: &mut Run, attacker: &str, defender: &str, day: f64, ser
     if !serious {
         return Ok(None);
     }
-    let id = format!("war-{}-{}-{}", slug_of(attacker), slug_of(defender), date);
-    if let Some(war) = run.wars.get(&id) {
+    let mut id = format!("war-{}-{}-{}", slug_of(attacker), slug_of(defender), date);
+    if let Some(war) = run.wars.get(&id).filter(|war| war.status != "ended") {
         return Ok(if war.status == "active" { Some(id) } else { None });
+    }
+    if run.wars.has(&id) {
+        let taken: HashSet<String> = run.wars.keys().cloned().collect();
+        id = mint_war_id(&Val::Str(id), &taken);
     }
     let (attacker, defender) = (clean_text(attacker, 120), clean_text(defender, 120));
     run.wars.set(id.clone(), War { id: id.clone(), title: String::new(), status: "active".to_string(), sides: [vec![attacker.clone()], vec![defender.clone()]], began: date.clone() });
@@ -2258,7 +2327,7 @@ fn apply_war_moment(run: &mut Run, moment: &Val, day: f64) -> Flow<()> {
         {
             let war = run.wars.get_mut(&id).unwrap();
             for name in &names {
-                if !war.sides.iter().any(|members| members.iter().any(|member| fold_text(member) == fold_text(name))) && (war.sides[side].len() as f64) < MAX_SIDE_MEMBERS {
+                if !war.sides.iter().any(|members| members.iter().any(|member| fold_text(member) == fold_text(name))) && (war.sides[side].len() as f64) < MAX_WAR_SIDE_MEMBERS {
                     war.sides[side].push(name.clone());
                 }
             }
@@ -2465,7 +2534,7 @@ fn march_into(run: &mut Run, at: usize, region: usize, taker: &Val, day: f64) {
         }
     }
     let reach = (battle.field.as_ref().unwrap().cols + battle.field.as_ref().unwrap().rows) as f64;
-    give_way(battle, 1 - side, 0.0, &date, reach);
+    fall_back_overland(battle, 1 - side, &date, region as i64, reach);
 }
 
 fn land_changed(run: &mut Run, id: &str, taker: &Val, day: f64, handed: &mut Vec<String>) {

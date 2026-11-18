@@ -1,5 +1,5 @@
 use super::chronicle::{read_chronicle, Chronicle};
-use super::codec::{decode_mask, is_packed_text, TROOP_LETTERS};
+use super::codec::{decode_mask, is_packed_text, troop_layout_of};
 use super::constants::*;
 use super::engine::{clean, member_list};
 use super::frame::{cell_index_at, normalize_frame, Frame, Projector};
@@ -53,8 +53,10 @@ fn packed(value: &Val) -> String {
 
 fn troop_text(value: &Val) -> Val {
     let text = packed(value);
-    let count = (text.len() / TROOP_LETTERS).min(MAX_TROOPS_PER_SIDE as usize);
-    Val::Str(text[..count * TROOP_LETTERS].to_string())
+    let (letters, from) = troop_layout_of(&text);
+    let count = ((text.len() - from) / letters).min(MAX_TROOPS_PER_SIDE as usize);
+    let body = &text[from..from + count * letters];
+    Val::Str(if body.is_empty() { String::new() } else { format!("{}{body}", &text[..from]) })
 }
 
 fn side_index(value: &Val) -> Option<f64> {

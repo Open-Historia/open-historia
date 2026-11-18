@@ -137,6 +137,7 @@ pub struct Ground<'a> {
 #[derive(Clone, Debug)]
 pub struct ReplayRecorder {
     pub members: [Vec<String>; 2],
+    pub shares: [usize; 2],
     pub names: Vec<String>,
     pub cells: usize,
     pub painted: Vec<u8>,
@@ -172,14 +173,25 @@ pub struct Finished {
     pub shown: Option<(Vec<(String, String)>, Vec<(f64, String, String)>)>,
 }
 
+pub fn paint_names_of(counts: [usize; 2]) -> [usize; 2] {
+    let most = PAINT_NAMES_MAX as usize;
+    if counts[0] + counts[1] <= most {
+        return counts;
+    }
+    let half = most / 2;
+    let first = counts[0].min(half.max(most.saturating_sub(counts[1])));
+    [first, counts[1].min(most - first)]
+}
+
 pub fn create_replay_recorder(sides: &Val, cols: f64, rows: f64) -> ReplayRecorder {
     let members = [member_list(sides.at(0)), member_list(sides.at(1))];
-    let mut names: Vec<String> = members[0].iter().chain(members[1].iter()).cloned().collect();
-    names.truncate(PAINT_NAMES_MAX as usize);
+    let shares = paint_names_of([members[0].len(), members[1].len()]);
+    let names: Vec<String> = members[0].iter().take(shares[0]).chain(members[1].iter().take(shares[1])).cloned().collect();
     let cells = jsmath::max(0.0, cols.floor() * rows.floor());
     let cells = if cells.is_finite() { cells as usize } else { 0 };
     ReplayRecorder {
         members,
+        shares,
         names,
         cells,
         painted: vec![0; cells],
@@ -207,12 +219,11 @@ impl ReplayRecorder {
             return own;
         }
         let painter = jsmath::min(ground.painters.map(|painters| painters.get(cell).copied().unwrap_or(0) as f64).unwrap_or(0.0), (self.members[side].len() - 1) as f64);
-        let state = 1.0 + if side == 0 { painter } else { self.members[0].len() as f64 + painter };
-        if state <= self.names.len() as f64 {
-            state as u8
-        } else {
-            own
+        if self.shares[side] == 0 {
+            return own;
         }
+        let first = if side == 0 { 0.0 } else { self.shares[0] as f64 };
+        (1.0 + first + if painter < self.shares[side] as f64 { painter } else { 0.0 }) as u8
     }
 
     pub fn record(&mut self, day: f64, troops: &[Vec<TrackIn>], ground: Option<&Ground>) {

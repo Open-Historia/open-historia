@@ -1,4 +1,4 @@
-use super::accents::{is_letter, strip_accents};
+use super::accents::strip_accents;
 use super::codec::{decode_troops, Troop as Coded};
 use super::command::{chosen_orders_of, generals_of, order_troops, release_marked, route_ahead, thin_route, OrderAsk};
 use super::constants::*;
@@ -9,10 +9,10 @@ use super::troops::or_else;
 use crate::jsmath;
 use std::cmp::Ordering;
 
-pub const ATTACK_WORDS: [&str; 5] = ["advance", "blitz", "spearhead", "flank", "encircle"];
+pub const ATTACK_WORDS: [&str; 5] = OPERATION_APPROACHES;
 pub const PROJECT_MARK: &str = "plan:";
 pub const WATCH_MARK: &str = "watch";
-const OPEN_STATUSES: [&str; 4] = ["proposed", "active", "stalled", "paused"];
+const OPEN_STATUSES: [&str; 4] = ["planning", "active", "stalled", "paused"];
 const FAR_FROM_TRUTH_KM: f64 = 150.0;
 const NEAR_TRUTH_KM: f64 = 40.0;
 const WORDS: [(&str, &str); 9] = [
@@ -46,10 +46,6 @@ fn clean(value: &Val) -> String {
 
 fn fold(value: &Val) -> String {
     clean(value).to_lowercase()
-}
-
-fn plain(value: &Val) -> String {
-    strip_accents(&clean_of(value, 4000)).to_lowercase()
 }
 
 fn side_of(side: &Val) -> Option<usize> {
@@ -587,76 +583,6 @@ fn order_plans(record: &Val, side: usize, cities: &Val, decoded: &[Vec<Coded>; 2
     plans
 }
 
-fn is_word(unit: char) -> bool {
-    unit.is_ascii_alphanumeric() || unit == '_'
-}
-
-fn starts_word(units: &[char], at: usize) -> bool {
-    at == 0 || !is_word(units[at - 1])
-}
-
-fn ends_word(units: &[char], end: usize) -> bool {
-    end >= units.len() || !is_word(units[end])
-}
-
-fn found_at(units: &[char], word: &str, whole: bool) -> bool {
-    let wanted: Vec<char> = word.chars().collect();
-    if wanted.len() > units.len() {
-        return false;
-    }
-    (0..=units.len() - wanted.len()).any(|at| starts_word(units, at) && units[at..at + wanted.len()] == wanted[..] && (!whole || ends_word(units, at + wanted.len())))
-}
-
-fn order_hint(sentence: &str) -> &'static str {
-    let units: Vec<char> = sentence.chars().collect();
-    let any = |starts: &[&str], wholes: &[&str]| starts.iter().any(|word| found_at(&units, word, false)) || wholes.iter().any(|word| found_at(&units, word, true));
-    if any(&["encircl", "surround", "besieg", "envelop", "pincer"], &["cut off", "cutting off"]) {
-        return "encircle";
-    }
-    if any(&["flank", "outflank"], &[]) {
-        return "flank";
-    }
-    if any(&["blitz"], &["lightning war", "lightning attack", "lightning offensive", "lightning advance"]) {
-        return "blitz";
-    }
-    if any(&["spearhead", "breakthrough", "break through", "thrust"], &["armored thrust", "armoured thrust"]) {
-        return "spearhead";
-    }
-    "advance"
-}
-
-fn letter_unit(unit: u16) -> bool {
-    if (0xd800..=0xdfff).contains(&unit) {
-        return false;
-    }
-    char::from_u32(unit as u32).is_some_and(is_letter)
-}
-
-fn named_in(sentence: &[u16], name: &[u16]) -> bool {
-    if name.len() < 3 || name.len() > sentence.len() {
-        return false;
-    }
-    let mut from = 0;
-    while from + name.len() <= sentence.len() {
-        let Some(found) = (from..=sentence.len() - name.len()).find(|&at| sentence[at..at + name.len()] == name[..]) else { return false };
-        let before = if found > 0 { sentence[found - 1] } else { b' ' as u16 };
-        let after = if found + name.len() < sentence.len() { sentence[found + name.len()] } else { b' ' as u16 };
-        if !letter_unit(before) && !letter_unit(after) {
-            return true;
-        }
-        from = found + 1;
-    }
-    false
-}
-
-fn template(value: &Val) -> String {
-    if value.is_nullish() {
-        String::new()
-    } else {
-        js::to_string(value)
-    }
-}
-
 pub struct Context<'a> {
     pub projects: &'a Val,
     pub cities: &'a Val,
@@ -670,16 +596,6 @@ pub fn operations_on(record: &Val, side: &Val, context: &Context) -> Vec<Obj> {
     let mut own: Vec<String> = vec![fold(context.player)];
     own.extend(context.people.array_or_empty().iter().map(fold));
     own.retain(|name| !name.is_empty());
-    let mut held: Vec<(Val, String)> = Vec::new();
-    for city in context.cities.array_or_empty() {
-        let name = clean(city.get("name"));
-        let (lng, lat) = (js::to_number(city.get("lng")), js::to_number(city.get("lat")));
-        if name.is_empty() || !in_frame(record, lng, lat) || !held_by(record, lng, lat, 1 - side) {
-            continue;
-        }
-        held.push((city.clone(), plain(&text(&name))));
-    }
-    js::stable_sort_by(&mut held, |a, b| or_else(js::utf16_len(&b.1) as f64 - js::utf16_len(&a.1) as f64, || locale_compare(&a.1, &b.1)));
     let player = clean(context.player);
     let mut found = Vec::new();
     for entry in context.projects.array_or_empty() {
@@ -696,27 +612,18 @@ pub fn operations_on(record: &Val, side: &Val, context: &Context) -> Vec<Obj> {
         if owner.is_empty() || !members.contains(&fold(&text(&owner))) {
             continue;
         }
-        let mut place: Option<Val> = None;
         let focus = entry.get("focus");
         let lng = js::to_number(focus.get("lng"));
         let lat = js::to_number(focus.get("lat"));
-        if focus.truthy() && lng.is_finite() && lat.is_finite() && in_frame(record, lng, lat) && held_by(record, lng, lat, 1 - side) {
-            let near = city_near(record, context.cities, lng, lat, PLAN_PLACE_KM);
-            place = Some(match near {
-                Some(near) if held_by(record, js::to_number(near.get("lng")), js::to_number(near.get("lat")), 1 - side) => {
-                    Val::obj([("name", text(&clean(near.get("name")))), ("lng", num(js::to_number(near.get("lng")))), ("lat", num(js::to_number(near.get("lat"))))])
-                }
-                _ => Val::obj([("name", text("")), ("lng", num(lng)), ("lat", num(lat))]),
-            });
+        if !focus.truthy() || !lng.is_finite() || !lat.is_finite() || !in_frame(record, lng, lat) || !held_by(record, lng, lat, 1 - side) {
+            continue;
         }
-        let sentence = plain(&Val::Str(format!("{}. {}. {}", template(entry.get("name")), template(entry.get("summary")), template(entry.get("nextMilestone").get("title")))));
-        if place.is_none() {
-            let units: Vec<u16> = sentence.encode_utf16().collect();
-            if let Some((city, _)) = held.iter().find(|(_, key)| named_in(&units, &key.encode_utf16().collect::<Vec<u16>>())) {
-                place = Some(Val::obj([("name", text(&clean(city.get("name")))), ("lng", num(js::to_number(city.get("lng")))), ("lat", num(js::to_number(city.get("lat"))))]));
+        let place = match city_near(record, context.cities, lng, lat, PLAN_PLACE_KM) {
+            Some(near) if held_by(record, js::to_number(near.get("lng")), js::to_number(near.get("lat")), 1 - side) => {
+                Val::obj([("name", text(&clean(near.get("name")))), ("lng", num(js::to_number(near.get("lng")))), ("lat", num(js::to_number(near.get("lat"))))])
             }
-        }
-        let Some(place) = place else { continue };
+            _ => Val::obj([("name", text("")), ("lng", num(lng)), ("lat", num(lat))]),
+        };
         let secrecy = clean_of(entry.get("secrecy"), 20);
         let mut operation = Obj::new();
         operation.set("project", text(&clean_of(entry.get("id"), 160)));
@@ -725,7 +632,10 @@ pub fn operations_on(record: &Val, side: &Val, context: &Context) -> Vec<Obj> {
         operation.set("own", Val::Bool(own.contains(&fold(&text(&owner)))));
         operation.set("status", entry.get("status").clone());
         operation.set("due", text(&if entry.get("ongoing").truthy() { String::new() } else { clean_of(entry.get("targetDate"), 40) }));
-        operation.set("order", text(order_hint(&sentence)));
+        operation.set("order", match entry.get("approach") {
+            Val::Str(approach) if OPERATION_APPROACHES.contains(&approach.as_str()) => text(approach),
+            _ => text("advance"),
+        });
         operation.set("place", place);
         operation.set("doubted", Val::Bool(matches!(entry.get("verification"), Val::Str(word) if word == "doubted")));
         operation.set("secrecy", text(if secrecy.is_empty() { "restricted" } else { &secrecy }));

@@ -62,3 +62,5 @@ pub mod front_run;
 pub mod march;
 pub mod home;
 pub mod air_strike;
+pub mod unit_types;
+pub mod war_record;

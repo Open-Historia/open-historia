@@ -24,7 +24,19 @@ fn wing_of(value: &Val) -> Wing {
         Val::Num(n) => Some(*n),
         _ => None,
     };
-    Wing { id: value.get("id").string_or_empty(), owner: value.get("owner").string_or_empty(), strength: value.get("strength").num(), began: value.get("began").num(), lng: at("lng"), lat: at("lat"), arm: value.get("arm").is_true(), changed: value.get("changed").is_true() }
+    Wing {
+        id: value.get("id").string_or_empty(),
+        owner: value.get("owner").string_or_empty(),
+        strength: value.get("strength").num(),
+        began: value.get("began").num(),
+        lng: at("lng"),
+        lat: at("lat"),
+        arm: value.get("arm").is_true(),
+        changed: value.get("changed").is_true(),
+        own: value.get("own").is_true(),
+        attack: at("attack").unwrap_or(1.0),
+        toughness: at("toughness").unwrap_or(1.0),
+    }
 }
 
 fn wing_val(wing: &Wing) -> Val {
@@ -41,6 +53,11 @@ fn wing_val(wing: &Wing) -> Val {
     }
     if wing.arm {
         out.set("arm", Val::Bool(true));
+    }
+    if wing.own {
+        out.set("own", Val::Bool(true));
+        out.set("attack", num(wing.attack));
+        out.set("toughness", num(wing.toughness));
     }
     if wing.changed {
         out.set("changed", Val::Bool(true));

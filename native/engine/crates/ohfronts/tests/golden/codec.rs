@@ -105,6 +105,12 @@ fn codec_matches_js() {
                     ),
                 )
             }),
+            ("troopLayoutOf", &|case| {
+                let raw = case.arg(0);
+                let given = if raw.is_nullish() { String::new() } else { ohfronts::sim::js::to_string(raw) };
+                let (letters, from) = troop_layout_of(&given);
+                expect(case, Val::obj([("letters", num(letters as f64)), ("from", num(from as f64))]))
+            }),
             ("encodeLevels", &|case| {
                 let values: Vec<f64> = list_of(case.arg(0)).iter().map(|v| v.num()).collect();
                 expect(case, text(&encode_levels(&values)))

@@ -84,6 +84,9 @@ pub fn troop_val(t: &Troop) -> Val {
         ("punch", num(t.punch)),
         ("guard", num(t.guard)),
         ("legs", num(t.legs)),
+        ("typeAttack", num(t.type_attack)),
+        ("typeToughness", num(t.type_toughness)),
+        ("typeSpeed", num(t.type_speed)),
         ("fought", b(t.fought)),
         ("goal", if t.goal.is_nan() { Val::Undef } else { num(t.goal) }),
     ];
@@ -122,6 +125,11 @@ pub fn troop_of(value: &Val) -> Troop {
     set(&mut t.fatigue, "fatigue");
     set(&mut t.goal, "goal");
     set(&mut t.legs, "legs");
+    set(&mut t.punch, "punch");
+    set(&mut t.guard, "guard");
+    set(&mut t.type_attack, "typeAttack");
+    set(&mut t.type_toughness, "typeToughness");
+    set(&mut t.type_speed, "typeSpeed");
     if !value.get("drawn").is_undef() {
         t.drawn = value.get("drawn").truthy();
     }

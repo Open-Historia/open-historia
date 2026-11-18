@@ -3,6 +3,8 @@ use super::constants::{BATTLEFIELD_NAME_MAX, GENERAL_NAME_MAX, MAX_COMMANDS, MAX
 use super::engine::clean;
 use super::js::{self, Obj, Val};
 use super::swarms::DEPLOY_FORMS;
+use super::war_record::mint_war_id;
+use std::collections::HashSet;
 use crate::jsmath;
 
 pub const MAX_SCENARIO_FRONTS: usize = 8;
@@ -134,13 +136,16 @@ fn opposed(war: &Val, front: &Val) -> bool {
 pub fn scenario_front_wars(fronts: &Val, wars: &Val, date: &Val) -> Val {
     let mut added: Vec<Val> = Vec::new();
     let ledger: Vec<&Val> = list(wars).iter().filter(|war| clean(war.get("status"), 200).to_lowercase() != "ended").collect();
+    let mut taken: HashSet<String> = list(wars).iter().map(|war| clean(war.get("id"), 200)).filter(|id| !id.is_empty()).collect();
     for (index, front) in list(fronts).iter().enumerate() {
         if !front.get("war").truthy() || ledger.iter().any(|war| opposed(war, front)) || added.iter().any(|war| opposed(war, front)) {
             continue;
         }
+        let id = mint_war_id(&Val::Str(format!("war-scenario-front-{}", index + 1)), &taken);
+        taken.insert(id.clone());
         let when = Val::Str(clean(date, 40));
         let mut war = Obj::new();
-        war.set("id", Val::Str(format!("war-scenario-front-{}", index + 1)));
+        war.set("id", Val::Str(id));
         war.set("title", front.get("name").clone());
         war.set("status", Val::str("active"));
         war.set("sideA", front.get("sides").at(0).clone());

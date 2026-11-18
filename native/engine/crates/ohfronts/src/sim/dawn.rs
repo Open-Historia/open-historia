@@ -95,9 +95,10 @@ pub fn dawn(run: &mut Run, index: usize, day: f64) {
                 * blows
                 * air.map(|air| air.punch[side]).unwrap_or(1.0)
                 * local.map(|local| local.attack()).unwrap_or(1.0)
-                * still;
-            troop.guard = (if tired { guard * guard_left(troop.fatigue) } else { guard }) * worth * air.map(|air| air.guard[side]).unwrap_or(1.0) * still;
-            troop.legs = (if tired { legs * legs_left(troop.fatigue) } else { legs }) * pace * air.map(|air| air.legs[side]).unwrap_or(1.0) * local.map(|local| local.pace()).unwrap_or(1.0);
+                * still
+                * troop.type_attack;
+            troop.guard = (if tired { guard * guard_left(troop.fatigue) } else { guard }) * worth * air.map(|air| air.guard[side]).unwrap_or(1.0) * still * troop.type_toughness;
+            troop.legs = (if tired { legs * legs_left(troop.fatigue) } else { legs }) * pace * air.map(|air| air.legs[side]).unwrap_or(1.0) * local.map(|local| local.pace()).unwrap_or(1.0) * troop.type_speed;
         }
     }
     run.battles = battles;

@@ -40,38 +40,40 @@ fn records(value: &Val) -> Val {
     }
 }
 
+fn grouped_digits(text: &str) -> bool {
+    let units: Vec<char> = text.chars().collect();
+    let lead = units.iter().take_while(|unit| unit.is_ascii_digit()).count();
+    if !(1..=3).contains(&lead) || lead >= units.len() {
+        return false;
+    }
+    let mark = units[lead];
+    if ![',', '.', '\'', '\u{2019}', '_', ' '].contains(&mark) {
+        return false;
+    }
+    let mut at = lead;
+    while at < units.len() {
+        if units[at] != mark || at + 4 > units.len() || !units[at + 1..at + 4].iter().all(|unit| unit.is_ascii_digit()) {
+            return false;
+        }
+        at += 4;
+    }
+    true
+}
+
 pub fn read_population_figure(value: &Val) -> f64 {
     if let Val::Num(number) = value {
         return if number.is_finite() && *number >= 1.0 { jsmath::min(POPULATION_FIGURE_MOST, jsmath::round(*number)) } else { 0.0 };
     }
     let text = if value.is_nullish() { String::new() } else { js::to_string(value) };
-    let text: String = js::lower(js::trim(&text)).chars().filter(|&unit| !(unit == ',' || unit == '_' || unit == '\'' || unit == '\u{2019}' || js::is_js_whitespace(unit))).collect();
-    let digits_end = text.find(|unit: char| !unit.is_ascii_digit()).unwrap_or(text.len());
-    if digits_end == 0 {
+    let text: String = js::trim(&text).chars().map(|unit| if matches!(unit, '\u{00A0}' | '\u{202F}' | '\u{2009}') { ' ' } else { unit }).collect();
+    let plain = !text.is_empty() && text.chars().all(|unit| unit.is_ascii_digit());
+    if !plain && !grouped_digits(&text) {
         return 0.0;
     }
-    let mut end = digits_end;
-    let rest = &text[digits_end..];
-    if let Some(after) = rest.strip_prefix('.') {
-        let fraction = after.find(|unit: char| !unit.is_ascii_digit()).unwrap_or(after.len());
-        if fraction > 0 {
-            end = digits_end + 1 + fraction;
-        }
-    }
-    let (number, word) = text.split_at(end);
-    if !word.chars().all(|unit| unit.is_ascii_lowercase()) {
-        return 0.0;
-    }
-    let scale = match word {
-        "" => 1.0,
-        "k" | "thousand" => 1e3,
-        "m" | "mn" | "million" => 1e6,
-        "b" | "bn" | "billion" => 1e9,
-        _ => return 0.0,
-    };
-    let people = js::number_of_text(number) * scale;
+    let digits: String = text.chars().filter(|unit| unit.is_ascii_digit()).collect();
+    let people = js::number_of_text(&digits);
     if people.is_finite() && people >= 1.0 {
-        jsmath::min(POPULATION_FIGURE_MOST, jsmath::round(people))
+        jsmath::min(POPULATION_FIGURE_MOST, people)
     } else {
         0.0
     }

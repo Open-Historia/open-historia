@@ -38,10 +38,10 @@ const CLOSE_PICK = { size: 1, key: 1, squeezed: 1, was: 1, prey: 1, toPrey: 1, p
 const PHI_FIELD = { ...FIELD_PICK, phi: 1 };
 const SWARM_BATTLE = { sides: 1, swarms: 1, deploy: 1, frame: 1, radiusKm: 1, field: PHI_FIELD, troops: troopsPick(["strength", "x", "y", "owner", "command"]) };
 const FEATURE_HOME = { field: { holders: 1 }, mindHomes: 1, homes: 1, sides: 1, arena: { region: 1, ids: 1 } };
-const DAWN_TROOP = troopsPick(["x", "y", "strength", "owner", "kind", "fatigue", "still", "climate", "punch", "guard", "legs", "walled", "dug", "pocket", "supply", "movedKm", "fought", "engaged", "walkedToday", "loss"]);
+const DAWN_TROOP = troopsPick(["x", "y", "strength", "owner", "kind", "fatigue", "still", "climate", "punch", "guard", "legs", "typeAttack", "typeToughness", "typeSpeed", "walled", "dug", "pocket", "supply", "movedKm", "fought", "engaged", "walkedToday", "loss"]);
 const DAWN_RUN = {
   ...CLIMATE_RUN,
-  input: { ...CLIMATE_RUN.input, ...WALL_RUN.input, units: 1, airArms: 1 },
+  input: { ...CLIMATE_RUN.input, ...WALL_RUN.input, units: 1, unitTypes: 1, airArms: 1 },
   lines: 1,
   mech: 1,
   era: 1,
@@ -222,11 +222,11 @@ const RAISE_RUN = { troops: 1, era: 1, seed: 1, mech: 1, warfare: 1, day: 1, men
 const PLANNER_BATTLE = { frame: 1, homeSide: 1, field: { cols: 1, rows: 1, size: 1, holders: 1 }, arena: { region: 1, cities: 1 }, troops: troopsPick(["x", "y", "strength", "pocket", "fatigue", "supply", "dug"]) };
 const PRINT_BATTLE = { daysRun: 1, orders: 1, field: { holders: 1 }, troops: troopsPick(["x", "y", "strength", "dig", "state", "hx", "hy", "fatigue", "dug", "serves", "order"]) };
 const RUN_CALLS = ["groupOf", "controllerOf", "sovereignOf", "shortageOf", "strengthOf", "militaryOf", "groupOwnerOf"];
-const LOAD_RUN = { seed: 1, steer: 1, mech: 1, input: { difficulty: 1, players: 1, fromDate: 1, toDate: 1, days: 1 } };
+const LOAD_RUN = { seed: 1, steer: 1, mech: 1, input: { difficulty: 1, players: 1, fromDate: 1, toDate: 1, days: 1, units: 1, unitTypes: 1 } };
 const LOAD_RESULT = {
   ...Object.fromEntries(["name", "warId", "status", "home", "calledOn", "mobilised", "sides", "gone", "openedDate", "openedDay", "fresh", "served", "shown", "regionSide", "homeSide", "homes", "iceSide", "edge", "short", "worth", "named", "pool", "base", "quality", "effort", "mind", "orders", "halts", "anchors", "pockets", "log", "logFrom", "quiet", "away", "sentHome", "generals", "talk", "swarms", "plans", "deploy", "staffPlans", "chronicle", "levy", "seed", "even", "lineKm"].map((key) => [key, 1])),
   field: { holders: 1, phi: 1, play: 1, cols: 1, rows: 1 },
-  troops: troopsPick(["x", "y", "strength", "kind", "owner", "named", "dig", "state", "dug", "serves", "next", "command", "fatigue", "goal"]),
+  troops: troopsPick(["x", "y", "strength", "kind", "owner", "named", "dig", "state", "dug", "serves", "next", "command", "fatigue", "goal", "punch", "guard", "legs", "typeAttack", "typeToughness", "typeSpeed"]),
 };
 const SAVE_BATTLE = {
   ...CLIMATE_BATTLE,
@@ -318,7 +318,7 @@ const MODULES = {
     name: "air",
     big: ["skyOfWings"],
     picks: {
-      skyOfWings: { 0: { era: 1, mech: 1, input: { map: { flat: 1, scale: 1, factor: 1, metric: 1 }, units: 1, airArms: 1 }, airDay: 1, wings: 1, battles: { "*": AIR_BATTLE } }, 1: AIR_BATTLE },
+      skyOfWings: { 0: { era: 1, mech: 1, input: { map: { flat: 1, scale: 1, factor: 1, metric: 1 }, units: 1, unitTypes: 1, airArms: 1 }, airDay: 1, wings: 1, battles: { "*": AIR_BATTLE } }, 1: AIR_BATTLE },
       airStrikes: { 0: { wings: 1, troops: { "*": { "*": { strength: 1, loss: 1 } } } } },
       wearWings: { 0: { wings: 1, airDay: 1 }, 1: { wings: 1 } },
       wingChanges: { 0: { wings: 1 } },
@@ -567,7 +567,7 @@ const MODULES = {
       memberWeights: { 0: { sides: 1, gone: 1, lineKm: 1, status: 1 }, 1: { battles: { "*": { sides: 1, gone: 1, lineKm: 1, status: 1 } } }, calls: ["1.strengthOf"], ids: true },
       keepStart: { 0: { field: { holders: 1, phi: 1 }, arena: { cities: 1 }, startPhi: 1, startHolders: 1, cityHolder: 1 } },
       raiseTroops: { 0: RAISE_BATTLE, 1: RAISE_RUN, calls: ["1.strengthOf", "1.controllerOf", "1.militaryOf", "1.musterOf", "1.input.peopleOf"], ids: true },
-      absorbUnit: { 0: { name: 1, sides: 1, gone: 1, named: 1, frame: 1, planKey: 1, field: PHI_FIELD, arena: { frame: 1, cols: 1, rows: 1, size: 1, speed: 1 }, troops: troopsPick(["x", "y", "strength", "kind", "owner", "named"]) }, 1: { mech: 1, unitChanges: { "*": { unitId: 1, committedTo: { name: 1 } } } }, calls: ["1.militaryOf"] },
+      absorbUnit: { 0: { name: 1, sides: 1, gone: 1, named: 1, frame: 1, planKey: 1, field: PHI_FIELD, arena: { frame: 1, cols: 1, rows: 1, size: 1, speed: 1 }, troops: troopsPick(["x", "y", "strength", "kind", "owner", "named", "punch", "guard", "legs", "typeAttack", "typeToughness", "typeSpeed"]) }, 1: { mech: 1, input: { unitTypes: 1 }, unitChanges: { "*": { unitId: 1, committedTo: { name: 1 } } } }, calls: ["1.militaryOf"] },
       releaseNamed: { 0: { named: 1, frame: 1, troops: troopsPick(["x", "y", "strength"]) }, 1: { unitChanges: { "*": { unitId: 1, committedTo: { name: 1 }, remove: 1, lng: 1, lat: 1, strength: 1 } } } },
       loadBattle: { 0: LOAD_RUN, result: LOAD_RESULT, calls: RUN_CALLS.map((name) => `0.${name}`) },
       openBattle: { 0: { ...LOAD_RUN, input: { ...LOAD_RUN.input, map: { regions: 1 } } }, result: LOAD_RESULT, calls: RUN_CALLS.map((name) => `0.${name}`) },
@@ -578,8 +578,8 @@ const MODULES = {
     name: "engine",
     factories: ["createFrontRun"],
     keep: ["createFrontRun", "runFronts"],
-    most: 40,
-    bytes: { default: 1500000 },
+    most: 50,
+    bytes: { default: 1500000, runFronts: 2000000 },
     picks: {
       createFrontRun: { distinct: true, keepCalls: true, caseBytes: 2000000, methods: {} },
       runFronts: { distinct: true, caseBytes: 2000000 },
@@ -602,7 +602,7 @@ const MODULES = {
       growIfNeeded: { 0: GROW_BATTLE, 1: { advanceKm: 1, pace: 1, mech: 1, input: { map: 1, regionTypes: 1 } }, calls: DAY_CALLS, when: "(args[0].grown ?? 0) < 6" },
       growToHold: { 0: GROW_BATTLE, 1: { advanceKm: 1, pace: 1, mech: 1, input: { map: 1, regionTypes: 1 } }, calls: DAY_CALLS },
       recordDay: { 0: { drawnHomes: 1, homes: 1, said: 1, recorded: 1, field: { cols: 1, rows: 1 } } },
-      simulateDay: { 0: 1, 1: { battles: 1, days: 1, era: 1, mech: 1, steer: 1, pace: 1, advanceKm: 1, braked: 1, flipsLeft: 1, lines: 1, airDay: 1, wings: 1, zoneSkies: 1, zoneSkiesDate: 1, zoneNeighbours: 1, mendDay: 1, mendLeft: 1, effort: 1, manpower: 1, menEach: 1, manpowerShare: 1, input: { fromDate: 1, toDate: 1, days: 1, regionTypes: 1, fortifications: 1, climateZones: 1, climateSeed: 1, units: 1, airArms: 1, players: 1, manpower: 1, authored: 1, map: 1 }, flips: 1, notes: 1 }, calls: ["1.groupOf", "1.controllerOf", "1.sovereignOf", "1.isGroup", "1.groupOwnerOf", "1.militaryOf", "1.musterOf", "1.strengthOf", "1.shortageOf", "1.input.peopleOf"], ids: true, when: "!Object.values(args[1].mech ?? {}).some((on) => on === true) && !args[1].steer?.readiness" },
+      simulateDay: { 0: 1, 1: { battles: 1, days: 1, era: 1, mech: 1, steer: 1, pace: 1, advanceKm: 1, braked: 1, flipsLeft: 1, lines: 1, airDay: 1, wings: 1, zoneSkies: 1, zoneSkiesDate: 1, zoneNeighbours: 1, mendDay: 1, mendLeft: 1, effort: 1, manpower: 1, menEach: 1, manpowerShare: 1, input: { fromDate: 1, toDate: 1, days: 1, regionTypes: 1, fortifications: 1, climateZones: 1, climateSeed: 1, units: 1, unitTypes: 1, airArms: 1, players: 1, manpower: 1, authored: 1, map: 1 }, flips: 1, notes: 1 }, calls: ["1.groupOf", "1.controllerOf", "1.sovereignOf", "1.isGroup", "1.groupOwnerOf", "1.militaryOf", "1.musterOf", "1.strengthOf", "1.shortageOf", "1.input.peopleOf"], ids: true, when: "!Object.values(args[1].mech ?? {}).some((on) => on === true) && !args[1].steer?.readiness" },
     },
   },
   "src/runtime/fronts/scenarioFronts.js": { name: "scenarioFronts" },

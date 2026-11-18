@@ -62,6 +62,11 @@ fn replay_matches_js() {
     run(
         "replay",
         &[
+            ("paintNamesOf", &|case| {
+                let count = |side: usize| case.arg(0).at(side).as_array().map_or(0, |list| list.len());
+                let shares = paint_names_of([count(0), count(1)]);
+                expect(case, nums(&[shares[0] as f64, shares[1] as f64]))
+            }),
             ("createReplayRecorder", &|case| {
                 let options = case.arg(0);
                 if !options.get("from").is_nullish() {

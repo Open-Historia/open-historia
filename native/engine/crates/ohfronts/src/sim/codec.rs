@@ -3,7 +3,7 @@ use super::js::{self, or_zero, Val};
 use super::unit_motion::hash_seed;
 use crate::jsmath;
 
-pub use crate::codec::{decode_tracks, decode_troops, BitReader, Sample, Troop};
+pub use crate::codec::{decode_tracks, decode_troops, troop_layout_of, BitReader, Sample, Troop, TROOP_OWNERS_MOST, TROOP_WIDE_LETTERS, TROOP_WIDE_MARK};
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
@@ -243,19 +243,33 @@ pub struct TroopCode {
     pub state: f64,
 }
 
+const NARROW_OWNERS: f64 = 8.0;
+
 pub fn encode_troops(troops: &[TroopCode]) -> String {
+    let wide = troops.iter().any(|troop| clamp_int(troop.owner, 0.0, (TROOP_OWNERS_MOST - 1) as f64) >= NARROW_OWNERS);
     let mut writer = BitWriter::new();
     for troop in troops {
         writer.write(clamp_int(or_zero(troop.x) * TROOP_UNITS, 0.0, 4095.0), 12);
         writer.write(clamp_int(or_zero(troop.y) * TROOP_UNITS, 0.0, 4095.0), 12);
         writer.write(clamp_int((or_zero(troop.strength) * 63.0) / 100.0, 0.0, 63.0), 6);
         writer.write(clamp_int(troop.kind, 0.0, (TROOP_KINDS.len() - 1) as f64), 2);
-        writer.write(clamp_int(troop.owner, 0.0, 7.0), 3);
+        if wide {
+            writer.write(clamp_int(troop.owner, 0.0, (TROOP_OWNERS_MOST - 1) as f64), 8);
+        } else {
+            writer.write(clamp_int(troop.owner, 0.0, NARROW_OWNERS - 1.0), 3);
+        }
         writer.write(if troop.named { 1.0 } else { 0.0 }, 1);
         writer.write(clamp_int(or_zero(troop.dig) * 7.0, 0.0, 7.0), 3);
         writer.write(clamp_int(troop.state, 0.0, (TROOP_STATES.len() - 1) as f64), 3);
+        if wide {
+            writer.write(0.0, 1);
+        }
     }
-    writer.end()
+    if wide {
+        format!("{TROOP_WIDE_MARK}{}", writer.end())
+    } else {
+        writer.end()
+    }
 }
 
 pub fn encode_levels(values: &[f64]) -> String {

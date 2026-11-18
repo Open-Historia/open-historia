@@ -47,6 +47,7 @@ use super::replay::Finished;
 use super::sectors::Sectors;
 use super::scenario_fronts::{authored_forms, authored_troops};
 use super::swarms::{raise_swarms, read_swarms, swarms_kept, SWARM_FORM};
+use super::unit_types::{unit_figures, Figures};
 use super::troops::{create_troop, draw_traits, drop_the_dead, is_attack, is_live, kinds_for, plan_lanes, share_out, size_sides, stand_at_places, stand_off, stands, troops_least, TroopSeed, KIND_ARMOUR, KIND_ARTILLERY, KIND_INFANTRY};
 use super::way::{left_on_leg, Leg};
 use super::weather::{skies_ahead, FORECAST_DAYS};
@@ -1014,6 +1015,31 @@ fn nearest_vertex_distance(contour: &Contour, x: f64, y: f64) -> f64 {
     best.sqrt()
 }
 
+pub fn stamp_unit_type(troop: &mut Troop, figures: Option<Figures>) {
+    let Some(figures) = figures else { return };
+    troop.type_attack = figures.attack;
+    troop.type_toughness = figures.toughness;
+    troop.type_speed = figures.speed;
+    troop.punch = figures.attack;
+    troop.guard = figures.toughness;
+    troop.legs = figures.speed;
+}
+
+fn stamp_named_types(battle: &mut Battle, run: &Run) {
+    let types = run.input.get("unitTypes");
+    if types.as_array().is_none_or(|list| list.is_empty()) || battle.named.is_empty() {
+        return;
+    }
+    let units = run.input.get("units").array_or_empty();
+    for entry in &battle.named {
+        let Some(troop) = battle.troops.get_mut(entry.s).and_then(|list| list.get_mut(entry.i)) else { continue };
+        let unit = units.iter().find(|candidate| matches!(&entry.unit_id, Val::Str(id) if js::trim(&candidate.get("id").string_or_empty()) == id.as_str()));
+        if let Some(unit) = unit {
+            stamp_unit_type(troop, unit_figures(types, unit));
+        }
+    }
+}
+
 pub fn absorb_unit(battle: &mut Battle, run: &mut Run, at: usize, unit: &Val, any_distance: bool) -> bool {
     let kind = kind_of_type(unit);
     let unit_id = js::trim(&unit.get("id").string_or_empty()).to_string();
@@ -1055,7 +1081,9 @@ pub fn absorb_unit(battle: &mut Battle, run: &mut Run, at: usize, unit: &Val, an
     let member = battle.sides[side].iter().position(|member| fold_name(member) == wanted).map(|at| at as f64).unwrap_or(-1.0);
     let given = unit.get("strength").num();
     let strength = jsmath::min(100.0, jsmath::max(1.0, if given != 0.0 && !given.is_nan() { given } else { 100.0 }));
-    battle.troops[side].push(create_troop(TroopSeed { x, y, strength, kind, owner: member, named: true, ..TroopSeed::default() }));
+    let mut troop = create_troop(TroopSeed { x, y, strength, kind, owner: member, named: true, ..TroopSeed::default() });
+    stamp_unit_type(&mut troop, unit_figures(run.input.get("unitTypes"), unit));
+    battle.troops[side].push(troop);
     let name = js::trim(&unit.get("name").string_or_empty()).to_string();
     battle.named.push(Named { s: side, i: battle.troops[side].len() - 1, name, unit_id: Val::str(&unit_id), reported: false });
     run.unit_changes.push(Val::obj([("unitId", Val::str(&unit_id)), ("committedTo", Val::obj([("battle", Val::Num(at as f64))]))]));
@@ -1253,6 +1281,7 @@ pub fn load_battle(run: &Run, record: &Val, arena: Rc<Arena>) -> Battle {
     let (troops, named) = drop_the_dead(read, &named);
     battle.troops = troops;
     battle.named = named;
+    stamp_named_types(&mut battle, run);
     let pair = |key: &str| [record.get(key).at(0).num(), record.get(key).at(1).num()];
     battle.pool = pair("pool");
     battle.base = pair("base");
