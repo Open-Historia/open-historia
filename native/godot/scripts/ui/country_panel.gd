@@ -371,6 +371,9 @@ func _input(event: InputEvent) -> void:
 
 
 func _on_engine_event(name: String, payload: Variant) -> void:
+	if name == "country.currency":
+		refresh()
+		return
 	if name != "country.sheet_loading" or typeof(payload) != TYPE_DICTIONARY:
 		return
 	var info: Dictionary = payload
@@ -1171,7 +1174,7 @@ func _render_landscape(views: Dictionary, polity: String) -> void:
 	stack.add_child(top)
 	var slices: Array = landscape.get("slices", [])
 	if active == "parties" and not slices.is_empty():
-		stack.add_child(_landscape_overview(landscape, slices, entries))
+		stack.add_child(_landscape_overview(landscape, slices))
 	if active == "blocs":
 		stack.add_child(_bloc_ledger(entries))
 	if can_switch:
@@ -1302,7 +1305,7 @@ func _bloc_ledger(entries: Array) -> Control:
 	return ledger
 
 
-func _landscape_overview(landscape: Dictionary, slices: Array, entries: Array) -> Control:
+func _landscape_overview(landscape: Dictionary, slices: Array) -> Control:
 	var holder := PanelContainer.new()
 	holder.mouse_filter = Control.MOUSE_FILTER_PASS
 	holder.add_theme_stylebox_override("panel", edged(CLEAR, _line(), Vector4(0, 0, 0, 1), Vector4(0, 6, 0, 11)))
@@ -1326,7 +1329,7 @@ func _landscape_overview(landscape: Dictionary, slices: Array, entries: Array) -
 	legend.size_flags_stretch_ratio = 1.0
 	legend.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	legend.custom_minimum_size.x = 1
-	for item in entries.slice(0, 4):
+	for item in slices.slice(0, 4):
 		var entry: Dictionary = item
 		var line := row(7)
 		var dot := StatDot.new()
@@ -1435,23 +1438,12 @@ func _party_row(party: Dictionary, first := false) -> Control:
 		role.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 		top.add_child(role)
 	lines.add_child(top)
-	var family := str(party.get("family", ""))
-	var sub := str(party.get("subideology", ""))
-	if not other and (not family.is_empty() or not sub.is_empty()):
+	var ideology_text := str(party.get("ideologyText", ""))
+	var position_text := str(party.get("politicalPosition", ""))
+	if not other and (not ideology_text.is_empty() or not position_text.is_empty()):
 		lines.add_child(gap(3))
-		var ideology := _rich(10, Color(1, 1, 1, 0.62))
-		var shown := ""
-		if not family.is_empty():
-			shown = "[b][color=#%s]%s[/color][/b]" % [tone(str(party.get("familyColor", "")), Color("#94a3b8")).to_html(false), _escape(I18n.now(family))]
-			if not sub.is_empty():
-				var listed: bool = party.get("listed", false)
-				shown += "[color=%s] %s[/color]" % ["#ffffff9e" if listed else "#ffffff59", _escape("· %s" % sub if listed else I18n.ui("· {{subideology}} (unlisted)", {"subideology": sub}))]
-				if not listed:
-					ideology.mouse_filter = Control.MOUSE_FILTER_PASS
-					ideology.tooltip_text = "Not one of this ideology's listed subideologies"
-		else:
-			shown = _escape(sub)
-		ideology.text = shown
+		var ideology := text(ideology_text + (" · " if not ideology_text.is_empty() and not position_text.is_empty() else "") + position_text, 10, Color(1, 1, 1, 0.62))
+		ideology.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		lines.add_child(ideology)
 	if not other:
 		var facts := flow(11, 0)
@@ -2245,6 +2237,22 @@ func _peace_controls(holder: VBoxContainer, war: Dictionary) -> void:
 		holder.add_child(to_chat)
 
 
+func _progression_hold() -> PanelContainer:
+	var hold := PanelContainer.new()
+	var style := StyleBoxFlat.new()
+	style.bg_color = UiTheme.pick("overlay_card", Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.08))
+	style.border_color = Color("#f59e0b")
+	style.border_width_left = 3
+	style.set_corner_radius_all(6)
+	style.content_margin_left = 13
+	style.content_margin_right = 13
+	style.content_margin_top = 10
+	style.content_margin_bottom = 10
+	hold.add_theme_stylebox_override("panel", style)
+	hold.add_child(text("Territory changed: refresh this country's Stats to update its geographic baseline before automatic progression resumes.", 12, UiTheme.pick("text", Color(1, 1, 1, 0.82))))
+	return hold
+
+
 func _render_economy() -> void:
 	var definition_error := str(data.get("definitionError", ""))
 	if not definition_error.is_empty():
@@ -2272,6 +2280,9 @@ func _render_economy() -> void:
 	if typeof(economy) != TYPE_DICTIONARY or sheet_status != "ready":
 		return
 	var sheet: Dictionary = economy
+	if bool(sheet.get("progressionBlocked", false)):
+		page.add_child(gap(13))
+		page.add_child(_progression_hold())
 	var intelligence: Variant = sheet.get("intelligence")
 	var rated := typeof(intelligence) == TYPE_INT or typeof(intelligence) == TYPE_FLOAT
 	if sheet.get("custom", false):
@@ -2338,7 +2349,7 @@ func _render_economy() -> void:
 		page.add_child(grid)
 		if not str(sheet.get("currency", "")).is_empty():
 			page.add_child(gap(7))
-			page.add_child(text("Domestic currency: %s · GDP accounting shown in 2026-EUR-equivalent values." % str(sheet["currency"]), 11, Color(1, 1, 1, 0.35)))
+			page.add_child(text("Domestic currency: %s · GDP display: %s. Canonical calculations remain in USD." % [str(sheet["currency"]), str(sheet.get("currencyUnit", ""))], 11, Color(1, 1, 1, 0.35)))
 		page.add_child(gap(14))
 		var split := card()
 		var split_stack := column(8)

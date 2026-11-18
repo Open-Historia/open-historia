@@ -225,7 +225,6 @@ export const resolveIdentity = (extras, value, world, allowUnknown = true) => {
     const resolved = extras.polityIdentity.resolvePolityIdentity(raw, world, {
       allowUnknown,
       requireActive: false,
-      allowCoreMatch: true,
       allowStockBase: true,
     });
     return cleanText(resolved?.resolved) || raw;
@@ -289,14 +288,10 @@ export const formatCompactNumber = (value, { digits = 1 } = {}) => {
 };
 
 const formatPopulation = (value) => formatCompactNumber(value);
-const formatEuroTotal = (value) => {
-  const text = formatCompactNumber(value);
-  return text === "—" ? text : `€${text}`;
-};
-const formatEuroPerCapita = (value) => {
-  const number = Number(value);
-  return Number.isFinite(number) ? `€${Math.round(number).toLocaleString()}` : "—";
-};
+let econ = null;
+const displayCurrency = () => econ?.getActiveEconomicDisplayCurrency?.() ?? "USD";
+const formatDollarTotal = (value) => econ.formatEconomicDisplayValue(value, displayCurrency(), { compact: true });
+const formatDollarPerCapita = (value) => econ.formatEconomicDisplayValue(value, displayCurrency(), { perCapita: true });
 const formatPercent = (value, { signed = false } = {}) => {
   const number = Number(value);
   if (!Number.isFinite(number)) return "—";
@@ -305,11 +300,12 @@ const formatPercent = (value, { signed = false } = {}) => {
   return `${prefix}${rounded}%`;
 };
 
-const formatCustomStatValue = (stat, value) => extrasFound.customStatFormatting.formatCustomStatValue(stat, value);
+const formatCustomStatValue = (stat, value) => extrasFound.customStatFormatting.formatCustomStatValue(stat, value, { economicDisplayCurrency: displayCurrency() });
 
 const customMetricUnit = (stat) => ["custom", stat?.kind || "number", String(stat?.prefix || ""), String(stat?.suffix || "")].join(":");
 
 const customMetricUnitLabel = (stat) => {
+  if (extrasFound.customStatFormatting.customGdpSourceCurrency(stat)) return econ.economicDisplayUnitLabel(displayCurrency());
   if (stat?.kind === "index") return "Index · 0–100";
   if (stat?.kind === "percentage") return stat?.suffix || "Percent";
   const display = [stat?.prefix, stat?.suffix].filter(Boolean).join(" … ");
@@ -355,10 +351,7 @@ const agreementStatusTone = (status) => {
 
 const warStatusTone = (status) => (lowerText(status) === "active" ? "#f87171" : "#fbbf24");
 
-const warCauseForDisplay = (cause) => {
-  const text = cleanText(cause);
-  return /^native bootstrap\b/i.test(text) ? "" : text;
-};
+const warCauseForDisplay = (cause) => cleanText(cause);
 
 const formatSupport = (value) => {
   if (value === null || value === undefined || value === "") return "—";
@@ -433,6 +426,7 @@ export const answerDiplomacy = async (ctx, op, ref, terms = null, where = {}) =>
 
 export const register = (ctx) => {
   const { engine, emit, storage } = ctx;
+  econ = engine.econCurrency;
   void loadExtras(ctx).catch((error) => emit("log", { category: "country", message: `The country panel's helpers could not be built: ${error?.message ?? error}` }));
   if (ctx.standIn) {
     ctx.addStandIn(({ tool, text }) => {
@@ -511,7 +505,7 @@ export const register = (ctx) => {
           territorialMacroComponentsText: rows.join("\n"),
           ...(split !== null ? { territorialComponentSplitText: split } : {}),
           populationCalibration: calibration,
-          economicCalibration: { ...calibration, anchorYear: 2016, anchorCurrency: "EUR", nominalGdpBillions: profile ? Math.round((people * Number(profile.gdpPerCapitaUsd)) / 1e7) / 100 : 2230, nominalGdpPerCapita: profile ? Number(profile.gdpPerCapitaUsd) : 33500, rebasedGdpPerCapita2026Eur: perHead, divergenceEventIds: [] },
+          economicCalibration: { ...calibration, anchorYear: 2016, anchorCurrency: "EUR", nominalGdpBillions: profile ? Math.round((people * Number(profile.gdpPerCapitaUsd)) / 1e7) / 100 : 2230, nominalGdpPerCapita: profile ? Number(profile.gdpPerCapitaUsd) : 33500, rebasedGdpPerCapita2026Usd: perHead, divergenceEventIds: [] },
           economy: profile?.economy || { gdpGrowth: 1.1, currency: "Euro", inflation: 0.3, unemployment: 10.1, publicDebt: 96.5, budgetBalance: -3.5 },
           gdpBreakdown: profile?.gdpBreakdown || { agriculture: 2, industry: 19, services: 79 },
           ...(profile?.intelligence && /intelligenceService/.test(String(text)) ? { intelligenceService: profile.intelligence } : {}),
@@ -557,6 +551,7 @@ export const register = (ctx) => {
 
   const readPlayer = async () => {
     const game = await engine.gameState.readGameData({ force: false }).catch(() => ({}));
+    engine.econCurrency.setActiveEconomicDisplayCurrency(game?.economicDisplayCurrency);
     const library = engine.getLibraryState?.() ?? {};
     return {
       code: cleanText(game?.country),
@@ -725,7 +720,7 @@ export const register = (ctx) => {
             return { kind: "value", label: `${stat.icon ?? ""} ${stat.label}`.toUpperCase(), value: formatCustomStatValue(stat, values[stat.key]), color: cssHex(stat.color || "#e7e7e9") };
           }),
         }));
-      return { custom: true, intelligence, sections };
+      return { custom: true, intelligence, sections, progressionBlocked: sheet?.continuity?.progressionBlocked === true };
     }
     const raw = sheet?.gdpBreakdown ?? {};
     const parts = [
@@ -742,7 +737,10 @@ export const register = (ctx) => {
     const hasOtherTerritories = Number.isFinite(otherPopulation) && otherPopulation > 0;
     const wholePerCapita = Number(sheet?.economy?.gdpPerCapita);
     const corePerCapita = Number(sheet?.economy?.coreGdpPerCapita);
-    const displayedPerCapita = hasOtherTerritories && Number.isFinite(corePerCapita) ? corePerCapita : wholePerCapita;
+    const displayedPerCapita = Number.isFinite(wholePerCapita) ? wholePerCapita : corePerCapita;
+    const capitaScope = hasOtherTerritories && Number.isFinite(corePerCapita)
+      ? `Whole polity · Core/integrated ${formatDollarPerCapita(corePerCapita)}`
+      : Number.isFinite(wholePerCapita) ? "Whole polity" : "Core/integrated";
     const card = (label, value, sub, tone) => ({ label: label.toUpperCase(), value: String(compactEconomyValue(value) || "—"), sub: sub || "", tone });
     return {
       custom: false,
@@ -754,14 +752,16 @@ export const register = (ctx) => {
         scope: hasOtherTerritories ? `Core/integrated ${formatPopulation(corePopulation)} · Other territories ${formatPopulation(otherPopulation)}` : "",
       },
       cards: [
-        card("GDP", formatEuroTotal(sheet.economy?.gdp), `Growth ${formatPercent(sheet.economy?.gdpGrowth, { signed: true })} · 2026-EUR eq.`, "#34d399ff"),
-        card("GDP/capita", formatEuroPerCapita(displayedPerCapita), hasOtherTerritories ? `Core/integrated · Whole polity ${formatEuroPerCapita(wholePerCapita)}` : "Whole polity", "#e7e7e9ff"),
+        card("GDP", formatDollarTotal(sheet.economy?.gdp), `Growth ${formatPercent(sheet.economy?.gdpGrowth, { signed: true })} · ${econ.economicDisplayUnitLabel(displayCurrency())}`, "#34d399ff"),
+        card("GDP/capita", formatDollarPerCapita(displayedPerCapita), capitaScope, "#e7e7e9ff"),
         card("Inflation", formatPercent(sheet.economy?.inflation), "", "#34d399ff"),
         card("Unemployment", formatPercent(sheet.economy?.unemployment), "", "#34d399ff"),
         card("Public debt", formatPercent(sheet.economy?.publicDebt), "of GDP", "#34d399ff"),
         card("Budget balance", formatPercent(sheet.economy?.budgetBalance, { signed: true }), `${budgetNegative ? "Deficit" : "Surplus"} · of GDP`, budgetNegative ? "#f87171ff" : "#34d399ff"),
       ],
       currency: cleanText(sheet.economy?.currency),
+      currencyUnit: econ.economicDisplayUnitLabel(displayCurrency()),
+      progressionBlocked: sheet?.continuity?.progressionBlocked === true,
       breakdown,
     };
   };
@@ -859,15 +859,16 @@ export const register = (ctx) => {
       const role = roleOf(party);
       const seats = Number.isFinite(party.seats) ? party.seats : null;
       const ideology = listOf(party.ideology).filter((item) => item.toLowerCase() !== String(family?.name ?? "").toLowerCase() && item.toLowerCase() !== subideology.toLowerCase());
+      const ideologyText = listOf(party.ideology).join(", ") || subideology || family?.name || "";
+      const politicalPosition = cleanText(party.politicalPosition)
+        || (family && ideologyText.toLowerCase() !== family.name.toLowerCase() ? family.name : "");
       return {
+        ideologyText,
+        politicalPosition,
         abbreviations: [...new Set([party.shortNameNative, party.shortName].map(cleanText).filter(Boolean))].join(" · "),
         nameNative: cleanText(party.nameNative) && cleanText(party.nameNative) !== cleanText(party.name) ? cleanText(party.nameNative) : "",
         role: politics.PARTY_ROLE_LABELS[role],
         roleTone: cssHex(roleTones[role]),
-        family: family ? cleanText(family.name) : "",
-        familyColor: cssHex(family?.colour || "#94a3b8"),
-        subideology,
-        listed: Boolean(family) && politics.isListedSubideology(party.ideologyFamily, party.subideology),
         seatsText: seats !== null ? `${seats}${legislatureSeats ? `/${legislatureSeats}` : ""} seats` : "",
         rowSupport: Number.isFinite(party.support) ? `${formatSupport(party.support)} support` : "",
         founded: cleanText(party.founded) ? `Founded ${cleanText(party.founded)}` : "",
@@ -1246,7 +1247,7 @@ export const register = (ctx) => {
       name: cleanText(polity?.name) || displayName || target,
       isPlayer,
       flag: flagFile(ctx, flagUrl),
-      initials: String(target).replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase() || "??",
+      initials: engine.nameKey.nameInitials(target),
       header: {
         place: headerSheet ? [headerSheet.capital, headerSheet.continent].filter(Boolean).join(" · ") : "",
         government: headerSheet && !profile ? cleanText(headerSheet.government) : "",
@@ -1303,8 +1304,8 @@ export const register = (ctx) => {
     }
     const formatValue = (value) => {
       if (metric.stat) return formatCustomStatValue(metric.stat, value);
-      if (metric.kind === "money") return formatEuroTotal(value);
-      if (metric.kind === "money each") return formatEuroPerCapita(value);
+      if (metric.kind === "money") return formatDollarTotal(value);
+      if (metric.kind === "money each") return formatDollarPerCapita(value);
       if (metric.kind === "index") return String(Math.round(value));
       if (metric.kind === "weight") return extras.militaryPower.formatMilitaryPower(value);
       return formatCompactNumber(value);
@@ -1364,8 +1365,8 @@ export const register = (ctx) => {
     }
     return [
       { key: "headline", label: "Headline economy", icon: "◈", metrics: [
-        { key: "gdp", label: "GDP", unit: "gdp", color: "#34d399", format: formatEuroTotal },
-        { key: "gdpPerCapita", label: "GDP per capita", unit: "gdpPerCapita", color: "#e7e7e9", format: formatEuroPerCapita },
+        { key: "gdp", label: "GDP", unit: "gdp", color: "#34d399", format: formatDollarTotal },
+        { key: "gdpPerCapita", label: "GDP per capita", unit: "gdpPerCapita", color: "#e7e7e9", format: formatDollarPerCapita },
         { key: "population", label: "Population", unit: "population", color: "#94a3b8", format: formatPopulation },
       ] },
       { key: "economy", label: "Economic conditions", icon: "↗", metrics: [
@@ -1388,13 +1389,16 @@ export const register = (ctx) => {
   };
 
   const ADVANCED_UNIT_LABELS = {
-    gdp: "GDP · 2026-EUR equivalent",
-    gdpPerCapita: "GDP per capita · 2026-EUR equivalent",
+    gdp: "GDP",
+    gdpPerCapita: "GDP per capita",
     population: "Population",
     economicPercent: "Percent",
     index: "Index · 0–100",
     sector: "Share of GDP · %",
   };
+  const advancedUnitLabel = (unit) => (unit === "gdp" || unit === "gdpPerCapita"
+    ? `${ADVANCED_UNIT_LABELS[unit]} · ${econ.economicDisplayUnitLabel(displayCurrency())}`
+    : ADVANCED_UNIT_LABELS[unit] || "Value");
 
   const historyFor = async (extras, target, player, fallbackSheet) => {
     const key = `${player.gameKey}:${target}:${player.date}:${player.round}`;
@@ -1471,11 +1475,11 @@ export const register = (ctx) => {
     const base = {
       countryName: cleanText(polity?.name) || displayName || target,
       flag: flagFile(ctx, flagUrl),
-      initials: String(target).replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase() || "??",
+      initials: engine.nameKey.nameInitials(target),
       keys,
       selectedCount: `Selected ${keys.length}/4`,
       title: selected.map((metric) => metric.label).join(" · "),
-      unitLabel: selected[0]?.unitLabel || ADVANCED_UNIT_LABELS[selectedUnit] || "Value",
+      unitLabel: selected[0]?.unitLabel || advancedUnitLabel(selectedUnit),
       legend: selected.map((metric) => ({ label: metric.label, color: cssHex(metric.color) })),
       groups: groups.map((group) => ({
         title: `${group.icon} ${group.label}`,
@@ -1561,7 +1565,7 @@ export const register = (ctx) => {
         width,
         height,
         plot: [pad.left, pad.top, plotWidth, plotHeight],
-        unitLabel: selected[0]?.unitLabel || ADVANCED_UNIT_LABELS[unit] || "Value",
+        unitLabel: selected[0]?.unitLabel || advancedUnitLabel(unit),
         yTicks,
         xTicks: xIndexes.map((index) => ({ x: xFor(valid[index]), label: formatHistoryDate(valid[index].date, { compact: true }) })),
         series: selected.map((metric) => {
@@ -1599,9 +1603,9 @@ export const register = (ctx) => {
         : String(metric.unit || "").startsWith("custom:")
           ? `${delta > 0 ? "+" : ""}${metric.format(delta)}`
           : metric.unit === "gdp"
-            ? formatEuroTotal(delta)
+            ? formatDollarTotal(delta)
             : metric.unit === "gdpPerCapita"
-              ? formatEuroPerCapita(delta)
+              ? formatDollarPerCapita(delta)
               : metric.unit === "population"
                 ? formatCompactNumber(delta)
                 : `${delta > 0 ? "+" : ""}${Math.round(delta * 10) / 10}${metric.unit === "index" ? "" : " pp"}`;

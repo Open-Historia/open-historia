@@ -314,8 +314,8 @@ func _country_panel() -> void:
 	_check(_has_text(panel, "Compile the government and parties again") and not _has_text(panel, "Compile parties"), "politics: parties filled in offer a fresh compile")
 	_check(not _has_text(panel, "GOVERNING PARTY") and not _has_text(panel, "GOVERNING COALITION"), "politics: no repeated governing-parties box")
 	_check(_has_text(panel, "Socialist Party (PS)") and _has_text(panel, "Parti socialiste") and _has_text(panel, "Governing") and _has_text(panel, "Opposition"), "politics: party rows carry names, native names and roles")
-	_check(_has_text(panel, "Social Democracy · Social Democracy") and _has_text(panel, "Leader: Jean-Christophe Cambadélis") and _has_text(panel, "286/577 seats") and _has_text(panel, "29% support") and _has_text(panel, "Founded 1969"), "politics: party row ideology, leader, seats, support, founded")
-	_check(_has_text(panel, "National Populism · Frontism (unlisted)"), "politics: an unlisted subideology is marked")
+	_check(_has_text(panel, "Social democracy,Pro-Europeanism · Social Democracy") and _has_text(panel, "Leader: Jean-Christophe Cambadélis") and _has_text(panel, "286/577 seats") and _has_text(panel, "29% support") and _has_text(panel, "Founded 1969"), "politics: party row ideology, leader, seats, support, founded")
+	_check(_has_text(panel, "National conservatism · National Populism") and not _has_text(panel, "(unlisted)"), "politics: a party's ideology and political position as written")
 	_check(_has_text(panel, "Other political support"), "politics: the other support row")
 	await _shoot("01-country-politics")
 	panel.scroll.scroll_vertical = 0

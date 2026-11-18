@@ -1073,7 +1073,7 @@ func _stat_editor(section_ref: Array, stat_ref: Array, stat: Dictionary, preview
 	color.color_changed.connect(func(value: Color) -> void: patch.call({"color": EditorKit.hex_of(value)}, []))
 	grid.add_child(_field("Colour", color))
 	if str(stat.get("kind", "")) != "index":
-		var prefix := _line_input(str(stat.get("prefix", "")) if stat.get("prefix") != null else "", 12, func(text: String) -> void: patch.call({"prefix": text}, []), "€, $, £")
+		var prefix := _line_input(str(stat.get("prefix", "")) if stat.get("prefix") != null else "", 12, func(text: String) -> void: patch.call({"prefix": text}, []), "$, €, £")
 		grid.add_child(_field("Prefix", prefix))
 		var suffix := _line_input(str(stat.get("suffix", "")) if stat.get("suffix") != null else "", 24, func(text: String) -> void: patch.call({"suffix": text}, []), "%, tonnes, ships")
 		grid.add_child(_field("Suffix / unit", suffix))
