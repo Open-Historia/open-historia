@@ -324,11 +324,11 @@ import {
 import { checksHeldError, checksHoldTurn, createTurnChecks } from "./turnChecks.js";
 import { acknowledgeFailures, buildPlayerEventRetryDirective, collectPlayerTurnFailures, describePlayerTurnFailures, dropRetriedReceiptNotes, hasPlayerTurnFailures, keepRetryBoundRecords, restrictToRetriedOrders } from "./playerTurnFailures.js";
 import {
-  describeDoubtedForPrompt,
-  doubtedAwaitingFreshSource,
   boardPassCarriers,
   boardPassReasons,
+  isBelief,
   isProjectOpen,
+  plantedOn,
 } from "../../runtime/projects.js";
 import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, interceptTableOf, isIntelligenceRated, mapInterceptTables, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, planCovertOperations, publicExpulsionLines, redactText, resolveEspionage, signalClarity, spymastersOf, spyServicesOf, withInterceptTable } from "../../runtime/spycraft.js";
 import { syncBoardsWithAgents } from "../../runtime/agentBoards.js";
@@ -3248,7 +3248,6 @@ ${pending}`);
     folded: foldedBoard,
     // The rules are above, among the standing ones (buildJumpStaticRules).
     rulesAbove,
-    doubted: normalizeString(variables.foldedBoardDoubts),
     // What the engine decided for this period, worked out before this prompt.
     forecast: normalizeString(variables.projectsForecast),
     players: humanCountriesOf(game),
@@ -3567,7 +3566,7 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
         const whose = people.length > 1
           ? sharedBoardServiceLine(normalizeString(game.country))
           : "What the player's service has read, uncensored — the player sees only what it could decode.";
-        const framing = `\n\n[Espionage]\n${whose}` + " Never write that an agent has been turned, or that an entry came from a spy at all.\n[Doubted intelligence]\nAn entry marked doubted was sourced from an agent the service no longer trusts, and may be a fabrication it was fed. Where the board below says a FRESH agent is now inside that polity, settle it from what that new source shows: set verification \"confirmed\" with op update and let the entry run on if the programme is real, or \"refuted\" and fail it if the new material shows there was never anything there. Settle it only when the new source actually bears on it — leave it doubted otherwise, because guessing is what put the phantom on the board to begin with. Never write that any of this came from a spy, or that an agent was turned.\n";
+        const framing = `\n\n[Espionage]\n${whose}` + " Never write that an agent has been turned, or that an entry came from a spy at all.\n[Planted material]\nA programme that exists only in material PLANTED on a service through its turned agent is no country's work: open it, if at all, with believedBy set to that service's country. An entry marked doubted is that service's doubt, which the game settles itself once a fresh agent has reported: give it no verdict, and never end it for that.\n";
         systemPrompt = systemPrompt + framing + brief;
       }
     } catch {
@@ -8226,6 +8225,19 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
           drop(path, "a project was not opened — the create operation gave it no name.", "projectUnnamed");
           continue;
         }
+        // A programme that exists only in material planted on a service: that
+        // service's belief, never its country's work (runtime/projects.js
+        // plantedOn). A time skip's alone; the Game Master's word opens work.
+        if (normalizeString(project?.believedBy)) {
+          const named = { ...project, ownerCode: toCountryName(normalizeString(project.ownerCode)) || normalizeString(project.ownerCode) };
+          const believer = worldProjects ? normalizeString(plantedOn(named, { spies: world?.spies, players: players ?? [playerCountry] })?.believer) : "";
+          if (worldProjects && !believer) {
+            drop(path, `the project "${projectName}" was not opened — believedBy is only for a programme planted on a person's service through its own turned agent inside the country that owns it.`, "projectNotOpened");
+            continue;
+          }
+          if (believer) project.believedBy = believer;
+          else delete project.believedBy;
+        }
         // What the world opens (a time skip, a scene): another country's, with
         // a plan, within the caps. Never the work of a country a person plays:
         // that is theirs to open, from the Projects tab.
@@ -9913,11 +9925,15 @@ const applySimulationResult = async ({
   // (runtime/agentBoards.js). It ran for the host's service alone, over the
   // game's board with every guest's own work lent to it, which it took for the
   // host's files and stalled (the review of 2026-11-18).
+  // A doubt a clean agent's report now settles is settled here too, from each
+  // service's own table of the agents' file as it stood before this turn
+  // filed anything (fileReviewedAgentReports files after the write).
   const agentBoards = syncBoardsWithAgents(worldWithImpacts, {
     spymasters: spymastersOf(baseGame),
     host: playerPolity,
     date: nextGame.gameDate,
     round: nextGame.round,
+    intercepts: await readInterceptsState({ force: false }).catch(() => ({})),
   });
   worldWithImpacts = agentBoards.world;
   if (agentBoards.ops || agentBoards.doubted) {
@@ -13469,15 +13485,20 @@ const prepareSpyReport = async (bundle, spy, { sharedVariables = null } = {}) =>
   // months about rail corridors and rare earths while the question that cost the
   // player an agent went unanswered. Appended to the user message rather than put
   // in the prompt template, so it reaches campaigns whose prompts are frozen.
+  // Which of them is what the service was made to believe (runtime/projects.js
+  // isBelief), for the agent's truth to bear out the verdict the game gives on
+  // its report (runtime/agentBoards.js); its board's view never says.
+  const believed = new Set([...normalizeArray(bundle.world?.projects), ...Object.values(bundle.world?.seatBoards ?? {}).flatMap(normalizeArray)]
+    .filter((row) => isBelief(row)).map((row) => normalizeString(row?.id)));
   const openQuestions = spymasterBoard(bundle.world, player, bundle.game?.country)
     .filter((project) => project.verification === "doubted"
       && isProjectOpen(project)
       && regionKey(project.ownerCode) === regionKey(name))
-    .map((project) => `- "${project.name}": ${project.summary || "no detail on record"}`);
+    .map((project) => `- "${project.name}" (${believed.has(normalizeString(project.id)) ? "NOT REAL: there is no such programme" : "real"}): ${project.summary || "no detail on record"}`);
   const orders = openQuestions.length
     ? "STANDING ORDERS — these sit on our books from a source we no longer trust, and this agent was sent to settle them."
-      + " At least one exchange must bear on them: either show the programme discussed as real work, with money, people and"
-      + " dates behind it, or show the traffic of a government that plainly has no such programme."
+      + " At least one exchange must bear on them, as each truly is: a real one discussed as real work, with money, people and"
+      + " dates behind it, one NOT REAL as the traffic of a government that plainly has no such programme."
       + " Never have anyone mention our interest in it.\n"
       + openQuestions.join("\n")
     : "";
@@ -16798,24 +16819,20 @@ let skipRidersWaiting = [];
 const skipDeclaredChars = (tool, beside = []) => geminiDeclaredChars([tool, ...beside]);
 
 // What a folded skip carries besides its events, gathered once before its first
-// request: the doubted board entries a fresh agent can now settle, the agents
-// whose reports ride on it, each with the brief its own request would have
-// carried, and the history fold when one is due. Nothing here costs a request.
+// request: the agents whose reports ride on it, each with the brief its own
+// request would have carried, and the history fold when one is due. Nothing
+// here costs a request. (A doubted board entry is settled by the engine, for
+// every service: runtime/agentBoards.js.)
 const prepareFoldedSkip = async ({ bundle, originDate, variables, campaignId }) => {
   const world = normalizeWorldState(bundle.world);
   const playerCountry = normalizeString(bundle.game?.country);
   // The board is always the skip's: the engine runs it, and an empty one is
   // where the countries nobody plays open their first projects.
   const boardShown = true;
-  const board = normalizeArray(bundle.world?.projects);
   const espionage = isActiveFeatureEnabled("espionage");
-  const file = board.length || espionage
+  const file = espionage
     ? await readInterceptsState({ force: false }).catch(() => ({}))
     : {};
-  const filed = normalizeIntercepts(interceptTableOf(file, playerCountry, { gameCountry: playerCountry }));
-  const doubted = board.length
-    ? doubtedAwaitingFreshSource(normalizeSpies(bundle.world?.spies), board, { playerPolity: playerCountry, intercepts: filed })
-    : [];
   // Every spymaster's agents (a shared game: every player's), each against its
   // own table, taken in turn (agentReports.js spymastersReportingWithSkip).
   const agents = espionage
@@ -16852,7 +16869,6 @@ const prepareFoldedSkip = async ({ bundle, originDate, variables, campaignId }) 
   }
   return {
     board: boardShown,
-    boardDoubts: doubted.length ? describeDoubtedForPrompt(doubted) : "",
     agentJobs,
     // What the unit and structure directors would have been told (regionTypesBlock).
     regionTypeRules: await regionTypeRulesFor(bundle.world).catch(() => ""),
@@ -17278,7 +17294,6 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         foldedSkip: true,
         // The board's rules are the folded ones only where its ops can be written.
         foldedBoard: riders.board,
-        foldedBoardDoubts: riders.board ? normalizeString(state.foldedPrep?.boardDoubts) : "",
         foldedAgentReports: buildFoldedAgentReportsBlock(agentJobs, focusContext.playerName),
         foldedRegionTypeRules: normalizeString(state.foldedPrep?.regionTypeRules),
         foldedHistoryJob: historyJob,
@@ -18252,15 +18267,10 @@ const runSceneReview = async ({ context, merged, signal, state, agentKind = "", 
     .filter(Boolean);
 
   const boardHasWork = board.length > 0 && (candidates.length > 0 || segmentHidden.length > 0);
-  let pendingDoubts = [];
   if (boardHasWork) {
-    const gathered = await readInterceptsState({ force: false }).catch(() => ({}));
-    pendingDoubts = doubtedAwaitingFreshSource(normalizeSpies(bundle.world?.spies), board, {
-      playerPolity: playerCountry,
-      intercepts: normalizeIntercepts(gathered),
-    });
+    // (A doubted entry is the engine's to settle, never a reason to ask:
+    // runtime/agentBoards.js.)
     const boardReasons = boardPassReasons({ board, events: [...candidates, ...segmentHidden] });
-    if (pendingDoubts.length) boardReasons.push(`${pendingDoubts.length} doubted entr${pendingDoubts.length === 1 ? "y" : "ies"} can now be settled`);
     if (boardReasons.length) reasons.push(`the Projects board: ${boardReasons.slice(0, 3).join("; ")}${boardReasons.length > 3 ? `; and ${boardReasons.length - 3} more` : ""}`);
   }
 
@@ -18273,9 +18283,6 @@ const runSceneReview = async ({ context, merged, signal, state, agentKind = "", 
   // There is a reason to ask, so everything with something to look at rides along.
   if (boardHasWork) {
     const boardBundle = { ...bundle, game: { ...bundle.game, gameDate: stopDate, round } };
-    const doubtBlock = pendingDoubts.length
-      ? `\n\nThese doubted entries can now be settled — a fresh agent is in place:\n${describeDoubtedForPrompt(pendingDoubts)}`
-      : "";
     review.boardShownEvents = [...candidates, ...segmentHidden];
     await addJob({
       key: "board",
@@ -18283,7 +18290,7 @@ const runSceneReview = async ({ context, merged, signal, state, agentKind = "", 
       title: "the Projects board",
       instruction: `These events have just been simulated. Record what they did to the board — a project an event set back, brought on or ended, or a line about one — and return `
         + `{"projectOps":[]} when they did nothing to it: the engine moves every project by itself.${segmentHidden.length ? BOARD_HIDDEN_NOTE : ""}\n\n`
-        + `${boardEventList(candidates, segmentHidden)}${doubtBlock}`,
+        + `${boardEventList(candidates, segmentHidden)}`,
     }, await buildTemplateVariables(boardBundle, { taskKey: "projects" }));
   }
   const usable = jobs.filter((job) => job.schema);

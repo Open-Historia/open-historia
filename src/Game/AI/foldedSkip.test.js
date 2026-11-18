@@ -195,7 +195,8 @@ test("a refused folded skip no longer turns folding off for the session", () => 
   assert.match(functionBody("runJsonTask"), /const ratedTool = taskToolFor\(taskKey, statContract, variables\);/);
   // And the prompt asks for nothing the function leaves out.
   assert.match(body, /foldedBoard: riders\.board,/);
-  assert.match(body, /foldedBoardDoubts: riders\.board \?/);
+  // (No doubted entries to settle: the engine settles them, runtime/agentBoards.js.)
+  assert.doesNotMatch(body, /foldedBoardDoubts/);
   assert.match(body, /foldedHistoryField: riders\.history,/);
   // A fold left out was never asked: it waits, and is no failure of the skip.
   assert.match(functionBody("foldedTurnReview"), /const fold = state\.foldedHistoryCarried \? \(state\.foldedPrep\?\.history \?\? null\) : null;/);

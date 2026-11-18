@@ -212,3 +212,13 @@ test("institution_info exposes formal business to the narrator and members, not 
   assert.equal("activeBusiness" in outsider, false);
   assert.match(outsider.note, /not a member/i);
 });
+
+// A belief (runtime/projectEngine.js isBelief) is what one service was made to
+// believe: the country it is about runs no such thing, and only the narrator knows
+// it is not real.
+test("a belief is the narrator's alone to look up, marked as not real", () => {
+  const world = { ...WORLD, projects: [...WORLD.projects, { id: "p5", name: "Portuguese Atom Bomb", kind: "project", ownerCode: "Portugal", status: "active", secrecy: "public", belief: true, progress: 0 }] };
+  const ask5 = (audience) => executeLookup(buildLookupContext({ regions: REGIONS, world, chats: CHATS, player: PLAYER, ...(audience ? { audience } : {}) }), "list_projects", {}).projects;
+  assert.match(ask5(SIMULATION_AUDIENCE).find((project) => project.name === "Portuguese Atom Bomb").notReal, /nobody works on it/);
+  for (const viewer of [["Portugal"], ["Angola"], [PLAYER]]) assert.equal(ask5(viewerAudience(viewer)).some((project) => project.name === "Portuguese Atom Bomb"), false, viewer[0]);
+});

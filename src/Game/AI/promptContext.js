@@ -24,7 +24,7 @@ import { buildForcePostureText } from "./forcePosture.js";
 import { regionNamer, unitHandles } from "./nameRefs.js";
 import { describePlayerGroupForPrompt } from "../../runtime/groups.js";
 import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
-import { deriveProjectFlags, isPlayerProject, isProjectOpen } from "../../runtime/projects.js";
+import { deriveProjectFlags, isBelief, isPlayerProject, isProjectOpen } from "../../runtime/projects.js";
 import { describeEffects, estimateProjectFinish } from "../../runtime/projectEngine.js";
 import { readableFigure } from "../../runtime/statsBackend.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
@@ -101,6 +101,10 @@ const joinWithinCharBudget = (
 // The time skip's two tasks, whose templates state some of what other tasks
 // get only from these variables (the briefing, an order's id).
 const SKIP_TASKS = new Set(["jumpForward", "autoJumpForward"]);
+// The tasks that are the world, and know which board entries are beliefs
+// (buildProjectsSummaryText): the time skip and the board pass. Not the Game
+// Master, whose user is a player, nor any task of a player's own.
+const WORLD_BOARD_TASKS = new Set([...SKIP_TASKS, "projects"]);
 
 export const renderTemplate = (template, variables) =>
   String(template ?? "").replace(/\$\{([^}]+)\}/g, (_match, key) => {
@@ -1499,7 +1503,9 @@ const projectMoney = (value) => {
   return readableFigure(amount);
 };
 
-export const buildProjectsSummaryText = (world, game, { compact = false, closedLimit = CLOSED_PROJECTS_LISTED } = {}) => {
+// `beliefsTold`: the world's own tasks (a time skip, the board pass) are told
+// which entries are beliefs (runtime/projectEngine.js isBelief).
+export const buildProjectsSummaryText = (world, game, { compact = false, closedLimit = CLOSED_PROJECTS_LISTED, beliefsTold = false } = {}) => {
   const projects = normalizeArray(world?.projects);
   if (projects.length === 0) {
     return "No projects or operations are being tracked yet.";
@@ -1529,6 +1535,11 @@ export const buildProjectsSummaryText = (world, game, { compact = false, closedL
     const flags = [
       project.secrecy && project.secrecy !== "public" ? project.secrecy : "",
       project.verification === "doubted" ? "doubted" : "",
+      // No country's work: what this board's service was made to believe
+      // (runtime/projectEngine.js isBelief). The engine never runs it. Told to
+      // the world's tasks only: to the player's own (the advisor, the planner)
+      // it is what their service believes, like any entry it knows of.
+      beliefsTold && isBelief(project) ? `NOT REAL: planted on ${player || "the player"}'s service, which believes it` : "",
     ].filter(Boolean);
     return `- "${project.name}" · ${ownerOf(project)} · ${Math.floor(Number(project.progress) || 0)}% · ${finishOf(project) || "-"}`
       + ` · ${projectMoney(project.plan?.monthlyCost)} a month · funding ${normalizeString(project.funding) || "normal"} · ${statusOf(project)}`
@@ -2996,7 +3007,7 @@ export const buildPromptContext = async (bundle, {
     result.plannedActionsWithIds = buildPlannedActionsWithIdsText(bundle.actions);
   }
   if (wants("projectsSummary")) {
-    result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game, { compact: SKIP_TASKS.has(taskKey) });
+    result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game, { compact: SKIP_TASKS.has(taskKey), beliefsTold: WORLD_BOARD_TASKS.has(taskKey) });
   }
 
   const worldBeforeRoundOne =

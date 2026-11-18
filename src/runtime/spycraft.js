@@ -867,7 +867,7 @@ export const espionageBrief = (world, intercepts, { playerPolity = "", hiddenTar
     if (!mine.some((s) => s.target === target)) continue;
     for (const exchange of entry.exchanges.slice(0, 3)) {
       const gist = exchange.messages.map((m) => `${m.speaker}: ${m.text}`).join(" / ");
-      lines.push(`${entry.planted ? "PLANTED (false, fed to the player's turned agent)" : "Intercepted"} ${target}↔${exchange.counterpart} on ${exchange.subject}: ${gist.slice(0, 400)}`);
+      lines.push(`${entry.planted ? `PLANTED (false, fed to ${player || "the player"}'s turned agent)` : "Intercepted"} ${target}↔${exchange.counterpart} on ${exchange.subject}: ${gist.slice(0, 400)}`);
     }
   }
   return lines.join("\n");

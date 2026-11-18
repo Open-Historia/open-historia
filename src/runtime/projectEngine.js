@@ -492,9 +492,19 @@ export const pricePlanForOwner = (plan, sheet, options = {}) => {
 
 export const projectOwnerOf = (project, host = "") => asText(project?.ownerCode, 120) || asText(host, 120);
 const isOpen = (project) => OPEN_ENGINE_STATUSES.includes(asText(project?.status) || "active");
+
+// A BELIEF is no country's work: a programme a service was made to believe in
+// by material planted on its turned agent. It is that service's knowledge, kept
+// on its own board (`belief`; `believedBy` names the service while a time skip
+// that opened it carries it home, runtime/seatBoards.js returnBoards). The
+// engine never runs one, no cap counts it, and nobody but its believer is shown
+// it. A programme opened from planted material used to be the country's real
+// work, and ran to completion with its effects.
+export const isBelief = (project) => project?.belief === true || Boolean(asText(project?.believedBy, 120));
+
 // Is the engine working on it: open, planned, and not paused, and for a
-// programme that runs on, whether it is set up or not.
-const ticks = (project) => isOpen(project) && Boolean(project?.plan) && asText(project?.status) !== "planning" && asText(project?.status) !== "paused" && !(asText(project?.status) === "stalled" && asText(project?.stallReason) !== "funds");
+// programme that runs on, whether it is set up or not. Never a belief.
+const ticks = (project) => isOpen(project) && !isBelief(project) && Boolean(project?.plan) && asText(project?.status) !== "planning" && asText(project?.status) !== "paused" && !(asText(project?.status) === "stalled" && asText(project?.stallReason) !== "funds");
 // What a project is due a day at its funding, overruns included.
 export const dailyCostOf = (project) => {
   const cost = Number(project?.plan?.monthlyCost) || 0;
@@ -944,11 +954,13 @@ export const mergeTickedBoard = ({ base = [], ticked = [], current = [] } = {}) 
 // countries people play open their own, from the Projects tab. A gate over the
 // board as it stands and the people who play; each call says whether one more
 // create may land ("" when it may, else why not: "theirs", "plan" or "cap"), and
-// counts it when it does.
+// counts it when it does. A belief (isBelief) is no country's work: it is
+// counted among what the answer opens, never as its country's running work,
+// and may be of any country, a played one too.
 export const worldProjectGate = ({ board = [], players = [] } = {}) => {
   const played = asArray(players).map((name) => asText(name, 120)).filter(Boolean);
   const isPlayed = (owner) => played.some((name) => sameName(name, owner));
-  const open = asArray(board).filter((project) => isRecord(project) && isOpen(project) && asText(project.ownerCode));
+  const open = asArray(board).filter((project) => isRecord(project) && isOpen(project) && !isBelief(project) && asText(project.ownerCode));
   const openOf = new Map();
   for (const project of open) {
     if (isPlayed(project.ownerCode)) continue;
@@ -959,6 +971,12 @@ export const worldProjectGate = ({ board = [], players = [] } = {}) => {
   let opened = 0;
   return (project) => {
     const owner = asText(project?.ownerCode || project?.owner, 120);
+    if (owner && isBelief(project)) {
+      if (!normalizeProjectPlan(project?.plan)) return "plan";
+      if (opened >= SKIP_CREATES_MOST) return "cap";
+      opened += 1;
+      return "";
+    }
     if (!owner || isPlayed(owner)) return "theirs";
     if (!normalizeProjectPlan(project?.plan)) return "plan";
     const key = nameKey(owner);

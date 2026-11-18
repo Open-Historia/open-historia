@@ -293,6 +293,26 @@ test("a skip opens projects only for countries nobody plays, each with a plan, w
   assert.equal(worldProjectGate({ board: [], players: ["France", "Spain"] })({ name: "S", ownerCode: "Spain", plan }), "theirs");
 });
 
+// A programme a service was made to believe in by material planted on its turned
+// agent ran to completion as its country's real work (the follow-ups of
+// 2026-11-18): a belief is nobody's work (isBelief).
+test("a belief is never run, counts toward no country's work, and is opened within the skip's own share", () => {
+  const plan = { durationDays: 200, monthlyCost: 1e8 };
+  const phantom = project({ id: "b1", name: "Phantom Fleet", ownerCode: "Italy", belief: true });
+  const { projects, outcomes } = run([phantom, project({ id: "p2", name: "Real", ownerCode: "Italy" })], "1936-01-01", "1936-12-31", { world: world({ Italy: SHEET }) });
+  assert.equal(projects[0].progress, 0, "nothing works on it");
+  assert.equal(outcomes.some((outcome) => outcome.project === "Phantom Fleet"), false);
+  assert.ok(projects[1].progress > 0);
+  const full = worldProjectGate({ board: [project({ ownerCode: "Italy" }), project({ id: "p2", name: "Two", ownerCode: "Italy" }), phantom], players: ["France"] });
+  assert.equal(full({ name: "Third", ownerCode: "Italy", plan }), "", "a belief is no running work of Italy's");
+  assert.equal(full({ name: "Planted on us", ownerCode: "Italy", believedBy: "France", plan }), "", "nor is a new one");
+  assert.equal(full({ name: "Planless belief", ownerCode: "Italy", believedBy: "France" }), "plan");
+  assert.equal(worldProjectGate({ board: [], players: ["France", "Spain"] })({ name: "Of a player", ownerCode: "Spain", believedBy: "France", plan }), "", "a belief may be of any country");
+  const busy = worldProjectGate({ board: [], players: ["France"] });
+  const answers = Array.from({ length: SKIP_CREATES_MOST + 1 }, (_, index) => busy({ name: `B${index}`, ownerCode: "Italy", believedBy: "France", plan }));
+  assert.equal(answers.filter((answer) => answer === "").length, SKIP_CREATES_MOST, "within what one skip opens");
+});
+
 // ---- a board from before the engine -----------------------------------------------------
 //
 // Trimmed from a real Italy campaign (round 130): programmes that sat at 52% for

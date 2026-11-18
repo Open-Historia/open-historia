@@ -35,6 +35,7 @@ import {
   STALL_REASONS,
   boundPlanForOwner,
   boundStatChange,
+  isBelief,
   legacyPlanFor,
   mergeTickedBoard,
   normalizeAdjustment,
@@ -1933,10 +1934,10 @@ const PROJECT_KIND_SET = new Set(["project", "operation"]);
 // Whether an entry sourced from a spy can still be trusted. "" is the ordinary
 // case and covers everything the player learned openly.
 //
-// "doubted" is ENGINE-ONLY and is not in the schema, so no model can emit it: it
-// is stamped when the agent an entry was sourced from turns out to be compromised
-// (projects.js spyIntelDoubtOps). "confirmed" and "refuted" are the model's to
-// give, and only once a FRESH agent is in that polity.
+// All three are ENGINE-ONLY. "doubted" is stamped when the agent an entry was
+// sourced from turns out to be compromised (projects.js spyIntelDoubtOps);
+// "confirmed" and "refuted" once a FRESH agent of the knower's has reported from
+// that polity, by whether the entry is real work or a belief (spyVerdictOps).
 const PROJECT_VERIFICATIONS = ["", "doubted", "confirmed", "refuted"];
 const PROJECT_VERIFICATION_SET = new Set(PROJECT_VERIFICATIONS);
 
@@ -2155,6 +2156,12 @@ export const normalizeProjectEntry = (entry, index = 0) => {
     // board it was lent from (multiplayer/host/seatBoards.js lendBoards).
     ...normalizeProjectKnowledge(entry.knownBy),
     ...(normalizeOptionalString(entry.lentFrom) ? { lentFrom: normalizeOptionalString(entry.lentFrom) } : {}),
+    // No country's work but what its board's government was made to believe by
+    // material planted on its turned agent (projectEngine.js isBelief), and,
+    // only in the time skip that opened it, whose service that is
+    // (runtime/seatBoards.js returnBoards takes it home).
+    ...(entry.belief === true ? { belief: true } : {}),
+    ...(normalizeOptionalString(entry.believedBy) ? { believedBy: normalizeOptionalString(entry.believedBy) } : {}),
     focus: normalizeProjectCoords(entry.focus),
     // kw5-units: how an operation's troops attack its focus (runtime/fronts/plans.js
     // operationsOn), one of OPERATION_APPROACHES; absent on every other entry, and
@@ -2169,15 +2176,20 @@ export const normalizeProjectEntry = (entry, index = 0) => {
 
 // What to drop when the board is over its cap: finished work first, oldest by
 // last-touched, and only then anything still running. Survivors keep their order.
+// What other players lent a time skip's own copy of the board (lentFrom,
+// runtime/seatBoards.js) is theirs, goes home with the turn and is never
+// stored here: it counts toward no cap and is never dropped. Counted, it took
+// the room of the board's own history, or was itself left out of the skip.
 const capProjectList = (list) => {
-  if (list.length <= MAX_PROJECTS) return list;
+  const kept = list.filter((project) => !project.lentFrom);
+  if (kept.length <= MAX_PROJECTS) return list;
 
   const evictionRank = (project) => (PROJECT_OPEN_STATUSES.has(project.status) ? 1 : 0);
   const doomed = new Set(
-    [...list]
+    [...kept]
       .sort((a, b) => evictionRank(a) - evictionRank(b)
         || normalizeOptionalString(a.updatedAt).localeCompare(normalizeOptionalString(b.updatedAt)))
-      .slice(0, list.length - MAX_PROJECTS)
+      .slice(0, kept.length - MAX_PROJECTS)
       .map((project) => project.id),
   );
   return list.filter((project) => !doomed.has(project.id));
@@ -2217,6 +2229,10 @@ const PROJECT_FIELD_ALIASES = {
   note: ["note"],
   plan: ["plan"],
   funding: ["funding"],
+  // A time skip's create of a programme that exists only in material planted
+  // on a service: that service (projectEngine.js isBelief). Never a
+  // restatement's to add to an entry that exists.
+  believedBy: ["believedBy"],
 };
 
 // A plain ARRAY, not a Set: normalized ops are persisted inside events.json and
@@ -2235,9 +2251,9 @@ const listProvidedFields = (source) => {
 //             nobody plays, the planner's, the advisor's), or with none: it
 //             then waits in "planning" for one;
 //   update    what it IS (summary, tags, secrecy, a new name, the lastUpdate
-//             line, a verdict on doubted intelligence), how it is funded, or
-//             the plan of one still planning. Never its progress, status or
-//             dates: those are the engine's;
+//             line), how it is funded, or the plan of one still planning.
+//             Never its progress, status or dates, nor what anyone knows of
+//             it (a verdict on doubted intelligence): those are the engine's;
 //   setback   an event set it back: days of work lost (at most
 //             SETBACK_DAYS_MOST) and a cost overrun (at most
 //             OVERRUN_PERCENT_MOST %), taking hold from the next period;
@@ -2327,12 +2343,13 @@ const normalizeProjectOp = (entry) => {
 // through an explicit `newName`.
 const PROJECT_PATCHABLE_FIELDS = [
   "kind", "summary", "secrecy", "lastUpdate", "note", "focus", "approach",
-  "linkedUnitIds", "linkedMarkerIds", "verification", "linkedSpyIds",
+  "linkedUnitIds", "linkedMarkerIds", "linkedSpyIds",
 ];
 // And what only the engine's own ops may set: applyProjectOps ctx.engine. (A
 // doubt about where intelligence came from is never a stall: it is the
-// knower's, projects.js spyIntelDoubtOps.)
-const ENGINE_PATCHABLE_FIELDS = ["status", "stallReason", "known"];
+// knower's, projects.js spyIntelDoubtOps; and so is the verdict on it,
+// spyVerdictOps, which the model gave until the engine knew what was real.)
+const ENGINE_PATCHABLE_FIELDS = ["status", "stallReason", "known", "verification"];
 
 const patchedAlias = (patch, field) => {
   const aliases = PROJECT_FIELD_ALIASES[field] ?? [field];
@@ -2433,7 +2450,7 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
         const existing = next[existingIndex];
         const merged = { ...existing };
         for (const field of op.provided ?? []) {
-          if (field === "name" || field === "ownerCode") continue;
+          if (field === "name" || field === "ownerCode" || field === "believedBy") continue;
           if (field === "plan") {
             if (existing.status === "planning" && op.project.plan) Object.assign(merged, withPlan({ ...existing, plan: op.project.plan }), { status: "active", startedAt: existing.startedAt || date });
             continue;
@@ -2489,8 +2506,8 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
     }
 
     if (op.op === "setback" || op.op === "boost") {
-      // Only on work the engine is still doing.
-      if (!PROJECT_OPEN_STATUSES.has(current.status) || !current.plan) continue;
+      // Only on work the engine is still doing (a belief is nobody's work).
+      if (!PROJECT_OPEN_STATUSES.has(current.status) || !current.plan || isBelief(current)) continue;
       const adjustment = { ...op.adjustment, round: round > 0 ? round : op.adjustment.round, date: date || op.adjustment.date, ...(op.note ? { note: op.note } : {}) };
       const normalized = renormalize({
         ...current,
@@ -6191,6 +6208,16 @@ export const applyEventImpactsToWorld = ({
   };
 };
 
+// A create without the believer it named (applyProjectOpsToWorld: a belief is a
+// time skip's alone to open).
+const withoutBelief = (raw) => {
+  if (!raw || typeof raw !== "object" || projectOpKind(raw) !== "create") return raw;
+  const { believedBy: _believedBy, ...op } = raw;
+  if (!raw.project || typeof raw.project !== "object") return op;
+  const { believedBy: _nested, ...project } = raw.project;
+  return { ...op, project };
+};
+
 // A plan held to its owner's means, against a world's sheets: what every door
 // that opens or plans a project passes to applyProjectOps as `boundPlan`. A
 // blank owner is `host`, the country a blank owner means.
@@ -6209,10 +6236,12 @@ const projectPlanBounder = (world, host = "") => (plan, owner) => {
 //             with its plan, plan one still planning, fund it, call it off;
 //   "ai"      the advisor: it may open the player's own work (with a plan, or
 //             to be planned), fund or call off the player's own, and report on
-//             any entry (its lastUpdate, a verdict on doubted intelligence). It
-//             is not the world: no setback or breakthrough, and no project of
-//             another country's (those the world opens, in a time skip);
-//   "engine"  the engine's own ops, which may also set a status.
+//             any entry (its lastUpdate). It is not the world: no setback or
+//             breakthrough, and no project of another country's (those the
+//             world opens, in a time skip);
+//   "engine"  the engine's own ops, which may also set a status and a verdict.
+// A belief (projectEngine.js isBelief) is a time skip's alone to open: a create
+// through here that names one is opened as ordinary work of its own owner.
 // Anything refused comes back in refusedProjectIds (or, for a create, nothing
 // lands) rather than throwing.
 export const applyProjectOpsToWorld = ({
@@ -6226,7 +6255,7 @@ export const applyProjectOpsToWorld = ({
 }) => {
   const nextWorld = normalizeWorldState(world);
   const resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
-  const resolved = normalizeArray(ops).map((raw) => resolveProjectOpOwner(raw, resolveOwner));
+  const resolved = normalizeArray(ops).map((raw) => resolveProjectOpOwner(withoutBelief(raw), resolveOwner));
   const refused = new Set();
   const player = normalizeOptionalString(playerCountry);
   const isPlayersOwn = (owner) => !normalizeOptionalString(owner) || samePolityName(owner, player);

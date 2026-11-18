@@ -136,3 +136,70 @@ test("every player sees the work nobody hides: a guest the AI's and the host's, 
   assert.deepEqual(ids("France"), ["fr-1/", "fr-2/", "de-1/Germany", "it-1/Italy"]);
   assert.deepEqual(ids("Germany"), ["de-1/", "de-2/", "it-1/Italy", "fr-1/France"]);
 }));
+
+// ---- the verdict on a doubt, and what was planted --------------------------------
+// The follow-ups of 2026-11-18: the doubted-entry settlement was the host's alone,
+// asked of the model, which was told to fail what it refuted (an AI country's real
+// work); and a programme opened from a turned agent's planted material became that
+// country's real work, which ran to completion. Each service's doubts are settled
+// here, from its own agents' reports, and a planted programme is its belief.
+
+const filedFrom = (target, planted) => ({ [target]: { gatheredAt: DATE, round: 3, planted, exchanges: [{ counterpart: "Portugal", subject: "trade", messages: [{ speaker: target, text: "x" }] }] } });
+const turn = (world, game, { intercepts = {}, opened = [] } = {}) => {
+  const lent = withBoardsLent({ world, game });
+  const synced = syncBoardsWithAgents(lent.world, { spymasters: spymastersOf(game), host: game.country, date: DATE, round: 3, intercepts });
+  // What the skip's board pass opened, after the passes (gameplay.js applySimulationResult).
+  const skipped = opened.length ? { ...synced.world, projects: [...synced.world.projects, ...opened] } : synced.world;
+  return withBoardsHome(skipped, { before: lent.world, game });
+};
+
+test("a guest's planted programme is its own service's belief, doubted with its agent, refuted by a clean one, and never anyone's work", shared(() => {
+  const game = { country: "Germany", humanCountries: ["Germany", "France"], gameDate: DATE, round: 3 };
+  const spain = (spies) => normalizeWorldState({ spies, projects: [{ id: "es-1", name: "Armada Rebuilding", secrecy: "covert", status: "active", plan, ownerCode: "Spain" }], seatBoards: {} });
+  const turned = { id: "spy-fr-es-1", owner: "France", target: "Spain", status: "turned", turnedAt: "1936-01-10", deployedAt: "1936-01-01" };
+  // The skip opens, from what Spain fed France's agent, a fleet that does not exist.
+  const opened = [{ id: "b-1", name: "Spanish Phantom Fleet", kind: "project", secrecy: "covert", status: "active", plan, ownerCode: "Spain", believedBy: "France" }];
+  let world = turn(spain([turned]), game, { opened });
+  const phantom = () => world.seatBoards.France.find((row) => row.id === "b-1");
+  assert.deepEqual([phantom().belief, phantom().linkedSpyIds, phantom().verification || ""], [true, ["spy-fr-es-1"], ""]);
+  assert.equal(world.projects.some((row) => row.id === "b-1"), false, "never Spain's work on the game's board");
+  const france = view(world, game, "France").world.projects.find((row) => row.id === "b-1");
+  assert.deepEqual([france.ownerCode, france.linkedSpyIds, "belief" in france], ["Spain", ["spy-fr-es-1"], false], "France sees what its service believes, and nothing says it was planted");
+  assert.equal(view(world, game, "Germany").world.projects.some((row) => row.id === "b-1"), false);
+
+  // France's analysts come to suspect the agent: what it sent is doubted.
+  world = turn({ ...world, spies: [{ ...turned, suspected: true }] }, game);
+  assert.equal(phantom().verification, "doubted");
+  assert.equal(world.projects.find((row) => row.id === "es-1").knownBy.France.verification, "doubted", "and so is what it told of Spain's real work");
+
+  // A fresh agent, once it has filed clean material, settles both.
+  const fresh = [{ ...turned, status: "recalled", suspected: true }, { id: "spy-fr-es-2", owner: "France", target: "Spain", status: "active", deployedAt: "1936-03-01" }];
+  const stillPlanted = turn({ ...world, spies: fresh }, game, { intercepts: { "@seats": { France: filedFrom("Spain", true) } } });
+  assert.equal(stillPlanted.seatBoards.France.find((row) => row.id === "b-1").verification, "doubted", "nothing clean filed yet");
+  world = turn({ ...world, spies: fresh }, game, { intercepts: { "@seats": { France: filedFrom("Spain", false) } } });
+  assert.deepEqual([phantom().verification, phantom().status], ["refuted", "failed"]);
+  const armada = world.projects.find((row) => row.id === "es-1");
+  assert.deepEqual([armada.knownBy.France.verification, armada.status, armada.verification], ["confirmed", "active", ""], "Spain's real work is confirmed, runs on, and is no verdict of the host's");
+  // The host's own table settles nothing of France's.
+  const hostsOnly = turn({ ...world, spies: fresh }, game, { intercepts: filedFrom("Spain", false) });
+  assert.equal(hostsOnly.seatBoards.France.find((row) => row.id === "b-1").verification, "refuted");
+}));
+
+test("in single player a planted programme is the player's belief, refuted and closed once a clean agent reports, and real work confirmed", () => {
+  const game = { country: "France", gameDate: DATE, round: 3 };
+  const spies = [
+    { id: "spy-fr-de-1", owner: "France", target: "Germany", status: "recalled", turnedAt: "1936-01-10", suspected: true },
+    { id: "spy-fr-de-2", owner: "France", target: "Germany", status: "active" },
+  ];
+  const world = normalizeWorldState({
+    spies,
+    projects: [
+      { id: "de-1", name: "Autobahn Network", secrecy: "public", status: "active", plan, ownerCode: "Germany", linkedSpyIds: ["spy-fr-de-1"], verification: "doubted" },
+      { id: "b-1", name: "German Moon Gun", secrecy: "covert", status: "active", plan, ownerCode: "Germany", belief: true, linkedSpyIds: ["spy-fr-de-1"], verification: "doubted" },
+    ],
+  });
+  const after = turn(world, game, { intercepts: filedFrom("Germany", false) });
+  const [autobahn, gun] = ["de-1", "b-1"].map((id) => after.projects.find((row) => row.id === id));
+  assert.deepEqual([autobahn.verification, autobahn.status], ["confirmed", "active"]);
+  assert.deepEqual([gun.verification, gun.status, gun.belief], ["refuted", "failed", true]);
+});

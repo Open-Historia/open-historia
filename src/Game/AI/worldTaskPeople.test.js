@@ -88,7 +88,9 @@ test("gameplay.js builds each block for every person in a world task, and single
   // The board pass: the board's own service, a person's agent inside it told as a person's.
   assert.match(gameplay, /espionageBrief\(normalizeWorldState\(world\), await readOpenedIntercepts\(\), \{ playerPolity: normalizeString\(game\.country\), people \}\);/);
   assert.match(gameplay, /people\.length > 1\n\s+\? sharedBoardServiceLine\(normalizeString\(game\.country\)\)\n\s+: "What the player's service has read, uncensored — the player sees only what it could decode\.";/);
-  assert.match(gameplay, /const framing = `\\n\\n\[Espionage\]\\n\$\{whose\}` \+ " Never write that an agent has been turned, or that an entry came from a spy at all\.\\n\[Doubted intelligence\]\\n/);
+  assert.match(gameplay, /const framing = `\\n\\n\[Espionage\]\\n\$\{whose\}` \+ " Never write that an agent has been turned, or that an entry came from a spy at all\.\\n\[Planted material\]\\n/);
+  // The verdict on doubted intelligence is the engine's, for every service (runtime/agentBoards.js).
+  assert.doesNotMatch(gameplay, /"refuted\\" and fail it|These doubted entries can now be settled/);
 });
 
 test("a departed guest's thread has its owner seated whenever the engine hosts a shared game", () => {

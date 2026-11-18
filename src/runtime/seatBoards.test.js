@@ -50,10 +50,12 @@ test("before a skip each other player's own open work stands on the game's board
   const lent = lendBoards(world(), who);
   assert.deepEqual(names(lent.projects), [
     "Riga port/", `Tallinn shipyard/${ESTONIA}`,
-    `Northern Fleet refit/${RUSSIA}`, `Arctic rail link/${RUSSIA}`,
+    `Northern Fleet refit/${RUSSIA}`, `Arctic rail link/${RUSSIA}`, `riga PORT (${RUSSIA})/${RUSSIA}`,
   ]);
-  assert.deepEqual(lent.projects.map((row) => row.lentFrom ?? ""), ["", "", RUSSIA, RUSSIA]);
-  // Not lent: finished work, what its services know of others, and a name the game's board already has.
+  assert.deepEqual(lent.projects.map((row) => row.lentFrom ?? ""), ["", "", RUSSIA, RUSSIA, RUSSIA]);
+  // Not lent: finished work and what its services know of others. A name the
+  // game's board already has is lent with its country's after it: the board
+  // keeps one entry of a name, and that work went without a skip.
   assert.deepEqual(lent.seatBoards, world().seatBoards, "nothing leaves home while it is out");
 });
 
@@ -86,6 +88,7 @@ test("after the skip each entry goes home as the skip left it, its owner as its 
     ["ru-same", "", "active", 10],
     ["new-ru", "", "active", 10],
   ]);
+  assert.equal(russia.find((row) => row.id === "ru-same").name, "riga PORT", "home under its own name");
   assert.equal(JSON.stringify(home).includes("lentFrom"), false, "nothing lent is left anywhere");
 });
 
@@ -117,11 +120,18 @@ test("an entry the skip dropped for want of room comes home as it left", () => {
   assert.deepEqual(home.seatBoards[RUSSIA].find((row) => row.id === "ru-1"), world().seatBoards[RUSSIA][0]);
 });
 
-test("the game's board is never lent past its room", () => {
+// Lending stopped short of the game's board's limit, so the seats whose work came
+// last had a skip that did not advance it (the follow-ups of 2026-11-18). Lent
+// entries are the skip's alone, and count toward no limit (gameState.js capProjectList).
+test("every player's open work is lent, however full the game's board is", () => {
   const crowded = world();
-  crowded.projects = Array.from({ length: 107 }, (_, n) => project(`lv-${n}`, `Host project ${n}`));
-  const lent = lendBoards(crowded, who);
-  assert.equal(lent.projects.length, 108, "one more fits under the room kept for the skip itself");
+  crowded.projects = Array.from({ length: 120 }, (_, n) => project(`lv-${n}`, `Host project ${n}`, "", { status: n % 2 ? "complete" : "active" }));
+  crowded.seatBoards.Poland = [project("pl-1", "Baltic pipeline"), project("pl-2", "Host project 3")];
+  const lent = lendBoards(crowded, { host: LATVIA, humans: [LATVIA, RUSSIA, "Poland"] });
+  assert.deepEqual(lent.projects.slice(120).map((row) => `${row.name}/${row.lentFrom}`), [
+    `Northern Fleet refit/${RUSSIA}`, `Arctic rail link/${RUSSIA}`, `riga PORT/${RUSSIA}`,
+    "Baltic pipeline/Poland", "Host project 3 (Poland)/Poland",
+  ]);
 });
 
 test("the skip's two ends lend and home for the people the game names", () => {
@@ -132,7 +142,7 @@ test("the skip's two ends lend and home for the people the game names", () => {
     const lent = withBoardsLent(bundle);
     assert.notEqual(lent, bundle);
     assert.equal(bundle.world.projects.length, 2, "the world it was read from is not touched");
-    assert.equal(lent.world.projects.filter((row) => row.lentFrom === RUSSIA).length, 2);
+    assert.equal(lent.world.projects.filter((row) => row.lentFrom === RUSSIA).length, 3);
     const home = withBoardsHome(lent.world, { before: lent.world, game });
     assert.deepEqual(home.projects, world().projects);
     assert.deepEqual(home.seatBoards, world().seatBoards);
@@ -162,8 +172,8 @@ test("every country's work, wherever it is kept, each with its owner: a seat's f
   const lent = lendBoards(world(), who);
   const work = workOfEveryCountry(lent, { host: LATVIA });
   assert.deepEqual(work.map(({ board, project: row, owner }) => `${board || "game"}:${row.id}:${owner}`), [
-    `game:lv-1:${LATVIA}`, `game:lv-on-ee:${ESTONIA}`, `game:ru-1:${RUSSIA}`, `game:ru-2:${RUSSIA}`,
-    `${RUSSIA}:ru-done:${RUSSIA}`, `${RUSSIA}:ru-same:${RUSSIA}`,
+    `game:lv-1:${LATVIA}`, `game:lv-on-ee:${ESTONIA}`, `game:ru-1:${RUSSIA}`, `game:ru-2:${RUSSIA}`, `game:ru-same:${RUSSIA}`,
+    `${RUSSIA}:ru-done:${RUSSIA}`,
   ]);
 });
 
@@ -206,4 +216,54 @@ test("each player's board as its screen shows it: its own, and every other count
   assert.equal(JSON.stringify(lv).includes("Narva file"), false, "a seat's files on others are its own");
   // Single player's board is its own, as it was.
   assert.deepEqual(boardSeenBy({ projects: seen.projects }, LATVIA, { host: LATVIA }).map((row) => row.id), ["lv-1", "lv-agent", "ee-1", "ee-2"]);
+});
+
+// A programme opened from material planted on a service through its turned agent
+// is that service's belief, never another country's real work (the follow-ups of
+// 2026-11-18): the skip names the service (believedBy), and the commit takes it
+// to that service's own board, as that board's government's (belief).
+test("a belief a skip opened goes home to its believer's board, and is nobody's work", () => {
+  const spies = [
+    { id: "spy-lv-ee", owner: LATVIA, target: ESTONIA, status: "turned", turnedAt: "2026-01-01" },
+    { id: "spy-ru-ee", owner: RUSSIA, target: ESTONIA, status: "turned", turnedAt: "2026-01-01" },
+    { id: "spy-lv-ru", owner: LATVIA, target: RUSSIA, status: "active" },
+  ];
+  const before = { ...lendBoards(world(), who), spies };
+  const skipped = {
+    ...before,
+    projects: [
+      ...before.projects,
+      project("b-lv", "Estonian atom bomb", ESTONIA, { believedBy: LATVIA }),
+      project("b-ru", "Estonian navy", ESTONIA, { believedBy: RUSSIA.toUpperCase() }),
+      project("b-ai", "Estonian moon shot", ESTONIA, { believedBy: "Finland" }),
+      project("b-loyal", "Russian rail gun", RUSSIA, { believedBy: LATVIA }),
+    ],
+  };
+  const home = returnBoards(skipped, { ...who, before });
+  const hostBelief = home.projects.find((row) => row.id === "b-lv");
+  assert.deepEqual([hostBelief.belief, "believedBy" in hostBelief, hostBelief.ownerCode, hostBelief.linkedSpyIds], [true, false, ESTONIA, ["spy-lv-ee"]]);
+  const guestBelief = home.seatBoards[RUSSIA].find((row) => row.id === "b-ru");
+  assert.deepEqual([guestBelief.belief, "believedBy" in guestBelief, guestBelief.ownerCode, guestBelief.linkedSpyIds], [true, false, ESTONIA, ["spy-ru-ee"]]);
+  assert.equal(home.projects.some((row) => row.id === "b-ru"), false);
+  // An AI country's service keeps no board; a loyal agent carried nothing planted.
+  assert.equal(JSON.stringify(home).includes("Estonian moon shot"), false);
+  assert.equal(JSON.stringify(home).includes("Russian rail gun"), false, "and never Russia's own work, sent to its board");
+  // Nobody's work, wherever it is kept, and nobody's but its believer's to see.
+  assert.equal(workOfEveryCountry(home, { host: LATVIA }).some(({ project: row }) => row.belief), false);
+  const lv = boardSeenBy(home, LATVIA, { host: LATVIA });
+  const seen = lv.find((row) => row.id === "b-lv");
+  assert.deepEqual([seen.ownerCode, seen.linkedSpyIds, "belief" in seen], [ESTONIA, ["spy-lv-ee"], false], "its service is never told it was planted");
+  assert.equal(lv.some((row) => row.id === "b-ru"), false);
+  const ru = boardSeenBy(home, RUSSIA, { host: LATVIA });
+  assert.deepEqual([ru.some((row) => row.id === "b-ru"), ru.some((row) => row.id === "b-lv"), "belief" in ru.find((row) => row.id === "b-ru")], [true, false, false]);
+  // Never lent to a skip: nothing runs it.
+  assert.equal(lendBoards(home, who).projects.some((row) => row.id === "b-ru"), false);
+});
+
+test("in single player a belief stays on the game's board as the player's service's", () => {
+  const game = { country: LATVIA };
+  const solo = { projects: [project("p", "Canal"), project("b", "Estonian atom bomb", ESTONIA, { believedBy: LATVIA })], spies: [{ id: "s", owner: LATVIA, target: ESTONIA, status: "turned" }] };
+  const home = withBoardsHome(solo, { before: { projects: [solo.projects[0]] }, game });
+  assert.deepEqual(home.projects.map((row) => [row.id, row.belief === true, "believedBy" in row]), [["p", false, false], ["b", true, false]]);
+  assert.equal("seatBoards" in home, false, "a single-player save never gains the other boards' key");
 });
