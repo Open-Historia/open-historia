@@ -39,6 +39,7 @@ import { withPlayerPost } from "../../runtime/socialFeed.js";
 import { applyProjectOpsToWorld, normalizeProjects } from "../../runtime/gameState.js";
 import { deployFor, disbandFor, revertOrderFor } from "./forces.js";
 import { agentOrderFor } from "./agents.js";
+import { institutionThreadRefusal } from "./institutions.js";
 import { acceptStructure, canSettleStructure, moveStructure } from "../../runtime/structurePlacement.js";
 import { applyWarRoomOp, cleanWarRoomOp } from "../../runtime/fronts/warRoomOps.js";
 import { applyFortifyOp, cleanFortifyOp } from "../../runtime/fronts/fortifyOps.js";
@@ -225,7 +226,8 @@ export const createGameHost = ({
   // the reason when it cannot.
   setFlag = async () => {},
   // An institution's business for a seat (host/institutions.js): resolves
-  // { institutionId, proposalId, chatId } or rejects with the reason.
+  // { institutionId, proposalId, chatId } or rejects with the reason. Given
+  // `onTable(chatId, job)`, which runs a turn of a table in that table's turn.
   institution = async () => {
     throw new Error("Institutions are not run here.");
   },
@@ -717,21 +719,40 @@ export const createGameHost = ({
   // phase on the way in, is what keeps it from the round already under way.
   const started = () => round.status().phase !== "lobby";
 
+  // Every turn of a table on the host's own AI key, one at a time for each
+  // table: the answer to a person's line, and an institution's Council or a
+  // hearing doing its business (host/institutions.js). Two at once each wrote
+  // the thread from what it had read, and the second's lines were dropped as
+  // known; a Council's turn ran outside this and could meet an answer half
+  // way. Resolves with what the turn resolves with; a turn that fails holds
+  // up none after it.
+  const tableOf = (chatId) => {
+    if (!tables.has(chatId)) tables.set(chatId, { tail: Promise.resolve(), waiting: new Set() });
+    return tables.get(chatId);
+  };
+  const onTable = (chatId, job) => {
+    const table = tableOf(chatId);
+    const turn = table.tail.then(() => (stopped ? undefined : job()));
+    const settled = turn.then(() => {}, () => {});
+    table.tail = settled;
+    void settled.then(() => {
+      if (table.tail === settled) tables.delete(chatId);
+    });
+    return turn;
+  };
+
   // The AI governments at a table answer a person's line on the host's own AI
-  // key (settings.replies "host", and an institution's table always), one
-  // answer at a time for each table: two at once each wrote the thread from
-  // what it had read, and the second's writing dropped the first's lines.
-  // Someone who writes again while their answer is still waiting is answered
-  // once, for all they have written by then. When the host's AI could not be
-  // reached the writer is told, or their line just went unanswered.
+  // key (settings.replies "host", and an institution's table always), in the
+  // table's turn (onTable). Someone who writes again while their answer is
+  // still waiting is answered once, for all they have written by then. When
+  // the host's AI could not be reached the writer is told, or their line just
+  // went unanswered.
   const answerOnHost = (chatId, seat, governments) => {
-    const table = tables.get(chatId) ?? { tail: Promise.resolve(), waiting: new Set() };
-    tables.set(chatId, table);
+    const table = tableOf(chatId);
     const who = fold(seat);
     if (table.waiting.has(who)) return;
     table.waiting.add(who);
-    const turn = table.tail.then(async () => {
-      if (stopped) return;
+    void onTable(chatId, async () => {
       table.waiting.delete(who);
       const outcome = await replyTo({ chatId, seat });
       // (Its writing was an entry in the queue: every view follows on its own.)
@@ -741,10 +762,7 @@ export const createGameHost = ({
     }).catch((error) => {
       table.waiting.delete(who);
       log("warn", "reply failed", { error: String(error?.message || error) });
-    }).finally(() => {
-      if (table.tail === turn) tables.delete(chatId);
     });
-    table.tail = turn;
   };
 
   // A line left to its writer's own device to answer.
@@ -1206,7 +1224,8 @@ export const createGameHost = ({
     // screen can show it.
     institution: async (connection, { call, args }, seat) => {
       try {
-        const made = await institution({ seat: seat.country, call, args: args ?? {} });
+        // A Council's or a hearing's turn is the table's next (onTable).
+        const made = await institution({ seat: seat.country, call, args: args ?? {}, onTable });
         const result = {};
         for (const key of ["institutionId", "proposalId", "proposalStatus", "chatId"]) {
           const value = clean(made?.[key]).slice(0, 160);
@@ -1351,7 +1370,8 @@ export const createGameHost = ({
     },
     thread: async (connection, { op, thread, title, members }, seat) => {
       const id = clean(thread);
-      const gameDate = clean((await store.read())?.game?.gameDate);
+      const docs = await store.read();
+      const gameDate = clean(docs?.game?.gameDate);
       let refusal = "";
       await store.updateChats((chats) => {
         const all = list(chats);
@@ -1363,6 +1383,9 @@ export const createGameHost = ({
           refusal = "You are not in that conversation.";
           return null;
         }
+        // An institution's table is the institution's (host/institutions.js).
+        refusal = institutionThreadRefusal(chat, op, docs?.world);
+        if (refusal) return null;
         const next = [...all];
         if (op === "close") {
           next[index] = { ...chat, status: "closed" };

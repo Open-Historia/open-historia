@@ -18,14 +18,40 @@
 // with no owner is the host's (host/projection.js threadOwner), and a guest's
 // founding table would otherwise reach nobody but the host.
 
+import { institutionLifecycleConversationState } from "../../runtime/institutionLifecycleCore.js";
+import { resolveInstitutionRecord } from "../../runtime/institutions.js";
+
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => (Array.isArray(value) ? value : []);
-const same = (a, b) => clean(a).toLocaleLowerCase() === clean(b).toLocaleLowerCase();
+const same =(a, b) => clean(a).toLocaleLowerCase() === clean(b).toLocaleLowerCase();
 const text = (value, max = 600) => clean(value).slice(0, max);
 const names = (value, max = 24) => list(value).map((entry) => text(entry, 120)).filter(Boolean).slice(0, max);
 const count = (value, low, high, fallback) => {
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(low, Math.min(high, Math.round(number))) : fallback;
+};
+
+// What a member may not do to an institution's table for everyone at it (the
+// "thread" request, host/gameHost.js), in words for the asker, or "" when it
+// may. Its name and its seats are the institution's (runtime/
+// institutionalChannels.js gives a Council its institution's members and
+// opens it again), and a Council stays open while the institution stands; a
+// membership hearing or invitation closes once every case at it is settled,
+// as leaving a settled one does (chat.jsx leaveActiveChat). Any member closed
+// or renamed one for every member: an invitee could lose the hearing of its
+// own invitation.
+export const institutionThreadRefusal = (chat, op, world) => {
+  const lifecycleId = clean(chat?.lifecycleInstitutionId);
+  const cases = list(chat?.lifecycleCaseIds);
+  if (!clean(chat?.institutionId) && !lifecycleId) return "";
+  if (op === "rename") return "An institution's table keeps the institution's name.";
+  if (op !== "close") return "";
+  if (!lifecycleId || !cases.length) {
+    const standing = clean(resolveInstitutionRecord(world ?? {}, chat?.institutionId)?.status || "active").toLowerCase() !== "dissolved";
+    return standing ? "An institution's Council stays open for its members while the institution stands." : "";
+  }
+  const state = institutionLifecycleConversationState(world ?? {}, { institutionId: lifecycleId, caseIds: cases });
+  return state.resolvedCases.length === state.cases.length ? "" : "A membership hearing closes once its business is settled.";
 };
 
 // The lifecycle commands a player's screen sends (InstitutionsWorkspace.jsx,
@@ -109,6 +135,14 @@ export const createInstitutionDesk = ({ host: hostOf = "", game }) => {
     });
   };
   const chatIds = async () => new Set(list(await game.readChats()).map((chat) => clean(chat?.id)).filter(Boolean));
+  // A Council's or a hearing's turn, in the table's own turn (host/gameHost.js
+  // onTable): after any answer under way there, read from the thread as that
+  // left it. Run beside an answer, it read the thread as it was, minted the
+  // same line ids, and the second turn's lines were dropped.
+  const turnOf = async (onTable, chat, flags) => onTable(clean(chat.id), async () => {
+    const now = list(await game.readChats()).find((entry) => clean(entry?.id) === clean(chat.id)) ?? chat;
+    return game.chatTurn({ ...flags, chat: now });
+  });
   const threadFor = async (seat, threadId) => {
     const chat = list(await game.readChats()).find((entry) => clean(entry?.id) === threadId);
     if (!chat) throw new Error("That conversation is not there.");
@@ -161,7 +195,7 @@ export const createInstitutionDesk = ({ host: hostOf = "", game }) => {
     },
     // The Council's turn on a proposal (chat.jsx runInstitutionCouncilTurn), on
     // the host's AI key: the player's comment said into the Council first.
-    council: async (seat, { institutionId, proposalId, kind, comment }) => {
+    council: async (seat, { institutionId, proposalId, kind, comment }, onTable) => {
       const id = idOf(institutionId);
       const proposal = idOf(proposalId);
       if (!id || !proposal) throw new Error("Which institution, and which proposal?");
@@ -172,8 +206,8 @@ export const createInstitutionDesk = ({ host: hostOf = "", game }) => {
         : await game.channel({ playerCountry: seat, institutionId: id });
       const chat = opened?.channel;
       if (!chat?.id) throw new Error("The Council could not be opened.");
-      await game.chatTurn({
-        chat, seat,
+      await turnOf(onTable, chat, {
+        seat,
         playerMessage: mode === "amendment" ? line : "",
         institutionDebateRequested: mode === "debate",
         institutionProposalId: proposal,
@@ -183,18 +217,19 @@ export const createInstitutionDesk = ({ host: hostOf = "", game }) => {
       return { institutionId: id, proposalId: proposal, chatId: idOf(chat.id) };
     },
     // The governments at a hearing answering it (chat.jsx "Request response").
-    hearing: async (seat, { thread }) => {
+    hearing: async (seat, { thread }, onTable) => {
       const chat = await threadFor(seat, idOf(thread));
-      await game.chatTurn({ chat, seat, playerMessage: "", lifecycleResponseRequested: true });
+      await turnOf(onTable, chat, { seat, playerMessage: "", lifecycleResponseRequested: true });
       return { chatId: idOf(chat.id) };
     },
   };
 
-  return async ({ seat, call, args = {} }) => {
+  // `onTable(chatId, job)`: the host's one turn per table (host/gameHost.js).
+  return async ({ seat, call, args = {}, onTable = (_chatId, job) => job() }) => {
     const run = calls[call];
     if (!run) throw new Error("That is not something a player can do to an institution.");
     const before = await chatIds();
-    const made = await run(clean(seat), args && typeof args === "object" ? args : {});
+    const made = await run(clean(seat), args && typeof args === "object" ? args : {}, onTable);
     await ownership(clean(seat), before, made.chatId);
     return made;
   };

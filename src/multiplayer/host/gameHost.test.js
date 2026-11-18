@@ -26,6 +26,7 @@ import { SOCIAL_POST_MAX_CHARS } from "../../runtime/socialFeed.js";
 import { ownReplyAsked } from "../client/ownReplies.js";
 import { pendingSharedThread } from "../client/sharedThreads.js";
 import { sessionFromRecord } from "./sessionRecord.js";
+import { createInstitutionDesk } from "./institutions.js";
 
 const LATVIA = "Republic of Latvia";
 const RUSSIA = "Russian Federation";
@@ -2116,4 +2117,86 @@ test("the host keeps each fleet's posture as the world last saw it, and writes n
   const seen = withFleetPosturesSeen(world);
   assert.deepEqual(seen.seenFleetPostures, { f1: { posture: "patrol", status: "idle" } }, "fleets only");
   assert.equal(withFleetPosturesSeen(seen), null, "the same postures: no write");
+});
+
+// An institution's Council turn ran outside the one answer at a time at each
+// table: beside an answer in the same thread it read the thread as it was,
+// and the second's lines were dropped (the gap audit of 2026-11-18, D2).
+test("a Council's turn waits for the answer under way at its table, and another table's does not", async () => {
+  let running = 0;
+  let most = 0;
+  const gates = [];
+  const turn = () => new Promise((resolve) => { gates.push(resolve); });
+  const councilTurns = [];
+  let s = null;
+  const desk = createInstitutionDesk({
+    host: LATVIA,
+    game: {
+      channel: async ({ institutionId }) => ({ channel: { id: institutionId === "inst-2" ? "council-2" : "council-1" } }),
+      message: async () => ({ channel: { id: "council-1" } }),
+      chatTurn: async ({ chat }) => {
+        councilTurns.push(chat.id);
+        running += 1;
+        most = Math.max(most, running);
+        await turn();
+        running -= 1;
+      },
+      readChats: async () => s.store.docs.chat,
+      updateChats: async (fn) => s.store.updateChats(fn),
+    },
+  });
+  s = setup({
+    institution: desk,
+    replyTo: async () => {
+      running += 1;
+      most = Math.max(most, running);
+      await turn();
+      running -= 1;
+    },
+  });
+  s.store.docs.chat.push(
+    { id: "council-1", institutionId: "inst-1", countries: [{ code: RUSSIA, name: RUSSIA }, { code: ESTONIA, name: ESTONIA }], messages: [] },
+    { id: "council-2", institutionId: "inst-2", countries: [{ code: RUSSIA, name: RUSSIA }, { code: ESTONIA, name: ESTONIA }], messages: [] },
+  );
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  // A line in the Council: its governments' answer is under way.
+  await s.request(s.guest, { t: "say", id: id(2), thread: "council-1", to: [], text: "Moscow addresses the council." });
+  await s.clock.flush();
+  assert.equal(s.replies.length, 1);
+  // The Council's debate on a proposal, asked meanwhile, waits for it.
+  const debate = s.host.receive(s.guest, { t: "institution", id: id(3), call: "council", args: { institutionId: "inst-1", proposalId: "p1", kind: "debate" } });
+  // Another institution's Council is its own table: it goes on beside them.
+  const other = s.host.receive(s.guest, { t: "institution", id: id(4), call: "council", args: { institutionId: "inst-2", proposalId: "p9", kind: "debate" } });
+  await s.clock.flush();
+  assert.deepEqual(councilTurns, ["council-2"], "the first Council's turn has not begun");
+  gates.shift()();
+  await s.clock.flush();
+  assert.deepEqual(councilTurns, ["council-2", "council-1"], "its turn came once the answer was written");
+  assert.equal(most, 2, "one turn at a time at each table");
+  while (gates.length) gates.shift()();
+  await Promise.all([debate, other]);
+  await s.clock.flush();
+  assert.equal(s.ack(s.guest, id(3)).ok, true);
+  assert.equal(s.ack(s.guest, id(4)).ok, true);
+});
+
+// Any member closed or renamed an institution's Council for every member (the
+// gap audit of 2026-11-18, N6).
+test("nobody renames or closes an institution's Council for everyone at it", async () => {
+  const s = setup();
+  s.store.docs.chat.push({ id: "council-1", institutionId: "inst-1", player: RUSSIA, title: "Baltic Council", countries: [{ code: LATVIA, name: LATVIA }, { code: ESTONIA, name: ESTONIA }], messages: [] });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.hostPlayer, { t: "thread", id: id(2), op: "rename", thread: "council-1", title: "Riga's club" });
+  assert.match(s.ack(s.hostPlayer, id(2)).error, /keeps the institution's name/);
+  await s.request(s.guest, { t: "thread", id: id(3), op: "close", thread: "council-1" });
+  assert.match(s.ack(s.guest, id(3)).error, /stays open/);
+  const council = s.store.docs.chat.find((chat) => chat.id === "council-1");
+  assert.equal(council.title, "Baltic Council");
+  assert.notEqual(council.status, "closed");
 });
