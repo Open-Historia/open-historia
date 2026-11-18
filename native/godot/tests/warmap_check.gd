@@ -498,6 +498,18 @@ func _run() -> void:
 	await _focus([[1.0, 41.0], [12.0, 52.5]], 5.2)
 	await _shoot("w0-units-before-war")
 	_check("units are drawn as counters", (war.overlay.units as Array).size() >= 6, "%d counters" % (war.overlay.units as Array).size())
+	var written: Dictionary = {}
+	for unit_value in (war.overlay.units as Array):
+		written[str((unit_value as Dictionary).get("name", "")).strip_edges()] = true
+	var named: Array = (war.overlay.get("_layout") as Dictionary).get("units", [])
+	var as_written := not named.is_empty()
+	var wrapped := false
+	for entry_value in named:
+		var shown := str((entry_value as Array)[1])
+		wrapped = wrapped or shown.contains("\n")
+		as_written = as_written and written.has(shown.replace("\n", " "))
+	var long_name := str(war.overlay.call("_wrap", "Gulf of Guinea Strike Group", 11, 10.0))
+	_check("a unit is named as written under its counter, wrapped at ten ems where it is long", as_written and long_name.replace("\n", " ") == "Gulf of Guinea Strike Group" and long_name.contains("\n"), "%d names, wrapped here %s, long name %s" % [named.size(), str(wrapped), long_name.replace("\n", " / ")])
 	await _skip(7)
 	var fronts: Array = war._state.get("fronts", [])
 	_check("the engine opened a battlefield", fronts.size() > 0, ", ".join(PackedStringArray(fronts.map(func(front: Dictionary) -> String: return str(front.get("title", ""))))))

@@ -367,12 +367,13 @@ func _place_unit_names(taken: Array[Rect2]) -> Array:
 		if ratio < MapView.LABEL_PERSPECTIVE_CUTOFF:
 			continue
 		var name_size := _scaled(base_size, ratio)
+		var wrapped := _wrap(text, name_size, 10.0)
 		var centre: Vector2 = (entry[1] as Vector2) + Vector2(0, 1.35 * name_size)
-		var box := _boxed(centre, _text_size(text, name_size), 2.0 * ratio)
+		var box := _boxed(centre, _text_size(wrapped, name_size), 2.0 * ratio)
 		if not _fits(box, taken):
 			continue
 		taken.append(box)
-		out.append([centre, text, name_size, entry[4]])
+		out.append([centre, wrapped, name_size, entry[4]])
 	return out
 
 
