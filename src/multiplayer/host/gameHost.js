@@ -24,7 +24,8 @@
 import { createRoundMachine } from "./round.js";
 import { createWorldQueue } from "./worldQueue.js";
 import { SEAT_STATUS, createSeatBook } from "./seats.js";
-import { groundHeldBy, seatFoundings, seatSuccessions, withSeatLetGo, withSeatMoved } from "./foundings.js";
+import { formerNamesOf, groundHeldBy, seatFoundings, seatSuccessions, withSeatLetGo, withSeatMoved } from "./foundings.js";
+import { holdSeatRecords, returnSeatRecords } from "./heldSeats.js";
 import { sessionRecordOf } from "./sessionRecord.js";
 import { DEFAULT_SETTINGS, REPLY_MODES, gameMasterAllowed, roundSettingsOf } from "./settings.js";
 import { createHostAnswers, hostAnswersSpent, hostTurnsSpent } from "./hostAnswers.js";
@@ -580,6 +581,24 @@ export const createGameHost = ({
     if (!list(game?.humanCountries).length) return null;
     const { humanCountries: _gone, ...rest } = game;
     return rest;
+  });
+  // The host's own game is its own seat's once nobody shares it: what is
+  // another person's (their queued orders, their threads, the events only
+  // others know of) is held apart, unseen and undone, and given back when the
+  // session is taken up again, before anything else (host/heldSeats.js). The
+  // people are every seat a person's device holds, the AI's while away too.
+  const holdForLater = () => store.updateGameDocs?.((docs) => {
+    const people = seats.list().filter((seat) => seat.device).map((seat) => seat.country);
+    const held = holdSeatRecords(docs, { host: hostCountry, readers: formerNamesOf(docs.game, hostCountry), people });
+    if (!held.changed) return null;
+    log("info", "what the other players left is held until the session is taken up again", { held: held.held });
+    return { world: held.world, actions: held.actions, chats: held.chats, events: held.events };
+  });
+  const giveBackHeld = () => store.updateGameDocs?.((docs) => {
+    const back = returnSeatRecords(docs);
+    if (!back.changed) return null;
+    log("info", "what the other players left waiting is theirs again", { returned: back.returned });
+    return { world: back.world, actions: back.actions, chats: back.chats, events: back.events };
   });
 
   // The host's screen gone (a reload, a crash, its window closed): the round
@@ -2158,9 +2177,13 @@ export const createGameHost = ({
     start() {
       // A game taken up again: its seats checked against the world as it is
       // now, and its rounds go on from the one it was at.
+      // What the players left waiting while nobody shared it is theirs again
+      // first, so their seats follow their countries with it.
       if (restored) {
-        void queue.run("session-taken-up", () => followSeats())
-          .catch((error) => log("warn", "a saved seat did not follow its country", { error: String(error?.message || error) }));
+        void queue.run("session-taken-up", async () => {
+          await giveBackHeld();
+          await followSeats();
+        }).catch((error) => log("warn", "a saved seat did not follow its country", { error: String(error?.message || error) }));
       }
       if (restored?.started) {
         // The campaign's round as the save has it now; a session kept before
@@ -2191,7 +2214,17 @@ export const createGameHost = ({
       roundAbort?.abort(new Error("The shared game was stopped."));
       payers.stop();
       await pushing.catch(() => {});
-      await queue.run("end", forgetHumans).catch((error) => log("warn", "the shared game's players were not cleared", { error: String(error?.message || error) }));
+      await queue.run("end", async () => {
+        try {
+          await holdForLater();
+        } catch (error) {
+          // The players stay recorded, so the host's game holds it when it
+          // is next opened alone (runtime/seatsLeftBehind.js).
+          log("warn", "what the other players left could not be held", { error: String(error?.message || error) });
+          return;
+        }
+        await forgetHumans();
+      }).catch((error) => log("warn", "the shared game's players were not cleared", { error: String(error?.message || error) }));
     },
     pushViews,
     // Whether a device is banned from this game (session/host.js isBanned).

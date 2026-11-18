@@ -9,6 +9,7 @@ import { GameLoadingScreen, LOADING_CEILING_MS, useGameLoading } from "./gameLoa
 import { setOpenGameCountry, useLibraryState } from "../../runtime/library.js";
 import { playerAtWar } from "../../runtime/playerAtWar.js";
 import { enterGame, useGameEntered } from "../../runtime/gameEntry.js";
+import { holdSeatsLeftBehind } from "../../runtime/seatsLeftBehind.js";
 import { useActiveFeatures, activeWars } from "../../runtime/gameFeatures.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { brushedMetalUrl } from "./brushedMetal.js";
@@ -387,6 +388,12 @@ const Main = ({
   useEffect(() => {
     if (gameEntered && activeGame?.id && playedCountry !== null) setOpenGameCountry(activeGame.id, playedCountry);
   }, [gameEntered, activeGame?.id, playedCountry]);
+  // A game left while it was shared, opened alone: what is its other players'
+  // waits for the session to be taken up again (runtime/seatsLeftBehind.js).
+  useEffect(() => {
+    if (!gameEntered || !activeGame?.id || inSharedGame()) return;
+    holdSeatsLeftBehind().catch((error) => console.warn("[shared game] what the other players left could not be held:", error?.message || error));
+  }, [gameEntered, activeGame?.id]);
   // The game menu names the campaign the way the library does. (Not before a
   // game is opened: looking the name up reads the game's world and the country
   // tiles.)

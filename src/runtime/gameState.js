@@ -4338,6 +4338,18 @@ export const normalizeWorldState = (world) => {
         .slice(0, 2000)
         .map(([id, seen]) => [normalizeOptionalString(id), { posture: seen.posture ?? null, status: seen.status ?? null }])),
     } : {}),
+    // And what those players left waiting while nobody shares the game
+    // (multiplayer/host/heldSeats.js): their orders, threads and secret
+    // events, kept as they were, read by nothing until the session is taken
+    // up again. Only a world that has the key keeps it.
+    ...(Object.prototype.hasOwnProperty.call(nextWorld, "seatsHeld") && nextWorld.seatsHeld && typeof nextWorld.seatsHeld === "object" && !Array.isArray(nextWorld.seatsHeld) ? {
+      seatsHeld: {
+        orders: normalizeArray(nextWorld.seatsHeld.orders).filter((row) => row && typeof row === "object").slice(-4000),
+        threads: normalizeArray(nextWorld.seatsHeld.threads).filter((row) => row && typeof row === "object").slice(-1000),
+        events: normalizeArray(nextWorld.seatsHeld.events).filter((row) => row?.event && typeof row.event === "object").slice(-4000),
+        turns: normalizeArray(nextWorld.seatsHeld.turns).filter((row) => row && typeof row === "object" && Array.isArray(row.orders)).slice(-400),
+      },
+    } : {}),
     // And each such player's seal for its own agents' traffic (spySeal.js
     // sealOf), by country. world.spySeal stays the game country's. Only a world
     // that has the key keeps it.

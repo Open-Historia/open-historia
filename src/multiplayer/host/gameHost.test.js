@@ -120,6 +120,16 @@ const createStore = () => {
       if (next.actions) docs.actions = next.actions;
       if (next.events) docs.events = next.events;
     },
+    // And the threads with them, as one commit (host/heldSeats.js).
+    updateGameDocs: async (fn) => {
+      const next = await fn({ world: structuredClone(docs.world), actions: structuredClone(docs.actions), game: structuredClone(docs.game), events: structuredClone(docs.events), chats: structuredClone(docs.chat) });
+      if (!next) return;
+      if (next.world) docs.world = next.world;
+      if (next.actions) docs.actions = next.actions;
+      if (next.events) docs.events = next.events;
+      if (next.chats) docs.chat = next.chats;
+      if (next.game) docs.game = next.game;
+    },
   };
 };
 
@@ -127,6 +137,8 @@ const setup = (options = {}) => {
   const clock = createClock();
   const store = createStore();
   if (options.world) store.docs.world = structuredClone(options.world);
+  // A game as an earlier sitting left it.
+  if (options.docs) Object.assign(store.docs, structuredClone(options.docs));
   const sent = [];
   const resolved = [];
   const replies = [];
@@ -2273,6 +2285,42 @@ test("the session is saved with the game and taken up again: every seat its devi
   t.host.join(other);
   await t.clock.flush();
   assert.equal(t.to(other, "lobby").length, 0);
+});
+
+// The review of 2026-11-18, core 3 and views 5: after Stop, the host's single-player game showed every guest's queued
+// orders, private threads and secret events as its own, and its skips carried the orders out.
+test("after Stop the host's own game is its own seat's: a guest's orders, threads and secret events wait, and come back when the session is taken up", async () => {
+  const campaign = "game-baltic";
+  const s = setup({ campaign });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "order", id: id(2), text: "Invade Latvia." });
+  await s.request(s.guest, { t: "say", id: id(3), thread: null, to: [ESTONIA], text: "Moscow to Tallinn, privately." });
+  await s.request(s.hostPlayer, { t: "say", id: id(4), thread: null, to: [RUSSIA], text: "Riga to Moscow." });
+  s.store.docs.events.push(
+    { id: "e-public", date: "2014-04-02", title: "Talks open", description: "" },
+    { id: "e-secret", date: "2014-04-03", title: "Moscow's agent turned", description: "", audience: [RUSSIA] },
+    { id: "e-host-knows", date: "2014-04-04", title: "Riga learns", description: "", audience: [LATVIA, RUSSIA] },
+  );
+  const before = structuredClone(s.store.docs);
+  await s.host.stop();
+  const docs = s.store.docs;
+  assert.deepEqual(docs.actions.map((action) => action.id), ["order-lv"], "the host's own order only");
+  assert.deepEqual(docs.chat.map((chat) => chat.id), ["chat-lv-est"], "the guest's thread and the thread between the two people wait");
+  assert.deepEqual(docs.events.map((event) => event.id), ["e-public", "e-host-knows"], "an event only the guest's government knows waits");
+  assert.equal(docs.game.humanCountries, undefined, "single player again");
+  assert.equal(JSON.stringify([docs.actions, docs.chat, docs.events]).includes("Invade Latvia"), false);
+  assert.equal(JSON.stringify([docs.actions, docs.chat, docs.events]).includes("privately"), false);
+
+  // Shared again another day: everything is back where it was, before anything else.
+  const t = setup({ campaign, docs, restored: sessionFromRecord(s.store.shared.at(-1), { campaign, hostDevice: "device-host" }) });
+  await t.clock.flush();
+  assert.deepEqual(t.store.docs.actions, before.actions);
+  assert.deepEqual(t.store.docs.chat.map((chat) => chat.id).sort(), before.chat.map((chat) => chat.id).sort());
+  assert.deepEqual(t.store.docs.events.map((event) => event.id), before.events.map((event) => event.id), "each event where it stood");
+  assert.equal("seatsHeld" in t.store.docs.world, false);
 });
 
 test("a player who holds a seat is let back in however many newcomers came meanwhile; a newcomer only while there is a seat", async () => {
