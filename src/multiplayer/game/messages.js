@@ -79,7 +79,13 @@ const DIFFICULTY_IDS = Object.freeze(DIFFICULTY_LEVELS.map((level) => level.id))
 // device is kept with the goal ("goalProgress"). Version 15: those requests,
 // orders kept by the screen's own id ("order" `ref`, "reword"), and the
 // world's language among the host's settings (host/settings.js `language`).
-export const SHARED_GAME_VERSION = "15";
+// Version 16 (the gap audit of 2026-11-18): the lobby carries the round's rules
+// (`rules`) and the Game Master's log (`gameMaster`); settings gain
+// `hostAnswers`, `postsPerRound`, payment "cycle" and the Game Master; a view
+// carries the player's advisor conversation and the Rostra feed as documents
+// of their own; new requests "pay"/"paid"/"payLookup"/"payStop", "advisor",
+// "answer", "ratings"/"ownRatings"; peace offers in a view are their parties'.
+export const SHARED_GAME_VERSION = "16";
 
 // The documents a player's view holds: the game itself first (a screen that
 // asks for one before the first view arrives waits for it), then the three a
