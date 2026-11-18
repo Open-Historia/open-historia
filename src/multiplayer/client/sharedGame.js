@@ -350,8 +350,11 @@ export const hostSharedGame = async ({ settings, name, resuming = false } = {}) 
   }
   // The engine page takes a moment to boot and to read the game, and a good
   // deal longer on a machine busy with something else: ask until it answers.
+  // A game whose start the engine is finishing first (host/gameStart.js: its
+  // backstory may be a request to the host's AI) is waited for while it says
+  // so, however long the AI takes.
   const giveUpAt = Date.now() + ENGINE_START_MS;
-  while (Date.now() < giveUpAt && !state.engine?.open && state.mode === "opening") {
+  while ((Date.now() < giveUpAt || state.engine?.preparing === true) && !state.engine?.open && state.mode === "opening") {
     screen.control("open", { settings, name: name || "Host" });
     await new Promise((resolve) => setTimeout(resolve, 1000));
     if (state.engine?.error) break;

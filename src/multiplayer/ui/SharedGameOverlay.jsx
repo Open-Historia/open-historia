@@ -230,7 +230,9 @@ const HostInvite = ({ shared }) => {
 const Lobby = ({ shared, me }) => {
   const { lobby, role, error } = shared;
   // Which step of joining this is, once it is past looking for the host.
-  const stage = lobby ? "" : joinStage(shared);
+  // (The host's engine may first finish the game's start, host/gameStart.js:
+  // its backstory can be a request to the host's AI, which takes a while.)
+  const stage = lobby ? "" : role === "host" && shared.engine?.preparing ? "Setting up the start of the game before anyone joins…" : joinStage(shared);
   const waiting = !lobby && role !== "host" && !error;
 
   // Under way, where the host lets nobody new in: nothing to choose.

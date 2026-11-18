@@ -33,7 +33,8 @@ import { setHostingSharedGame } from "../../runtime/humanPolities.js";
 import { discardHeldTurns, endSimulation, enterSimulation } from "../../Game/AI/simulationStatus.js";
 import { getDebugLogEntries, logDebugEvent, setDebugLogPersistence, subscribeToDebugLog } from "../../runtime/debugLog.js";
 import { GENERATION_COMPLETE_EVENT } from "../../Game/AI/telemetry.js";
-import { assessPoliticalLandscape, checkDemandReply, declineInteractiveOffer, hasCompiledParties, hasCountryStatSheet, takePoliticalLandscape, readCountryForPlayer, runChatActionBatch, setAsideActiveInteractive, simulateTimelineJump, takeCountryStatSheet, warRoomChart } from "../../Game/AI/gameplay.js";
+import { assessPoliticalLandscape, checkDemandReply, declineInteractiveOffer, hasCompiledParties, hasCountryStatSheet, maybeGeneratePregameHistory, maybeOpenScenarioFronts, takePoliticalLandscape, readCountryForPlayer, runChatActionBatch, setAsideActiveInteractive, simulateTimelineJump, takeCountryStatSheet, warRoomChart } from "../../Game/AI/gameplay.js";
+import { finishGameStart } from "./gameStart.js";
 import { lendBoards, returnBoards } from "./seatBoards.js";
 import { createLoopbackEngineSide } from "../transport/loopback.js";
 import { createHostSession } from "../session/host.js";
@@ -263,6 +264,16 @@ const boot = async () => {
   let network = "";
   let hostStatus = null;
   let failure = "";
+  // Finishing the game's start before anyone joins (host/gameStart.js): its
+  // backstory may be a request to the host's AI, which takes a while.
+  let preparing = false;
+  // The fronts a scenario begins with, tried again before each round when they
+  // could not be built yet; asks nothing.
+  const openPendingFronts = () => finishGameStart({
+    fronts: () => maybeOpenScenarioFronts(),
+    read: () => store.read(),
+    log: (text, detail) => logDebugEvent("shared game", `${text}: ${detail}`, undefined, { problem: true }),
+  });
 
   const loopback = createLoopbackEngineSide({
     onHello: ({ device, name }) => {
@@ -304,6 +315,7 @@ const boot = async () => {
       campaign,
       relays: relays ?? null,
       error: failure || null,
+      preparing,
       lobby: hostStatus?.lobby ?? null,
       round: hostStatus?.round ? round : null,
       players,
@@ -348,6 +360,23 @@ const boot = async () => {
     // nothing written, and an offer still waiting is let pass.
     if (docs.world?.activeInteractive) await setAsideActiveInteractive();
     if (docs.world?.interactiveOffer) await declineInteractiveOffer();
+    // The game's start, finished here before anyone joins (host/gameStart.js):
+    // its backstory and the fronts its scenario begins with, the calls single
+    // player makes when its player first enters the game, which no page of a
+    // shared game may make. In the world's language, set above. Nothing to do
+    // for a game already under way.
+    preparing = true;
+    report();
+    const startProblems = await finishGameStart({
+      backstory: () => maybeGeneratePregameHistory(),
+      fronts: () => maybeOpenScenarioFronts(),
+      read: () => store.read(),
+      log: (text, detail) => logDebugEvent("shared game", `${text}: ${detail}`, undefined, { problem: true }),
+    }).finally(() => {
+      preparing = false;
+    });
+    // The game as its start left it.
+    const started = await store.read();
     // The game and its scenario, as the library knows them: a player must open
     // the same scenario to see the same map.
     const library = getLibraryState();
@@ -377,13 +406,15 @@ const boot = async () => {
       // must be this map, or it draws another world.
       scenario: { id: clean(entry?.scenarioId).slice(0, 120), name: clean(scenario?.name || entry?.name || "Open Historia").slice(0, 120), hash: fingerprint },
       features: sharedGameFeaturesOf(getActiveFeatures()),
-      countries: gameCountries(docs.world, docs.game),
+      countries: gameCountries(started.world, started.game),
       countriesOf: (now) => gameCountries(now.world, now.game),
       campaign,
       restored,
-      campaignRound: Number(docs.game?.round) || 0,
+      campaignRound: Number(started.game?.round) || 0,
       store,
       resolveRound: async ({ daysPerRound, humanCountries, signal }) => {
+        // Fronts the game began with that could not be built when it opened.
+        await openPendingFronts();
         // The game's own lock, waited for and taken in one step: a stat sheet
         // being written is waited out, and none is written until the round has
         // landed (it is an entry in the queue already, so nothing else is).
@@ -527,7 +558,8 @@ const boot = async () => {
     writeInOrder = (label, write) => hosting.write(label, write);
     gameHost.start();
     session.start();
-    failure = "";
+    // What of the game's start could not be done, said to the host.
+    failure = startProblems.join(" ");
     report();
     void probeNetwork().then((kind) => {
       network = kind;
