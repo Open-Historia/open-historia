@@ -54,7 +54,7 @@ const walkFiles = (dir, found = []) => {
   return found;
 };
 
-const NOT_ON_NATIVE = new Set(["2026-11-smoother-zooming", "2026-11-picture-edges-and-strike-targets", "2026-11-less-for-the-gpu", "2026-11-mac-opening", "2026-11-slower-welcome", "2026-11-smoother-lighter-map", "2026-11-battlefields-on-3d-terrain"]);
+const NOT_ON_NATIVE = new Set(["2026-11-smoother-zooming", "2026-11-picture-edges-and-strike-targets", "2026-11-less-for-the-gpu", "2026-11-mac-opening", "2026-11-slower-welcome", "2026-11-smoother-lighter-map", "2026-11-battlefields-on-3d-terrain", "2026-11-installer-privacy-page", "2026-11-advisor-group-silent-repair", "2026-11-country-stats-reliability", "2026-11-every-language-alike", "2026-11-custom-unit-types", "2026-11-whole-coalitions", "2026-11-sturdier-wars", "2026-11-political-world-prehistory", "2026-11-war-music-only-in-war", "2026-11-advisor-country-tools", "2026-11-stats-in-dollars", "2026-11-features-off-left-out"]);
 
 export const register = (ctx) => {
   const { engine, api, emit, plain, storage, clean, list, cacheDir, standIn } = ctx;

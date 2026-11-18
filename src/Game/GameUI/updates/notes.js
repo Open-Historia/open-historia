@@ -54,6 +54,107 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-11-native-beta-catch-up",
+    kind: "minor",
+    date: "2026-11-17",
+    banners: [
+      {
+        title: "Advisor group replies recover from invalid silence",
+        items: [
+          "Group chats can recover when a silent advisor adds private memory by mistake, without asking the other advisors to speak again.",
+          "A silent advisor's private memory is never shown or saved; invalid replies still have to pass validation before joining the meeting.",
+        ],
+      },
+      {
+        title: "More reliable country stats",
+        items: [
+          "Your scenario's starting country figures stay intact when you first open Stats.",
+          "Stats generation handles regional figures from more AI models without losing valid rows.",
+          "Rebuilding country stats still checks the country's territory and requires economic evidence.",
+          "Game Master corrections no longer put standard economy values into custom stats, preventing a Stats refresh validation error.",
+        ],
+      },
+      {
+        title: "Every language plays alike",
+        items: [
+          "The game no longer looks for English words to decide what happens. It reads what the AI records and the names on your map, so a game in any language plays like one in English.",
+          "Land, armies and buildings move only by places written with their exact map names. A name the map doesn't have is left out and noted, never guessed, and never costs another AI request.",
+          "Peace terms, treaties and puppet states use the game's own record form, so a peace made in French or Chinese changes the map just as one made in English.",
+          "Countries, parties, leaders, wars and agents named in any alphabet are told apart, each country is drawn in a colour of its own, and renaming one written in Cyrillic or Chinese moves its regions with it.",
+          "History, storylines, scripted events, Rostra posts and the Advisor's letters and searches written in Chinese, Japanese or Thai now work like any other.",
+          "Scenario authors: a region type is water only when its Water switch is on, your own structure kinds and seasons are drawn as you pick them, and populations are typed in digits.",
+        ],
+      },
+      {
+        title: "Unit types of your own",
+        items: [
+          "Scenario authors can create their own unit types under Wars in the scenario editor's Features tab, each with a name, an icon and a kind.",
+          "Set how hard each type hits, how much it can take and how fast it moves: a dragon can be an air unit five times as strong.",
+          "Units of these types fight by their own figures in the air, on land and at sea, and only the countries you choose can raise them.",
+        ],
+      },
+      {
+        title: "Whole coalitions, steadier records",
+        items: [
+          "Every member of a coalition now fights on its battlefields with troops of its own: a battlefield used to seat eight a side.",
+          "Treaties, puppet changes, battlefield orders and storylines stay on the event the AI wrote them for, even when it lists a period's events out of date order.",
+          "The map changes only by the region changes an event records, in every language: a capture or annexation told in words alone no longer moves it.",
+          "War news such as rationing, patrols and artillery fire is no longer hidden or thrown out over its English wording, and a country can ration in the same turn its war begins.",
+        ],
+      },
+      {
+        title: "Sturdier wars",
+        items: [
+          "A war that ends and flares up again is now a new war, so the first keeps its history, treaty and reparations.",
+          "Every member of a coalition counts, however large it is: a front opens wherever any of them borders the enemy.",
+          "Ongoing wars, open peace offers, unanswered calls to arms and unpaid reparations are never dropped from the record.",
+          "A time skip no longer asks the AI again over a war record that does not fit: it is fixed or left out, and the next turn is told.",
+          "A pre-game history is no longer thrown away over one war, and a war already being fought is never set up twice.",
+        ],
+      },
+      {
+        title: "Political World and starting history",
+        items: [
+          "Small parties now stay individually visible in the Political World party list, even when the chart groups them together.",
+          "Parties now use freeform Ideology and Political position fields in the Scenario Editor and Country Editor.",
+          "Generated political parties can use more flexible ideology and political-position descriptions.",
+          "Create and edit starting relationships, agreements and ongoing storylines without generating pre-game history.",
+          "Set relationship scores, treaty signatories, guarantees and access rights, and storyline participants, pressure and status.",
+          "Existing treaties generated with Political World can now be edited or removed from your scenario's starting history.",
+        ],
+      },
+      {
+        title: "War music only in war",
+        items: [
+          "Opening the War Room on troops gathered at a border in peacetime no longer plays the war music; it plays only while your country is in a conflict.",
+        ],
+      },
+      {
+        title: "Steadier advisers and country tools",
+        items: [
+          "Advisers keep earlier conversations intact, and new Action proposals still need your review instead of changing orders already completed.",
+          "Interactive Events now show the ending of the scene you played, even when other events occur during the same time skip.",
+          "Scenario-defined national Stats can be edited without a territorial baseline, while unset values remain unset.",
+          "Country Editor and Game Master can correct intelligence, military capability, war weariness and resources without overriding calculated Military Power.",
+          "Choose GDP display currency in scenarios, new games or Settings: dollars, euros, pounds, rubles, rupees or yuan.",
+          "Invalid battle records are rejected instead of being silently accepted as the result of a war.",
+        ],
+      },
+      {
+        title: "Stats in dollars",
+        items: [
+          "GDP and GDP per person are now counted and shown in 2026 US dollars instead of euros. Figures in games already under way keep their numbers.",
+        ],
+      },
+      {
+        title: "Switched-off features left out",
+        items: [
+          "The AI is no longer told about what a scenario switched off: no spies or intelligence rating without espionage, and no aircraft or fleets without air units or navies.",
+        ],
+      },
+    ],
+  },
+  {
     // A Beta maintenance release for legacy Projects and their saved state.
     // A recovery operation always creates a separate game: old work is never
     // silently dropped just to fit the board, and in-play work can be shelved
@@ -844,6 +945,20 @@ const NEW_UPDATES = [
     ],
   },
   {
+    id: "2026-11-native-card-badges",
+    kind: "minor",
+    date: "2026-11-10",
+    banners: [
+      {
+        title: "Game cards keep their labels in place",
+        items: [
+          "A long scenario name on a game card no longer runs over the card beside it: it moves to a line of its own and is cut short, and pointing at it shows the whole name.",
+          "The labels at the top of each game card are back to their usual height, with their text centred.",
+        ],
+      },
+    ],
+  },
+  {
     // "make it so in the scripted events there is a mini map thing so you can easily select regions for things instead
     // of needing to manually type out each one"; "upgrade the scripted events editor so there is an easy thing to add
     // Impacts yourself"; "make it so events can remove all claims on territory on a country" (the owner, 2026-11-09):
@@ -1502,6 +1617,20 @@ const NEW_UPDATES = [
     ],
   },
   {
+    id: "2026-11-native-slower-welcome",
+    kind: "minor",
+    date: "2026-11-06",
+    banners: [
+      {
+        title: "A slower welcome",
+        items: [
+          "The first-time setup's greeting now stays on each language for about four seconds, and fades one out before the next fades in.",
+          "The Diplomatic map mode's button turns blue when it is chosen, like the other map modes.",
+        ],
+      },
+    ],
+  },
+  {
     // A player's report (2026-11-06, 1836 France): every time skip fell back to the stand-in events, "Storyline
     // storyline-fr-franchise-1836 lowers pressure by 47 point(s), but its linked event(s) contain escalation/failure
     // cues": reforms that passed over a bloc that "rejects" them. The check read the events for words; "dont do
@@ -1919,6 +2048,22 @@ const NEW_UPDATES = [
     ],
   },
   {
+    id: "2026-11-native-fits-the-window",
+    kind: "minor",
+    date: "2026-11-05",
+    banners: [
+      {
+        title: "In proportion to the window",
+        items: [
+          "The game now grows with its window: make the window larger and everything in it grows in the same proportion, on a laptop as on a 4K monitor. In a window smaller than usual, everything keeps its usual size.",
+          "Rounded cards and buttons, and the arrows of these notices, no longer show a bright rim along their curves.",
+          "The message that the game was updated now shows once, after the update, and names the day of the new build.",
+          "If the game cannot start because the connection it uses on your computer is taken, it says so instead of closing without a word.",
+        ],
+      },
+    ],
+  },
+  {
     // A Mac report, 2026-11-04: the app "opens then immediately closes". The packed Mac build starts as far as its
     // window in a simulated run; what is left to it is said and logged now (electron/main.cjs app.alreadyRunning,
     // window.shown, the system and folder in app.files, updater.relaunch; a launch update from a translocated copy waits for the next start; server.js EADDRINUSE through __ohFatal) and an Intel Mac's banner
@@ -2011,6 +2156,76 @@ const NEW_UPDATES = [
         title: "The Aircraft key works",
         items: [
           "In the War Room, the Aircraft key is no longer greyed out for a country whose only aircraft are the ones flying over its fronts: those can be sent to strike now.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "2026-11-native-sharp-at-any-size",
+    kind: "minor",
+    date: "2026-11-04",
+    banners: [
+      {
+        title: "Sharp at any size",
+        items: [
+          "The vault door, the round flags on the war map and the dot that marks an unread chat now grow with the rest of the interface on large screens, and stay sharp.",
+        ],
+      },
+      {
+        title: "The Country drawer and the Advisor, redrawn",
+        items: [
+          "The Country drawer is laid out anew: the whole flag in its header, tabs that stay in view as you scroll, relations you can search and sort, compact index cards, a leaderboard for each ranking, and a country's parties and its power blocs shown apart.",
+          "The Advisor's conversations look new too: replies read as open text beside a narrow rail, your own messages stay compact on the right, and the contact list is a tidy ledger.",
+        ],
+      },
+      {
+        title: "Map pictures keep their edges",
+        items: [
+          "A picture you add to a scenario's maps in the Workshop now keeps the edges its setup gave it, Q-BAM's exact ones included, so it stays lined up with the coastlines in the Workshop and in the game.",
+        ],
+      },
+      {
+        title: "Strike targets by name",
+        items: [
+          "In the War Room, an air strike sent at troops names the town nearest them plainly, without \"city:\" in front of it.",
+        ],
+      },
+    ],
+  },
+  {
+    // The interface as large against any screen as on 1080p (Hotkeys.resolution_scale, DPITexture icons), Advisor M2-M3C, the standing goal's progress and the war room's button beside a narrower dock, as the native app has them since lab native/godot-app took beta e07fb83e (2026-11-04).
+    id: "2026-11-native-advisor-contacts",
+    kind: "minor",
+    date: "2026-11-04",
+    banners: [
+      {
+        title: "The same size on every screen",
+        items: [
+          "On a 1440p, 4K or larger screen, the game is now as large against the screen as on a 1080p one, with sharp text and icons. Screens of 1080p or smaller look as before.",
+          "Move the window to a screen of another size and it rescales to match. Ctrl and + or − still make it larger or smaller.",
+        ],
+      },
+      {
+        title: "Advisors and contacts",
+        items: [
+          "Rename your chief advisor and give them a new title with Edit beside them in the list of contacts. Restore scenario defaults brings the original back and keeps the conversation.",
+          "Each contact has a type: Advisor / Minister, Citizen / Civilian, Foreign Official or Other Character. A minister can open Projects and propose Actions; any other contact knows only what is public.",
+          "An Action your advisor proposes now waits on a card in the conversation: Discuss talks it over first, and Proceed / Queue puts it on your list.",
+          "Retire asks first. The conversation and personality are kept, and you can restore the contact later.",
+        ],
+      },
+      {
+        title: "How far your goal has come",
+        items: [
+          "Under your standing goal in Actions, Assess progress asks how far it has come: a score out of 100, the change since the last reading, what was reached, what is in the way and the next steps.",
+          "Each reading is one request, so it is made only when you ask. A reworded goal starts again.",
+        ],
+      },
+      {
+        title: "Also in this update",
+        items: [
+          "A scenario's events set for its first day now happen in the first time skip, and several set for the same day all happen.",
+          "With Social media off, the War Room button stands right beside the dock.",
         ],
       },
     ],
@@ -2644,6 +2859,23 @@ const NEW_UPDATES = [
           "The desktop app is a smaller download: about 40 MB less on Windows.",
           "It takes up about 100 MB less space once installed.",
           "Updates have far fewer files to put in place, so they finish sooner.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "2026-11-native-editor-map",
+    kind: "minor",
+    date: "2026-11-01",
+    banners: [
+      {
+        title: "A clearer map in the map editor",
+        items: [
+          "The map in the map editor now looks and works as it does in the desktop app: every region is outlined, filled as its region type says, over the plain basemap you chose.",
+          "Zoom out until the whole world fills the window, or much closer in, with the + and − buttons in the corner, a double-click, or a box drawn with Shift held.",
+          "Each turn of the mouse wheel zooms a third of a level, smoothly, and the map glides on for a moment after you drag it.",
+          "Region names show only where they fit inside their region, and crowded cities and units make room for each other instead of piling up.",
+          "A selected region gets a light outline, and a paint stroke shows each region in the colour it is about to take.",
         ],
       },
     ],

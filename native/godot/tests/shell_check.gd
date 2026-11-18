@@ -7,8 +7,8 @@ var failures: PackedStringArray = []
 var played: PackedStringArray = []
 var only := ""
 
-const NEWEST_UPDATES := ["2026-11-native-android-community-keeps-answering", "2026-11-native-android-lighter-community","2026-11-native-android", "2026-11-older-history-kept", "2026-11-armies-on-their-own-land-stay-supplied", "2026-11-civil-wars-split-countries", "2026-11-overthrown-governments-rename"]
-const NEWEST_TITLES := ["Older history kept", "Armies on their own land stay supplied", "Civil wars split countries", "Overthrown governments change the map"]
+const NEWEST_UPDATES := ["2026-11-native-beta-catch-up", "2026-11-projects-recovery-safeguards", "2026-11-diplomatic-atlas", "2026-11-projects-that-build", "2026-11-diplomatic-correspondence-refresh", "2026-11-national-stats-improvements", "2026-11-wars-end-with-an-outcome", "2026-11-advisor-action-completeness"]
+const NEWEST_TITLES := ["Projects, Safely Preserved", "A better diplomatic inbox", "More reliable national statistics", "Wars end with an outcome"]
 const RELEASE := "2026-11-version-2-5"
 
 
