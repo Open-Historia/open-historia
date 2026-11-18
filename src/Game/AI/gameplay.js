@@ -33,6 +33,7 @@ import { MILITARY_CHANGE_RULE, describeMilitaryStanding } from "../../runtime/mi
 import { warSettingsOf } from "../../runtime/warSettings.js";
 import { STATS_BACKEND_FIELD, conflictSheetTargets, hasStatsBackend, readableFigure, statsBackendInstruction, statsBackendOf, statsBackendPatch, statsBackendTurnRule } from "../../runtime/statsBackend.js";
 import { CONFLICT_BACKENDS_MOST, conflictBackendsRequest, readConflictBackends } from "./conflictBackends.js";
+import { compactStatSheet, describeStatsRefreshEvidence, deviceStorage, lastStatsRefreshRound, pickStatsRefreshCountries, readStatsRefreshEvery, readStatsRefreshUpdates, rememberStatsRefreshRound, statsRefreshPatch, statsRefreshRequest, statsRefreshRunDue } from "./statsRefresh.js";
 import { MILITARY_BATCH_MOST, militaryRatingRequest, militaryTargets, nextRatingBatch, ratedFigures, ratedScaleOf, readMilitaryRatings, waitForRating, wantsRating } from "./militaryRating.js";
 import { peopleFor } from "../../runtime/militaryPower.js";
 import {
@@ -5263,6 +5264,11 @@ const afterJumpWritten = async (applied, { applyArgs, signal, phases = null, dat
     console.warn("[institution autonomy] post-turn ballot pass failed; the completed turn remains committed.", error);
   }
   reportJumpRequests(requests);
+  // The stat sheets kept up to date, at the pace the player picks (Settings,
+  // AI requests; Off by default): after the skip's requests are reported, as a background request
+  // of its own that waits for the world to be idle. Never awaited: the skip is
+  // done, and nothing here may hold it or count against it.
+  void refreshStaleStatSheets().catch(() => null);
   // Where the skip's time and requests went, in one line (skipPhases.js),
   // and on the result for the panel's own log entry.
   const phaseSummary = phases?.finish();
@@ -12602,15 +12608,19 @@ const buildTargetEconomicEvidence = ({ bundle, statCode, previous, normalizedWor
     text: lines.join("\n"),
     relevantIds: relevant.map((event) => event.id).slice(-STATS_ACCOUNTED_EVENT_LIMIT),
     selectedFreshIds: selectedFresh.map((event) => event.id),
+    // The same events as records, for a prompt that tells them without their
+    // ids (statsRefresh.js describeStatsRefreshEvidence).
+    freshEvents: selectedFresh,
     unaccountedCount: unaccounted.length,
   };
 };
 
 
 // The automatic Stats refresh of tracked countries, a request after the skips
-// it fell due on, is gone: "remove the stuff relating to those things
-// entirely, they dont need to be part of the game" (the owner, 2026-11-07). A
-// save's countryStatsTracking is left as it is and no longer read.
+// it fell due on, went on 2026-11-07, and with it the Historical tracking list
+// (a save's countryStatsTracking is left as it is and no longer read). It came
+// back on 2026-11-18 as a background request after the skip, never in it, on
+// a schedule the player sets: refreshStaleStatSheets.
 
 // "Stats should be generated for countries you're going into conflict with,
 // either if you deploy a front on them, if you redirect a front to attack them
@@ -14364,6 +14374,164 @@ export const pendingCountryStatSheet = (target) => {
 export const ensureCountryAssessed = (target, options = {}) =>
   ensureCountryStatSheet(target, { ...options, rateIntelligence: true }).then(() => ensureIntelligenceRated(target, options));
 
+// ---- Stat sheets kept up to date after time skips ---------------------------
+//
+// The background refresh, at the pace the player picks in Settings, Off by
+// default and as one of the picker's choices (statsRefresh.js says what, when
+// and why). Started once a time skip is written
+// (afterJumpWritten), and a request of its own, never the skip's: a first
+// reading like the others (background, under the day's cap, after whatever is
+// running, one at a time a campaign, silent when it fails). At most one
+// request every so many skips, for the stale sheets: the players' own first.
+// What it is told goes through the same write as the Stats pane's Refresh
+// (persistStatSheet), held to the same continuity rules.
+//
+// In a shared game only the host's engine runs it, and only while its own AI
+// answers for everyone (runtime/sharedReadings.js): with each player's own AI
+// the host's AI makes no background readings, and a guest's page never asks.
+export const refreshStaleStatSheets = ({ reason = "after a time skip" } = {}) => {
+  const every = readStatsRefreshEvery();
+  if (!every || inSharedGame() || !hostReadsFigures()) return Promise.resolve(null);
+  return firstReading("stats refresh", "the stale stat sheets", reason, async () => {
+    const campaign = activeCampaignId();
+    await waitForSimulationIdle();
+    const bundle = await readGameStateBundle({ force: true });
+    const round = Math.max(0, Math.trunc(Number(bundle.game?.round) || 0));
+    const storage = deviceStorage();
+    if (!statsRefreshRunDue({ every, round, lastRound: lastStatsRefreshRound(storage, campaign) })) return null;
+    const world = normalizeWorldState(bundle.world);
+    const definition = await loadStatSheetDefinition();
+    const keys = definition.custom ? statSheetKeys(definition) : [];
+    const currentDate = normalizeString(bundle.game?.gameDate || bundle.game?.startDate);
+    const players = humanCountriesOf(bundle.game);
+    // Every country with a whole sheet, and what has changed under it since.
+    const groups = new Set(Object.keys(world.groups || {}).map((key) => key.toLowerCase()));
+    const looked = new Map();
+    const candidates = [];
+    for (const [name, raw] of Object.entries(world.countryStats || {})) {
+      if (!normalizeString(name) || groups.has(name.toLowerCase())) continue;
+      const previous = normalizeCountryStatSheet(raw);
+      let fresh = 0;
+      if (definition.custom) {
+        if (!isCompleteCustomCountryStatSheet(previous, keys)) continue;
+        const evidence = customStatEvidenceOf({ bundle, world, statCode: name, previous, currentDate });
+        const decision = customStatRefreshDecision({
+          previousValues: normalizeCustomStatValues(previous?.customStats, definition, { partial: true }),
+          requiredKeys: keys,
+          prior: previous?.continuity,
+          current: evidence,
+        });
+        fresh = decision.regenerate ? Math.max(1, evidence.newEventCount) : 0;
+        looked.set(name, { previous, evidence });
+      } else {
+        if (!isCompleteCountryStatSheet(previous)) continue;
+        const economic = buildTargetEconomicEvidence({ bundle, statCode: name, previous, normalizedWorld: world });
+        fresh = economic.unaccountedCount;
+        looked.set(name, { previous, economic });
+      }
+      candidates.push({ name, assessedRound: previous?.continuity?.assessedRound, fresh });
+    }
+    // Those at war with a player come after the players' own.
+    const playing = new Set(players.map((name) => normalizeString(name).toLowerCase()));
+    const opponents = [];
+    for (const war of normalizeArray(world.wars)) {
+      if (!war || war.status === "ended") continue;
+      const sides = [normalizeArray(war.sideA), normalizeArray(war.sideB)];
+      sides.forEach((side, index) => {
+        if (side.some((name) => playing.has(normalizeString(name).toLowerCase()))) opponents.push(...sides[1 - index]);
+      });
+    }
+    const names = pickStatsRefreshCountries({ candidates, players, opponents, round, every }).filter((name) => looked.has(name));
+    if (names.length === 0) return null;
+    // The scenario's strategic indices, as the Stats pane's own sheet has them.
+    const loadedRows = definition.custom ? [] : normalizeArray((await loadStatIndexDefinition({ definition }))?.rows);
+    const rows = definition.custom ? [] : loadedRows.length ? loadedRows : DEFAULT_STAT_INDEX_ROWS;
+    const { systemPrompt, userMessage, asked } = statsRefreshRequest({
+      date: currentDate,
+      rules: normalizeString(world.simulationRules),
+      sheet: definition.custom ? { description: describeStatSheetDefinition(definition), keys } : null,
+      indices: definition.custom ? "" : describeStatIndexRows(rows),
+      indexKeys: rows.map((row) => row?.key),
+      countries: names.map((name) => {
+        const { previous, economic, evidence } = looked.get(name);
+        return {
+          name,
+          since: normalizeString(previous?.continuity?.assessedDate),
+          values: definition.custom
+            ? normalizeCustomStatValues(previous?.customStats, definition, { partial: true })
+            : compactStatSheet(finalizeCountryStatSheet(previous), rows),
+          backend: definition.custom ? statsBackendOf(previous) : null,
+          evidence: describeStatsRefreshEvidence(definition.custom ? evidence.freshEvents : economic.freshEvents),
+        };
+      }),
+    });
+    // Counted as the request is made: one whose answer is lost was still spent.
+    if (!backgroundAiAllowance().allowed || activeCampaignId() !== campaign) return null;
+    rememberStatsRefreshRound(storage, campaign, round);
+    const response = await callAIWithTaskLimit(systemPrompt, [{ role: "user", parts: [{ text: userMessage }] }], {
+      reasoningEnabled: false,
+      taskKey: "countryStatSheet",
+      requestKind: BACKGROUND_REQUEST,
+    });
+    const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
+    const read = readStatsRefreshUpdates(response?.toolInput ?? extractJsonPayload(rawText), asked);
+    if (read.length === 0) return null;
+    const leave = await beginStatsWrite(campaign, null, { inOrder: "stats-refresh" });
+    const kept = [];
+    try {
+      // A skip that landed meanwhile wrote a world this answer never saw: it
+      // is let go, and the refresh is due again on its own schedule.
+      const latest = await readGameStateBundle({ force: true });
+      if (Math.max(0, Math.trunc(Number(latest.game?.round) || 0)) !== round) return null;
+      const latestWorld = normalizeWorldState(latest.world);
+      for (const { name, update } of read) {
+        const { previous, economic, evidence } = looked.get(name);
+        // A sheet refreshed meanwhile (its own Refresh) stands.
+        const now = normalizeCountryStatSheet(latestWorld.countryStats?.[name]);
+        if (JSON.stringify(now?.continuity ?? null) !== JSON.stringify(previous?.continuity ?? null)) continue;
+        let sheet = null;
+        let continuity = null;
+        if (definition.custom) {
+          const values = normalizeCustomStatValues(update.customStats, definition, { partial: true });
+          const backend = statsBackendPatch(update[STATS_BACKEND_FIELD]);
+          if (!Object.keys(values).length && !Object.keys(backend).length) continue;
+          continuity = { assessedDate: currentDate, assessedRound: round, customStatFingerprint: evidence.fingerprint, customStatEvidenceIds: evidence.evidenceIds };
+          sheet = mergeCountryStatPatch(previous, { ...(Object.keys(values).length ? { customStats: values } : {}), ...backend }, { continuity });
+          if (!isCompleteCustomCountryStatSheet(sheet, keys)) continue;
+        } else {
+          const patch = statsRefreshPatch(update, rows);
+          if (!patch) continue;
+          continuity = { assessedDate: currentDate, assessedRound: round, accountedEventIds: economic.selectedFreshIds };
+          const merged = mergeCountryStatPatch(previous, patch, { continuity });
+          // Held to the same band as the Stats pane's Refresh: no reroll, no
+          // territory, only what the developments shown it warrant.
+          sheet = guardCountryStatContinuity(previous, merged, {
+            elapsedYears: statsElapsedYears(previous?.continuity?.assessedDate, currentDate),
+            evidenceText: economic.text,
+            territoryChanged: false,
+          })?.sheet || merged;
+          if (!isCompleteCountryStatSheet(sheet)) continue;
+        }
+        await persistStatSheet({
+          code: name,
+          sheet,
+          continuity,
+          date: currentDate,
+          round,
+          replaceComponents: !definition.custom,
+          source: "stats-refresh",
+        });
+        kept.push(name);
+      }
+    } finally {
+      endSimulation();
+      leave();
+    }
+    if (kept.length > 0) logDebugEvent("turn", `Stat sheets kept up to date: ${kept.length} countr${kept.length === 1 ? "y" : "ies"} refreshed in one background request.`, { countries: kept });
+    return kept;
+  });
+};
+
 // One polity's government and parties as they stand, read on the player's asking and folded into its Political
 // World record (runtime/politicalLandscapeFold.js): its parties' native names, freeform ideologies and positions, roles and
 // seats, the legislature and the next election, for a record generated before the Political World kept them, or
@@ -14496,6 +14664,85 @@ export const assessGoalProgress = async ({ signal, commit = null } = {}) => {
   return playerGoalEntryOf(next, player)?.progress ?? null;
 };
 
+// The write of a stat sheet, made by the Stats pane's Refresh (both the
+// standard sheet and a scenario's own) and by the background refresh after
+// skips (refreshStaleStatSheets): one writer. The caller holds the write
+// (beginStatsWrite). R2.40: the full-world save runs in the Stats worker,
+// which is handed only this one sheet, and the same-tab caches are patched
+// narrowly so nothing else on the page wakes; the main thread writes it when
+// the worker fails. Says so to the Stats pane (oh:country-stats-updated).
+// `replaceComponents`: the sheet carries the whole territorial ledger.
+const announceStatSheet = (country, sheet, source) => {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent("oh:country-stats-updated", { detail: { country, sheet, source } }));
+};
+const persistStatSheet = async ({ code, sheet, continuity, date, round, signal = null, replaceComponents = false, source = "country-stats" } = {}) => {
+  try {
+    const persisted = await persistCountryStatsBackground({ code, sheet, continuity, date, round, signal });
+    if (persisted?.sheet && typeof persisted.sheet === "object") {
+      await primeCountryStatsWorkerCommit({ country: code, sheet: persisted.sheet, historySeries: persisted.historySeries });
+      announceStatSheet(code, persisted.sheet, `${source}-worker-persist`);
+      return persisted.sheet;
+    }
+  } catch (workerPersistError) {
+    if (signal?.aborted || workerPersistError?.name === "AbortError") throw workerPersistError;
+    console.warn("[OH PERF] Country Stats worker persistence failed; using main-thread canonical fallback.", workerPersistError);
+  }
+  let nextSheet = null;
+  await mutateWorldState((world) => {
+    nextSheet = applyCountryStatPatchToWorld(world, code, sheet, { ...(replaceComponents ? { replaceComponents: true } : {}), continuity });
+    world.countryStatsHistory = appendCountryStatHistorySample(world.countryStatsHistory, code, nextSheet, { date, round });
+    return world;
+  }, { emitEvents: false });
+  announceStatSheet(code, nextSheet, `${source}-main-thread-persist`);
+  return nextSheet;
+};
+
+// What a scenario's own sheet rests on, for one country: its evidence and
+// fingerprint (customStatContinuity.js), as the Stats pane's Refresh and the
+// background refresh after skips (refreshStaleStatSheets) both test it.
+const customStatEvidenceOf = ({ bundle, world, statCode, previous, currentDate }) => {
+  // A saved custom sheet is canon, not a fresh opinion poll. The previous
+  // provider path asked for every value on every Refresh, even if no native
+  // evidence whatsoever had changed. Fingerprint only TARGET-relevant facts,
+  // never elapsed calendar time or unrelated countries' news. A fact is the
+  // country's when a record names it as a party (statsEventEvidence.js), never
+  // when its name turns up in the record's text.
+  const sameTarget = statsTargetTest(world, canonicalStatsPolity(statCode, world) || normalizeString(statCode));
+  const playerIsTarget = sameTarget(bundle?.game?.country);
+  const currentEvents = normalizeEvents(bundle?.events).filter((event) =>
+    !event?.date || !currentDate || compareGameDates(event.date, currentDate) <= 0);
+  const partyTo = (rows, partiesOf) => normalizeArray(rows).filter((row) => partiesOf(row).some(sameTarget));
+  const political = getPoliticalProfile(world, statCode);
+  const polity = Object.entries(world?.polityOverrides || {})
+    .filter(([key, value]) => [key, value?.code, value?.name].some(sameTarget))
+    .map(([key, value]) => ({ key, name: value?.name, note: value?.note, tags: value?.tags, aliases: value?.aliases }));
+  const sourceState = {
+    polity,
+    government: political?.government ?? null,
+    politicalSystem: political?.politicalSystem ?? null,
+    stability: political?.stability ?? null,
+    domesticPressures: political?.domesticPressures ?? null,
+    reputation: Object.entries(world?.internationalReputation || {})
+      .filter(([key]) => sameTarget(key)),
+    wars: partyTo(world?.wars, (war) => [...normalizeArray(war?.sideA), ...normalizeArray(war?.sideB)]),
+    agreements: partyTo(world?.agreements, (agreement) => normalizeArray(agreement?.parties)),
+    relations: partyTo(world?.relations, (relation) => [relation?.a, relation?.b]),
+    // A Project is its owner's; one with no owner is the player's.
+    projects: normalizeArray(world?.projects)
+      .filter((row) => (normalizeString(row?.ownerCode) ? sameTarget(row.ownerCode) : playerIsTarget))
+      .map((row) => ({
+        id: row?.id, title: row?.title, status: row?.status, progress: row?.progress, ownerCode: row?.ownerCode,
+      })),
+  };
+  return buildCustomStatContinuity({
+    events: currentEvents,
+    prior: previous?.continuity,
+    currentState: sourceState,
+    concernsTarget: (event) => eventConcernsTarget(event, sameTarget, { playerIsTarget }),
+  });
+};
+
 const generateScenarioCustomStatSheet = async ({
   bundle,
   definition,
@@ -14521,45 +14768,7 @@ const generateScenarioCustomStatSheet = async ({
   const previousValues = normalizeCustomStatValues(previous?.customStats, definition, { partial: true });
   const requiredKeys = statSheetKeys(definition);
 
-  // A saved custom sheet is canon, not a fresh opinion poll. The previous
-  // provider path asked for every value on every Refresh, even if no native
-  // evidence whatsoever had changed. Fingerprint only TARGET-relevant facts,
-  // never elapsed calendar time or unrelated countries' news. A fact is the
-  // country's when a record names it as a party (statsEventEvidence.js), never
-  // when its name turns up in the record's text.
-  const sameTarget = statsTargetTest(worldAtStart, canonicalStatsPolity(statCode, worldAtStart) || normalizeString(statCode));
-  const playerIsTarget = sameTarget(bundle?.game?.country);
-  const currentEvents = normalizeEvents(bundle?.events).filter((event) =>
-    !event?.date || !currentDate || compareGameDates(event.date, currentDate) <= 0);
-  const partyTo = (rows, partiesOf) => normalizeArray(rows).filter((row) => partiesOf(row).some(sameTarget));
-  const political = getPoliticalProfile(worldAtStart, statCode);
-  const polity = Object.entries(worldAtStart?.polityOverrides || {})
-    .filter(([key, value]) => [key, value?.code, value?.name].some(sameTarget))
-    .map(([key, value]) => ({ key, name: value?.name, note: value?.note, tags: value?.tags, aliases: value?.aliases }));
-  const sourceState = {
-    polity,
-    government: political?.government ?? null,
-    politicalSystem: political?.politicalSystem ?? null,
-    stability: political?.stability ?? null,
-    domesticPressures: political?.domesticPressures ?? null,
-    reputation: Object.entries(worldAtStart?.internationalReputation || {})
-      .filter(([key]) => sameTarget(key)),
-    wars: partyTo(worldAtStart?.wars, (war) => [...normalizeArray(war?.sideA), ...normalizeArray(war?.sideB)]),
-    agreements: partyTo(worldAtStart?.agreements, (agreement) => normalizeArray(agreement?.parties)),
-    relations: partyTo(worldAtStart?.relations, (relation) => [relation?.a, relation?.b]),
-    // A Project is its owner's; one with no owner is the player's.
-    projects: normalizeArray(worldAtStart?.projects)
-      .filter((row) => (normalizeString(row?.ownerCode) ? sameTarget(row.ownerCode) : playerIsTarget))
-      .map((row) => ({
-        id: row?.id, title: row?.title, status: row?.status, progress: row?.progress, ownerCode: row?.ownerCode,
-      })),
-  };
-  const evidence = buildCustomStatContinuity({
-    events: currentEvents,
-    prior: previous?.continuity,
-    currentState: sourceState,
-    concernsTarget: (event) => eventConcernsTarget(event, sameTarget, { playerIsTarget }),
-  });
+  const evidence = customStatEvidenceOf({ bundle, world: worldAtStart, statCode, previous, currentDate });
   const decision = customStatRefreshDecision({
     previousValues,
     requiredKeys,
@@ -14652,50 +14861,7 @@ Reassess existing values only as a response to newly changed canonical evidence.
 
   const leave = await beginStatsWrite(campaign, signal, { inOrder: "stat-sheet" });
   try {
-    try {
-      const persisted = await persistCountryStatsBackground({
-        code: statCode,
-        sheet,
-        continuity,
-        date: currentDate,
-        round: currentRound,
-        signal,
-      });
-      if (persisted?.sheet) {
-        await primeCountryStatsWorkerCommit({
-          country: statCode,
-          sheet: persisted.sheet,
-          historySeries: persisted.historySeries,
-        });
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent("oh:country-stats-updated", {
-            detail: { country: statCode, sheet: persisted.sheet, source: "scenario-custom-stats-worker-persist" },
-          }));
-        }
-        return persisted.sheet;
-      }
-    } catch (workerPersistError) {
-      if (signal?.aborted || workerPersistError?.name === "AbortError") throw workerPersistError;
-      console.warn("[stats custom] worker persistence failed; using canonical main-thread fallback.", workerPersistError);
-    }
-
-    let nextSheet = null;
-    await mutateWorldState((world) => {
-      nextSheet = applyCountryStatPatchToWorld(world, statCode, sheet, { continuity });
-      world.countryStatsHistory = appendCountryStatHistorySample(
-        world.countryStatsHistory,
-        statCode,
-        nextSheet,
-        { date: currentDate, round: currentRound },
-      );
-      return world;
-    }, { emitEvents: false });
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("oh:country-stats-updated", {
-        detail: { country: statCode, sheet: nextSheet, source: "scenario-custom-stats-main-thread-persist" },
-      }));
-    }
-    return nextSheet;
+    return await persistStatSheet({ code: statCode, sheet, continuity, date: currentDate, round: currentRound, signal, source: "scenario-custom-stats" });
   } finally {
     endSimulation();
     leave();
@@ -15280,116 +15446,21 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
 
     const leave = await beginStatsWrite(campaign, signal, { inOrder: "stat-sheet" });
     try {
-      const commitStartedAt =
-        typeof performance !== "undefined" && performance.now
-          ? performance.now()
-          : Date.now();
-
-      // R2.40: the expensive full-world save belongs in the same Stats worker that
-      // already owns Stats loading/preparation. The UI sends only one bounded sheet.
-      const persisted = await persistCountryStatsBackground({
+      // The same write as a scenario's own sheet and the refresh after skips
+      // (persistStatSheet): the Stats worker's, or the main thread's when it fails.
+      return await persistStatSheet({
         code: statCode,
         sheet: guarded.sheet,
         continuity,
         date: currentDate,
         round: currentRound,
         signal,
+        replaceComponents: true,
+        source: "native-country-stats",
       });
-
-      if (persisted?.sheet && typeof persisted.sheet === "object") {
-        const workerDoneAt =
-          typeof performance !== "undefined" && performance.now
-            ? performance.now()
-            : Date.now();
-
-        // The worker has already written canonical world.json. Patch the same-tab
-        // caches narrowly so future reads see it without reparsing/normalizing the
-        // entire world and without waking MapTree/Timeline/Chat.
-        await primeCountryStatsWorkerCommit({
-          country: statCode,
-          sheet: persisted.sheet,
-          historySeries: persisted.historySeries,
-        });
-
-        const cachePrimedAt =
-          typeof performance !== "undefined" && performance.now
-            ? performance.now()
-            : Date.now();
-
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent("oh:country-stats-updated", {
-            detail: {
-              country: statCode,
-              sheet: persisted.sheet,
-              source: "native-country-stats-worker-persist",
-            },
-          }));
-        }
-
-        const endedAt =
-          typeof performance !== "undefined" && performance.now
-            ? performance.now()
-            : Date.now();
-
-        console.info(
-          `[stats commit R2.40] ${statCode}: ` +
-          `worker persistence wait ${(workerDoneAt - commitStartedAt).toFixed(1)} ms (UI free); ` +
-          `local cache patch ${(cachePrimedAt - workerDoneAt).toFixed(1)} ms; ` +
-          `targeted notify ${(endedAt - cachePrimedAt).toFixed(1)} ms; ` +
-          `main-thread tail ${(endedAt - workerDoneAt).toFixed(1)} ms.`,
-        );
-
-        return persisted.sheet;
-      }
-
-      throw new Error("Country Stats worker persistence returned no canonical sheet.");
-    } catch (workerPersistError) {
-      if (signal?.aborted || workerPersistError?.name === "AbortError") {
-        throw workerPersistError;
-      }
-
-      // Correctness fallback only. If this path logs during the responsiveness test,
-      // the test is not exercising R2.40's intended persistence architecture.
-      console.warn(
-        "[OH PERF] Country Stats worker persistence failed; using main-thread canonical fallback.",
-        workerPersistError,
-      );
-
-      try {
-        let nextSheet = null;
-        await mutateWorldState((world) => {
-          nextSheet = applyCountryStatPatchToWorld(
-            world,
-            statCode,
-            guarded.sheet,
-            {
-              replaceComponents: true,
-              continuity,
-            },
-          );
-          world.countryStatsHistory = appendCountryStatHistorySample(
-            world.countryStatsHistory,
-            statCode,
-            nextSheet,
-            { date: currentDate, round: currentRound },
-          );
-          return world;
-        }, { emitEvents: false });
-
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent("oh:country-stats-updated", {
-            detail: {
-              country: statCode,
-              sheet: nextSheet,
-              source: "native-country-stats-main-thread-fallback",
-            },
-          }));
-        }
-
-        return nextSheet;
-      } catch (error) {
-        console.warn("[ai] failed to persist native country stats:", error);
-      }
+    } catch (error) {
+      if (signal?.aborted || error?.name === "AbortError") throw error;
+      console.warn("[ai] failed to persist native country stats:", error);
     } finally {
       endSimulation();
       leave();
