@@ -15,6 +15,7 @@
 // never trusted. Pure.
 
 import { NAME, bool, int, list, literal, obj, str, validate } from "../protocol/validate.js";
+import { SETTINGS_SCHEMA, normalizeSettings } from "./settings.js";
 
 export const SESSION_RECORD_VERSION = 1;
 
@@ -44,12 +45,16 @@ const SCHEMA = obj({
   ownLines: list(obj({ line: str(160, { min: 1 }), thread: str(120, { min: 1 }), seat: COUNTRY }), 400),
   // Devices the host has banned from this game.
   banned: list(DEVICE, 256),
-}, ["watching", "changes", "ownLines", "banned"]);
+  // The game's settings as they stood (host/settings.js), changes made during
+  // the game included: a game taken up again starts from them, so a host
+  // sharing it another day is shown its rules, not the defaults.
+  settings: SETTINGS_SCHEMA,
+}, ["watching", "changes", "ownLines", "banned", "settings"]);
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
 // The record of a session as it stands.
-export const sessionRecordOf = ({ campaign, started, round, hostDevice, seats = [], watching = [], changes = [], ownLines = [], banned = [] }) => ({
+export const sessionRecordOf = ({ campaign, started, round, hostDevice, seats = [], watching = [], changes = [], ownLines = [], banned = [], settings = null }) => ({
   v: SESSION_RECORD_VERSION,
   campaign: clean(campaign).slice(0, 160),
   started: Boolean(started),
@@ -68,6 +73,7 @@ export const sessionRecordOf = ({ campaign, started, round, hostDevice, seats = 
   ownLines: ownLines.slice(-400).map((entry) => ({ line: clean(entry.line).slice(0, 160), thread: clean(entry.thread).slice(0, 120), seat: clean(entry.seat).slice(0, 200) }))
     .filter((entry) => entry.line && entry.thread && entry.seat),
   banned: [...new Set(banned.map((device) => clean(device).slice(0, 64)).filter(Boolean))].slice(0, 256),
+  ...(settings && normalizeSettings(settings).ok ? { settings: normalizeSettings(settings).settings } : {}),
 });
 
 // The session a record holds, for `campaign` and the host on `hostDevice`; null
@@ -87,5 +93,14 @@ export const sessionFromRecord = (record, { campaign, hostDevice }) => {
     changes: value.changes ?? [],
     ownLines: value.ownLines ?? [],
     banned: value.banned ?? [],
+    settings: value.settings ?? null,
   };
+};
+
+// The settings a game kept the last time it was shared, for the host's Host a
+// lobby to start from: null when it kept none, or the record is another game's.
+export const keptSettingsOf = (record, { campaign } = {}) => {
+  if (!record || typeof record !== "object" || clean(record.campaign) !== clean(campaign)) return null;
+  const checked = normalizeSettings(record.settings ?? null);
+  return record.settings && checked.ok ? checked.settings : null;
 };

@@ -133,6 +133,8 @@ const setup = (options = {}) => {
       if (options.holdResolve) await options.holdResolve;
       resolved.push({ ...info, game: structuredClone(store.docs.game) });
       store.docs.events.push({ id: `round-${info.round}`, title: "The round's events", description: "", date: "2014-05-01" });
+      // A time skip writes the campaign's next round, as the game's own does.
+      store.docs.game = { ...store.docs.game, round: (Number(store.docs.game?.round) || 0) + 1 };
       // What else the round wrote into the game.
       options.roundWrites?.(store.docs, info);
     },

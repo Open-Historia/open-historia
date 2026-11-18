@@ -109,6 +109,7 @@ export const createRoundMachine = ({
     needed: readyNeeded(counted().length, settings.readyThreshold),
     failure: failure ? { ...failure } : null,
     settings: { ...settings },
+    followsCampaign,
   });
 
   const emit = () => onChange(snapshot());

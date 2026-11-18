@@ -312,7 +312,9 @@ export const createGameHost = ({
   // The round a game taken up again plans: one that has landed (being read)
   // is done, and the next is planned; one being planned or resolved had not
   // landed, and is planned again with its orders.
-  const roundToPlan = (status) => (status.phase === "revealing" ? status.round + 1 : status.round);
+  // (A machine that follows the campaign's rounds, host/round.js, already
+  // names the landed round while it is read: it is the next to plan.)
+  const roundToPlan = (status) => (status.phase === "revealing" && !status.followsCampaign ? status.round + 1 : status.round);
   const sessionNow = () => sessionRecordOf({
     campaign,
     started: seats.started,
@@ -323,6 +325,7 @@ export const createGameHost = ({
     changes: [...changes.values()],
     ownLines: [...ownLines].map(([line, entry]) => ({ line, ...entry })),
     banned: [...banned],
+    settings: { ...settings, replies },
   });
   const sessionChanged = () => {
     if (sessionWanted || stopped || !campaign || typeof store.writeShared !== "function") return;

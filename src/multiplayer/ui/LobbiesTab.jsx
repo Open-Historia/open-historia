@@ -11,6 +11,8 @@ import React, { useEffect, useState } from "react";
 import { useLibraryState } from "../../runtime/library.js";
 import { MAX_SEATS, SEATS_AVAILABLE_NOW, DEFAULT_SETTINGS } from "../host/settings.js";
 import { LANGUAGES, readingLanguageName } from "../../runtime/i18n.js";
+import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { keptSettingsOf } from "../host/sessionRecord.js";
 import { hostSharedGame, joinSharedGame, useSharedGame } from "../client/sharedGame.js";
 import PublicLobbies from "./PublicLobbies.jsx";
 
@@ -116,6 +118,24 @@ const HostPanel = ({ onClose, onEnterGame }) => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [desktop, setDesktop] = useState(null);
+  // The settings this game kept the last time it was shared (host/sessionRecord.js
+  // keptSettingsOf): the form starts from them, so its rules are shown, never
+  // quietly reset to the defaults (the gap audit of 2026-11-18).
+  const [kept, setKept] = useState(false);
+  useEffect(() => {
+    let live = true;
+    const campaign = String(activeGame?.id || "");
+    if (!campaign) return undefined;
+    readJson(JSON_URLS.shared, { defaultValue: {}, force: true })
+      .then((record) => {
+        const settingsKept = keptSettingsOf(record, { campaign });
+        if (!live || !settingsKept) return;
+        setSettings(settingsKept);
+        setKept(true);
+      })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [activeGame?.id]);
 
   useEffect(() => {
     let live = true;
@@ -159,6 +179,7 @@ const HostPanel = ({ onClose, onEnterGame }) => {
         <p style={note}>Open a game first (the Games tab), then come back to host it.</p>
       ) : (
         <>
+          {kept ? <p style={note}>These are this game&apos;s settings from the last time it was shared.</p> : null}
           <div style={grid}>
             <Field title="Your name"><input style={input} value={name} maxLength={40} onChange={(event) => setName(event.target.value)} placeholder="Host" /></Field>
             <Field title="Lobby name"><input style={input} value={settings.name} maxLength={60} onChange={update("name")} /></Field>
