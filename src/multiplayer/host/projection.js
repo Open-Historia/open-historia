@@ -50,6 +50,7 @@ import { settleBoards } from "./seatBoards.js";
 import { interceptTableOf } from "../../runtime/spycraft.js";
 import { sealOf } from "../../runtime/spySeal.js";
 import { advisorOfSeat } from "../../runtime/seatAdvisors.js";
+import { sharedLetterOf } from "../../Game/AI/sharedLetters.js";
 import { VIEW_PARTS } from "../game/messages.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -111,14 +112,22 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   // Earth.
   "projection", "regionTypes", "seas", "customGeometry", "cityPopulationBasis", "commonNames",
   "builtInMap", "builtInRevision",
+  // The Game Master's standing reminders (runtime/gmChanges.js): facts of the
+  // world the host declared (decision 8), which bind every device's AI as
+  // they bind the host's skip. Host-only, they reached no player's advisor,
+  // suggestions or own-device replies, the host's own included.
+  "simulationReminders",
 ]);
 
 // The narrator's and the engine's own. Never in any view.
 export const HOST_ONLY_WORLD_KEYS = Object.freeze([
   "actionSuggestions", "chargedRefusals", "chatKnowledgeCursors", "consolidatedHistory",
   "gmAudit", "gmChanges", "historyDocument", "idlePulseTick", "lastJumpSummary", "naviesRaised", "notes",
-  "pendingEventOutreach", "politicalSimulation", "seatBoards", "seatSeals", "seenFleetPostures", "simulationReminders",
+  "pendingEventOutreach", "politicalSimulation", "seatBoards", "seatSeals", "seenFleetPostures",
   "storylines",
+  // What a seat's person left waiting while nobody shared the game (heldSeats.js):
+  // given back to the game before anything is sent, and never in a view.
+  "seatsHeld",
   // What the last time skip's prompt read (runtime/promptSnapshot.js).
   "promptSnapshot", "promptReference",
   // The campaign's canon, kept beside the history document (runtime/historyTiers.js).
@@ -161,6 +170,12 @@ const PUBLIC_INSTITUTION_KEYS = [
 ];
 
 const pick = (record, keys) => Object.fromEntries(keys.filter((key) => record[key] !== undefined).map((key) => [key, record[key]]));
+
+// Another government's intelligence rating as the viewer's own services would
+// put it: to the nearest ten. (Not a number: as it is.)
+const estimatedRating = (rating) => (Number.isFinite(Number(rating)) && rating !== null && rating !== ""
+  ? Math.max(0, Math.min(100, Math.round(Number(rating) / 10) * 10))
+  : rating);
 
 // WHAT IS ONLY ORDERED STAYS PRIVATE UNTIL THE SKIP (the owner's decision 6,
 // 2026-11-18: "just do A only"): units and structures that exist are seen by
@@ -302,7 +317,11 @@ const FILTERED_WORLD_KEYS = Object.freeze({
   },
 
   // Documents: the public ones, the ones on the viewer's distribution list, and
-  // the ones it stole. Who else stole a copy is never said.
+  // the ones it stole. Who else stole a copy is never said, nor who else holds
+  // one: a holder is told it holds the document and who sent it, and the list
+  // of holders is cut to those two, as `receivedFrom` is to the viewer. Every
+  // holder was sent the whole list, which said that England handed the memo
+  // to Italy (the review of 2026-11-18, views 7).
   // A seat that founded a country of its own still holds what its government
   // held before (`readers`, foundings.js formerNamesOf).
   reports: (world, viewer, { readers = [viewer] } = {}) => normalizeReports(world.reports)
@@ -315,25 +334,39 @@ const FILTERED_WORLD_KEYS = Object.freeze({
       const received = isRecord(receivedFrom)
         ? Object.fromEntries(Object.entries(receivedFrom).filter(([polity]) => same(polity, viewer)))
         : null;
+      // (A list left empty would read as published, normalizeReports: a stolen
+      // copy that names neither keeps the one holder it was taken from.)
+      const holders = Array.isArray(rest.visibleTo)
+        ? rest.visibleTo.filter((entry) => same(entry, rest.from) || readers.some((name) => same(entry, name)))
+        : null;
       return {
         ...rest,
+        ...(holders ? { visibleTo: holders.length ? holders : rest.visibleTo.slice(0, 1) } : {}),
         ...(stolen ? { interceptedBy: [viewer] } : {}),
         ...(received && Object.keys(received).length ? { receivedFrom: received } : {}),
       };
     }),
 
-  // Relations the viewer is a party to.
-  relations: (world, viewer) => list(world.relations).filter((relation) =>
-    [relation?.a, relation?.b, relation?.polityA, relation?.polityB, relation?.actorA, relation?.actorB]
-      .some((party) => same(party, viewer))),
+  // How every two governments stand with each other is what exists, and what
+  // exists is public (decision 6): the Diplomatic map colours every country by
+  // its standing with whichever it is focused on, and with only the viewer's
+  // own rows it showed no relations between any two others, on every screen,
+  // the host's too (the review of 2026-11-18, views 8). A relation the viewer
+  // is a party to is its own in full; any other is its standing alone: the
+  // narrator's account of it (`summary`) is prose written from everywhere at
+  // once, and the events it cites are only those the viewer may read.
+  relations: (world, viewer, { hiddenEventIds = new Set() } = {}) => list(world.relations).filter(isRecord).map((relation) => {
+    const party = [relation.a, relation.b, relation.polityA, relation.polityB, relation.actorA, relation.actorB].some((name) => same(name, viewer));
+    if (party) return relation;
+    const { summary: _summary, ...rest } = relation;
+    return Array.isArray(rest.sourceEventIds) ? { ...rest, sourceEventIds: rest.sourceEventIds.filter((id) => !hiddenEventIds.has(clean(id))) } : rest;
+  }),
 
   // Its own service's rating exact; another's as its own services would put
   // it, to the nearest ten. (The Intelligence tab reads how much of an
   // intercept it can make out from the two ratings, so it needs one of each.)
   intelligence: (world, viewer) => Object.fromEntries(Object.entries(isRecord(world.intelligence) ? world.intelligence : {})
-    .map(([country, rating]) => [country, same(country, viewer) || !Number.isFinite(Number(rating))
-      ? rating
-      : Math.max(0, Math.min(100, Math.round(Number(rating) / 10) * 10))])),
+    .map(([country, rating]) => [country, same(country, viewer) ? rating : estimatedRating(rating)])),
   playerGoals: (world, viewer) => Object.fromEntries(Object.entries(isRecord(world.playerGoals) ? world.playerGoals : {})
     .filter(([country]) => same(country, viewer))),
   // A player's advisor and the orders they suggest (AI/seatAdvice.js): theirs alone.
@@ -443,9 +476,19 @@ export const eventsHiddenFrom = (events, viewer) => new Set(list(events)
   .map((event) => clean(event.id))
   .filter(Boolean));
 
+// A polity's change as the viewer may know it: another government's new
+// intelligence rating is an estimate, as world.intelligence sends it
+// (estimatedRating). An event carried the exact one to every view.
+const polityChangeSeenBy = (change, readers) => (isRecord(change)
+  && change.intelligence !== undefined && change.intelligence !== null
+  && !readers.some((name) => same(name, change.code) || same(name, change.name))
+  ? { ...change, intelligence: estimatedRating(change.intelligence) }
+  : change);
+
 // `unitOwner(unitId)` names a unit's owner (from the host's world); a move is a
-// march order, and only its owner reads where it is going.
-export const projectEvents = (events, viewer, { ownOrderIds = new Set(), unitOwner = () => "", host = "", readers = [viewer] } = {}) => list(events).filter((event) => !isRecord(event) || readableBy(event, readers)).map((event) => {
+// march order, and only its owner reads where it is going. `people`: the
+// polities people play, the host's first (game.country, game.humanCountries).
+export const projectEvents = (events, viewer, { ownOrderIds = new Set(), unitOwner = () => "", host = "", readers = [viewer], people = [host] } = {}) => list(events).filter((event) => !isRecord(event) || readableBy(event, readers)).map((event) => {
   if (!isRecord(event)) return event;
   // The narrator's provenance, NPC-reaction bookkeeping and storyline links stay
   // with the host, and so does who else an event was for.
@@ -455,9 +498,14 @@ export const projectEvents = (events, viewer, { ownOrderIds = new Set(), unitOwn
     && (op.op !== "move" || same(unitOwner(op.unitId), viewer)));
   const projected = {};
   for (const key of PUBLIC_IMPACT_KEYS) if (Array.isArray(impacts?.[key])) projected[key] = impacts[key];
+  if (Array.isArray(projected.polityChanges)) projected.polityChanges = projected.polityChanges.map((change) => polityChangeSeenBy(change, readers));
   // An opened thread is its owner's (projectChats): single player's and the
-  // host's are the host seat's.
-  const createdChats = same(host, viewer) ? list(impacts?.createdChats) : [];
+  // host's are the host seat's. A letter the skip wrote to another player is
+  // that player's (AI/sharedLetters.js), never the host's to read: the host's
+  // view carried the text of every one of them (the gap audit's N7).
+  const createdChats = same(host, viewer)
+    ? list(impacts?.createdChats).filter((chat) => same(sharedLetterOf(chat, { people, host })?.to, host))
+    : [];
   return {
     ...rest,
     impacts: {
@@ -603,7 +651,9 @@ export const projectForViewer = ({ world, game, events, chat, actions, intercept
   const ownOrderIds = new Set(ownActions.map((action) => clean(action?.id)).filter(Boolean));
   const owners = new Map(list(world?.units).map((unit) => [clean(unit?.id), clean(unit?.ownerCode)]));
   const readers = formerNamesOf(game, seat);
-  const seenEvents = projectEvents(events, seat, { ownOrderIds, host, readers, unitOwner: (id) => owners.get(clean(id)) || "" });
+  // The people, as the game records them (host/gameHost.js recordHumans), the host's first.
+  const people = [host, ...list(game?.humanCountries).map(clean).filter((name) => name && !same(name, host))];
+  const seenEvents = projectEvents(events, seat, { ownOrderIds, host, readers, people, unitOwner: (id) => owners.get(clean(id)) || "" });
   const shown = new Set(list(seenEvents).map((event) => clean(event?.id)));
   // The world's parts sent as documents of their own (game/messages.js
   // VIEW_PARTS): Rostra's feed, which a post changes and nothing else does.

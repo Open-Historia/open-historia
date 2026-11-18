@@ -128,7 +128,11 @@ const state = () => ({
         projectOps: [{ op: "update", projectId: "proj-ru", note: "CANARY-PROJECTOP" }],
         politicalActorOps: [{ op: "set-strategy", polityKey: RUSSIA, argsJson: "{\"summary\":\"CANARY-ACTOROP\"}" }],
         reports: [{ op: "create", title: "t", body: "CANARY-EVENT-DOCUMENT" }],
-        createdChats: [{ countries: [ESTONIA], openingMessage: "CANARY-LV-OPENING" }],
+        // A letter to each player (AI/sharedLetters.js): each is its addressee's.
+        createdChats: [
+          { to: LATVIA, countries: [ESTONIA], openingMessage: "CANARY-LV-OPENING" },
+          { to: RUSSIA, countries: [ESTONIA], openingMessage: "CANARY-RU-LETTER" },
+        ],
         regionControlOps: [{ op: "control", regionId: "Ida-Viru", toCode: RUSSIA }],
       },
       npcReaction: { enabled: true, chatId: "CANARY-NPC-CHAT" },
@@ -182,6 +186,8 @@ test("nothing private of the second player reaches the host's view", () => {
     "CANARY-RU-GOAL", "CANARY-RU-STRATEGY", "CANARY-RU-TO-EST", "CANARY-RU-ORDER",
     "order-ru-1", "order-ru-march", "CANARY-MOVE-NOTE", "CANARY-ACTOROP", "CANARY-LEADER-MEMORY",
     "spy-ru-in-est", "pup-covert",
+    // The letter the skip wrote to the second player (the gap audit's N7).
+    "CANARY-RU-LETTER",
   ]) assert.equal(view.includes(canary), false, `${canary} leaked to the host's view`);
   // Numbers are checked where they live: a bare "88" can turn up in any timestamp.
   // How good Russia's service is, is Russia's to know: everyone else has an estimate.
@@ -660,4 +666,52 @@ test("terms of peace are the two parties' own until they are taken, and a call t
   assert.deepEqual(calls(LATVIA), ["ask-ru-lv", "joined-ru-est"]);
   assert.deepEqual(calls(ESTONIA), ["ask-est-ru", "joined-ru-est"]);
   assert.ok(!text(projectForViewer(docs, ESTONIA)).includes("open-ru-lv"), "not a byte of another's terms");
+});
+
+// The review of 2026-11-18, views 6, 7, 8 and 11: what each view carried beyond, or short of, what its government knows.
+test("an event's new intelligence rating is exact for its own government only, as world.intelligence is", () => {
+  const docs = state();
+  docs.events[0].impacts.polityChanges = [
+    { operation: "update", code: RUSSIA, intelligence: 83 },
+    { operation: "update", code: LATVIA, intelligence: 47, reputation: 61 },
+  ];
+  const ratings = (viewer) => Object.fromEntries(projectForViewer(docs, viewer).events[0].impacts.polityChanges.map((change) => [change.code, change.intelligence]));
+  assert.deepEqual(ratings(RUSSIA), { [RUSSIA]: 83, [LATVIA]: 50 });
+  assert.deepEqual(ratings(LATVIA), { [RUSSIA]: 80, [LATVIA]: 47 });
+  assert.deepEqual(ratings(ESTONIA), { [RUSSIA]: 80, [LATVIA]: 50 });
+  assert.equal(projectForViewer(docs, ESTONIA).events[0].impacts.polityChanges[1].reputation, 61, "reputation is public");
+});
+
+test("a document's holders are told they hold it and who sent it, never who else holds it", () => {
+  const docs = state();
+  docs.world.reports.push(
+    { id: "rep-shared", title: "Memo", body: "b", from: RUSSIA, visibleTo: [RUSSIA, LATVIA, ESTONIA] },
+    { id: "rep-stolen", title: "Note", body: "b", visibleTo: [ESTONIA, "Kingdom of Sweden"], interceptedBy: [LATVIA] },
+  );
+  const holders = (viewer, id) => projectForViewer(docs, viewer).world.reports.find((report) => report.id === id)?.visibleTo;
+  assert.deepEqual(holders(LATVIA, "rep-shared"), [RUSSIA, LATVIA], "the sender and itself");
+  assert.deepEqual(holders(ESTONIA, "rep-shared"), [RUSSIA, ESTONIA]);
+  assert.deepEqual(holders(RUSSIA, "rep-shared"), [RUSSIA]);
+  assert.deepEqual(holders(LATVIA, "rep-stolen"), [ESTONIA], "a stolen copy is still nobody's published paper");
+  assert.equal(holders(LATVIA, "rep-public"), null);
+});
+
+test("how any two governments stand is in every view; the narrator's account of it only in the parties'", () => {
+  const relations = (viewer) => projectForViewer(state(), viewer).world.relations;
+  const lv = relations(LATVIA);
+  assert.deepEqual(lv.map((relation) => relation.id).sort(), ["rel-lv-ru", "rel-ru-est"]);
+  const theirs = lv.find((relation) => relation.id === "rel-ru-est");
+  assert.equal(theirs.score, -61);
+  assert.equal(theirs.status, "rival");
+  assert.equal("summary" in theirs, false);
+  assert.equal(lv.find((relation) => relation.id === "rel-lv-ru").summary, "a relation both know");
+  assert.equal(relations(RUSSIA).find((relation) => relation.id === "rel-ru-est").summary, "CANARY-RU-EST-RELATION");
+});
+
+test("the Game Master's standing reminders reach every view, so every device's AI is bound by them", () => {
+  const docs = state();
+  docs.world.simulationReminders = [{ id: "r1", text: "The Baltic is frozen this winter.", createdRound: 2 }];
+  const whole = normalizeWorldState(docs.world).simulationReminders;
+  assert.ok(Array.isArray(whole) && whole.length === 1, "the save keeps them");
+  for (const viewer of [LATVIA, RUSSIA, ESTONIA]) assert.deepEqual(projectForViewer(docs, viewer).world.simulationReminders, whole);
 });
