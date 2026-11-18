@@ -18729,11 +18729,11 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   ]);
   const variables = await buildTemplateVariables(bundle, {
     lookups: true,
-    // Whether its lookups are declared, and its prompt slim for them, by whoever pays for it.
-    spending: skipRules(),
     relatedEvents,
     pastTalks,
     taskKey: mode === "auto" ? "autoJumpForward" : "jumpForward",
+    // Whether its lookups are declared, and its prompt slim for them, by whoever pays for it.
+    spending: skipRules(),
     consolidatedHistoryMaxChars: WORLD_SIMULATION_CONSOLIDATED_HISTORY_MAX_CHARS,
     consolidatedHistorySelection: "coverage",
     historicalAnchorActivationChars: WORLD_SIMULATION_HISTORICAL_ANCHOR_ACTIVATION_CHARS,

@@ -200,13 +200,14 @@ test("an explicitly unowned map polygon must not assign its base geography a fic
 // path as gameplay.js runProjectsEngine does: one board-only event per project,
 // with the active map's catalog.
 const projectCession = (before, regionCatalog) => {
+  // A project's own completion effects (onComplete) are a save's from before the projects engine: a create never
+  // carries them (gameState.js applyProjectOps, the review of 2026-11-18), so the entry is one such save keeps.
   before.projects = applyProjectOps([], [{
     op: "create",
     name: "Settlement",
     summary: "Transfer one region",
     status: "active",
-    onComplete: { regionTransfers: [{ regionId: "region-A", toCode: "Borduria" }] },
-  }]);
+  }]).map((project) => ({ ...project, onComplete: { regionTransfers: [{ regionId: "region-A", toCode: "Borduria" }] } }));
   const released = applyProjectOutcomesToWorld({
     world: before,
     outcomes: [{ type: "complete", project: "Settlement", date: "2026-07-01" }],

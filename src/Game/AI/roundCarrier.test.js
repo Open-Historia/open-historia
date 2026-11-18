@@ -350,6 +350,7 @@ test("callAI carries the round's calls once its prompt is whole, the engine inst
   assert.match(gameplay, /lookupRoundLimit\(\{ unlimited: skipRules\(\)\.unlimited \}\)/);
   assert.match(gameplay, /buildTaskLookups\(segmentBundle, \{ enabled: skipRules\(\)\.lookups \}\)/);
   assert.match(gameplay, /spending\.declares \?\? geminiDeclaresTaskFunction\(/);
-  assert.match(gameplay, /spending: skipRules\(\),\s+relatedEvents,/);
+  // (After its taskKey: contextDemand.test.js scans each call's options up to its first bracket.)
+  assert.match(gameplay, /taskKey: mode === "auto" \? "autoJumpForward" : "jumpForward",\s+\/\/[^\n]*\n\s+spending: skipRules\(\),/);
   assert.match(gameplay, /if \(!roundCarried\(\)\) requestLedger\.noteJump\(/, "the host's ledger is not told a payer's requests were its own");
 });
