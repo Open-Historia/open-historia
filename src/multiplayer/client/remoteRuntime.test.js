@@ -200,6 +200,16 @@ test("what is this device's own passes through: the advisor, the map's files, th
   await target.fetch("/api/library");
   await target.fetch("https://relay.example/x");
   assert.equal(network.length, 5);
+  // The map's files are read from this device's copy, checked against the host's map when it joined, and never
+  // written while the game is shared: that screen alone would draw another world from then on.
+  network.length = 0;
+  for (const key of ["regionsGeojson", "citiesGeojson", "backgroundData", "ownBasemapsData"]) {
+    const answer = await target.fetch(`/api/runtime/json/${key}?v=token`, { method: "PUT", body: "{}" });
+    assert.equal(answer.status, 409, key);
+    assert.match((await answer.json()).error, /the map is the host's/);
+  }
+  assert.equal(network.length, 0, "nothing reached this device's own files");
+  stopRemoteRuntime();
 });
 
 test("a document the host has not sent yet is waited for, then served; an optional one falls back to this device", async () => {

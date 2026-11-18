@@ -18,7 +18,8 @@
 
 import { useSyncExternalStore } from "react";
 import { JSON_URLS, publishJsonWriteBatch } from "../../runtime/assets.js";
-import { activateGame, createGame, getLibraryState, refreshLibraryCatalog, setSharedGameEntry } from "../../runtime/library.js";
+import { activateGame, createGame, getLibraryState, libraryStandIns, refreshLibraryCatalog, setSharedGameEntry } from "../../runtime/library.js";
+import { closeStandIn, holdStandIn, standInMark } from "../../runtime/standInGames.js";
 import { normalizeActions, normalizeChats, normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { unseenEvents } from "../../runtime/unseenEvents.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
@@ -413,7 +414,7 @@ export const hostControl = (action, args = null) => current?.screen?.control(act
 
 // The host's scenario must be in this library, with the host's map: the game is
 // drawn on it (client/standIn.js chooses the copy).
-const prepareStandIn = async (owner, lobby, roomId) => {
+const prepareStandIn = async (owner, lobby) => {
   await refreshLibraryCatalog({ force: true }).catch(() => {});
   const library = getLibraryState();
   const hostName = String(lobby?.scenario?.name || "").trim();
@@ -433,44 +434,54 @@ const prepareStandIn = async (owner, lobby, roomId) => {
     throw new Error(differs ? scenarioDiffers(hostName) : scenarioMissing(hostName));
   }
   const scenarioId = String(scenario.id);
-  const key = `oh:mp:standin:${roomId}`;
-  let gameId = "";
-  try {
-    gameId = localStorage.getItem(key) || "";
-  } catch {
-    gameId = "";
-  }
-  if (!gameId || !(library.games ?? []).some((game) => game?.id === gameId)) {
-    // Made with a known id, so its entry has no country from the first moment
-    // it is in the library: for a guest with no games of their own the new one
-    // is the library's game straight away.
-    const wanted = `shared-game-${[...crypto.getRandomValues(new Uint8Array(6))].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-    if (current !== owner) return false;
-    setSharedGameEntry({ gameId: wanted, country: "" });
-    const created = await createGame({
-      id: wanted,
-      scenarioId,
-      // A host sharing a game that was itself a shared game's stand-in names
-      // it "Shared game: …" already: said once.
-      name: `Shared game: ${String(lobby?.settings?.name || "with friends").replace(/^(?:shared game:\s*)+/i, "").slice(0, 60) || "with friends"}`,
-      gamePatch: { country: String(lobby?.countries?.[0] || "") },
-    }, { forSharedGame: true });
-    gameId = String(created?.id || created?.game?.id || "");
-    try {
-      if (gameId) localStorage.setItem(key, gameId);
-    } catch {
-      // it is made again next time
-    }
-  }
-  if (!gameId) throw new Error("Could not make a local game to show the shared one in.");
-  // Left meanwhile: nothing to open.
+  // A stand-in of its own for this sitting (runtime/standInGames.js): its record
+  // says it is one, and which game was open before it, to go back to when the
+  // shared game closes. It is never listed, kept or hosted; one an earlier page
+  // left behind was closed when the app started.
+  // Made with a known id, so its entry has no country from the first moment it
+  // is in the library: for a guest with no games of their own the new one is
+  // the library's game straight away.
+  const wanted = `shared-game-${[...crypto.getRandomValues(new Uint8Array(6))].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
   if (current !== owner) return false;
+  // Held from before it exists, so no start of the app elsewhere takes it for one left behind.
+  owner.releaseStandIn = holdStandIn(wanted);
+  setSharedGameEntry({ gameId: wanted, country: "" });
+  const created = await createGame({
+    id: wanted,
+    scenarioId,
+    // A game hosted from a stand-in made before stand-ins said what they are is
+    // named "Shared game: …" already: said once.
+    name: `Shared game: ${String(lobby?.settings?.name || "with friends").replace(/^(?:shared game:\s*)+/i, "").slice(0, 60) || "with friends"}`,
+    gamePatch: { country: String(lobby?.countries?.[0] || ""), ...standInMark({ returnTo: String(library.activeGameId || "") }) },
+  }, { forSharedGame: true });
+  const gameId = String(created?.id || created?.game?.id || "");
+  if (!gameId) throw new Error("Could not make a local game to show the shared one in.");
+  owner.gameId = gameId;
+  // Left meanwhile: closed again, and nothing to open.
+  if (current !== owner) {
+    await closeStandInOf(owner);
+    return false;
+  }
   // No country until one is taken: the stand-in's own is only a placeholder,
   // and it must not be what the loading screen names.
-  owner.gameId = gameId;
   setSharedGameEntry({ gameId, country: "" });
   await activateGame(gameId, { forSharedGame: true });
   return current === owner;
+};
+
+// The page's stand-in, closed with its shared game: the game open before it is
+// the active one again, the stand-in is deleted, and its lock let go.
+const closeStandInOf = async (owner) => {
+  if (!owner?.gameId) {
+    owner?.releaseStandIn?.();
+    return;
+  }
+  const gameId = owner.gameId;
+  owner.gameId = "";
+  await refreshLibraryCatalog({ force: true }).catch(() => {});
+  const entry = libraryStandIns().find((standIn) => standIn.id === gameId);
+  if (entry) await closeStandIn(entry);
+  owner.releaseStandIn?.();
 };
 
 // A join that is still asking its own server whether it may begin.
@@ -547,7 +558,7 @@ export const joinSharedGame = async ({ token, name } = {}) => {
       if (message.t === "lobby" && current && !current.preparing) {
         const owner = current;
         set({ standIn: "preparing" });
-        owner.preparing = prepareStandIn(owner, message, invite.roomId)
+        owner.preparing = prepareStandIn(owner, message)
           .then((ready) => {
             if (!ready || current !== owner) return;
             startViews();
@@ -604,5 +615,8 @@ export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
   setWorldLanguage("");
   // Back to this device's own documents, and the library's own entry.
   setSharedGameEntry(null);
+  // A guest's stand-in goes with its shared game, and the game open before it
+  // is the library's again (runtime/standInGames.js). The host's game is its own.
+  if (leaving && !leaving.screen) await closeStandInOf(leaving);
   await refreshLibraryCatalog({ force: true }).catch(() => {});
 };

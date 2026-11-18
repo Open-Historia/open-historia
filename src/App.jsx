@@ -45,6 +45,7 @@ import {
   runStartupPreload,
 } from "./runtime/preload.js";
 import { ensureLibraryCatalog, useLibraryState } from "./runtime/library.js";
+import { closeAbandonedStandIns } from "./runtime/standInGames.js";
 import { hasEnteredGame, useGameEntered } from "./runtime/gameEntry.js";
 import { VaultDoor } from "./Game/GameUI/VaultDoor.jsx";
 import { holdMusicBehindDoor } from "./runtime/ambientMusic.js";
@@ -223,6 +224,10 @@ function GameApp() {
     }, STARTUP_TIME_BUDGET_MS);
 
     ensureLibraryCatalog()
+      // A shared game's stand-in that a page left behind (a reload, a crash) is
+      // closed before the menu shows (runtime/standInGames.js): it would be the
+      // active game, and Continue would open it as one of the player's.
+      .then(() => closeAbandonedStandIns())
       .catch((error) => {
         console.warn("Failed to load library catalog at startup:", error);
       })

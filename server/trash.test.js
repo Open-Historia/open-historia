@@ -159,3 +159,23 @@ test("each shelf empties its own kind", () => {
   assert.equal(result.emptied, 1);
   assert.deepEqual(result.left, ["scenario"]);
 });
+
+// A shared game's stand-in held nothing of the player's (its documents were the host's view), and it is made again at
+// every sitting: in the trash it was one "Shared game: ..." entry a sitting, among the player's own deleted games
+// (server/sharedGameStandIn.js). Its record says what it is; the library lists it apart, and a delete is for good.
+test("a shared game's stand-in is listed as one, and deleting it is for good: nothing in the trash", () => {
+  const result = run(`
+    store.createScenario({ id: "vinland", name: "Vinland" });
+    store.createGame({ id: "mine", name: "Mine", scenarioId: "vinland", setActive: true });
+    store.createGame({ id: "shared-game-1", name: "Shared game: Friday", scenarioId: "vinland", gamePatch: { country: "", sharedGameStandIn: { returnTo: "mine" } } });
+    const listed = store.getLibraryCatalog().games.map((game) => ({ id: game.id, standIn: game.standIn ?? null }));
+    store.deleteGame("shared-game-1");
+    ${report(`{ listed, after: gameIds(), trash: store.listTrash().length, gone: !fs.existsSync(path.join(dataDir, "games", "shared-game-1")) }`)}
+  `);
+  assert.equal(result.listed.length, 2);
+  assert.deepEqual(result.listed.find((game) => game.id === "shared-game-1").standIn, { returnTo: "mine" });
+  assert.equal(result.listed.find((game) => game.id === "mine").standIn, null, "a game of the player's says nothing");
+  assert.deepEqual(result.after, ["mine"]);
+  assert.equal(result.trash, 0);
+  assert.equal(result.gone, true);
+});

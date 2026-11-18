@@ -185,11 +185,15 @@ const withSharedGameEntry = (game) => (sharedGameEntry && game?.id === sharedGam
 
 const applyLibraryCatalog = (catalog) => {
   lastCatalog = catalog;
-  const games = Array.isArray(catalog?.games) ? catalog.games.map((game) => withSharedGameEntry(withOpenGameCountry(game))) : [];
+  const every = Array.isArray(catalog?.games) ? catalog.games.map((game) => withSharedGameEntry(withOpenGameCountry(game))) : [];
+  // A shared game's stand-in (server/sharedGameStandIn.js) is never one of the
+  // player's games: the list leaves it out. While its shared game is open it is
+  // still the game the page runs on, so the active game is found among all.
+  const games = every.filter((game) => !game.standIn);
   const scenarios = Array.isArray(catalog?.scenarios) ? catalog.scenarios : [];
   const activeGameId = catalog?.activeGameId ?? games[0]?.id ?? null;
   const selectedScenarioId = catalog?.selectedScenarioId ?? scenarios[0]?.id ?? null;
-  const activeGame = games.find((entry) => entry.id === activeGameId) ?? null;
+  const activeGame = every.find((entry) => entry.id === activeGameId) ?? null;
   const selectedScenario = scenarios.find((entry) => entry.id === selectedScenarioId) ?? null;
   const runtimeScenario =
     scenarios.find((entry) => entry.id === catalog?.runtimeScenario?.id) ??
@@ -280,6 +284,13 @@ export const setOpenGameCountry = (gameId, country) => {
 
 export const getLibraryState = () => libraryState;
 
+// Every shared game's stand-in in this library, as the library last read it:
+// [{ id, standIn: { returnTo } }]. The list of games never shows them
+// (applyLibraryCatalog); runtime/standInGames.js closes them.
+export const libraryStandIns = () => (Array.isArray(lastCatalog?.games) ? lastCatalog.games : [])
+  .filter((game) => game?.standIn && game.id)
+  .map((game) => ({ id: String(game.id), standIn: { returnTo: String(game.standIn.returnTo ?? "") } }));
+
 export const subscribeToLibraryState = (listener) => {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -360,6 +371,7 @@ export const createScenario = async (payload) => {
 };
 
 export const saveScenario = async (scenarioId, payload, { refresh = true } = {}) => {
+  assertSharedMapKept(scenarioId);
   const details = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}`, {
     body: payload,
     method: "PUT",
@@ -378,6 +390,7 @@ export const selectScenario = async (scenarioId) => {
 };
 
 export const removeScenario = async (scenarioId) => {
+  assertSharedMapKept(scenarioId);
   const catalog = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}`, {
     method: "DELETE",
   });
@@ -418,6 +431,7 @@ export const downloadScenarioJsonAsset = async (scenarioId, assetKey, { coarse =
 };
 
 export const uploadScenarioAsset = async (scenarioId, assetKey, file, { refresh = true } = {}) => {
+  assertSharedMapKept(scenarioId);
   const response = await fetch(
     `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}`,
     {
@@ -435,6 +449,7 @@ export const uploadScenarioAsset = async (scenarioId, assetKey, file, { refresh 
 };
 
 export const clearScenarioAsset = async (scenarioId, assetKey, { refresh = true } = {}) => {
+  assertSharedMapKept(scenarioId);
   const details = await requestJson(
     `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}`,
     {
@@ -446,6 +461,7 @@ export const clearScenarioAsset = async (scenarioId, assetKey, { refresh = true 
 };
 
 export const uploadGameAsset = async (gameId, assetKey, file, { refresh = true } = {}) => {
+  assertNoSharedGame();
   const response = await fetch(
     `${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/assets/${encodeURIComponent(assetKey)}`,
     {
@@ -463,6 +479,7 @@ export const uploadGameAsset = async (gameId, assetKey, file, { refresh = true }
 };
 
 export const clearGameAsset = async (gameId, assetKey, { refresh = true } = {}) => {
+  assertNoSharedGame();
   const details = await requestJson(
     `${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/assets/${encodeURIComponent(assetKey)}`,
     {
@@ -493,6 +510,7 @@ export const importScenarioBundle = async (bundle) => {
 // "Update" button. Keeps the local scenario id, so games that reference it
 // keep working.
 export const updateScenarioFromBundle = async (scenarioId, bundle) => {
+  assertSharedMapKept(scenarioId);
   const details = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/import`, {
     body: bundle,
     method: "PUT",
@@ -567,6 +585,31 @@ const assertNoSharedGame = ({ forSharedGame = false } = {}) => {
   if (sharedGameEntry && !forSharedGame) throw new Error(SHARED_GAME_OPEN);
 };
 
+// Nor is the map the shared game is drawn on changed under it: a guest's own
+// copy of the host's scenario is checked against the host's map once, when it
+// joins (client/standIn.js), and a Workshop save or a hub update of that copy
+// mid-game drew another world on that screen alone, unseen (the gap audit of
+// 2026-11-18). Every other scenario is the player's to change as ever; the
+// host's own computer refuses the hosted one in its server too.
+export const SHARED_MAP_HELD = "Leave the shared game first: its map is this scenario's, and stays as the host's while the game is open.";
+const sharedScenarioId = () => {
+  if (!sharedGameEntry) return "";
+  const game = (Array.isArray(lastCatalog?.games) ? lastCatalog.games : []).find((entry) => entry?.id === sharedGameEntry.gameId);
+  return String(game?.scenarioId ?? "");
+};
+const assertSharedMapKept = (scenarioId) => {
+  const held = sharedScenarioId();
+  if (held && held === String(scenarioId ?? "")) throw new Error(SHARED_MAP_HELD);
+};
+
+// A shared game's stand-in (server/sharedGameStandIn.js) is opened by its
+// shared game alone: never as a game of the player's, before or after.
+export const STAND_IN_CLOSED = "That game only showed a shared game, and is gone with it.";
+// And what hosting one is told (multiplayer/host/engineMain.js, ui/LobbiesTab.jsx).
+export const STAND_IN_NOT_SHARED = "This game only showed a shared game you joined, so it cannot be shared. Open one of your own games to host.";
+const isStandInGame = (gameId) => (Array.isArray(lastCatalog?.games) ? lastCatalog.games : [])
+  .some((game) => game?.id === gameId && game.standIn);
+
 export const createGame = async (payload, { forSharedGame = false } = {}) => {
   assertNoSharedGame({ forSharedGame });
   announceGameOpening(payload?.scenarioId ?? payload?.id ?? "");
@@ -602,11 +645,14 @@ export const saveGame = async (gameId, payload, { refresh = true, forSharedGame 
   return details;
 };
 
-export const activateGame = async (gameId, { forSharedGame = false } = {}) => {
+// `enter: false`: the game is made the active one and not opened (the page is
+// about to load again, as when a shared game closes, runtime/standInGames.js).
+export const activateGame = async (gameId, { forSharedGame = false, enter = true } = {}) => {
   assertNoSharedGame({ forSharedGame });
+  if (!forSharedGame && isStandInGame(gameId)) throw new Error(STAND_IN_CLOSED);
   // The loading screen comes up now, not when the new UI mounts a round trip
   // later (GameUI/gameLoadingScreen.jsx).
-  announceGameOpening(gameId);
+  if (enter) announceGameOpening(gameId);
   const catalog = await requestJson(`${GAMES_API_ROOT}/active`, {
     body: { gameId },
     method: "PUT",
@@ -617,7 +663,7 @@ export const activateGame = async (gameId, { forSharedGame = false } = {}) => {
   // applied, so the map mounts for the game that was asked for; and whether or
   // not the active id changed, since Play on the game that was already the
   // active one changes nothing else.
-  enterGame();
+  if (enter) enterGame();
   return state;
 };
 
@@ -656,6 +702,7 @@ export const emptyTrash = async (kind) =>
 // imported or updated, downloaded since (src/runtime/missingBasemap.js):
 // payload is { dataUrl } or { geojson }.
 export const restoreScenarioBasemap = async (scenarioId, payload) => {
+  assertSharedMapKept(scenarioId);
   const details = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/basemap`, {
     body: { payload },
     method: "PUT",

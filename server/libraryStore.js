@@ -3,6 +3,7 @@ import fs from "fs";
 import { scenarioFilesFingerprint } from "./scenarioFingerprint.js";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "./gameFeatures.js";
 import { assertEconomicDisplayCurrencyChoice } from "./economicDisplayCurrency.js";
+import { standInOf } from "./sharedGameStandIn.js";
 import { layOutScenarioBundle } from "./mapProjection.js";
 import path from "path";
 import url from "url";
@@ -1924,6 +1925,9 @@ const readGameFigures = (gameId) => {
       Number.isFinite(Number(gameData?.round)) && Number(gameData.round) > 0
         ? Math.trunc(Number(gameData.round))
         : 1,
+    // A shared game's frame on this device, which the library never lists
+    // (server/sharedGameStandIn.js).
+    standIn: standInOf(gameData),
   };
   gameFiguresCache.set(gameId, { stamp, figures });
   return figures;
@@ -1981,6 +1985,7 @@ const buildGameCatalog = () => {
        ownCoverImageUrl,
        pendingActions: figures.pendingActions,
        round: figures.round,
+       ...(figures.standIn ? { standIn: figures.standIn } : {}),
        scenarioAccentColor: scenario?.accentColor ?? meta.accentColor,
        // The first client reader of `missing`: pressing Play on a game whose map
        // is not here has to offer to go and get it rather than open a blank world.
@@ -3070,7 +3075,12 @@ const deleteGame = (gameId) => {
   // Deleting the open game opens the next one: not under a game being hosted.
   if (getGameManifest().activeGameId === gameId) assertActiveGameMayChange("");
 
-  moveDirectoryToTrash(resolved, "game", gameId);
+  // A shared game's stand-in held nothing of the player's (its documents were
+  // the host's view): gone for good, and never a "Recently deleted" entry
+  // among the player's own (server/sharedGameStandIn.js). Tried again a few
+  // times, as the trash's own move is, while a handle on Windows lets go.
+  if (standInOf(readJsonFile(getGameJsonPath(gameId, "game"), {}))) fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 4, retryDelay: 150 });
+  else moveDirectoryToTrash(resolved, "game", gameId);
   invalidateOwnerSchemaCache("game", gameId);
   gameFiguresCache.delete(gameId);
 

@@ -36,6 +36,12 @@ const REQUIRED_KEYS = new Set(["world", "game", "events", "chat", "actions"]);
 const VIEW_KEY_SET = new Set(VIEW_KEYS);
 // The rollback archive is the host's; a player has none.
 const HOST_ONLY_KEYS = new Set(["snapshots", "snapshotsIndex"]);
+// The map's own documents, read from this device's copy of the host's scenario
+// (checked against the host's map when the player joined, client/standIn.js):
+// read as ever, never written while the game is shared, or this screen alone
+// would draw another world from then on (runtime/library.js SHARED_MAP_HELD
+// holds the library's own doors the same way).
+const MAP_KEYS = new Set(["regionsGeojson", "citiesGeojson", "backgroundData", "ownBasemapsData"]);
 
 let installed = false;
 let current = null;
@@ -142,6 +148,7 @@ export const installRemoteRuntime = ({ target = globalThis, waitMs = 20_000 } = 
     if (HOST_ONLY_KEYS.has(key)) {
       return method === "GET" || method === "HEAD" ? jsonResponse([]) : refusal("In a shared game, only the host can roll back.");
     }
+    if (MAP_KEYS.has(key) && method !== "GET" && method !== "HEAD") return refusal("In a shared game, the map is the host's and is not changed here.");
     if (!VIEW_KEY_SET.has(key)) return originalFetch(input, init);
 
     if (method === "GET" || method === "HEAD") {

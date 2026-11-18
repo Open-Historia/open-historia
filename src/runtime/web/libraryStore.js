@@ -47,6 +47,7 @@ import COMMON_NAME_RENAMES from "./generated/commonNames.js";
 import { planRestorePointSlots, publicRestorePointIndex } from "../../../server/restorePoints.js";
 import { coverObjectUrl } from "./coverUrls.js";
 import { mapLogicFingerprint } from "../../../server/mapLogicFingerprint.js";
+import { standInOf } from "../../../server/sharedGameStandIn.js";
 import { createCoarseRegionsCache } from "./coarseRegionsCache.js";
 import { onMemoryPressure } from "../memoryPressure.js";
 import { musicTracksDropped, usedMusicTrackIds } from "../../../server/keptMusic.js";
@@ -97,6 +98,9 @@ const projectGameMeta = (record) => {
     eventCount: Array.isArray(events) ? events.length : 0,
     pendingActions: Array.isArray(actions)
       ? actions.filter((e) => String(e?.status ?? "").trim() !== "resolved").length : 0,
+    // A shared game's frame on this device, which the library never lists
+    // (server/sharedGameStandIn.js).
+    standIn: standInOf(game),
     // False once the record's restore points are in their own store (a row
     // written before that has no such field); migrateStoreLayout reads it.
     inlineRestorePoints: gameSnapshots(record) !== undefined,
@@ -490,6 +494,7 @@ const getGameCatalog = async (scenarioCatalog, gameMetas) => {
       ownCoverImageUrl,
       pendingActions: proj.pendingActions ?? 0,
       round: proj.round ?? 1,
+      ...(proj.standIn ? { standIn: proj.standIn } : {}),
       scenarioAccentColor: scenario?.accentColor ?? meta.accentColor,
       // Server twin: the first client reader of `missing` is the Play button.
       scenarioMissing: Boolean(scenario?.missing),
@@ -1636,9 +1641,14 @@ const setActiveGame = async (gameId) => {
 // The record goes into the trash with its row, its cover, every restore point
 // stored under its id and its kept turn (moveToTrash).
 const deleteGame = async (id) => {
+  // A shared game's stand-in held nothing of the player's (its documents were
+  // the host's view): gone for good, and never one of the few deleted games the
+  // trash keeps, which it would push out (server/sharedGameStandIn.js). Read
+  // from its lean catalog row, which says so, not its whole record.
+  const keep = !(await idbGet(STORES.gameMeta, id))?.standIn;
   // In the write queue: a turn commit that read the game before the move would
   // otherwise put it back beside its trash entry.
-  await serializeWrite(() => moveToTrash("game", id));
+  await serializeWrite(() => moveToTrash("game", id, Date.now(), { keep }));
   const manifest = await getGameManifest();
   const remaining = resolveOrderedIds(manifest.order.filter((e) => e !== id), await listGameIds(), DEFAULT_GAME_ID);
   const activeGameId = manifest.activeGameId === id ? (remaining[0] ?? "") : manifest.activeGameId;
@@ -1668,7 +1678,9 @@ const trashRowStores = (kind) => [...recordRowStores(kind), ...(kind === "game" 
 // library and puts it in the trash (idbMovePair), its cover and a game's restore
 // points inside it (takeRecordRows). A kept turn never outlives its game, so a
 // later game given the same id cannot be offered it: it goes into the entry too.
-const moveToTrash = async (kind, id, now = Date.now()) => {
+// `keep: false`: moved and then deleted for good, in place of a trash entry
+// (a shared game's stand-in); what the trash holds is not touched.
+const moveToTrash = async (kind, id, now = Date.now(), { keep = true } = {}) => {
   const entry = `${kind}-${id}-${now.toString(36)}`;
   const deletedAt = new Date(now).toISOString();
   await idbMovePair(trashRecordStore(kind), trashIndexStore(kind), id, STORES.trash, STORES.trashMeta, async (record, tx) => {
@@ -1682,6 +1694,10 @@ const moveToTrash = async (kind, id, now = Date.now()) => {
       { id: entry, kind, itemId: id, name, deletedAt, ...(scenarioId ? { scenarioId } : {}) },
     ];
   }, trashRowStores(kind));
+  if (!keep) {
+    await idbDeletePair(STORES.trash, STORES.trashMeta, entry);
+    return;
+  }
   await purgeTrash(now);
 };
 

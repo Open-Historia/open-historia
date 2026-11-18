@@ -1625,3 +1625,20 @@ test("a scenario's map has the desktop's checksum for the same map, so a website
   assert.notEqual(asked.fingerprint, split);
   assert.equal((await scenarios("GET", "no-such-map/fingerprint")).status, 404);
 });
+
+// A shared game's stand-in (server/sharedGameStandIn.js) is made again at every sitting and held nothing of the
+// player's. In the trash it was one entry a sitting, and the trash keeps only five: five sittings pushed out every game
+// the player had deleted. Its record says what it is; the library lists it apart, and its delete is for good.
+test("a shared game's stand-in is listed as one, and deleting it is for good, leaving the trash as it was", async () => {
+  await reset();
+  const mine = await newGame("Mine");
+  ok(await games("DELETE", await newGame("Deleted earlier")));
+  const standIn = ok(await games("POST", "", { name: "Shared game: Friday", scenarioId: "default", gamePatch: { country: "", sharedGameStandIn: { returnTo: mine } } })).game.id;
+  const listed = (await library()).games;
+  assert.deepEqual(listed.find((game) => game.id === standIn).standIn, { returnTo: mine });
+  assert.equal("standIn" in listed.find((game) => game.id === mine), false, "a game of the player's says nothing");
+  ok(await games("DELETE", standIn));
+  assert.equal((await library()).games.some((game) => game.id === standIn), false);
+  const kept = ok(await trash("GET", "")).entries;
+  assert.deepEqual(kept.map((entry) => entry.name), ["Deleted earlier"]);
+});
