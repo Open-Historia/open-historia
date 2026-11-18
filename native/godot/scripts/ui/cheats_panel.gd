@@ -1921,7 +1921,7 @@ func _ce_field(label: String, key: String, refresh_label: Label = null) -> Contr
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 4)
 	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	column.add_child(UI.label(label.to_upper(), 10, Color(1, 1, 1, 0.75), 700, "Arial", 1))
+	column.add_child(_field_caption(label))
 	var on_change := func(text: String) -> void:
 		_ce_set(key, text)
 		if refresh_label and is_instance_valid(refresh_label):
@@ -2011,7 +2011,7 @@ func _render_country_form(target: String) -> void:
 		var derived := VBoxContainer.new()
 		derived.add_theme_constant_override("separation", 4)
 		derived.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		derived.add_child(UI.label("GDP / CAPITA · DERIVED", 10, Color(1, 1, 1, 0.75), 700, "Arial", 1))
+		derived.add_child(_field_caption("GDP / capita · derived"))
 		var derived_box := PanelContainer.new()
 		derived_box.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.28)), UiTheme.pick("line", Color(1, 1, 1, 0.16)), 8, 1, Vector4(9, 7, 9, 7)))
 		derived_box.add_child(per_capita_label)
@@ -2071,6 +2071,14 @@ func _render_country_form(target: String) -> void:
 	_body.add_child(actions)
 
 
+func _field_caption(text: String) -> Label:
+	var caption := UI.label(text.to_upper(), 10, Color(1, 1, 1, 0.75), 700, "Arial", 1)
+	caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	caption.custom_minimum_size.x = 1
+	caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return caption
+
+
 func _render_capabilities() -> void:
 	_body.add_child(_gap(10))
 	var box: Array = _field_box(6)
@@ -2086,7 +2094,7 @@ func _render_capabilities() -> void:
 		var cell := VBoxContainer.new()
 		cell.add_theme_constant_override("separation", 4)
 		cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		cell.add_child(UI.label(str(field.get("label", key)).to_upper(), 10, Color(1, 1, 1, 0.75), 700, "Arial", 1))
+		cell.add_child(_field_caption(str(field.get("label", key))))
 		var in_custom := key == "intelligence" and shared_intelligence
 		var shown := str(_sd("ce_custom").get("intelligenceService", "")) if in_custom else str(_sd("ce_caps").get(key, ""))
 		var placeholder := "Unrated (default 40)" if key == "intelligence" else "Scenario/default"
@@ -2121,7 +2129,7 @@ func _render_custom_stats(stats_meta: Dictionary) -> void:
 			var cell := VBoxContainer.new()
 			cell.add_theme_constant_override("separation", 3)
 			cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			cell.add_child(UI.label(str(stat.get("label", key)).to_upper(), 10, Color(1, 1, 1, 0.75), 700, "Arial", 1))
+			cell.add_child(_field_caption(str(stat.get("label", key))))
 			var decimals := int(stat.get("decimals", 0))
 			var minimum: float = float(stat["minimum"]) if stat.get("minimum") != null else -INF
 			var maximum: float = float(stat["maximum"]) if stat.get("maximum") != null else INF
@@ -2843,7 +2851,7 @@ func _cp_field(label: String, field: Control) -> Control:
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 4)
 	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	column.add_child(UI.label(label.to_upper(), 10, Color(1, 1, 1, 0.75), 700, "Arial", 1))
+	column.add_child(_field_caption(label))
 	column.add_child(field)
 	return column
 
