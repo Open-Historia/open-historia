@@ -600,15 +600,15 @@ func _stats(value: Dictionary) -> void:
 		await _type(section_name, "Économie rurale")
 	sections = (last_stats as Dictionary)["sections"]
 	_check(str((sections[4] as Dictionary)["key"]) == "economieRurale", "accented section name folds like the engine (economieRurale)")
-	var labels := ["Économie nationale", "½ ﬁsh", "1st place", "", "Ölçü", "Straße", "Ⅻ legions", "  spaced   out  ", "naïve café", "東京"]
+	var labels := ["Économie nationale", "½ ﬁsh", "1st place", "", "Ölçü", "Straße", "Ⅻ legions", "  spaced   out  ", "naïve café", "東京", "Военный бюджет", "한국 경제", "がっこう", "Σοφία", "™ mark", "İstanbul", "١٢٣"]
 	var reply: Dictionary = await main.engine.request("editor.rules.statSheet", {"value": last_stats, "labels": labels})
 	var engine_keys: Array = reply.get("result", {}).get("keys", [])
 	var keys_match := engine_keys.size() == labels.size()
 	for index in range(labels.size()):
-		if keys_match and EditorStatKeys.to_key(labels[index]) != str(engine_keys[index]):
+		if engine_keys.size() == labels.size() and EditorStatKeys.to_key(labels[index]) != str(engine_keys[index]):
 			keys_match = false
 			_say("key mismatch for %s: mine %s, engine %s" % [labels[index], EditorStatKeys.to_key(labels[index]), engine_keys[index]])
-	_check(keys_match, "statistic keys match the engine for accented and symbol labels")
+	_check(keys_match, "statistic keys match the engine for accented and symbol labels, and in every script")
 	_check(int(reply.get("result", {}).get("total", -1)) == sheet._total_stats(), "statistic count matches the engine (%d)" % sheet._total_stats())
 	var standard := _find_button(sheet, "Use standard sheet", 0)
 	if standard:

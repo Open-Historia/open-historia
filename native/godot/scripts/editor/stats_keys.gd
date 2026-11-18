@@ -1943,7 +1943,11 @@ const FOLD := {
 	130041: "9",
 }
 
+const UNICODE := preload("res://scripts/editor/stats_key_unicode.gd")
+const BASE36 := "0123456789abcdefghijklmnopqrstuvwxyz"
+
 static var _pattern: RegEx
+static var _spaces: RegEx
 
 
 static func pattern() -> RegEx:
@@ -1956,7 +1960,107 @@ static func is_key(value: String) -> bool:
 	return pattern().search(value) != null
 
 
+static func _clean(value: String) -> String:
+	if _spaces == null:
+		_spaces = RegEx.create_from_string("\\s+")
+	return _spaces.sub(value, " ", true).strip_edges()
+
+
+static func _within(ranges: Array, code: int) -> bool:
+	var low := 0
+	var high := ranges.size() / 2 - 1
+	while low <= high:
+		var middle := (low + high) / 2
+		if code < int(ranges[middle * 2]):
+			high = middle - 1
+		elif code > int(ranges[middle * 2 + 1]):
+			low = middle + 1
+		else:
+			return true
+	return false
+
+
+static func _codes(text: String) -> Array[int]:
+	var codes: Array[int] = []
+	for index in range(text.length()):
+		codes.append(text.unicode_at(index))
+	return codes
+
+
+static func _decomposed(codes: Array[int]) -> Array[int]:
+	var out: Array[int] = []
+	for code in codes:
+		if code >= 0xAC00 and code <= 0xD7A3:
+			var index := code - 0xAC00
+			out.append(0x1100 + index / 588)
+			out.append(0x1161 + (index % 588) / 28)
+			if index % 28 != 0:
+				out.append(0x11A7 + index % 28)
+		elif UNICODE.DECOMPOSED.has(code):
+			for part in UNICODE.DECOMPOSED[code]:
+				out.append(int(part))
+		else:
+			out.append(code)
+	return out
+
+
+static func _lowered(codes: Array[int]) -> Array[int]:
+	var out: Array[int] = []
+	for code in codes:
+		if code >= 65 and code <= 90:
+			out.append(code + 32)
+		elif UNICODE.LOWER.has(code):
+			for part in UNICODE.LOWER[code]:
+				out.append(int(part))
+		else:
+			out.append(code)
+	return out
+
+
+static func _unmarked(codes: Array[int]) -> Array[int]:
+	var out: Array[int] = []
+	for code in codes:
+		if code < 0x300 or code > 0x36F:
+			out.append(code)
+	return out
+
+
+static func is_latin_name(value: String) -> bool:
+	for code in _lowered(_unmarked(_decomposed(_lowered(_codes(_clean(value)))))):
+		if _within(UNICODE.LETTERS, code) and not (code >= 97 and code <= 122):
+			return false
+		if _within(UNICODE.NUMBERS, code) and not (code >= 48 and code <= 57):
+			return false
+	return true
+
+
+static func label_digest(value: String) -> String:
+	var kept: Array[int] = []
+	for code in _lowered(_unmarked(_decomposed(_codes(_clean(value))))):
+		if _within(UNICODE.LETTERS, code) or _within(UNICODE.MARKS, code) or _within(UNICODE.NUMBERS, code):
+			kept.append(code)
+	if kept.is_empty():
+		return ""
+	var hash := 2166136261
+	for code in kept:
+		hash = ((hash ^ code) * 16777619) & 0xFFFFFFFF
+	if hash == 0:
+		return "0"
+	var digits := ""
+	while hash > 0:
+		digits = BASE36[hash % 36] + digits
+		hash /= 36
+	return digits
+
+
+static func _digest_key(value: String) -> String:
+	var digest := label_digest(value)
+	return "stat" + digest if not digest.is_empty() else ""
+
+
 static func to_key(value: String) -> String:
+	if not is_latin_name(value):
+		return _digest_key(value)
 	var text := value.strip_edges()
 	var spaced := ""
 	for index in range(text.length()):
@@ -1971,7 +2075,7 @@ static func to_key(value: String) -> String:
 	for word in spaced.split(" ", false):
 		words.append(word)
 	if words.is_empty():
-		return ""
+		return _digest_key(value)
 	var key := ""
 	for index in range(words.size()):
 		var lower := words[index].to_lower()
