@@ -58,6 +58,19 @@ export const setSharedGamePeople = (names) => {
   people = next.length ? Object.freeze(next) : NOBODY;
   for (const listener of [...roleListeners]) listener();
 };
+// How many days each round of this shared game moves the world (the lobby's
+// settings, host/settings.js daysPerRound): the Timeline panel shows the round
+// in place of the skip lengths, which no page of a shared game can run. 0 in no
+// shared game. For useSyncExternalStore, with the role's subscription.
+let roundDays = 0;
+export const sharedRoundDays = () => roundDays;
+export const setSharedRoundDays = (days) => {
+  const next = Number.isFinite(Number(days)) && Number(days) >= 1 ? Math.trunc(Number(days)) : 0;
+  if (next === roundDays) return;
+  roundDays = next;
+  for (const listener of [...roleListeners]) listener();
+};
+
 export const playedByPerson = (country) => {
   const key = String(country ?? "").replace(/\s+/g, " ").trim().toLowerCase();
   return Boolean(key) && people.some((name) => name.toLowerCase() === key);

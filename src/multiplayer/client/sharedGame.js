@@ -26,7 +26,7 @@ import { GENERATION_COMPLETE_EVENT, adoptStoredAiRecord } from "../../Game/AI/te
 import { planWorldWrite, revealedTurnOf, suggestionsOutlived, unroutedChanges } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
-import { SHARED_ROUND_LANDED, setSharedGamePeople, setSharedGameRole, setSharedRequester, setSharedRoundBase } from "./sharedGameBridge.js";
+import { SHARED_ROUND_LANDED, setSharedGamePeople, setSharedGameRole, setSharedRequester, setSharedRoundBase, setSharedRoundDays } from "./sharedGameBridge.js";
 import { roundBaseOf } from "./roundBase.js";
 import { createLoopbackScreenSide } from "../transport/loopback.js";
 import { createClientSession } from "../session/client.js";
@@ -60,6 +60,8 @@ const IDLE = Object.freeze({
   // "" | preparing | ready. Countries are offered only once it is ready, so
   // the page never shows its own game where the shared one should be.
   standIn: "",
+  // The game's date as this page's view has it (the round bar, ui/SharedGameOverlay.jsx).
+  date: "",
   error: "",
 });
 
@@ -233,6 +235,8 @@ const applyToRuntime = (view) => {
   if (applied && owner.gameId && game && typeof game === "object") {
     setSharedGameEntry({ gameId: owner.gameId, country: game.country, currentDate: game.gameDate });
   }
+  // The game's date, which the round bar names with the date the round lands on.
+  if (applied && game && typeof game === "object" && String(game.gameDate ?? "") !== state.date) set({ date: String(game.gameDate ?? "") });
   // The Events panel opens on the round (GameUI/time.jsx).
   if (applied && landed && typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent(SHARED_ROUND_LANDED, { detail: { round: landed.round, events: landed.eventIds.length } }));
@@ -258,6 +262,8 @@ const makeClient = (send) => createGameClient({
     if (lobby?.settings) setWorldLanguage(lobby.settings.language);
     // And who plays which country: a seat a person's device holds (game/messages.js SEAT `held`), not one they watch.
     if (lobby) setSharedGamePeople((Array.isArray(lobby.seats) ? lobby.seats : []).filter((seat) => seat?.held === true && seat?.status !== "watching").map((seat) => seat.country));
+    // And how far each round moves the world, which the Timeline panel shows in place of its skips.
+    if (lobby?.settings) setSharedRoundDays(lobby.settings.daysPerRound);
     set({
       lobby,
       round,
@@ -589,6 +595,7 @@ export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
   setSharedGameRole("");
   setSharedGamePeople([]);
   setSharedRoundBase(null);
+  setSharedRoundDays(0);
   // This device's own features again, and its own language.
   setSharedGameFeatures(null);
   setWorldLanguage("");

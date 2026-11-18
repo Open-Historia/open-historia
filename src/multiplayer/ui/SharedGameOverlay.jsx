@@ -24,6 +24,7 @@ import {
   useSharedGame,
 } from "../client/sharedGame.js";
 import { OWN_MAP_NOTE, hostLines, joinStage } from "../client/joinProgress.js";
+import { roundDatesOf } from "../client/roundDates.js";
 import { languageDisplayName } from "../../runtime/i18n.js";
 
 const glass = {
@@ -303,6 +304,9 @@ const RoundBar = ({ shared, me, watching = "" }) => {
   }, [round]);
   const ready = Boolean(me && round?.ready?.includes(me));
   const timed = ["planning", "countdown", "revealing"].includes(round?.phase);
+  // The game's date, and where the round lands (client/roundDates.js); while a
+  // landed round is read, where the next one lands.
+  const dates = roundDatesOf(shared.date, shared.lobby?.settings?.daysPerRound);
   const latest = notices?.at(-1);
   const recent = latest && clockState.at - latest.at < 8000 ? latest : null;
 
@@ -310,6 +314,11 @@ const RoundBar = ({ shared, me, watching = "" }) => {
     <div style={{ ...glass, alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.6rem", left: "50%", maxWidth: "calc(100vw - 1.5rem)", padding: "0.45rem 0.6rem 0.45rem 0.9rem", position: "fixed", top: "calc(3.4rem + env(safe-area-inset-top, 0px))", transform: "translateX(-50%)", zIndex: 3500 }}>
       <span style={{ fontSize: "0.82rem", fontWeight: 750 }}>Round {round?.round ?? "–"} · {PHASES[round?.phase] ?? "…"}</span>
       {timed ? <span style={{ fontVariantNumeric: "tabular-nums", fontSize: "0.82rem" }}>{round?.paused ? "Paused" : clock(clockState.remaining)}</span> : null}
+      {dates ? (
+        <span style={{ ...small, ...isolate }} title="The game's date now, and the date the round lands on">
+          {!dates.lands ? dates.now : dates.days === 1 ? `${dates.now} → ${dates.lands} (1 day)` : `${dates.now} → ${dates.lands} (${dates.days} days)`}
+        </span>
+      ) : null}
       <span style={small}>{round ? `${round.ready?.length ?? 0} of ${round.counted ?? 0} ready${round.needed ? ` (countdown at ${round.needed})` : ""}` : ""}</span>
       {["planning", "countdown"].includes(round?.phase) && me ? (
         <button type="button" style={ready ? primary : button} onClick={() => sharedRequest("ready", { value: !ready })}>{ready ? "Ready ✓" : "I'm ready"}</button>
