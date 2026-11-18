@@ -3620,6 +3620,36 @@ test("a request sent again after the game is shared again is answered as it was,
   assert.equal(t.store.docs.chat.flatMap((chat) => chat.messages ?? []).filter((line) => line.text === "A letter to Riga.").length, 1);
 });
 
+// FOLLOWUPS A4: the answer is saved with the session after the request's effect, apart from it. An engine closed in
+// between had written the effect and not the answer, and the request sent again was applied twice.
+test("a request whose effect was written just before the engine closed, its answer never saved, is applied once when sent again", async () => {
+  const campaign = "game-baltic";
+  const s = setup({ campaign });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.clock.flush();
+  // The session as it was last saved: the engine closes after the order below is written, before its answer is saved.
+  const saved = structuredClone(s.store.shared.at(-1));
+  await s.request(s.guest, { t: "order", id: id(2), text: "Hold the line at Narva" });
+  assert.equal(s.ack(s.guest, id(2)).ok, true);
+  assert.equal(s.shown(s.guest).game.sharedRequests, undefined, "no view carries the host's marks");
+  assert.equal(s.shown(s.hostPlayer).game.sharedRequests, undefined);
+  // Shared again from that session, over the documents as the engine left them.
+  const t = setup({ campaign, restored: sessionFromRecord(saved, { campaign, hostDevice: "device-host" }) });
+  Object.assign(t.store.docs, structuredClone(s.store.docs));
+  t.host.join(t.hostPlayer);
+  t.host.join(t.guest);
+  await t.clock.flush();
+  await t.request(t.guest, { t: "order", id: id(2), text: "Hold the line at Narva" });
+  assert.equal(t.ack(t.guest, id(2)).ok, true, "answered as done");
+  assert.equal(t.store.docs.actions.filter((action) => action.text === "Hold the line at Narva").length, 1, "applied once");
+  // A request it never applied is applied as ever.
+  await t.request(t.guest, { t: "order", id: id(4), text: "Raise the Pskov levies" });
+  assert.equal(t.store.docs.actions.filter((action) => action.text === "Raise the Pskov levies").length, 1);
+});
+
 test("a founding the seats never followed (the engine closed after its round's turn was written) is followed when the game is taken up", async () => {
   const campaign = "game-baltic";
   const PSKOV = "Pskov Republic";

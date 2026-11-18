@@ -53,6 +53,7 @@ import { advisorOfSeat } from "../../runtime/seatAdvisors.js";
 import { sharedLetterOf } from "../../Game/AI/sharedLetters.js";
 import { VIEW_PARTS } from "../game/messages.js";
 import { fleetAsSeen, isOwnOrder, linesGivenUpSeenBy, transportSeenBy } from "./onlyOrdered.js";
+import { withoutLedger } from "./requestLedger.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLocaleLowerCase();
@@ -682,7 +683,8 @@ export const projectForViewer = ({ world, game, events, chat, actions, intercept
   return {
     ...parts,
     world: seenWorld,
-    game: copy({ ...(isRecord(game) ? game : {}), country: seat }),
+    // (Without the host's marks of the requests it applied: host/requestLedger.js.)
+    game: copy({ ...(isRecord(game) ? withoutLedger(game) : {}), country: seat }),
     events: copy(seenEvents),
     // Their advisor's conversation, with the secrets their government keeps
     // (advisorDesk.js): made for this view, never stored.

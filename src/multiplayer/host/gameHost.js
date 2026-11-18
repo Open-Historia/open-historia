@@ -72,6 +72,7 @@ import { withAdvisorChanges } from "../game/advisorChanges.js";
 import { advisorOfSeat, withSeatAdvisor } from "../../runtime/seatAdvisors.js";
 import { createRequestWaits } from "./requestWaits.js";
 import { blindId, blindToken } from "../../runtime/blindIds.js";
+import { APPLIED_BEFORE, createRequestLedger, requestStamp } from "./requestLedger.js";
 
 export const MAX_ORDERS_PER_ROUND = 12;
 // Said to the host when a round began while the Game Master thought (control.gameMaster).
@@ -233,7 +234,7 @@ export const createGameHost = ({
   campaignRound = 0,
   // `store` reads and writes the game's documents (read, update*), and the
   // session's own record (writeShared).
-  store,
+  store: givenStore,
   // The round's time skip, for everyone at once. `signal` ends it when the
   // shared game is stopped meanwhile.
   resolveRound = async () => {},
@@ -298,6 +299,10 @@ export const createGameHost = ({
   now = () => Date.now(),
   timers = globalThis,
 } = {}) => {
+  // Every write goes through the store; a player's request's first one marks
+  // the request as applied in the same commit (host/requestLedger.js).
+  const ledger = createRequestLedger(givenStore);
+  const store = ledger.store;
   const seats = createSeatBook({
     countries,
     maxPlayers: settings.seats,
@@ -2402,10 +2407,15 @@ export const createGameHost = ({
         // name the round had renamed or founded away, which nobody played (the
         // review of 2026-11-18, core 1). A seat that has ended meanwhile (its
         // player released, their country gone, or changed) is refused.
+        // And, an entry for a seat, it is kept with its effect: its first write
+        // marks it applied, and finds it marked when it was applied before
+        // the engine closed and its answer was never saved (host/requestLedger.js).
         const apply = () => {
           const acting = needsSeat ? seats.seatById(seat.id) : seat;
           if (needsSeat && acting?.device !== connection.device) return `You no longer play ${seat.country}.`;
-          return handler(connection, message, acting);
+          return queued && needsSeat && id
+            ? ledger.during(requestStamp(connection.device, id), () => handler(connection, message, acting))
+            : handler(connection, message, acting);
         };
         if (id && !AT_ONCE.has(message.t)) waits.begin({ device: connection.device, id, t: message.t, resolving: round.status().phase === "resolving" });
         // An entry is its device's (host/worldQueue.js), so what one player
@@ -2418,6 +2428,8 @@ export const createGameHost = ({
       } catch (failure) {
         // One the host let go of while it waited was never applied, and says why.
         if (failure?.code === DROPPED) error = clean(failure.message).slice(0, 300);
+        // One applied before (its answer lost with the engine) is done: answered so, and applied once.
+        else if (failure?.code === APPLIED_BEFORE) log("info", "a request sent again had been applied already", { t: message.t });
         else {
           log("warn", "request failed", { t: message.t, error: String(failure?.message || failure) });
           error = "The host could not do that.";
