@@ -27,7 +27,7 @@ import { BOUND_REFUSALS, SEAT_WAITING_MOST, advisorPastBound, createSeatBounds }
 import { failureWords, guestFailureWords } from "./failureWords.js";
 import { stakeIn } from "./ownReadings.js";
 import { SEAT_STATUS, createSeatBook } from "./seats.js";
-import { formerNamesOf, groundHeldBy, seatFoundings, seatSuccessions, withGameCountryChanged, withSeatLetGo, withSeatMoved } from "./foundings.js";
+import { formerNamesOf, groundHeldBy, seatFoundings, seatSuccessions, withGameCountryChanged, withSeatGone, withSeatLetGo, withSeatMoved } from "./foundings.js";
 import { holdSeatRecords, returnSeatRecords } from "./heldSeats.js";
 import { sessionRecordOf } from "./sessionRecord.js";
 import { DEFAULT_SETTINGS, REPLY_MODES, gameMasterAllowed, roundSettingsOf } from "./settings.js";
@@ -984,6 +984,7 @@ export const createGameHost = ({
       const seat = seats.vanish(country);
       if (!seat?.device) continue;
       changes.delete(seat.device);
+      await goneSeatOrders(country);
       log("info", "a seat's country is gone; its player watches", { country });
       for (const connection of connections.values()) {
         if (connection.device === seat.device) send(connection, notice("warn", `${country} is gone. You can take any free country under Players, or stay to watch.`, { about: "seat" }));
@@ -996,6 +997,17 @@ export const createGameHost = ({
     if (moves.length) onSeatsMoved(moves.map(({ from, to, host }) => ({ from, to, host })));
     if (moves.length || successions.gone.length || after || asked.renamed.length || asked.gone.length) await seatsChanged({ inEntry: true });
   };
+  // A seat's country gone: the orders its player queued for it and had not
+  // seen carried out are withdrawn, and what each moved on the map undone in
+  // the same write, as their own "unorder" would (host/foundings.js
+  // withSeatGone). They stayed planned under the gone name, and the next skip
+  // read them among the live orders (FOLLOWUPS A3).
+  const goneSeatOrders = (country) => store.updateForces(({ world, actions }) => {
+    const out = withSeatGone({ actions }, { country, host: hostCountry });
+    if (!out.withdrawn.length) return null;
+    const at = new Date(now()).toISOString();
+    return { actions: out.actions, world: out.withdrawn.reduce((next, order) => revertOrderFor(next, order, country, { at }), world) };
+  });
   // A peace or a treaty landed between rounds may annex a country people play:
   // the seats follow in the same entry (`landed`: the landings it told).
   const followLandings = async (landed) => {

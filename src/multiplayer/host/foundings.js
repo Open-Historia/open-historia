@@ -306,6 +306,23 @@ export const withSeatLetGo = ({ actions, world, chats, advisor }, { country, peo
   };
 };
 
+// A seat's country is gone (dissolved, or annexed whole): its player watches
+// it or takes a free country (the owner's decision 11), and the orders they
+// queued for it and had not seen carried out are withdrawn, as their own
+// "unorder" would: no government is left to carry them out. Left planned, the
+// next skip read them among the live orders, under a name nobody plays
+// (FOLLOWUPS A3). What its government knew (its threads, its agents' reports,
+// its board) stays, for the player who watches it to read. `host`: the game's
+// own country, whose orders that name no owner are its own
+// (runtime/humanPolities.js orderOwner). Returns the orders withdrawn (for
+// the map's undo) and the queue without them.
+export const withSeatGone = ({ actions }, { country, host = "" } = {}) => {
+  const theirs = (action) => clean(action?.status || "planned") === "planned"
+    && (same(action?.ownerCode, country) || (!clean(action?.ownerCode) && same(host, country)));
+  const withdrawn = list(actions).filter(theirs);
+  return { withdrawn, actions: list(actions).filter((action) => !withdrawn.includes(action)) };
+};
+
 // The host's own country is gone, and the host takes a free one (the owner's
 // decision 11, for every player): the game is played as `to` from then on
 // (game.country). What single player keeps as the player's without naming it

@@ -232,6 +232,23 @@ test("what the seat's government knows of others' work goes with it, wherever th
   assert.equal(entry("p-ai"), world.projects[1], "an entry nobody knew of is the same entry");
 });
 
+// FOLLOWUPS A3: a gone country's player's queued orders stayed planned under the gone name, and the next skip read
+// them among the live orders.
+test("a seat whose country is gone has its queued orders withdrawn; what was done stays", async () => {
+  const { withSeatGone } = await import("./foundings.js");
+  const queue = [
+    { id: "a", ownerCode: BURGHERS, status: "planned" },
+    { id: "b", ownerCode: BURGHERS, status: "resolved" },
+    { id: "c", ownerCode: HILL, status: "planned" },
+    { id: "d", status: "planned" },
+  ];
+  const out = withSeatGone({ actions: queue }, { country: BURGHERS, host: HILL });
+  assert.deepEqual(out.withdrawn.map((action) => action.id), ["a"]);
+  assert.deepEqual(out.actions.map((action) => action.id), ["b", "c", "d"]);
+  // The host's orders that name no owner are the game country's.
+  assert.deepEqual(withSeatGone({ actions: queue }, { country: HILL, host: HILL }).withdrawn.map((action) => action.id), ["c", "d"]);
+});
+
 test("the list of a seat's records holds every record a view keeps per seat", async () => {
   const { HOST_ONLY_WORLD_KEYS } = await import("./projection.js");
   const projection = fs.readFileSync(new URL("./projection.js", import.meta.url), "utf8");

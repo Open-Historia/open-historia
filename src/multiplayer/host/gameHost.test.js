@@ -2356,6 +2356,35 @@ test("a country annexed whole is gone: its player watches it, and may take any f
   assert.ok(!s.to(s.guest, "lobby").at(-1).seats.some((seat) => seat.status === "watching"));
 });
 
+// FOLLOWUPS A3: the orders a gone country's player had queued stayed planned under the gone name, and the next skip
+// read them among the live orders; a formation it was raising stood on the map for nobody.
+test("a country gone takes its player's queued orders with it, and what they raised on the map is undone", async () => {
+  const s = setup({
+    world: mapWorld(),
+    countriesOf: gameCountries,
+    roundWrites: (docs) => {
+      docs.world.regionOwnershipOverrides["reg-ee"] = RUSSIA;
+      // The round carried out none of Estonia's orders: they were still planned when it landed.
+    },
+    // The host's own map: Estonia holds its ground until the round.
+    readChart: async () => ({ holds: (country) => country === ESTONIA }),
+  });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: ESTONIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "order", id: id(2), text: "Fortify Narva." });
+  await s.request(s.guest, { t: "deploy", id: id(3), name: "Narva Guard", type: "infantry", strength: 20, lng: 28.2, lat: 59.4 });
+  assert.equal(s.ack(s.guest, id(3)).ok, true);
+  assert.equal(s.store.docs.actions.filter((action) => action.ownerCode === ESTONIA).length, 2);
+  assert.ok(s.store.docs.world.units.some((unit) => unit.ownerCode === ESTONIA && unit.status === "pending"));
+  await playRound(s, [s.hostPlayer, s.guest]);
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA]);
+  assert.ok(!s.store.docs.actions.some((action) => action.ownerCode === ESTONIA && action.status === "planned"), "nothing is left planned for a country that is gone");
+  assert.ok(s.store.docs.actions.some((action) => action.id === "order-lv"), "the host's own stay");
+  assert.ok(!(s.store.docs.world.units ?? []).some((unit) => unit.ownerCode === ESTONIA && unit.status === "pending"), "no formation of its stands waiting on the map");
+});
+
 test("a country renamed while its player is away keeps their seat, and they come back to it under its new name", async () => {
   const EMPIRE = "Russian Empire";
   const s = setup({
