@@ -149,8 +149,10 @@ test("the engine's one commit carries the event log, and a table's decisions are
   const fs = await import("node:fs");
   const engine = fs.readFileSync(new URL("./engineMain.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.match(engine, /updateForces: \(fn\) => mutateCanonicalTurnState\(\(\{ world, actions, game, events \}\) => fn\(\{ world, actions, game, events \}\) \|\| null\),/);
-  assert.match(engine, /commit: \(write\) => writeInOrder\("table-decided", \(\) => decidedAndTold\(write, landed\)\),/);
+  // (Its entry told of what landed, so the seats follow in that entry: FOLLOWUPS A2.)
+  assert.match(engine, /commit: \(write\) => writeInOrder\("table-decided", \(entry\) => decidedAndTold\(write, landed, entry\)\),/);
   const told = engine.slice(engine.indexOf("const decidedAndTold = async"), engine.indexOf("const tableTurn = async"));
   assert.ok(told.indexOf("readWorldState") < told.indexOf("await write()") && told.indexOf("tellLandings(") > told.indexOf("await write()"), "the world before the decisions, and after");
+  assert.match(told, /entry\?\.told\?\.\(fresh\);/, "its entry is told what landed");
   assert.match(engine, /return \{ unreachable: outcome\?\.generation\?\.source === "fallback", landed: list\(outcome\?\.landed\) \};/);
 });
