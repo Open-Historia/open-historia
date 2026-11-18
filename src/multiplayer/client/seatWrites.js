@@ -86,13 +86,20 @@ export const unroutedChanges = (key, held, wanted) => {
 };
 
 // What becomes of a save that holds such a change (client/sharedGame.js): it is
-// never passed for saved without a word. The player is told on the round bar
-// (UNROUTED_NOTICE) and the diagnostics log names the document and fields; in
-// development the save is refused outright (409, client/remoteRuntime.js), so
-// the screen that made it fails where its developer is looking, and the tests
-// that drive the game's writers through a shared page fail with it
-// (client/oneDoor.test.js). In a player's game it is answered with the
-// document the page holds, which is the truth: none of the change was kept.
+// never passed for saved. The player is told on the round bar (UNROUTED_NOTICE)
+// and the diagnostics log names the document and fields; and the save is
+// refused outright (409, client/remoteRuntime.js), so the screen that made it
+// fails where its player acted, and every screen is shown the document as the
+// page holds it. The tests that drive the game's writers through a shared page
+// fail with it (client/oneDoor.test.js), and so does the two-browser run.
+//
+// It was refused in development only, and in a player's game answered 200 with
+// the document the page holds (the follow-ups of 2026-11-18, C8): the screen
+// went on as though its change were kept, cleared its form or said "saved",
+// and only the round bar said otherwise. That is the whole class of bug the one
+// door is for (every such writer was found by a player), and it is closed at
+// the one place every save of the game reaches, whatever screen made it, rather
+// than by each of some seventy screens remembering to ask first.
 export const UNROUTED_NOTICE = "A change on this screen did not reach the host, and was not kept.";
 export const unroutedRefusal = (key, fields) => Object.assign(
   new Error(`In a shared game, changes go to the host as requests; this save of ${key} changed ${list(fields).slice(0, 8).join(", ")}, which no request carries.`),

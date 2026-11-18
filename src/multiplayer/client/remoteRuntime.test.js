@@ -181,8 +181,9 @@ test("a write never reaches the host's game or this device's store: a hook reads
 });
 
 test("a save the hook refuses fails as a save, in the hook's words; a hook that merely fell over still answers with the held document", async () => {
+  const shown = [];
   const runtime = startRemoteRuntime({
-    publish: () => {},
+    publish: (entries) => shown.push(...entries),
     urlFor,
     onWrite: ({ key }) => {
       if (key === "world") throw Object.assign(new Error("this save of world changed countryStatsHistory, which no request carries."), { refusal: true });
@@ -190,8 +191,11 @@ test("a save the hook refuses fails as a save, in the hook's words; a hook that 
     },
   });
   runtime.apply(viewsFrom("e1").next({ world: { units: [1] }, game: {}, events: [], chat: [], actions: [] }));
+  shown.length = 0;
   const refused = await body(await target.fetch("/api/runtime/json/world?v=token", { method: "PUT", body: "{\"units\":[1],\"countryStatsHistory\":{}}" }));
   assert.deepEqual(refused, { status: 409, json: { error: "this save of world changed countryStatsHistory, which no request carries." } });
+  // Every screen is shown the document as the page holds it: the change was not kept (C8).
+  assert.deepEqual(shown, [{ url: urlFor("world"), value: { units: [1] } }]);
   assert.deepEqual(await body(await target.fetch("/api/runtime/json/actions?v=token", { method: "PUT", body: "[]" })), { status: 200, json: [] });
 });
 

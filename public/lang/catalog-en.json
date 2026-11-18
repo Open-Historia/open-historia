@@ -14431,6 +14431,7 @@
  "Tongyeong",
  "Tonopah",
  "Too large for one pass. R2.4 caps a single conservative repair at {{LARGE_AREA_CAP}} regions; split the scenario into country / empire / continental chunks.",
+ "Too large to send to the host in one go: make it shorter, then send it again.",
  "Too long for a shared game: {{most}} characters at most.",
  "Too many countries have forces built up already.",
  "Too many redirects fetching the file.",

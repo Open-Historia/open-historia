@@ -18,7 +18,7 @@
 import { deriveRoomKeys } from "../invite.js";
 import { fromBase64Url, equalBytes, randomBytes, toHex } from "../bytes.js";
 import { signFields, verifyFields } from "../identity.js";
-import { createDecoder, encodeMessage } from "../protocol/codec.js";
+import { PLAYER_MESSAGE_MAX_CHARS, createDecoder, encodeMessage } from "../protocol/codec.js";
 import { validate } from "../protocol/validate.js";
 import { createNostrChannel } from "../signaling/nostr.js";
 import { createPeer } from "../transport/peer.js";
@@ -42,8 +42,9 @@ const DEFAULT_LIMITS = Object.freeze({
   // it pays for (host/settings.js payment "cycle"; game/messages.js "paid", at
   // most PAID_ANSWER_MAX characters of text and as many of a function call's
   // input, escaped once more inside the message). Before that it was its own
-  // Projects board, a few hundred KB at the board's limit.
-  maxMessageChars: 3 * 1024 * 1024,
+  // Projects board, a few hundred KB at the board's limit. A player's page
+  // reads the same number, and sends nothing larger (protocol/codec.js).
+  maxMessageChars: PLAYER_MESSAGE_MAX_CHARS,
   strikesToRemove: 5,
   pendingTimeoutMs: 30_000,
   helloTimeoutMs: 10_000,

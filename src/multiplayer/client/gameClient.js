@@ -31,14 +31,34 @@ const NOTICES_KEPT = 20;
 // the request when the round landed, and a player who did it again did it twice.
 export const REQUEST_WAIT_MS = 20 * 60 * 1000;
 
-// A request this page built that its own schema refuses is never sent, and the
+// A request this page built that the host would not take is never sent, and the
 // player is told why in words; the schema's ("$.text: longer than 2000") went
-// into a letter's error bubble as they were, and are kept for the log
-// (`detail`). The schemas hold the limits (game/messages.js), and the screens
-// read the same ones: a text longer than a request carries is refused whole,
-// never cut (the review of 2026-11-18, door 4).
+// into a letter's error bubble as they were. The schemas hold the limits
+// (game/messages.js), and the screens read the same ones: a text longer than a
+// request carries is refused whole, never cut (the review of 2026-11-18, door 4).
+//
+// The page's check is the host's whole check, not part of it: the schema, and
+// the size the host's session reads a message to (protocol/codec.js
+// PLAYER_MESSAGE_MAX_CHARS, `maxMessageChars` here). One the schema took and the
+// session did not was sent, dropped there with a strike, and never answered:
+// twenty minutes later the screen said "The host did not answer.". And a
+// request the connection itself could not carry said the codec's English
+// ("A 3500000-character message is over the … limit."). What the check found,
+// in the schema's or the codec's terms, goes to the diagnostics log (`log`) and
+// stays on the answer as `detail`; the player reads words (the follow-ups of
+// 2026-11-18, C4).
 export const tooLongWords = (most) => `Too long for a shared game: ${most} characters at most.`;
-const unsentWords = (checked) => (checked.longest ? tooLongWords(checked.longest) : "This could not be sent to the host.");
+export const TOO_LARGE_WORDS = "Too large to send to the host in one go: make it shorter, then send it again.";
+const UNSENT_WORDS = "This could not be sent to the host.";
+const unsentWords = (checked) => (checked.longest ? tooLongWords(checked.longest) : UNSENT_WORDS);
+// The length of a message as the host's session measures it: its JSON text.
+const textLength = (message) => {
+  try {
+    return JSON.stringify(message).length;
+  } catch {
+    return Infinity;
+  }
+};
 
 export const createGameClient = ({
   send,
@@ -52,6 +72,13 @@ export const createGameClient = ({
   // resolved now (["institution", "sheet"]), whenever that changes: the screens
   // say what they wait for (client/sharedGameBridge.js sharedRequestsHeld).
   onHeld = () => {},
+  // The most a message may be where it is read (a guest's: the host's session,
+  // protocol/codec.js PLAYER_MESSAGE_MAX_CHARS; the host's own screen talks to
+  // its engine with no such limit).
+  maxMessageChars = Infinity,
+  // A line for the diagnostics log: why a request was not sent, in the terms of
+  // whatever refused it.
+  log = () => {},
   now = () => Date.now(),
   timers = globalThis,
   requestTimeoutMs = REQUEST_WAIT_MS,
@@ -125,7 +152,18 @@ export const createGameClient = ({
       const message = { t, id, ...fields };
       const schema = PLAYER_REQUESTS[t];
       const checked = schema ? validate(schema, message) : { ok: false, error: `unknown request ${t}` };
-      if (!checked.ok) return Promise.resolve({ ok: false, error: unsentWords(checked), detail: checked.error });
+      const unsent = (error, detail) => {
+        try {
+          log(`a "${t}" request was not sent to the host: ${detail}`);
+        } catch {
+          // the log is no reason for the player not to be told
+        }
+        return { ok: false, error, detail };
+      };
+      if (!checked.ok) return Promise.resolve(unsent(unsentWords(checked), checked.error));
+      const length = textLength(checked.value);
+      // i18n-ignore: the log's words, never shown to a player.
+      if (length > maxMessageChars) return Promise.resolve(unsent(TOO_LARGE_WORDS, `its text is ${length} characters, over the ${maxMessageChars} a message to the host may be`));
       return new Promise((resolve) => {
         const timer = timers.setTimeout(() => settle(id, { ok: false, error: "The host did not answer." }), requestTimeoutMs);
         pending.set(id, { resolve, timer, message: checked.value, held: false });
@@ -134,7 +172,10 @@ export const createGameClient = ({
           // the connection is back.
           send(checked.value);
         } catch (error) {
-          settle(id, { ok: false, error: String(error?.message || error) });
+          // The connection could not carry it (the codec's own limit): said in
+          // words, its own kept for the log.
+          const answer = unsent(UNSENT_WORDS, String(error?.message || error));
+          settle(id, answer);
         }
       });
     },

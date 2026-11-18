@@ -12,10 +12,11 @@
 //
 // Here the game's own writers run on a page playing a shared game, served by
 // the remote runtime as a guest's page is (client/remoteRuntime.js), with the
-// page's hook as strict as it is in development: a save holding a change no
-// request carries is refused (client/seatWrites.js unroutedRefusal), and the
-// writer fails. Each writer must ask the host, or keep to this device's own
-// fields, or not write at all.
+// page's hook as it is in every build: a save holding a change no request
+// carries is refused (client/seatWrites.js unroutedRefusal), and the writer
+// fails. Each writer must ask the host, or keep to this device's own fields, or
+// not write at all. (It was refused in development only; a player's game
+// answered it "saved": the follow-ups of 2026-11-18, C8.)
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -48,9 +49,9 @@ const { digestText } = await import("../protocol/digest.js");
 
 setRuntimeAssetEndpoints({ token: "one-door" });
 
-// The page's hook as strict as in development (client/sharedGame.js ownWrite):
-// what of a save is this device's own is kept on it, and a change no request
-// carries refuses the save. Every save that reached it is recorded.
+// The page's hook (client/sharedGame.js ownWrite): what of a save is this
+// device's own is kept on it, and a change no request carries refuses the
+// save. Every save that reached it is recorded.
 const NORMALIZE = {
   world: gameState.normalizeWorldState,
   chat: gameState.normalizeChats,
@@ -185,4 +186,18 @@ test("the Stats chart's history backfill saves nothing on a shared page", () => 
   const guard = source.lastIndexOf("if (!inSharedGame() && JSON.stringify(persistedSeries) !== JSON.stringify(stored))", backfill);
   const write = source.lastIndexOf("await writeWorldState({", backfill);
   assert.ok(guard > 0 && guard < write, "its one write is behind the shared game's guard");
+});
+
+// The page's hook is the one above in every build: a player's game refuses such a save as a developer's does, and
+// says it on the round bar and in the log as well (the follow-ups of 2026-11-18, C8: in a player's game it was
+// answered "saved", and its screen went on as though the change were kept).
+test("a save no door takes is refused in a player's game too, not only in development", () => {
+  const source = fs.readFileSync(new URL("./sharedGame.js", import.meta.url), "utf8");
+  const start = source.indexOf("const ownWrite = ");
+  const end = source.indexOf("\n};", start);
+  const hook = source.slice(start, end);
+  assert.ok(start > 0 && end > start, "the hook is where it was");
+  assert.doesNotMatch(hook, /import\.meta\.env|STRICT_DOOR|DEV\b/, "no build decides it");
+  assert.match(hook, /if \(unrouted\.length\) \{\s*console\.error\([^\n]*\);\s*throw unroutedRefusal\(key, unrouted\);\s*\}/);
+  assert.match(hook, /notify\(UNROUTED_NOTICE\)/, "and it is said on the round bar");
 });

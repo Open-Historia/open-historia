@@ -32,6 +32,7 @@ import { roundBaseOf } from "./roundBase.js";
 import { createRoundPayer } from "./roundPayer.js";
 import { createLoopbackScreenSide } from "../transport/loopback.js";
 import { createClientSession } from "../session/client.js";
+import { PLAYER_MESSAGE_MAX_CHARS } from "../protocol/codec.js";
 import { probeNetwork } from "../transport/peer.js";
 import { hostingHere, joinFailure, scenarioDiffers, scenarioMissing, scenarioUnchecked, unreadableFromHost } from "./joinProgress.js";
 import { chooseStandInScenario } from "./standIn.js";
@@ -167,9 +168,6 @@ const asThePageSavesIt = (key, value) => {
   return value;
 };
 
-// A save no door takes is refused in development (seatWrites.js unroutedRefusal).
-const STRICT_DOOR = Boolean(import.meta.env?.DEV);
-
 // One of the game's screens saved a document (client/remoteRuntime.js).
 const ownWrite = ({ key, wanted, held }) => {
   const owner = current;
@@ -205,8 +203,9 @@ const ownWrite = ({ key, wanted, held }) => {
     return after;
   }
   // A change no door takes is said, not passed for saved (seatWrites.js
-  // unroutedChanges): on the round bar and in the diagnostics log, and in
-  // development the save is refused, so the screen that made it fails there.
+  // unroutedChanges): on the round bar and in the diagnostics log, and the save
+  // is refused, in every build, so the screen that made it fails where its
+  // player acted instead of going on as though it were kept.
   const unrouted = unroutedChanges(key, before, after);
   if (unrouted.length) {
     logDebugEvent("shared game", `a change only this screen made, which the host never heard: ${key}: ${unrouted.slice(0, 8).join(", ")}`, undefined, { problem: true });
@@ -225,7 +224,7 @@ const ownWrite = ({ key, wanted, held }) => {
     const plan = planGameWrite(before, after);
     if (Object.keys(plan.device).length) owner.runtime.patch("game", plan.device, { quiet: true });
   }
-  if (unrouted.length && STRICT_DOOR) {
+  if (unrouted.length) {
     console.error(`[shared game] a save no door takes: ${key}: ${unrouted.join(", ")}`);
     throw unroutedRefusal(key, unrouted);
   }
@@ -299,8 +298,12 @@ const applyToRuntime = (view) => {
   return applied;
 };
 
-const makeClient = (send) => createGameClient({
+// `maxMessageChars`: the most a message may be where it is read (a guest's: the
+// host's session, protocol/codec.js PLAYER_MESSAGE_MAX_CHARS).
+const makeClient = (send, { maxMessageChars = Infinity } = {}) => createGameClient({
   send,
+  maxMessageChars,
+  log: (line) => logDebugEvent("shared game", line, undefined, { problem: true }),
   applyView: (view) => {
     if (!current) return false;
     if (!current.runtime) {
@@ -641,7 +644,7 @@ export const joinSharedGame = async ({ token, name } = {}) => {
     },
   });
   current.session = session;
-  current.client = makeClient((message) => session.send(message));
+  current.client = makeClient((message) => session.send(message), { maxMessageChars: PLAYER_MESSAGE_MAX_CHARS });
   session.connect();
 };
 

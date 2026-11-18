@@ -188,10 +188,15 @@ export const installRemoteRuntime = ({ target = globalThis, waitMs = 20_000 } = 
     try {
       answer = session.onWrite?.({ key, wanted: await bodyOf(input, init), held: heldDoc(session, key) });
     } catch (error) {
-      // A save the hook refuses (client/seatWrites.js unroutedRefusal: in
-      // development, one holding a change no request carries) fails as a save:
-      // its screen is told, never answered "saved".
-      if (error?.refusal && current === session) return refusal(String(error.message || "In a shared game, this change was not sent to the host."));
+      // A save the hook refuses (client/seatWrites.js unroutedRefusal: one
+      // holding a change no request carries) fails as a save: its screen is
+      // told, never answered "saved". Every screen is shown the document as the
+      // page holds it, which is the truth: the host's, with whatever of the save
+      // was this device's own (the AI's suggestions) kept.
+      if (error?.refusal && current === session) {
+        publishHeld(session, [key]);
+        return refusal(String(error.message || "In a shared game, this change was not sent to the host."));
+      }
       // a hook that fell over otherwise changes nothing: the page still holds its view
     }
     if (current !== session) return refusal("The shared game ended.");
