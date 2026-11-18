@@ -121,6 +121,10 @@ test("an operation on the Board that sends troops at a place the other side hold
   // The other side's operation, as the Board knows of it, attacking as its approach says.
   const theirs = operationsOn({ record, side: 1, ...context([operation({ ownerCode: "Borduria", approach: "encircle", focus: at("Alba"), verification: "doubted" })]) });
   assert.deepEqual(theirs.map((entry) => [entry.by, entry.own, entry.order, entry.place.name, entry.doubted]), [["Borduria", false, "encircle", "Alba", true]]);
+  // Another country's operation the player's agent told of carries that agent's
+  // id: it is still that country's operation (it dropped out, single player too).
+  const told = operationsOn({ record, side: 1, ...context([operation({ ownerCode: "Borduria", focus: at("Alba"), linkedSpyIds: ["spy-aland-borduria"] })]) });
+  assert.deepEqual(told.map((entry) => [entry.by, entry.own]), [["Borduria", false]]);
 
   const [plan] = plansOf(record, 0, context([operation()]));
   assert.deepEqual([plan.kind, plan.name, plan.objective, plan.status, plan.live, plan.edited, plan.off], ["project", "Operation Kingfisher", "city: Brod", "active", true, false, false]);

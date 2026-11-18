@@ -46,6 +46,19 @@ test("every Board of the game is one list, each entry with its owner written out
   assert.deepEqual(boardsOf({}, game), []);
 });
 
+// During a skip a guest's operation stands on the game's board lent, and at home:
+// it was counted twice. And a belief (planted on a service) is nobody's operation.
+test("a guest's operation lent to a skip is one entry, as the skip has it, and a belief none", () => {
+  const world = {
+    projects: [
+      operation({ id: "p3", name: "Operation Kingfisher (Syldavia)", ownerCode: "Syldavia", lentFrom: "Syldavia", status: "paused" }),
+      operation({ id: "b1", name: "Bordurian feint", ownerCode: "Borduria", belief: true }),
+    ],
+    seatBoards: { Syldavia: [operation({ id: "p3" }), operation({ id: "b2", ownerCode: "Borduria", belief: true })] },
+  };
+  assert.deepEqual(boardsOf(world, game).map((entry) => [entry.id, entry.name, entry.ownerCode, entry.status]), [["p3", "Operation Kingfisher", "Syldavia", "paused"]]);
+});
+
 test("a turn sends the player's operation and leaves the world alone when there is nothing to do", () => {
   const { record } = fresh();
   const quiet = { battlefields: [record], projects: [], spies: [] };
