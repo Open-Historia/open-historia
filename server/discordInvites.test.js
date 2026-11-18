@@ -137,7 +137,7 @@ test("the routes, the popups, the party and Discord's launch are wired", () => {
   assert.match(server, /app\.get\("\/api\/presence\/inbox", \(req, res\) => \{\s+if \(!isLoopbackAddress\(req\.socket\?\.remoteAddress\)\)/);
   assert.match(server, /app\.post\("\/api\/presence\/answer", jsonParser, \(req, res\) => \{\s+if \(!isLoopbackAddress/);
   const ui = read("../src/multiplayer/ui/DiscordInvites.jsx");
-  assert.match(ui, /await joinSharedGame\(\{ token: invite\.token, name: rememberedName\(\) \}\);\s+setInvite\(null\);\s+enterActiveGameFromOutside\(\);/);
+  assert.match(ui, /await joinSharedGame\(\{ token: invite\.token, name: cleanPlayerName\(name\) \}\);\s+setInvite\(null\);\s+enterActiveGameFromOutside\(\);/);
   assert.match(ui, /setDiscordParty\(available \? party : null\);/);
   assert.match(ui, /if \(stopped \|\| !presenceAllowed\(\)\) return;/);
   assert.match(ui, /A friend invited you to a shared game/);
