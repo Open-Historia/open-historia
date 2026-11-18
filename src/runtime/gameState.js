@@ -4329,6 +4329,15 @@ export const normalizeWorldState = (world) => {
           .slice(0, 64),
       ),
     } : {}),
+    // And what a shared game's other players have seen of each fleet's posture
+    // since the last skip (multiplayer/host/gameHost.js withFleetPosturesSeen):
+    // what is only ordered stays private. Only a world that has the key keeps it.
+    ...(Object.prototype.hasOwnProperty.call(nextWorld, "seenFleetPostures") && nextWorld.seenFleetPostures && typeof nextWorld.seenFleetPostures === "object" && !Array.isArray(nextWorld.seenFleetPostures) ? {
+      seenFleetPostures: Object.fromEntries(Object.entries(nextWorld.seenFleetPostures)
+        .filter(([id, seen]) => normalizeOptionalString(id) && seen && typeof seen === "object")
+        .slice(0, 2000)
+        .map(([id, seen]) => [normalizeOptionalString(id), { posture: seen.posture ?? null, status: seen.status ?? null }])),
+    } : {}),
     // And each such player's seal for its own agents' traffic (spySeal.js
     // sealOf), by country. world.spySeal stays the game country's. Only a world
     // that has the key keeps it.

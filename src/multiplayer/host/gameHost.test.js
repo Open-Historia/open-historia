@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createGameHost, MAX_ORDERS_PER_ROUND, VIEW_ACK_MS } from "./gameHost.js";
+import { createGameHost, MAX_ORDERS_PER_ROUND, VIEW_ACK_MS, withFleetPosturesSeen } from "./gameHost.js";
 import { digestText } from "../protocol/digest.js";
 import { startRemoteRuntime, stopRemoteRuntime } from "../client/remoteRuntime.js";
 import { normalizeSettings } from "./settings.js";
@@ -505,8 +505,10 @@ test("a player's forces: raised and stood down by the host, for the player who a
   assert.deepEqual([raised.ownerCode, raised.status, raised.source, raised.type], [RUSSIA, "pending", "player", "armor"]);
   const request = s.store.docs.actions.find((action) => action.unitRevert?.unitId === raised.id);
   assert.equal(request.ownerCode, RUSSIA);
-  // Both players see the formation on the map; only its owner sees the request.
-  assert.ok(s.shown(s.hostPlayer).world.units.some((unit) => unit.id === raised.id));
+  // Only ordered: its owner sees the formation and the request, and nobody else sees either until the skip (the
+  // owner's decision 6, "just do A only": what exists is public, what is only ordered is private).
+  assert.ok(s.shown(s.guest).world.units.some((unit) => unit.id === raised.id));
+  assert.equal(s.shown(s.hostPlayer).world.units.some((unit) => unit.id === raised.id), false);
   assert.deepEqual(s.shown(s.guest).actions.map((action) => action.id), [request.id]);
   assert.equal(s.shown(s.hostPlayer).actions.some((action) => action.id === request.id), false);
 
@@ -912,8 +914,9 @@ test("the war room's fortified lines and fleets are the seat's own, held to the 
   await s.request(s.hostPlayer, { t: "fortify", id: id(5), op: { op: "unfortify", id: lines()[0].id } });
   assert.match(s.ack(s.hostPlayer, id(5)).error, /not one of yours/);
   assert.equal(lines().length, 1);
-  // And the line is there for all to see.
-  assert.equal(s.shown(s.hostPlayer).world.fortifications.length, 1);
+  // A line still being built is its owner's (decision 6); once it stands, everyone sees it.
+  assert.equal(s.shown(s.guest).world.fortifications.length, 1);
+  assert.equal(s.shown(s.hostPlayer).world.fortifications.length, 0);
 
   // A fleet: only the seat's own.
   await s.request(s.guest, { t: "fleet", id: id(6), op: { op: "posture", unit: "lv-fleet", posture: "withdrawing" } });
@@ -2103,4 +2106,14 @@ test("a seat the host takes back leaves the next player of that country none of 
   assert.equal(letter.status, "closed", "a letter between people is not the next player's to read");
   assert.equal(projectForViewer({ ...s.store.docs, game: { ...s.store.docs.game, country: LATVIA } }, RUSSIA).chat.some((chat) => chat.id === letter.id), false, "nor sent to the next player of Russia");
   assert.equal(projectForViewer({ ...s.store.docs, game: { ...s.store.docs.game, country: LATVIA } }, LATVIA).chat.some((chat) => chat.id === letter.id), true, "the other person keeps it, closed");
+});
+
+test("the host keeps each fleet's posture as the world last saw it, and writes nothing when none changed", () => {
+  const world = { units: [
+    { id: "f1", type: "naval", ownerCode: "Russia", posture: "patrol", status: "idle" },
+    { id: "a1", type: "infantry", ownerCode: "Russia", status: "idle" },
+  ] };
+  const seen = withFleetPosturesSeen(world);
+  assert.deepEqual(seen.seenFleetPostures, { f1: { posture: "patrol", status: "idle" } }, "fleets only");
+  assert.equal(withFleetPosturesSeen(seen), null, "the same postures: no write");
 });

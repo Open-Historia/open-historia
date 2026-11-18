@@ -538,3 +538,56 @@ test("the map as the scenario draws it reaches every view: its projection, regio
     assert.equal(JSON.stringify(world).includes("CANARY-CANON"), false);
   }
 });
+
+// ---- What is only ordered stays private until the skip (decision 6, "A only") ----
+
+test("another country's formation raised this round is not seen until the skip; one it stood down still is", () => {
+  const docs = state();
+  docs.world.units = [
+    unit("ru-raised", RUSSIA, { status: "pending" }),
+    unit("ru-standing", RUSSIA),
+    unit("lv-raised", LATVIA, { status: "pending" }),
+  ];
+  const disbanded = unit("ru-gone", RUSSIA, { strength: 40 });
+  docs.actions = [
+    { id: "order-ru-disband", kind: "action", source: "order", status: "planned", ownerCode: RUSSIA, text: "Stand down ru-gone", unitRevert: { unitId: "ru-gone", restore: disbanded } },
+  ];
+  const latvia = projectForViewer(docs, LATVIA).world.units.map((entry) => entry.id).sort();
+  assert.deepEqual(latvia, ["lv-raised", "ru-gone", "ru-standing"], "its own pending formation, and Russia's as the world last saw them");
+  const russia = projectForViewer(docs, RUSSIA).world.units.map((entry) => entry.id).sort();
+  assert.deepEqual(russia, ["ru-raised", "ru-standing"], "its own as they now are: raised, and the stood-down one gone");
+  const gone = projectForViewer(docs, LATVIA).world.units.find((entry) => entry.id === "ru-gone");
+  assert.equal(gone.orderId, "", "another's unit never carries its order");
+  // After the skip the order is no longer planned: the formation is gone for everyone.
+  docs.actions = [{ ...docs.actions[0], status: "resolved" }];
+  assert.equal(projectForViewer(docs, LATVIA).world.units.some((entry) => entry.id === "ru-gone"), false);
+});
+
+test("a fleet's new posture is seen by others only as it stood at the last skip", () => {
+  const docs = state();
+  docs.world.units = [unit("ru-fleet", RUSSIA, { type: "naval", posture: "blockade", status: "idle" })];
+  docs.world.seenFleetPostures = { "ru-fleet": { posture: "patrol", status: "idle" } };
+  assert.equal(projectForViewer(docs, LATVIA).world.units[0].posture, "patrol");
+  assert.equal(projectForViewer(docs, RUSSIA).world.units[0].posture, "blockade", "its own as ordered");
+  assert.equal("seenFleetPostures" in projectForViewer(docs, LATVIA).world, false, "the host's bookkeeping");
+});
+
+test("a convoy only ordered is its owner's, and whom a country's ships hunt is that country's own", () => {
+  const docs = state();
+  const convoy = (id, owner, status, hunters = []) => ({ id, medium: "sea", owner, to: { lng: 24, lat: 59, name: "Tallinn" }, from: { lng: 30, lat: 60 }, status, hunters, load: [] });
+  docs.world.transports = [convoy("t1", RUSSIA, "ordered"), convoy("t2", RUSSIA, "moving", [LATVIA, ESTONIA]), convoy("t3", LATVIA, "ordered")];
+  const latvia = projectForViewer(docs, LATVIA).world.transports;
+  assert.deepEqual(latvia.map((entry) => entry.id).sort(), ["t2", "t3"]);
+  assert.deepEqual(latvia.find((entry) => entry.id === "t2").hunters, [LATVIA], "its own hunt only");
+  const russia = projectForViewer(docs, RUSSIA).world.transports;
+  assert.deepEqual(russia.map((entry) => entry.id).sort(), ["t1", "t2"]);
+  assert.deepEqual(russia.find((entry) => entry.id === "t2").hunters, [], "not who hunts its convoy");
+});
+
+test("a line ordered since the last skip is its owner's; once time has passed everyone sees it, built or not", () => {
+  const docs = state();
+  const line = (id, owner, since) => ({ id, name: id, owner, level: 5, points: [[24, 57], [25, 58]], building: { since, days: 60 } });
+  docs.world.fortifications = [line("ru-new", RUSSIA, "2014-04-01"), line("ru-rising", RUSSIA, "2014-03-01"), { id: "ru-old", name: "ru-old", owner: RUSSIA, level: 5, points: [[26, 57], [27, 58]] }];
+  assert.deepEqual(projectForViewer(docs, LATVIA).world.fortifications.map((entry) => entry.id).sort(), ["ru-old", "ru-rising"]);
+  assert.deepEqual(projectForViewer(docs, RUSSIA).world.fortifications.map((entry) => entry.id).sort(), ["ru-new", "ru-old", "ru-rising"]);
+});

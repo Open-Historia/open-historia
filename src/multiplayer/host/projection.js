@@ -69,8 +69,6 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "ownBasemaps", "ownerCodes", "ownerSchema", "polityOverrides", "powerStatus", "regionClaimants",
   "regionOwnershipOverrides", "regionRenames", "regionSovereigntyOverrides", "settledRegionClaims",
   "simulationRules", "startingTimelineText", "unitSystem", "wars", "agreements",
-  // Transporters are seen as fleets are: what crosses the sea is not hidden.
-  "transports",
   // And what an event's strike looked like: every map plays it.
   "strikes",
   // And what the war room's air strikes did: who was struck knows it (runtime/fronts/airStrike.js).
@@ -91,7 +89,6 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "unitTypes",
   // What the scenario draws on its map for war (runtime/warGeography.js): there for all to see.
   "terrainAreas",
-  "fortifications",
   "climateZones",
   "freezingRegions",
   // And the water frozen now, and each climate zone's weather: there for all to see.
@@ -120,7 +117,7 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
 export const HOST_ONLY_WORLD_KEYS = Object.freeze([
   "actionSuggestions", "chargedRefusals", "chatKnowledgeCursors", "consolidatedHistory",
   "gmAudit", "gmChanges", "historyDocument", "idlePulseTick", "lastJumpSummary", "naviesRaised", "notes",
-  "pendingEventOutreach", "politicalSimulation", "seatBoards", "seatSeals", "simulationReminders",
+  "pendingEventOutreach", "politicalSimulation", "seatBoards", "seatSeals", "seenFleetPostures", "simulationReminders",
   "storylines",
   // What the last time skip's prompt read (runtime/promptSnapshot.js).
   "promptSnapshot", "promptReference",
@@ -165,13 +162,51 @@ const PUBLIC_INSTITUTION_KEYS = [
 
 const pick = (record, keys) => Object.fromEntries(keys.filter((key) => record[key] !== undefined).map((key) => [key, record[key]]));
 
+// WHAT IS ONLY ORDERED STAYS PRIVATE UNTIL THE SKIP (the owner's decision 6,
+// 2026-11-18: "just do A only"): units and structures that exist are seen by
+// everyone; what a country has ordered and the world has not yet seen happen
+// is its own. Another player's view showed a formation raised, a formation
+// stood down, a convoy ordered and whom it hunts, a line still being built
+// and a fleet's new posture the moment they were ordered (the gap audit of
+// 2026-11-18). Each filter below keeps another country's as it stood at the
+// last skip.
+// A planned stand-down's order carries the formation as it was (host/forces.js
+// disbandFor): until the skip, another sees it there.
+const standingDown = (actions, viewer) => list(actions)
+  .filter((action) => !same(action?.ownerCode, viewer) && clean(action?.status || "planned") === "planned")
+  .map((action) => action?.unitRevert?.restore)
+  .filter((unit) => isRecord(unit) && clean(unit.id));
+
 // Filtered keys: each is given the whole world and returns what the viewer may
-// have of that key.
+// have of that key. `actions`: the order queue, for what is only ordered.
 const FILTERED_WORLD_KEYS = Object.freeze({
-  // Units are seen, their orders are not.
-  units: (world, viewer) => list(world.units).map((unit) => (same(unit?.ownerCode, viewer)
-    ? unit
-    : { ...unit, orderId: "" })),
+  // Units are seen, their orders are not. Another country's formation raised
+  // this round (pending) is not seen yet, one it stood down still is, and a
+  // fleet's posture is as it was at the last skip (world.seenFleetPostures).
+  units: (world, viewer, { actions = [] } = {}) => {
+    const seen = isRecord(world.seenFleetPostures) ? world.seenFleetPostures : {};
+    const asSeen = (unit) => {
+      const was = seen[clean(unit?.id)];
+      return isRecord(was) ? { ...unit, posture: was.posture ?? unit.posture, status: was.status ?? unit.status } : unit;
+    };
+    const standing = list(world.units)
+      .filter((unit) => same(unit?.ownerCode, viewer) || clean(unit?.status) !== "pending")
+      .map((unit) => (same(unit?.ownerCode, viewer) ? unit : { ...asSeen(unit), orderId: "" }));
+    const ids = new Set(standing.map((unit) => clean(unit?.id)));
+    const stoodDown = standingDown(actions, viewer).filter((unit) => !ids.has(clean(unit.id))).map((unit) => ({ ...asSeen(unit), orderId: "" }));
+    return [...standing, ...stoodDown];
+  },
+  // Transporters are seen as fleets are, once under way: a convoy only ordered
+  // is its owner's, and whom a country's ships hunt is that country's own.
+  transports: (world, viewer) => list(world.transports)
+    .filter((entry) => same(entry?.owner, viewer) || clean(entry?.status) !== "ordered")
+    .map((entry) => (Array.isArray(entry?.hunters) ? { ...entry, hunters: entry.hunters.filter((name) => same(name, viewer)) } : entry)),
+  // A line ordered since the last skip is its owner's; once time has passed
+  // it is seen by everyone, built or still being built. (`building` stays on a
+  // line for good, fronts/walls.js standsOn: it is the order's DATE that says
+  // it was only ordered. A skip always moves the date on.)
+  fortifications: (world, viewer, { date = "" } = {}) => list(world.fortifications)
+    .filter((line) => same(line?.owner, viewer) || !(clean(date) && clean(line?.building?.since) === clean(date))),
   pendingUnitOrders: (world, viewer) => list(world.pendingUnitOrders).filter((order) => ownsUnit(world, order?.unitId, viewer)),
   // The air strikes a country has ordered and not yet flown are its own.
   airStrikeOrders: (world, viewer) => list(world.airStrikeOrders).filter((order) => same(order?.owner, viewer)),
@@ -315,11 +350,11 @@ export const FILTERED_WORLD_KEY_NAMES = Object.freeze([...Object.keys(FILTERED_W
 
 // `hiddenEventIds`: the events this viewer is not shown (eventsHiddenFrom), so
 // a turn's record does not count them either.
-export const projectWorld = (world, viewer, { host = "", hiddenEventIds = new Set(), readers = [viewer] } = {}) => {
+export const projectWorld = (world, viewer, { host = "", hiddenEventIds = new Set(), readers = [viewer], actions = [], date = "" } = {}) => {
   const full = normalizeWorldState(world);
   const out = {};
   for (const key of PUBLIC_WORLD_KEYS) if (full[key] !== undefined) out[key] = full[key];
-  for (const [key, filter] of Object.entries(FILTERED_WORLD_KEYS)) out[key] = filter(full, viewer, { host, hiddenEventIds, readers });
+  for (const [key, filter] of Object.entries(FILTERED_WORLD_KEYS)) out[key] = filter(full, viewer, { host, hiddenEventIds, readers, actions, date });
   if (same(host, viewer)) for (const key of HOST_SEAT_WORLD_KEYS) if (full[key] !== undefined) out[key] = full[key];
   // The seal of the viewer's own agents' traffic, which its intercepts view is
   // sealed with (runtime/spySeal.js sealOf): the host's for the host, each other
@@ -523,7 +558,7 @@ export const projectForViewer = ({ world, game, events, chat, actions, intercept
   const seenEvents = projectEvents(events, seat, { ownOrderIds, host, readers, unitOwner: (id) => owners.get(clean(id)) || "" });
   const shown = new Set(list(seenEvents).map((event) => clean(event?.id)));
   return {
-    world: projectWorld(world ?? {}, seat, { host, readers, hiddenEventIds: eventsHiddenFrom(events, readers) }),
+    world: projectWorld(world ?? {}, seat, { host, readers, hiddenEventIds: eventsHiddenFrom(events, readers), actions, date: clean(game?.gameDate) }),
     game: copy({ ...(isRecord(game) ? game : {}), country: seat }),
     events: copy(seenEvents),
     // Their advisor's conversation, with the secrets their government keeps

@@ -134,6 +134,17 @@ const demandEventFor = (chat, { demand, seat, owner, members, world, message, ga
 // kept beside it by country (world.seatBoards), where no time skip, no rollback
 // and no other player's view mistakes it for the host's. The game's normalizer
 // holds it to a board's shape and size, whatever was sent.
+// Every fleet's posture and status as the world has seen them (decision 6:
+// what is only ordered stays private until the skip), kept by the host for
+// the views (projection.js units): a fleet ordered to blockade is seen by
+// others as it stood until the skip carries the order out.
+export const withFleetPosturesSeen = (world) => {
+  const seen = Object.fromEntries(list(world?.units)
+    .filter((unit) => clean(unit?.type).toLowerCase() === "naval" && clean(unit?.id))
+    .map((unit) => [clean(unit.id), { posture: unit.posture ?? null, status: unit.status ?? null }]));
+  return JSON.stringify(seen) === JSON.stringify(world?.seenFleetPostures ?? {}) ? null : { ...world, seenFleetPostures: seen };
+};
+
 export const withSeatBoard = (world, country, projects, { host = "" } = {}) => {
   const board = normalizeProjects(projects);
   if (same(country, host)) return { ...world, projects: board };
@@ -573,6 +584,7 @@ export const createGameHost = ({
         roundAbort = null;
       }
       await followSeats(before).catch((error) => log("warn", "a seat did not follow its country", { error: String(error?.message || error) }));
+      await store.updateWorld(withFleetPosturesSeen);
       // The campaign's round the skip wrote: the round machine names it from
       // here on (host/round.js, one round number).
       return { round: Number((await store.read())?.game?.round) || 0 };
@@ -1678,7 +1690,10 @@ export const createGameHost = ({
       async start() {
         if (seats.started) return;
         seats.start();
-        await queue.run("start", recordHumans);
+        await queue.run("start", async () => {
+          await recordHumans();
+          await store.updateWorld(withFleetPosturesSeen);
+        });
         // The campaign's own round: one number on every screen (host/round.js).
         round.start(Number((await store.read())?.game?.round) || 0);
         broadcastLobby();
