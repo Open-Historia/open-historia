@@ -313,6 +313,11 @@ const NEW_UPDATES = [
           "In a shared game your Projects board changes only through your own panel and advisor, and a project can no longer take land from a country another player plays.",
           "The round bar shows the same round as the Events panel, and the reveal ends as soon as everyone has read the round. The host can cancel a round that hangs, and a round that fails waits for the host instead of running again on its own.",
           "A shared game keeps its settings: when the host shares it again another day, they start from where they were.",
+          "When the host releases a country, or its player moves to another, the orders that player had queued are withdrawn, and their goal, advice and conversations with other players are not handed to whoever plays the country next.",
+          "With each player's own AI, the figures and parties of a country another player plays are written by that player's AI, when they open them.",
+          "While a shared game is open, the library no longer switches to another game, or makes, changes or deletes one: leave the shared game first.",
+          "What another player has only ordered stays theirs until the round is played: the forces they are raising or standing down, convoys setting out and whom their ships hunt, the lines they have begun to fortify and a fleet's new orders. What already stands on the map is seen by everyone.",
+          "Two players fighting on the same front can both order air strikes there: one's strikes no longer replace the other's.",
         ],
       },
       {
