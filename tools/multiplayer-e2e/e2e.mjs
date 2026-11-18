@@ -518,13 +518,18 @@ try {
   await until(guest, `window.__e2e.view('game').then((game) => game.country === ${JSON.stringify(GUEST_COUNTRY)})`, 20000);
   const guestGame = seated ? await guest.eval("window.__e2e.view('game')") : null;
   check("the guest's view says it plays that country", guestGame?.country === GUEST_COUNTRY, JSON.stringify({ country: guestGame?.country, humans: guestGame?.humanCountries }));
-  // The stand-in's own country is a placeholder the page must never show.
-  const standIn = await guest.eval("fetch('/api/library').then((r) => r.json()).then((c) => (c.games || []).find((g) => String(g.name).startsWith('Shared game:')) || null)");
+  // The stand-in's own country is a placeholder the page must never show. The
+  // stand-in is found by its record (server/sharedGameStandIn.js: the library
+  // lists its marker as `standIn`), never by its name: the game decides nothing
+  // by matching words, and neither does its check.
+  const standIn = await guest.eval("fetch('/api/library').then((r) => r.json()).then((c) => (c.games || []).find((g) => g && g.standIn) || null)");
   const seenAtPick = await guest.eval("window.__seen");
   check("the guest's loading screen never names the stand-in's placeholder country",
     standIn?.country && standIn.country !== GUEST_COUNTRY && seenAtPick.loading.length && seenAtPick.loading.every((text) => !text.includes(standIn.country)),
     JSON.stringify({ placeholder: standIn?.country, loading: seenAtPick.loading.map((text) => text.slice(0, 90)) }));
-  const barNamesGuest = await until(guest, `document.body.textContent.includes(${JSON.stringify(`Shared game: E2E shared game / ${GUEST_COUNTRY} /`)})`, 10000);
+  // The bar shows the game as "<the stand-in's name> / <country> / <date>": the
+  // lobby's name and the country taken are what it must say, in any language.
+  const barNamesGuest = await until(guest, `document.body.textContent.includes(${JSON.stringify(`E2E shared game / ${GUEST_COUNTRY} /`)})`, 10000);
   check("the guest's menu bar names the country it took", barNamesGuest);
   const hostSeesGuest = await until(host, `document.body.textContent.includes(${JSON.stringify(GUEST_COUNTRY)})`, 15000);
   check("the host's lobby shows the guest's country", hostSeesGuest);
