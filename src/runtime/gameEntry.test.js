@@ -268,8 +268,9 @@ test("hosting and joining a shared game enter the game the menu closes over", ()
   assert.match(menu, /<LobbiesTab hosting=\{lobbyHosting\} onHostingChange=\{setLobbyHosting\} onEnterGame=\{enterActiveGame\} \/>/);
   assert.match(lobbies, /await joinSharedGame\(\{ token: code, name: name \|\| "Player" \}\);\s*onEnterGame\?\.\(\);/);
   assert.match(lobbies, /await hostSharedGame\(\{ settings, name: name \|\| "Host" \}\);\s*onClose\?\.\(\);\s*onEnterGame\?\.\(\);/);
-  // The guest's stand-in is opened by the library like any game.
-  assert.match(sharedGame, /await activateGame\(gameId\);/);
+  // The guest's stand-in is opened by the library like any game, as the shared game's own (the library refuses
+  // any other switch while a shared game is open).
+  assert.match(sharedGame, /await activateGame\(gameId, \{ forSharedGame: true \}\);/);
   // Back, on a phone, closes the menu only over a game it was opened from, and by the same way out.
   assert.match(menu, /useBackToClose\(menuOpen && menuOverGame && Boolean\(activeGame\), enterActiveGame\);/);
 });

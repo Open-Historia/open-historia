@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 
 import { renameInTransports } from "../../../server/battlefieldNames.js";
 import { renamePolityInWorld } from "../../../server/polityRename.js";
-import { PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
+import { FILTERED_WORLD_KEY_NAMES, PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
 import { applyEventImpactsToWorld, normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { syntheticMap } from "../../runtime/fronts/syntheticMap.js";
@@ -202,13 +202,16 @@ test("what is told of transporters: the period's voyages by date, those on the w
   assert.match(account, /2024-03-06 troops of Borduria came ashore at city: Alba/);
 });
 
-test("the world keeps its transporters, shows them to everyone in a shared game, and renames their owners with everything else", () => {
+test("the world keeps its transporters, shows them to everyone in a shared game once under way, and renames their owners with everything else", () => {
   const sent = orderTransport([], { medium: "sea", owner: "Aland", to: { lng: 28.4, lat: 51.5, name: "city: Port" }, raise: 6, by: "Aland" }, { date: "2024-03-01", year: 2024 }).transports;
   const hunted = sent.map((entry) => ({ ...entry, status: "moving", hunters: ["Borduria"], attacks: ["Neutralia"] }));
   const world = normalizeWorldState({ transports: [...hunted, { id: "junk" }, null, hunted[0]] });
   assert.deepEqual(world.transports.map((entry) => [entry.id, entry.status, entry.owner]), [["t1", "moving", "Aland"]], "what is not a transporter is not kept, and each is kept once");
   assert.deepEqual(normalizeWorldState({}).transports, []);
-  assert.ok(PUBLIC_WORLD_KEYS.includes("transports"));
+  // In a shared game one only ordered is its owner's until the skip (the owner's decision 6): a key of its own
+  // filter (multiplayer/host/projection.js), not a public one.
+  assert.ok(FILTERED_WORLD_KEY_NAMES.includes("transports"));
+  assert.equal(PUBLIC_WORLD_KEYS.includes("transports"), false);
   const renamed = renameInTransports(hunted, "aland", "The Aland Republic");
   assert.deepEqual([renamed[0].owner, renamed[0].by, renamed[0].hunters, renamed[0].attacks], ["The Aland Republic", "The Aland Republic", ["Borduria"], ["Neutralia"]]);
   assert.deepEqual(renameInTransports(hunted, "Borduria", "Bordureich")[0].hunters, ["Bordureich"]);
