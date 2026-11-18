@@ -209,6 +209,14 @@ const filedOrderCards = (cards, ownOrders) => {
   });
 };
 
+// The agents the viewer's service caught without ever learning who sent them,
+// each with a name of the view's own, numbered in the order they were sent.
+// Such an agent died in custody (spycraft.js resolveEspionage), so nothing is
+// ever ordered by it and the name never has to be read back.
+const unidentifiedAgentIds = (spies, viewer) => new Map(list(spies)
+  .filter((spy) => spy?.identified === false && same(spy?.target, viewer) && !same(spy?.owner, viewer))
+  .map((spy, index) => [spy, `agent-unknown-${index + 1}`]));
+
 // Filtered keys: each is given the whole world and returns what the viewer may
 // have of that key. `actions`: the order queue, for what is only ordered.
 const FILTERED_WORLD_KEYS = Object.freeze({
@@ -249,10 +257,17 @@ const FILTERED_WORLD_KEYS = Object.freeze({
   battlefields: (world, viewer) => battlefieldsForViewer(world.battlefields, viewer),
 
   // An agent is known to its owner (who never learns it was turned) and to the
-  // country that caught it; to nobody else.
+  // country that caught it; to nobody else. One caught whose sender was never
+  // learned reaches the country that caught it under a name of the view's own
+  // (unidentifiedAgentIds): its id is made from its owner's name
+  // (spycraft.js mintId), and gave away what its interrogators never learned.
   spies: (world, viewer) => {
     const audience = viewerAudience([viewer]);
-    return list(world.spies).map((spy) => spyAsSeenBy(audience, spy)).filter(Boolean);
+    const caught = unidentifiedAgentIds(world.spies, viewer);
+    return list(world.spies).map((spy) => {
+      const seen = spyAsSeenBy(audience, spy);
+      return seen && caught.has(spy) ? { ...seen, id: caught.get(spy) } : seen;
+    }).filter(Boolean);
   },
 
   // A government's Projects board: its own work, and every other country's it

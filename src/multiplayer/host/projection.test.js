@@ -300,6 +300,23 @@ test("every board shows the work abroad nobody hides, and what the viewer's own 
   assert.deepEqual(est.map((project) => project.id), ["proj-ru-public"], "a country nobody plays here sees only what nobody hides");
 });
 
+// The review of 2026-11-18, views 9: an agent's id is made from its owner's
+// name, so one caught whose sender was never learned still named its sender.
+test("an agent caught without its sender ever being learned reaches the country that caught it under a name of the view's own", () => {
+  const s = state();
+  s.world.spies.push(
+    { id: "spy-russian-federation-republic-of-latvia-2", owner: RUSSIA, target: LATVIA, status: "dead", identified: false, deployedAt: "2014-02-01", exposedAt: "2014-03-15" },
+    { id: "spy-republic-of-estonia-republic-of-latvia-1", owner: ESTONIA, target: LATVIA, status: "dead", identified: false, deployedAt: "2014-02-10", exposedAt: "2014-03-20" },
+  );
+  const lv = projectForViewer(s, LATVIA);
+  const dead = lv.world.spies.filter((spy) => spy.status === "dead");
+  assert.deepEqual(dead.map((spy) => [spy.id, spy.owner]), [["agent-unknown-1", ""], ["agent-unknown-2", ""]]);
+  for (const id of ["spy-russian-federation-republic-of-latvia-2", "spy-republic-of-estonia-republic-of-latvia-1"]) assert.equal(text(lv).includes(id), false);
+  assert.ok(lv.world.spies.some((spy) => spy.id === "spy-ru-in-lv"), "one caught and known keeps its id: it is held, and orders name it");
+  const ru = projectForViewer(s, RUSSIA);
+  assert.ok(ru.world.spies.some((spy) => spy.id === "spy-russian-federation-republic-of-latvia-2"), "its owner knows its own agent");
+});
+
 test("threads read from each side: the viewer is the implicit player, and its own words are its own", () => {
   const ru = projectForViewer(state(), RUSSIA);
   const own = ru.chat.find((chat) => chat.id === "chat-ru-est");
