@@ -115,3 +115,24 @@ test("at start, a stand-in no page holds is closed; one a page of this app holds
   await reset();
   assert.equal(await closeAbandonedStandIns({ target: {} }), 1);
 });
+
+test("a guest with no games of their own runs its shared game: the War Room, the music and Discord take it for a game being played", async () => {
+  // The list leaves the stand-in out, and "no games" was read from the list: a first-time player who joined a
+  // friend could not open the War Room, heard the menu's music all game and showed "in the menu" on Discord
+  // (the review of 2026-11-18, door 2).
+  const only = { id: "sg-1", name: "Shared game: Friday", country: "Abkhazia", scenarioId: "modern", standIn: { returnTo: "" } };
+  catalog = { ...catalog, activeGameId: "sg-1", games: [only] };
+  library.setSharedGameEntry(null);
+  await library.refreshLibraryCatalog({ force: true });
+  const state = library.getLibraryState();
+  assert.deepEqual(state.games, [], "never listed");
+  assert.equal(state.activeGame.id, "sg-1");
+  assert.equal(library.hasNoGameToRun(state), false, "the game the page runs");
+  // Single player as before: nothing listed and nothing active is nothing to run; a listed game is one.
+  catalog = { ...catalog, activeGameId: null, games: [] };
+  await library.refreshLibraryCatalog({ force: true });
+  assert.equal(library.hasNoGameToRun(library.getLibraryState()), true);
+  assert.equal(library.hasNoGameToRun({ loaded: false, games: [], activeGame: null }), false, "not before the library is read");
+  await reset("mine");
+  assert.equal(library.hasNoGameToRun(library.getLibraryState()), false);
+});

@@ -284,6 +284,19 @@ export const setOpenGameCountry = (gameId, country) => {
 
 export const getLibraryState = () => libraryState;
 
+// Whether the page has no game to run: the library is read, lists none of the
+// player's games, and has no active game either. A shared game's stand-in is
+// never listed (applyLibraryCatalog), but while its shared game is open it is
+// the game the page runs, for every purpose but the list: the War Room, the
+// music and Discord read this. They read the list's length, so a guest with no
+// games of their own (every first-time player who installs to join a friend)
+// could not open the War Room, heard the menu's music all game and showed "in
+// the menu" (the review of 2026-11-18, door 2). In single player the active
+// game is always one of the listed, so nothing there changes.
+export const hasNoGameToRun = ({ loaded = false, games = [], activeGame = null } = {}) => Boolean(loaded)
+  && (Array.isArray(games) ? games.length : 0) === 0
+  && !activeGame?.id;
+
 // Every shared game's stand-in in this library, as the library last read it:
 // [{ id, standIn: { returnTo } }]. The list of games never shows them
 // (applyLibraryCatalog); runtime/standInGames.js closes them.

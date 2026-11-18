@@ -6,7 +6,7 @@ import { Presence } from "./presence.jsx";
 import { LibraryTopBar, TOP_BAR_OFFSET, openLibraryTab, useMainMenuOpen } from "./libraryBar";
 import { ApiSetupPrompt } from "./apiSetupPrompt.jsx";
 import { GameLoadingScreen, LOADING_CEILING_MS, useGameLoading } from "./gameLoadingScreen.jsx";
-import { setOpenGameCountry, useLibraryState } from "../../runtime/library.js";
+import { hasNoGameToRun, setOpenGameCountry, useLibraryState } from "../../runtime/library.js";
 import { playerAtWar } from "../../runtime/playerAtWar.js";
 import { enterGame, useGameEntered } from "../../runtime/gameEntry.js";
 import { holdSeatsLeftBehind } from "../../runtime/seatsLeftBehind.js";
@@ -398,8 +398,10 @@ const Main = ({
   // game is opened: looking the name up reads the game's world and the country
   // tiles.)
   const activeCountryName = useCountryDisplayName(activeGame?.country || "", { wait: !gameEntered });
-  // No games -> nothing to simulate (the main menu covers the empty world).
-  const hasNoGames = loaded && (games?.length ?? 0) === 0;
+  // No games -> nothing to simulate (the main menu covers the empty world). A
+  // shared game's stand-in is no game of the list's, but is the one being run
+  // (runtime/library.js hasNoGameToRun).
+  const hasNoGames = hasNoGameToRun({ loaded, games, activeGame });
 
   // Starting a game with nothing to call the AI with: a prompt, once per game
   // per session, offering the AI settings. It goes away the moment a key is
