@@ -39,3 +39,15 @@ test("a checksum that cannot be read counts as no match, never as a match", asyn
   const chosen = await chooseStandInScenario({ scenarios, host: { id: "modern-day", name: "Modern Day", hash: HOST_MAP }, fingerprintOf: async () => { throw new Error("offline"); } });
   assert.deepEqual(chosen, { scenario: null, differs: true });
 });
+
+// A stand-in says what it is by its record, never by its name: the old copies named "Shared game: ..." were found by
+// matching those English words, which decides nothing (the review of 2026-11-18, door 8). A copy a guest kept from
+// before stand-ins said so is an ordinary game of theirs.
+test("no stand-in, old or new, is found by its name", async () => {
+  const { readFileSync } = await import("node:fs");
+  for (const file of ["./sharedGame.js", "../ui/LobbiesTab.jsx"]) {
+    const source = readFileSync(new URL(file, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /\.replace\(\/\^\(\?:shared game/i, file);
+    assert.doesNotMatch(source, /\/[^/\n]*shared game[^/\n]*\/[gimsuy]*\.test\(|\.match\(\/[^/\n]*shared game/i, file);
+  }
+});

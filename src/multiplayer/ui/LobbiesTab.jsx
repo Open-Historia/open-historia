@@ -120,8 +120,13 @@ const readAi = () => ({ refusal: sharedRoundRefusal(), answerer: sharedRoundAnsw
 const HostPanel = ({ onClose, onEnterGame }) => {
   const { activeGame } = useLibraryState();
   const shared = useSharedGame();
-  // A stand-in of an earlier shared game is named "Shared game: …": its lobby is not.
-  const [settings, setSettings] = useState({ ...DEFAULT_SETTINGS, name: String(activeGame?.name || "").replace(/^(?:shared game:\s*)+/i, "").trim() || DEFAULT_SETTINGS.name });
+  // The lobby is named after the game shared, as it is named. A stand-in says
+  // what it is by its record (server/sharedGameStandIn.js) and is never hosted;
+  // a copy a guest kept from before stand-ins said so is an ordinary game of
+  // theirs, named as they have it. Its name was matched against the English
+  // words "Shared game:" to drop them, which is no way to decide anything (the
+  // review of 2026-11-18, door 8).
+  const [settings, setSettings] = useState({ ...DEFAULT_SETTINGS, name: String(activeGame?.name || "").trim() || DEFAULT_SETTINGS.name });
   const [name, setName] = useState(rememberedName);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");

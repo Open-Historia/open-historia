@@ -497,9 +497,13 @@ const prepareStandIn = async (owner, lobby) => {
   const created = await createGame({
     id: wanted,
     scenarioId,
-    // A game hosted from a stand-in made before stand-ins said what they are is
-    // named "Shared game: …" already: said once.
-    name: `Shared game: ${String(lobby?.settings?.name || "with friends").replace(/^(?:shared game:\s*)+/i, "").slice(0, 60) || "with friends"}`,
+    // Its record says it is a stand-in (standInMark); the name is only what the
+    // menu bar and the loading screen show. The lobby's name is taken as the
+    // host gave it: it was matched against the English words "Shared game:"
+    // to drop them (a game hosted from a copy kept from before stand-ins said
+    // what they are), which is no way to decide anything (the review of
+    // 2026-11-18, door 8).
+    name: `Shared game: ${String(lobby?.settings?.name || "").trim().slice(0, 60) || "with friends"}`,
     gamePatch: { country: String(lobby?.countries?.[0] || ""), ...standInMark({ returnTo: String(library.activeGameId || "") }) },
   }, { forSharedGame: true });
   const gameId = String(created?.id || created?.game?.id || "");
