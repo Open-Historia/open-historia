@@ -44,7 +44,7 @@ import { digestText } from "../protocol/digest.js";
 import { withGoalProgress, withPlayerGoal } from "../../runtime/playerGoal.js";
 import { normalizeSocialFeed, withPlayerPost } from "../../runtime/socialFeed.js";
 import { applyProjectOpsToWorld, normalizeProjects } from "../../runtime/gameState.js";
-import { seatProjectOps } from "./seatProjects.js";
+import { opsPlaceStructures, seatProjectOps } from "./seatProjects.js";
 import { deployFor, disbandFor, revertOrderFor } from "./forces.js";
 import { orderCapRefusal } from "./orderCap.js";
 import { huntSeenBy, opaqueId, withFleetOrdered, withLineGivenUp, withOrdersSeen, withRenamed } from "./onlyOrdered.js";
@@ -1808,6 +1808,8 @@ export const createGameHost = ({
       const docs = await store.read();
       const date = clean(docs?.game?.gameDate);
       const turn = Number(docs?.game?.round) || 0;
+      // A structure a plan builds is held to the host's own map (seatProjects.js).
+      const chart = opsPlaceStructures(list(ops)) ? await Promise.resolve().then(readChart).catch(() => null) : null;
       let refusal = "";
       await store.updateWorld((world) => {
         const mine = same(seat.country, hostCountry);
@@ -1818,7 +1820,7 @@ export const createGameHost = ({
         // its own work (host/seatProjects.js): ids the host's, a plan priced
         // and held to the seat's own country. And the player's, whoever on the
         // page wrote it: `by` is the page's word, and lifted nothing.
-        const door = seatProjectOps(list(ops), { board, world, country: seat.country, mint: () => mintId("project", now) });
+        const door = seatProjectOps(list(ops), { board, world, country: seat.country, mint: () => mintId("project", now), chart });
         if (!door.ops.length) {
           refusal = door.refusal;
           return null;

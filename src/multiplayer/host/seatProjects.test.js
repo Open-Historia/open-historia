@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { PROJECT_REFUSALS, SEAT_OPEN_PROJECTS_MOST, seatPlanOf, seatProjectOps } from "./seatProjects.js";
+import { PROJECT_REFUSALS, SEAT_OPEN_PROJECTS_MOST, opsPlaceStructures, seatPlanOf, seatProjectOps } from "./seatProjects.js";
 import { lendBoards } from "../../runtime/seatBoards.js";
 import { advanceProjectsInWorld, applyProjectOpsToWorld, applyProjectOutcomesToWorld } from "../../runtime/gameState.js";
 import { COST_SHARE_OF_BUDGET_MOST, monthlyProjectBudget } from "../../runtime/projectEngine.js";
@@ -161,4 +161,39 @@ test("a seat's plan holds to its own country and is priced, whatever wrote it", 
   assert.deepEqual(plan.yields, [{ type: "relation", country: victim, change: 1 }]);
   assert.equal(plan.durationDays, 600, "an honest plan's days stand");
   assert.equal(plan.monthlyCost, 5e8, "and its cost");
+});
+
+// The follow-ups of 2026-11-18 (B8): a structure a seat's plan built stood wherever
+// its point said, or at its focus, anywhere on Earth, another player's capital
+// included, as a deployment did before wars 11. The host's map holds it to the
+// seat's own ground, or the sea off it.
+test("a structure a seat's plan builds stands on its own ground, held to the host's map", () => {
+  // Ruritania holds the land east of 0; the sea is south of 0 and off its coast west of 0.
+  const chart = {
+    holds: (owner, lng, lat) => (lat < 0 ? null : owner === guest ? lng >= 0 : lng < 0),
+    sea: (lng, lat) => lat < 0,
+    landNear: (owner, lng, lat) => owner === guest && lng >= -2,
+  };
+  const yards = (point) => ({ type: "structure", name: "Yards", kind: "shipyard", ...point });
+  const plan = (...effects) => ({ durationDays: 100, monthlyCost: 1, effects });
+  const placed = (effects, focus) => seatPlanOf(plan(...effects), { owner: guest, world: world(), chart, focus })?.effects;
+  assert.deepEqual(placed([yards({ lng: 5, lat: 5 })]), [yards({ lng: 5, lat: 5 })], "on its own land");
+  assert.deepEqual(placed([yards({ lng: -1, lat: -1 })]), [yards({ lng: -1, lat: -1 })], "at sea off it");
+  assert.deepEqual(placed([yards({ lng: -5, lat: 5 })]), [], "never on another's land");
+  assert.deepEqual(placed([yards({ lng: -9, lat: -1 })]), [], "nor far out at sea");
+  assert.deepEqual(placed([yards()], { lng: 3, lat: 3 }), [yards({ lng: 3, lat: 3 })], "with no point, where the project happens, pinned there");
+  assert.deepEqual(placed([yards()], { lng: -3, lat: 3 }), [], "and never where that is another's");
+  assert.deepEqual(placed([yards()]), [yards()], "with neither, it stands where the story later says");
+
+  // Through the door: the map is read for such a request, and a request whose map could not be read is refused.
+  const create = { op: "create", name: "Naval base", plan: plan(yards({ lng: -5, lat: 5 }), { type: "stat", stat: "military.sea", change: 2 }) };
+  const { ops } = seatProjectOps([create], { board: [], world: world(), country: guest, mint: ids(), chart });
+  assert.deepEqual(ops[0].project.plan.effects.map((effect) => effect.type), ["stat"]);
+  assert.deepEqual(seatProjectOps([create], { board: [], world: world(), country: guest, mint: ids() }), { ops: [], refusal: PROJECT_REFUSALS.chart });
+  assert.equal(opsPlaceStructures([create]), true);
+  assert.equal(opsPlaceStructures([{ op: "create", name: "Roads", plan: plan({ type: "stat", stat: "stability", change: 1 }) }, { op: "cancel", name: "X" }]), false);
+  // A plan for one still planning stands at that entry's focus.
+  const board = [{ id: "p1", name: "Harbour", status: "planning", focus: { lng: -3, lat: 3 } }];
+  const update = seatProjectOps([{ op: "update", name: "Harbour", patch: { plan: plan(yards()) } }], { board, world: world(), country: guest, mint: ids(), chart });
+  assert.deepEqual(update.ops[0].patch.plan.effects, []);
 });

@@ -34,25 +34,31 @@
 // figures, its relations with others, its structures and unit types, and land
 // it may CLAIM; what it does to another country's figures or land is the
 // world's to say, in the round's one request (rule 10), which reads the
-// board. And it is priced by what it does, by the engine's own measures
-// (runtime/projectEngine.js pricePlanForOwner), so the seat's own project
-// budget bounds how much it does. A seat runs at most SEAT_OPEN_PROJECTS_MOST
-// open projects at once: every one stands on the game's board through the
-// round's skip (runtime/seatBoards.js), which holds a fixed number.
+// board. A structure it builds stands on its own ground, held to the host's
+// own map as a formation raised or a structure moved is (structurePlacement.js
+// structureMoveRefusal, onOwnGround below): any point on Earth was taken, another player's
+// capital included (the follow-ups of 2026-11-18). And it is priced by what it
+// does, by the engine's own measures (runtime/projectEngine.js
+// pricePlanForOwner), so the seat's own project budget bounds how much it
+// does. A seat runs at most SEAT_OPEN_PROJECTS_MOST open projects at once:
+// every one stands on the game's board through the round's skip
+// (runtime/seatBoards.js), which is what that skip's prompt lists.
 //
 // Single player is untouched: its board's ops are the player's own device's,
 // whose AI is the world there.
 //
 // Pure: the host hands in the seat's board and the world it reads the seat's
-// means from, and a maker of ids.
+// means from, its own chart of the map (runtime/warRoomChart.js chartOf), and a
+// maker of ids.
 
 import { EFFECT_TYPES, normalizeProjectPlan, pricePlanForOwner, sheetOf } from "../../runtime/projectEngine.js";
 import { isProjectOpen } from "../../runtime/projects.js";
+// The sea off a country's own land, as a structure may be moved to it.
+import { STRUCTURE_SEA_KM } from "../../runtime/structurePlacement.js";
 import { sameName } from "../../../server/nameKey.js";
 
-// How many open projects of its own one seat may run at once. Eight seats of
-// eight, with the countries nobody plays at theirs, fit the game's board
-// through a skip (runtime/seatBoards.js BOARD_LIMIT).
+// How many open projects of its own one seat may run at once: every one is
+// lent to each skip (runtime/seatBoards.js lendBoards), and its prompt lists it.
 export const SEAT_OPEN_PROJECTS_MOST = 8;
 // The longest note a page's "cancel" keeps.
 const NOTE_MOST = 240;
@@ -70,23 +76,66 @@ export const PROJECT_REFUSALS = Object.freeze({
   story: "In a shared game a project is funded, planned or called off; what becomes of it is the round's to tell.",
   ops: "That is nothing a government does to its own projects.",
   most: `You run ${SEAT_OPEN_PROJECTS_MOST} projects at once already: finish or call one off before you open another.`,
+  chart: "The map could not be read to see whose ground that is: try again.",
+});
+
+// Where a structure stands: its own point, else the project's focus; null for
+// neither (it then stands where the story later says, or nowhere).
+const pointOf = (effect, focus) => {
+  const lng = Number(effect?.lng);
+  const lat = Number(effect?.lat);
+  if (effect?.lng !== undefined && effect?.lat !== undefined && Number.isFinite(lng) && Number.isFinite(lat)) return { lng, lat };
+  const at = { lng: Number(focus?.lng), lat: Number(focus?.lat) };
+  return isRecord(focus) && Number.isFinite(at.lng) && Number.isFinite(at.lat) ? at : null;
+};
+// Whether `owner` holds the ground at a point, on the host's own map (`chart`):
+// its land, its own or taken, or the sea within STRUCTURE_SEA_KM of it, as a
+// formation is raised (forces.js deployPlaceRefusal) and a structure moved.
+const onOwnGround = (owner, { lng, lat }, chart) => {
+  const held = chart.holds(owner, lng, lat);
+  if (held === true) return true;
+  if (held === false) return false;
+  return Boolean(typeof chart.sea === "function" && chart.sea(lng, lat)
+    && typeof chart.landNear === "function" && chart.landNear(owner, lng, lat, STRUCTURE_SEA_KM));
+};
+const readable = (chart) => Boolean(chart) && typeof chart.holds === "function";
+const typeOf = (effect) => clean(effect?.type || effect?.system) || (EFFECT_TYPES.includes(clean(effect?.kind)) ? clean(effect.kind) : "");
+// Whether a plan builds a structure at a point (its own, or the focus), which
+// is then held to the host's map.
+const placesStructure = (plan, focus) => isRecord(plan)
+  && [...list(plan.effects), ...list(plan.yields)].some((effect) => isRecord(effect) && typeOf(effect) === "structure" && pointOf(effect, focus));
+// Whether a page's ops plan a structure: the host reads its chart of the map
+// for such a request only (host/gameHost.js "projectOps").
+export const opsPlaceStructures = (ops) => list(ops).some((raw) => {
+  if (!isRecord(raw)) return false;
+  const source = isRecord(raw.project) ? raw.project : isRecord(raw.patch) ? raw.patch : raw;
+  return isRecord(source.plan) && [...list(source.plan.effects), ...list(source.plan.yields)].some((effect) => isRecord(effect) && typeOf(effect) === "structure");
 });
 
 // A plan as the seat's own government may make it: its effects and yields on
-// its own country, its relations, and claims, priced by what they do. null for
-// no plan. `owner`: the seat's country; `world`: the host's, for its means.
-export const seatPlanOf = (plan, { owner = "", world = {} } = {}) => {
+// its own country, its relations, and claims, priced by what they do, and the
+// structures it builds on its own ground, at the point each stands (its own,
+// or the project's `focus`). null for no plan. `owner`: the seat's country;
+// `world`: the host's, for its means; `chart`: the host's map (a plan that
+// builds at a point is refused when it could not be read: seatProjectOps).
+export const seatPlanOf = (plan, { owner = "", world = {}, chart = null, focus = null } = {}) => {
   if (!isRecord(plan) || !normalizeProjectPlan(plan)) return null;
   const own = (effect) => {
     if (!isRecord(effect)) return [];
     // Its type as the engine reads one (projectEngine.js normalizeProjectEffect).
-    const type = clean(effect.type || effect.system) || (EFFECT_TYPES.includes(clean(effect.kind)) ? clean(effect.kind) : "");
+    const type = typeOf(effect);
     const named = clean(effect.country);
     if (!EFFECT_TYPES.includes(type)) return [];
     // A figure of its own country's, and nobody else's.
     if (type === "stat") return named && !sameName(named, owner) ? [] : [{ ...effect, country: "" }];
     // Land it may claim; a border moves by war or by treaty.
     if (type === "territory") return named && !sameName(named, owner) ? [] : [{ ...effect, country: owner, claim: true }];
+    // A structure on its own ground, at the point it stands.
+    if (type === "structure") {
+      const at = pointOf(effect, focus);
+      if (!at) return [effect];
+      return readable(chart) && onOwnGround(owner, at, chart) ? [{ ...effect, lng: at.lng, lat: at.lat }] : [];
+    }
     return [effect];
   };
   const shaped = {
@@ -100,8 +149,9 @@ export const seatPlanOf = (plan, { owner = "", world = {} } = {}) => {
 
 // The ops the host applies for a page's `ops`, on the seat's own `board`:
 // { ops, refusal }, `refusal` the first reason one was left out ("" for none).
-// `mint()` makes a project's id.
-export const seatProjectOps = (ops, { board = [], world = {}, country = "", mint = () => "" } = {}) => {
+// `mint()` makes a project's id; `chart` is the host's map, read when the ops
+// build a structure at a point (opsPlaceStructures).
+export const seatProjectOps = (ops, { board = [], world = {}, country = "", mint = () => "", chart = null } = {}) => {
   const out = [];
   let refusal = "";
   const refuse = (reason) => {
@@ -136,8 +186,12 @@ export const seatProjectOps = (ops, { board = [], world = {}, country = "", mint
         refuse("most");
         continue;
       }
+      if (placesStructure(source.plan, source.focus) && !readable(chart)) {
+        refuse("chart");
+        continue;
+      }
       const project = Object.fromEntries(CREATE_FIELDS.filter((key) => source[key] !== undefined).map((key) => [key, source[key]]));
-      const plan = seatPlanOf(source.plan, { owner: country, world });
+      const plan = seatPlanOf(source.plan, { owner: country, world, chart, focus: source.focus });
       out.push({ op: "create", project: { ...project, name, id: restated ? clean(restated.id) : mint(), ...(plan ? { plan } : {}) } });
       if (!restated) open += 1;
       continue;
@@ -147,7 +201,13 @@ export const seatProjectOps = (ops, { board = [], world = {}, country = "", mint
     if (op === "update") {
       // Where the game's own door reads an update's fields (gameState.js normalizeProjectOp).
       const patch = isRecord(raw.patch) ? raw.patch : isRecord(raw.project) ? raw.project : raw;
-      const plan = isRecord(patch.plan) ? seatPlanOf(patch.plan, { owner: country, world }) : null;
+      // A plan's structure with no point of its own stands at the entry's focus.
+      const focus = (list(board).find((row) => (target.projectId && clean(row?.id) === target.projectId) || (target.name && sameName(row?.name, target.name))) ?? null)?.focus ?? null;
+      if (isRecord(patch.plan) && placesStructure(patch.plan, focus) && !readable(chart)) {
+        refuse("chart");
+        continue;
+      }
+      const plan = isRecord(patch.plan) ? seatPlanOf(patch.plan, { owner: country, world, chart, focus }) : null;
       const funding = clean(patch.funding);
       if (!funding && !plan) {
         refuse("story");
