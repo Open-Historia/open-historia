@@ -22,6 +22,7 @@ var _draft: Dictionary = {}
 var _dirty := false
 var _busy := false
 var _message := ""
+var _message_ok := false
 var _pending_logo := ""
 var _lookup := {}
 var _delete_button: Button
@@ -500,7 +501,7 @@ func _update_message() -> void:
 	EditorKit.clear(_message_holder)
 	if _message.is_empty():
 		return
-	var success := RegEx.create_from_string("(?i)saved|deleted from").search(_message) != null
+	var success := _message_ok
 	_message_holder.add_child(PoliticalKit.tone_box(_message, Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.08) if success else Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.08), Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.2) if success else Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.22), PoliticalKit.GREEN_INK if success else PoliticalKit.RED_INK, 11, 10, Vector4(10, 9, 10, 9)))
 
 
@@ -778,15 +779,18 @@ func _upload_logo() -> void:
 	var extension := source.get_extension().to_lower()
 	if not LOGO_TYPES.has(extension):
 		_message = "Upload a PNG, JPEG, WebP or GIF. SVG logos should use a normal scenario/public asset path rather than inline SVG."
+		_message_ok = false
 		_update_message()
 		return
 	var bytes := FileAccess.get_file_as_bytes(source)
 	if bytes.is_empty() and FileAccess.get_open_error() != OK:
 		_message = "Could not read the selected logo file."
+		_message_ok = false
 		_update_message()
 		return
 	if bytes.size() > 256 * 1024:
 		_message = "Embedded institution logos are limited to 256 KB. Use a scenario/public asset path or web URL for larger artwork."
+		_message_ok = false
 		_update_message()
 		return
 	_pending_logo = "data:%s;base64,%s" % [str(LOGO_TYPES[extension]), Marshalls.raw_to_base64(bytes)]
@@ -808,6 +812,7 @@ func _save() -> void:
 		return
 	if not reply.get("ok", false):
 		_message = str(reply.get("error", "Could not save institution."))
+		_message_ok = false
 		_update_header()
 		return
 	var result: Dictionary = reply["result"]
@@ -818,6 +823,7 @@ func _save() -> void:
 		_pending_logo = ""
 		_dirty = false
 		_message = str(result.get("message", ""))
+		_message_ok = true
 		_logo_cache.clear()
 		_render_card()
 		_render_list()
@@ -826,6 +832,7 @@ func _save() -> void:
 			details_changed.emit(result["details"])
 	else:
 		_message = str(result.get("message", ""))
+		_message_ok = false
 		_update_header()
 
 
@@ -845,6 +852,7 @@ func _delete() -> void:
 		return
 	if not reply.get("ok", false):
 		_message = str(reply.get("error", "Could not delete the institution."))
+		_message_ok = false
 		_update_header()
 		return
 	var result: Dictionary = reply["result"]
@@ -854,6 +862,7 @@ func _delete() -> void:
 		_pending_logo = ""
 		_dirty = false
 		_message = str(result.get("message", ""))
+		_message_ok = true
 		_reset_to_selection()
 		_render_card()
 		_render_list()
@@ -862,4 +871,5 @@ func _delete() -> void:
 			details_changed.emit(result["details"])
 	else:
 		_message = str(result.get("message", ""))
+		_message_ok = false
 		_update_header()

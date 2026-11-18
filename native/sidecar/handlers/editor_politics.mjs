@@ -173,10 +173,8 @@ const callsToFinish = (estimated) => (estimated > 0
 
 const aiRequestsUsed = (calls, ceiling) => `${calls === 1 ? "1 AI request used" : `${calls} AI requests used`}${ceiling ? ` · Safety limit: ${ceiling}` : ""}`;
 
-const safeFileToken = (value) => clean(value)
-  .replace(/[^a-z0-9._-]+/gi, "-")
-  .replace(/^-+|-+$/g, "")
-  .slice(0, 80) || "scenario";
+let fileSafeName = null;
+const safeFileToken = (value) => fileSafeName(clean(value), { fallback: "scenario", keep: "._-" });
 
 const buildRows = (result, { allowRosterExpansion = false, selectValid = true } = {}) => {
   const rows = [];
@@ -518,6 +516,7 @@ export const register = (ctx) => {
   };
 
   const loadDetails = (scenarioId) => lib.loadScenarioDetails(clean(scenarioId));
+  fileSafeName = engine.nameKey.fileSafeName;
 
   const MODES = () => review().POLITICAL_WORLD_GENERATION_MODES;
   const modeOptions = () => [
@@ -536,13 +535,20 @@ export const register = (ctx) => {
       label: "Basic",
       description: "The player's country and countries at war get full detail, and every other country gets standard detail, even one that already has Political Actors. The AI's answers are the shortest.",
     },
+    {
+      id: MODES().UNIFORM,
+      label: "Uniform depth (all active polities)",
+      description: "Advanced: explicitly choose one detail level for every active polity, including the player's country, client states and landless polities. Existing authored data remains authoritative.",
+    },
   ];
+  const UNIFORM_DEPTH_OPTIONS = [["standard", "Standard"], ["rich", "Rich"], ["full", "Full"]];
 
   const sessions = new Map();
 
   const freshSession = (scenarioId) => ({
     scenarioId: clean(scenarioId),
     mode: MODES().BALANCED,
+    uniformDepth: "rich",
     allowRosterExpansion: false,
     busy: false,
     applying: false,
@@ -581,7 +587,7 @@ export const register = (ctx) => {
 
   const computeInputs = (session) => {
     try {
-      session.inputs = review().buildScenarioPoliticalGenerationInputs(session.details, { mode: session.mode, maxBatchSize: 8, countryTags: session.scenarioTags });
+      session.inputs = review().buildScenarioPoliticalGenerationInputs(session.details, { mode: session.mode, uniformDepth: session.uniformDepth, maxBatchSize: 8, countryTags: session.scenarioTags });
     } catch {
       session.inputs = null;
     }
@@ -614,6 +620,15 @@ export const register = (ctx) => {
       }
       session.v2Checkpoint = visibleCheckpoint;
       if (visibleCheckpoint) {
+        const selection = visibleCheckpoint.generationSelection;
+        if (selection?.mode && modeOptions().some((entry) => entry.id === selection.mode)) {
+          const depth = selection.mode === MODES().UNIFORM ? selection.uniformDepth : session.uniformDepth;
+          if (selection.mode !== session.mode || depth !== session.uniformDepth) {
+            session.mode = selection.mode;
+            session.uniformDepth = depth;
+            computeInputs(session);
+          }
+        }
         session.runKind = "political-world-v2";
         if (visibleCheckpoint?.pauseReason === "reference-canon-rebase") {
           session.progress = "Political World progress recovered. Scenario context changed; Continue Generation will refresh reference institutions without rebuilding completed political actors.";
@@ -721,6 +736,10 @@ export const register = (ctx) => {
       mode: session.mode,
       modes: modeOptions().map((entry) => [entry.id, entry.label]),
       modeDescription: option?.description ?? "",
+      uniform: session.mode === MODES().UNIFORM,
+      uniformDepth: session.uniformDepth,
+      uniformDepths: UNIFORM_DEPTH_OPTIONS,
+      modeDisabled: busy || applying || Boolean(v2Checkpoint),
       allowRosterExpansion: session.allowRosterExpansion,
       settingsDisabled: busy || applying,
       toolsDisabled: busy || applying || d.dateMismatch,
@@ -956,7 +975,7 @@ export const register = (ctx) => {
       await withIdb(async () => {
         const freshDetails = await loadDetails(session.scenarioId);
         const freshTags = await lib.downloadScenarioJsonAsset(freshDetails?.scenario?.id || session.scenarioId, "tags");
-        const freshInputs = review().buildScenarioPoliticalGenerationInputs(freshDetails, { mode: session.mode, maxBatchSize: 8, countryTags: freshTags });
+        const freshInputs = review().buildScenarioPoliticalGenerationInputs(freshDetails, { mode: session.mode, uniformDepth: session.uniformDepth, maxBatchSize: 8, countryTags: freshTags });
         if (freshInputs.scenarioDate !== inputs.scenarioDate) {
           throw new Error(`Scenario start date changed from ${inputs.scenarioDate} to ${freshInputs.scenarioDate || "<blank>"}. Save/reload before generating Political World.`);
         }
@@ -1092,7 +1111,7 @@ export const register = (ctx) => {
           if (freshDate !== v2Checkpoint.scenarioDate) {
             throw new Error(`Scenario start date changed from ${v2Checkpoint.scenarioDate} to ${freshDate || "<blank>"}. Start a fresh Political World generation for the new date.`);
           }
-          const freshInputs = review().buildScenarioPoliticalGenerationInputs(freshDetails, { mode: session.mode, maxBatchSize: 8 });
+          const freshInputs = review().buildScenarioPoliticalGenerationInputs(freshDetails, { mode: session.mode, uniformDepth: session.uniformDepth, maxBatchSize: 8 });
           const world = pipeline().applyPoliticalWorldV2Checkpoint({
             checkpoint: v2Checkpoint,
             freshWorld: freshDetails?.data?.world ?? {},
@@ -1182,7 +1201,7 @@ export const register = (ctx) => {
         if (freshDate !== v2Checkpoint.scenarioDate) {
           throw new Error(`Scenario start date changed from ${v2Checkpoint.scenarioDate} to ${freshDate || "<blank>"}. Resume from a fresh v2 checkpoint.`);
         }
-        const freshInputs = review().buildScenarioPoliticalGenerationInputs(freshDetails, { mode: session.mode, maxBatchSize: 8 });
+        const freshInputs = review().buildScenarioPoliticalGenerationInputs(freshDetails, { mode: session.mode, uniformDepth: session.uniformDepth, maxBatchSize: 8 });
         const application = pipeline().applyCompletePoliticalWorldV2Work({
           checkpoint: v2Checkpoint,
           freshWorld: freshDetails?.data?.world ?? {},
@@ -1193,7 +1212,7 @@ export const register = (ctx) => {
         });
         const saved = await lib.saveScenario(scenarioId, { world: application.world });
         const reloaded = saved?.data?.world ? saved : await loadDetails(scenarioId);
-        const savedInputs = review().buildScenarioPoliticalGenerationInputs(reloaded, { mode: session.mode, maxBatchSize: 8 });
+        const savedInputs = review().buildScenarioPoliticalGenerationInputs(reloaded, { mode: session.mode, uniformDepth: session.uniformDepth, maxBatchSize: 8 });
         const kept = await pipeline().keepPoliticalWorldV2CheckpointAfterPartialApply({
           checkpoint: v2Checkpoint,
           world: savedInputs.world,
@@ -1399,7 +1418,7 @@ export const register = (ctx) => {
     pushProgress(session);
     try {
       const freshDetails = await loadDetails(session.details.scenario.id);
-      const freshInputs = review().buildScenarioPoliticalGenerationInputs(freshDetails, { mode: session.mode, maxBatchSize: 8 });
+      const freshInputs = review().buildScenarioPoliticalGenerationInputs(freshDetails, { mode: session.mode, uniformDepth: session.uniformDepth, maxBatchSize: 8 });
       if (freshInputs.scenarioDate !== result.scenarioDate) {
         throw new Error(`Scenario start date changed from ${result.scenarioDate} to ${freshInputs.scenarioDate || "<blank>"}. Generate political proposals again for the new canonical date.`);
       }
@@ -1483,7 +1502,7 @@ export const register = (ctx) => {
       if (diagnostic?.kind === "political-world-v2-checkpoint") {
         await withIdb(async () => {
           const freshDetails = await loadDetails(session.details?.scenario?.id);
-          const freshInputs = review().buildScenarioPoliticalGenerationInputs(freshDetails, { mode: session.mode, maxBatchSize: 8 });
+          const freshInputs = review().buildScenarioPoliticalGenerationInputs(freshDetails, { mode: session.mode, uniformDepth: session.uniformDepth, maxBatchSize: 8 });
           const restoredCheckpoint = engine.polV2CheckpointFile.restorePoliticalWorldV2CheckpointFile(diagnostic, {
             scenarioId: session.details?.scenario?.id,
             inputs: freshInputs,
@@ -1827,9 +1846,14 @@ export const register = (ctx) => {
       return { view: genView(session, { withRows: true }) };
     }),
     "editor.politics.gen.view": genMethod(async (session) => ({ view: genView(session, { withRows: true }) })),
-    "editor.politics.gen.settings": genMethod(async (session, { mode, allowRosterExpansion, callBudget }) => {
-      if (mode !== undefined && modeOptions().some((entry) => entry.id === mode) && mode !== session.mode) {
+    "editor.politics.gen.settings": genMethod(async (session, { mode, uniformDepth, allowRosterExpansion, callBudget }) => {
+      const lockedDepth = Boolean(session.v2Checkpoint);
+      if (!lockedDepth && mode !== undefined && modeOptions().some((entry) => entry.id === mode) && mode !== session.mode) {
         session.mode = mode;
+        computeInputs(session);
+      }
+      if (!lockedDepth && uniformDepth !== undefined && UNIFORM_DEPTH_OPTIONS.some(([value]) => value === uniformDepth) && uniformDepth !== session.uniformDepth) {
+        session.uniformDepth = uniformDepth;
         computeInputs(session);
       }
       if (allowRosterExpansion !== undefined) session.allowRosterExpansion = allowRosterExpansion === true;
@@ -1897,7 +1921,6 @@ export const register = (ctx) => {
         })),
         representations: Object.values(engine.polActors.POLITICAL_REPRESENTATIONS).map((value) => [value, representationLabel(value)]),
         regimes: engine.polActors.POLITICAL_REGIME_CHARACTERS.map((value) => [value, representationLabel(value)]),
-        ideologies: (engine.ctPolitics?.IDEOLOGIES ?? []).map((ideology) => [ideology.id, ideology.name]),
         partyRoles: Object.entries(engine.ctPolitics?.PARTY_ROLE_LABELS ?? {}),
       };
     },

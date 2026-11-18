@@ -26,6 +26,10 @@ var _settings_nodes: Array[Control] = []
 var _budget_input: LineEdit
 var _mode_select: OptionButton
 var _mode_note: Label
+var _depth_box: HBoxContainer
+var _depth_select: OptionButton
+var _uniform_note: Control
+var _locked_note: Control
 var _roster_check: CheckBox
 var _status_box: VBoxContainer
 var _rows_box: VBoxContainer
@@ -230,6 +234,8 @@ func _build_advanced(content: VBoxContainer) -> void:
 	mode_box.add_child(UI.label("Generation mode", 11, Color(1, 1, 1, 0.58)))
 	_mode_select = PoliticalKit.select([], "")
 	_mode_select.custom_minimum_size = Vector2(150, 35)
+	_mode_select.fit_to_longest_item = true
+	_mode_select.clip_text = false
 	_mode_select.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	_mode_select.item_selected.connect(func(index: int) -> void:
 		if _quiet_settings:
@@ -240,11 +246,30 @@ func _build_advanced(content: VBoxContainer) -> void:
 		(child as Control).size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_tools_flow.add_child(mode_box)
 	_settings_nodes.append(mode_box)
+	_depth_box = HBoxContainer.new()
+	_depth_box.add_theme_constant_override("separation", 6)
+	_depth_box.add_child(UI.label("Detail for every active polity", 11, Color(1, 1, 1, 0.58)))
+	_depth_select = PoliticalKit.select([], "")
+	_depth_select.custom_minimum_size = Vector2(90, 35)
+	_depth_select.fit_to_longest_item = true
+	_depth_select.clip_text = false
+	_depth_select.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_depth_select.item_selected.connect(_on_depth_selected)
+	_depth_box.add_child(_depth_select)
+	for child in _depth_box.get_children():
+		(child as Control).size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_depth_box.visible = false
+	_tools_flow.add_child(_depth_box)
+	_settings_nodes.append(_depth_box)
 	content.add_child(PoliticalKit.gap(8))
 	_mode_note = PoliticalKit.text("", 11, Color(1, 1, 1, 0.48))
 	content.add_child(_mode_note)
 	content.add_child(PoliticalKit.gap(6))
 	content.add_child(PoliticalKit.text("Generation mode applies to Generate Political World and to Generate Missing Politics.", 11, Color(1, 1, 1, 0.48)))
+	_uniform_note = _noted(PoliticalKit.text("Full detail for every active polity can require many more AI calls and may reach the generation safety ceiling. This targets missing supported fields, not a guarantee of historical completeness.", 11, Color(1, 1, 1, 0.55)))
+	content.add_child(_uniform_note)
+	_locked_note = _noted(PoliticalKit.text("Generation depth is locked while this saved checkpoint exists. Continue or apply the saved work before starting with another depth.", 11, Color(1, 1, 1, 0.48)))
+	content.add_child(_locked_note)
 	content.add_child(PoliticalKit.gap(8))
 	content.add_child(PoliticalKit.text("Repair Governing Alignment can only fill missing rulingPartyIds / coalitionPartyIds from party IDs that already exist and never runs the temporal verifier.", 11, Color(1, 1, 1, 0.48)))
 	content.add_child(PoliticalKit.gap(10))
@@ -261,6 +286,21 @@ func _build_advanced(content: VBoxContainer) -> void:
 	roster_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	roster_row.add_child(roster_text)
 	content.add_child(roster_row)
+
+
+func _noted(note: Control) -> VBoxContainer:
+	var holder := VBoxContainer.new()
+	holder.add_theme_constant_override("separation", 0)
+	holder.add_child(PoliticalKit.gap(6))
+	holder.add_child(note)
+	holder.visible = false
+	return holder
+
+
+func _on_depth_selected(index: int) -> void:
+	if _quiet_settings:
+		return
+	_send_settings({"uniformDepth": str(_depth_select.get_item_metadata(index))})
 
 
 func _send_settings(patch: Dictionary) -> void:
@@ -382,7 +422,19 @@ func _render_tools() -> void:
 		_mode_select.set_item_metadata(_mode_select.item_count - 1, str(pair[0]))
 		if str(pair[0]) == str(_view.get("mode", "")):
 			_mode_select.select(_mode_select.item_count - 1)
-	_mode_select.disabled = not settings_enabled
+	_mode_select.disabled = bool(_view.get("modeDisabled", not settings_enabled))
+	_depth_select.clear()
+	for option in _view.get("uniformDepths", []):
+		var depth: Array = option
+		_depth_select.add_item(str(depth[1]))
+		_depth_select.set_item_metadata(_depth_select.item_count - 1, str(depth[0]))
+		if str(depth[0]) == str(_view.get("uniformDepth", "")):
+			_depth_select.select(_depth_select.item_count - 1)
+	_depth_select.disabled = _mode_select.disabled
+	var uniform := bool(_view.get("uniform", false))
+	_depth_box.visible = uniform
+	_uniform_note.visible = uniform
+	_locked_note.visible = bool(_view.get("hasCheckpoint", false))
 	_roster_check.button_pressed = bool(_view.get("allowRosterExpansion", false))
 	_roster_check.disabled = not settings_enabled
 	_quiet_settings = false

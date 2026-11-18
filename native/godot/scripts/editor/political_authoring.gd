@@ -35,7 +35,6 @@ var _syncing := false
 var _parties_section: Dictionary = {}
 var _blocs_section: Dictionary = {}
 var _open_states := {}
-var _ideologies: Array = []
 var _party_roles: Array = []
 var _composition: Dictionary = {}
 var _composition_label: Label
@@ -66,7 +65,6 @@ func setup(engine: EngineLink, props: Dictionary) -> void:
 			_trait_alias[_alias_key(str(alias))] = str(trait_info.get("key", ""))
 	_representations = result.get("representations", [])
 	_regimes = result.get("regimes", [])
-	_ideologies = result.get("ideologies", [])
 	_party_roles = result.get("partyRoles", [])
 	_take_state(result, true)
 	_render_card()
@@ -519,14 +517,8 @@ func _render_parties() -> void:
 		var refresh_title := func() -> void: PoliticalKit.set_section_title(nested, _party_title(party, index))
 		var inner: VBoxContainer = nested["content"]
 		var grid := PoliticalKit.AutoGrid.new(192.0, 8.0)
-		for pair in [["Name", "name"], ["Short name", "shortName"], ["Native name", "nameNative"], ["Native abbreviation", "shortNameNative"], ["Leader", "leader"], ["Ideology label", "ideology"], ["Founded", "founded"], ["Party colour (hex)", "color"], ["Influence label", "influenceLabel"]]:
+		for pair in [["Name", "name"], ["Short name", "shortName"], ["Native name", "nameNative"], ["Native abbreviation", "shortNameNative"], ["Leader", "leader"], ["Ideology", "ideology"], ["Political position", "politicalPosition"], ["Founded", "founded"], ["Party colour (hex)", "color"], ["Influence label", "influenceLabel"]]:
 			grid.add_child(_entity_input(party, str(pair[0]), str(pair[1]), refresh_title))
-		var families: Array = [["", "Not specified"]]
-		families.append_array(_ideologies)
-		grid.add_child(PoliticalKit.field("Ideology family", PoliticalKit.select(families, str(party.get("ideologyFamily", "")), func(value: String) -> void:
-			party["ideologyFamily"] = value
-			_set_dirty())))
-		grid.add_child(_entity_input(party, "Subideology", "subideology", Callable(func() -> void: pass)))
 		var role := "governing" if bool(party.get("ruling", false)) else ("coalition" if bool(party.get("coalition", false)) else (str(party.get("role", "")) if not str(party.get("role", "")).is_empty() else "opposition"))
 		grid.add_child(PoliticalKit.field("Party role", PoliticalKit.select(_party_roles, role, func(value: String) -> void:
 			party["role"] = value
@@ -627,6 +619,7 @@ func _empty_party() -> Dictionary:
 		"ideology": "",
 		"ideologyFamily": "",
 		"subideology": "",
+		"politicalPosition": "",
 		"role": "opposition",
 		"seats": "",
 		"founded": "",

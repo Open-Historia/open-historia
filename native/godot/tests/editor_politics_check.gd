@@ -215,6 +215,25 @@ func _run() -> void:
 	(generation._advanced["summary"] as Button).pressed.emit()
 	await _wait(0.3)
 	await _shoot("pol-02-advanced")
+	var mode_labels: Array = []
+	for index in range(generation._mode_select.item_count):
+		mode_labels.append(generation._mode_select.get_item_text(index))
+	_check(mode_labels.has("Uniform depth (all active polities)"), "the Uniform depth mode is offered (%s)" % str(mode_labels))
+	_check(not generation._depth_box.visible and not generation._uniform_note.visible, "no depth select outside Uniform depth")
+	_choose_option(generation._mode_select, "uniform")
+	await _wait_until(func() -> bool: return str(generation._view.get("mode", "")) == "uniform", 10.0, "uniform mode")
+	await _wait(0.2)
+	_check(generation._depth_box.visible and generation._uniform_note.visible, "Uniform depth shows its detail select and its warning")
+	_check(generation._depth_select.get_item_text(generation._depth_select.selected) == "Rich", "the detail starts at Rich")
+	_check(str(generation._mode_note.text).begins_with("Advanced: explicitly choose one detail level for every active polity"), "the Uniform description shows")
+	_choose_option(generation._depth_select, "full")
+	await _wait_until(func() -> bool: return str(generation._view.get("uniformDepth", "")) == "full", 10.0, "full depth")
+	_check(str(generation._view.get("uniformDepth", "")) == "full" and generation._depth_select.get_item_text(generation._depth_select.selected) == "Full", "Full detail picked")
+	await _shoot("pol-02b-uniform-depth")
+	_choose_option(generation._mode_select, "balanced")
+	await _wait_until(func() -> bool: return str(generation._view.get("mode", "")) == "balanced", 10.0, "balanced mode")
+	await _wait(0.2)
+	_check(not generation._depth_box.visible, "back to Balanced hides the detail select")
 
 	_button(generation, "Test 15 Polities").pressed.emit()
 	await _wait_until(func() -> bool: return bool(generation._view.get("busy", false)) or not generation._rows.is_empty(), 20.0, "test run to start")
@@ -260,6 +279,9 @@ func _run() -> void:
 	_say("v2 progress: " + str(generation._view.get("progress", "")))
 	_check(generation._view.get("checkpointCard") is Dictionary, "checkpoint card shown after pause")
 	_check(str(generation._view.get("generateLabel", "")) == "Continue Generation", "Generate button now reads Continue Generation")
+	_check(generation._mode_select.disabled and generation._locked_note.visible, "the mode is locked while the checkpoint exists, and says so")
+	var locked: Dictionary = await main.engine.request("editor.politics.gen.settings", {"scenarioId": "default", "mode": "basic"})
+	_check(str(((locked.get("result", {}) as Dictionary).get("view", {}) as Dictionary).get("mode", "")) == "balanced", "a locked mode is not changed")
 	scroll.scroll_vertical = 0
 	await _shoot("pol-07-v2-paused")
 
@@ -314,8 +336,9 @@ func _run() -> void:
 	_check(_find(authoring._manager.main_body, func(node: Node) -> bool: return node is CheckBox and (node as CheckBox).text == "Ruling / government") == null, "a party's role is chosen, not ticked")
 	_choose_option(_field(authoring._manager.main_body, "Party role"), "governing")
 	_type(_field(authoring._manager.main_body, "Native name"), "Parti socialiste")
-	_choose_option(_field(authoring._manager.main_body, "Ideology family"), "socialDemocracy")
-	_type(_field(authoring._manager.main_body, "Subideology"), "Social Democracy")
+	_check(_field(authoring._manager.main_body, "Ideology family") == null and _field(authoring._manager.main_body, "Subideology") == null and _field(authoring._manager.main_body, "Ideology label") == null, "no Ideology family, Subideology or Ideology label fields")
+	_type(_field(authoring._manager.main_body, "Ideology"), "Social democracy")
+	_type(_field(authoring._manager.main_body, "Political position"), "Centre-left")
 	_type(_field(authoring._manager.main_body, "Founded"), "1969")
 	_type(_field(authoring._manager.main_body, "Party colour (hex)"), "#e4002b")
 	_type(_field(authoring._manager.main_body, "Legislature"), "National Assembly")
@@ -345,7 +368,8 @@ func _run() -> void:
 	_check(is_equal_approx(float((saved_france.get("government", {}) as Dictionary).get("approval", -1)), 61.0), "typed approval saved, not erased (%s)" % str((saved_france.get("government", {}) as Dictionary).get("approval", "missing")))
 	var saved_party: Dictionary = (saved_france.get("parties", []) as Array)[0] if not (saved_france.get("parties", []) as Array).is_empty() else {}
 	_check(str((saved_france.get("government", {}) as Dictionary).get("legislature", "")) == "National Assembly" and int((saved_france.get("government", {}) as Dictionary).get("legislatureSeats", 0)) == 577 and str((saved_france.get("government", {}) as Dictionary).get("nextElection", "")) == "June 2017", "the legislature, its seats and the next election are saved")
-	_check(str(saved_party.get("nameNative", "")) == "Parti socialiste" and str(saved_party.get("ideologyFamily", "")) == "socialDemocracy" and int(saved_party.get("seats", -1)) == 286 and str(saved_party.get("founded", "")) == "1969" and str(saved_party.get("color", "")) == "#e4002b" and str(saved_party.get("role", "")) == "governing", "the party's native name, family, seats, founding, colour and role are saved (%s)" % JSON.stringify(saved_party).left(300))
+	_check(str(saved_party.get("ideology", "")) == "Social democracy" and str(saved_party.get("politicalPosition", "")) == "Centre-left", "the party's Ideology and Political position are saved (%s)" % JSON.stringify(saved_party).left(300))
+	_check(str(saved_party.get("nameNative", "")) == "Parti socialiste" and int(saved_party.get("seats", -1)) == 286 and str(saved_party.get("founded", "")) == "1969" and str(saved_party.get("color", "")) == "#e4002b" and str(saved_party.get("role", "")) == "governing", "the party's native name, family, seats, founding, colour and role are saved (%s)" % JSON.stringify(saved_party).left(300))
 	await _shoot("pol-10-authoring-saved")
 	authoring._manager.main_scroll.scroll_vertical = 2000
 	await _wait(0.3)
@@ -380,6 +404,7 @@ func _run() -> void:
 	await _wait_until(func() -> bool: return not institutions._busy and not institutions._message.is_empty(), 20.0, "institution save")
 	await _wait(0.6)
 	_check(institutions._message == "Institution saved to scenario canon.", "institution save message (%s)" % institutions._message)
+	_check(institutions._message_ok, "the saved note is marked good news where it is written")
 	_check(institutions._rows.size() == 1, "one institution in the scenario")
 	var saved_institutions: Dictionary = ((last_details.get("data", {}) as Dictionary).get("world", {}) as Dictionary).get("institutions", {})
 	var saved_league: Dictionary = (saved_institutions.get("byId", {}) as Dictionary).get("northern-league", {})
@@ -409,6 +434,12 @@ func _run() -> void:
 	await _wait_until(func() -> bool: return not institutions._busy and institutions._rows.is_empty(), 20.0, "institution delete")
 	await _wait(0.4)
 	_check(institutions._message == "Northern League deleted from the scenario.", "institution delete message (%s)" % institutions._message)
+	_check(institutions._message_ok and _note_ink(institutions) == PoliticalKit.GREEN_INK, "the delete note is green")
+	institutions._message_ok = false
+	institutions._update_message()
+	_check(_note_ink(institutions) == PoliticalKit.RED_INK, "the same words marked as a failure are red: the colour never reads the words")
+	institutions._message_ok = true
+	institutions._update_message()
 	await _shoot("pol-14-institution-deleted")
 	institutions._close_manager()
 	await _wait(0.3)
@@ -417,6 +448,11 @@ func _run() -> void:
 	_say("details_changed events: %d" % details_events)
 	_say("RESULT %s" % ("PASS" if failures.is_empty() else "FAIL: " + "; ".join(failures)))
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _note_ink(institutions: EditorInstitutionAuthoring) -> Color:
+	var label := _find(institutions._message_holder, func(node: Node) -> bool: return node is Label) as Label
+	return label.get_theme_color("font_color") if label else Color.TRANSPARENT
 
 
 func _finish(code: int) -> void:
