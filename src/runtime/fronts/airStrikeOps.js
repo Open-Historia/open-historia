@@ -36,7 +36,7 @@ import { militaryLookup } from "../militaryStats.js";
 import { decodeTroops } from "./codec.js";
 import { airWorth, readMilitary } from "./military.js";
 import { AIR_REACH_KM } from "./air.js";
-import { AIR_BLAST_KM, AIR_STRIKE_KINDS, AIR_STRIKE_ORDERS_MOST, AIR_STRIKE_RADIUS_DEFAULT, enemiesIn, fightersShareOf, normalizeAirStrikeOrders, strikeRadiusOf } from "./airStrike.js";
+import { AIR_ARM_UNIT, AIR_BLAST_KM, AIR_STRIKE_KINDS, AIR_STRIKE_ORDERS_MOST, AIR_STRIKE_RADIUS_DEFAULT, airArmId, enemiesIn, fightersShareOf, normalizeAirStrikeOrders, strikeRadiusOf } from "./airStrike.js";
 import { pointInFrame, projectorOf } from "./frame.js";
 import { foldBattlefieldName, isOpenBattlefield, normalizeBattlefields } from "./record.js";
 import { kmBetween, measureOptions } from "./worldGrid.js";
@@ -100,8 +100,7 @@ export const airReachOf = (world, date) => {
 // arms are whole again each run. None for a country with an air unit of its own
 // (it flies that), one whose air arm is worth nothing (its military figures:
 // air 0), or one with no troops there.
-// i18n-ignore: a key prefix.
-export const AIR_ARM_UNIT = "air-arm:";
+export { AIR_ARM_UNIT, airArmId };
 export const airArmsOf = (world, player) => {
   const wanted = fold(player);
   if (!wanted) return [];
@@ -119,7 +118,7 @@ export const airArmsOf = (world, player) => {
     const y = troops.reduce((sum, troop) => sum + Number(troop.y), 0) / troops.length;
     const [lng, lat] = projectorOf(record.frame).toLngLat(x, y);
     if (!finite(lng) || !finite(lat)) continue;
-    arms.push({ id: `${AIR_ARM_UNIT}${record.name}`, type: "air", ownerCode: record.sides[side][member], name: `${record.name} air arm`, strength: 100, lng: round4(lng), lat: round4(lat), composition: "", status: "" });
+    arms.push({ id: airArmId(record.name, record.sides[side][member]), type: "air", ownerCode: record.sides[side][member], name: `${record.name} air arm`, strength: 100, lng: round4(lng), lat: round4(lat), composition: "", status: "" });
   }
   return arms;
 };
