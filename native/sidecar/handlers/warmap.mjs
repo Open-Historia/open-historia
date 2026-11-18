@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { diplomaticViewOf } from "./diplomap.mjs";
 
 const WORLD = 4096;
 const RAD = Math.PI / 180;
@@ -281,12 +282,12 @@ export const register = (ctx) => {
     const polityOverrides = world?.polityOverrides ?? {};
     const resolveOwnerRgb = colours.createOwnerRgbResolver(colorMap, polityOverrides);
     const groups = world?.groups && Object.keys(world.groups).length ? engine.wmGroups.normalizeGroups(world.groups) : {};
-    const stances = mode === "diplomatic"
-      ? engine.diplomaticStance.buildDiplomaticStanceMap({ playerCountry: clean(game?.country), wars: list(world?.wars), agreements: list(world?.agreements), relations: list(world?.relations), puppets: list(world?.puppets) })
+    const diplomatic = mode === "diplomatic"
+      ? diplomaticViewOf(engine, { world, player: game?.country, landedOwners: (await ctx.mapState(world).catch(() => ({ ownerNames: [] }))).ownerNames })
       : null;
     const colorOf = (name) => groups?.[name]?.color || colours.ownerDisplayCss(resolveOwnerRgb, name, UNOWNED);
     const rgbOf = (name) => colours.parseColorToRgb(colorOf(name)) ?? UNOWNED_RGB;
-    const groundRgbOf = (name) => (stances ? colours.parseColorToRgb(engine.diplomaticStance.getDiplomaticOwnerColor(name, stances)) ?? UNOWNED_RGB : rgbOf(name));
+    const groundRgbOf = (name) => (diplomatic ? colours.parseColorToRgb(diplomatic.colorOf(name)) ?? UNOWNED_RGB : rgbOf(name));
     const arrows = new Map();
     const arrowColorsOf = (name) => {
       let made = arrows.get(name);
@@ -304,7 +305,7 @@ export const register = (ctx) => {
     const aliases = engine.wmOwnerNames.buildOwnerAliasMap(polityOverrides);
     const resolveToken = aliases?.size ? engine.wmOwnerNames.createOwnerResolver(aliases) : null;
     const tokenOf = (name) => (resolveToken ? resolveToken(name) || name : name);
-    return { colorMap, flags, polityOverrides, resolveOwnerRgb, groups, stances, colorOf, rgbOf, groundRgbOf, arrowColorsOf, mapRgbOf, tokenOf };
+    return { colorMap, flags, polityOverrides, resolveOwnerRgb, groups, diplomatic, colorOf, rgbOf, groundRgbOf, arrowColorsOf, mapRgbOf, tokenOf };
   };
 
   const table = () => {

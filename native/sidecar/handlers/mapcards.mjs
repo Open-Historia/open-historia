@@ -60,21 +60,6 @@ const MARKER_STATUS_META = {
 };
 const markerStatusMeta = (status) => MARKER_STATUS_META[String(status || "").trim().toLowerCase()] || MARKER_STATUS_META.active;
 
-const LEGEND_ITEMS = [
-  ["You", "player"],
-  ["Puppets", "puppet"],
-  ["Allies", "ally"],
-  ["Friendly / Trade", "friendly"],
-  ["Hostile", "hostile"],
-  ["At War", "enemy"],
-  ["Neutral", "neutral"],
-];
-
-const rgbOf = (css) => {
-  const hex = cssHex(css, "#58626eff");
-  return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
-};
-
 export const register = (ctx) => {
   const { engine, emit } = ctx;
   const readableDate = (value) => (cleanText(value) ? engine.gameDates.formatGameDateReadable(cleanText(value)) || cleanText(value) : "");
@@ -687,25 +672,6 @@ export const register = (ctx) => {
     };
   };
 
-  const stances = async () => {
-    const [world, game, state] = await Promise.all([readWorld(), readGame(), ctx.mapState().catch(() => ({ ownerNames: [] }))]);
-    const stance = engine.diplomaticStance;
-    const data = stance.buildDiplomaticStanceMap({
-      playerCountry: cleanText(game?.country),
-      wars: asArray(world?.wars),
-      agreements: asArray(world?.agreements),
-      relations: asArray(world?.relations),
-      puppets: asArray(world?.puppets),
-    });
-    const colors = {};
-    for (const owner of asArray(state?.ownerNames)) colors[owner] = rgbOf(stance.getDiplomaticOwnerColor(owner, data));
-    return {
-      colors,
-      neutralLand: rgbOf(stance.NEUTRAL_LAND_COLOR),
-      legend: LEGEND_ITEMS.map(([label, key]) => ({ label, color: cssHex(stance.DIPLO_COLORS[key]) })),
-    };
-  };
-
   return {
     "mapcards.region": async (args) => regionCard(args),
     "mapcards.countryinfo": async (args) => countryInfo(args),
@@ -746,7 +712,6 @@ export const register = (ctx) => {
     "mapcards.pickables": async () => pickables(),
     "mapcards.search": async (args) => localSearch(args),
     "mapcards.places": async (args, meta) => remoteSearch(args, meta),
-    "mapcards.stances": async () => stances(),
     "mapcards.flags.view": async (args) => flagsView(args),
     "mapcards.flags.apply": async ({ polity = {}, dataUrl = "" } = {}) => {
       const extras = await loadExtras(ctx);

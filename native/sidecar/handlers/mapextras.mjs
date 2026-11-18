@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
+import { diplomaticOnMap } from "./diplomap.mjs";
 
 const RAD = Math.PI / 180;
 const FLOOD_FIELD_LIMIT = 8;
@@ -259,7 +260,7 @@ export const register = (ctx) => {
     return index === undefined ? -1 : index;
   };
 
-  const claimsOf = (world, colors) => {
+  const claimsOf = (world, colors, diplomatic = null) => {
     const store = engine.mxWorldStore;
     const folded = store.foldOwnerTokens(world);
     const regionClaimants = store.withoutHeldDisputes(store.withSettledClaims(folded.claimants, world?.settledRegionClaims), world, folded.overrides);
@@ -281,7 +282,7 @@ export const register = (ctx) => {
         const key = String(name ?? "").trim();
         if (!key || seen.has(key)) continue;
         seen.add(key);
-        const rgb = resolve(key) ?? engine.mxOwnerColors.fallbackRgbFromOwner(key);
+        const rgb = (diplomatic ? engine.diplomaticPalette.hexToRgb(diplomatic.colorOf(key)) : resolve(key)) ?? engine.mxOwnerColors.fallbackRgbFromOwner(key);
         stripes.push(rgb.slice(0, 3).map((part) => Math.max(0, Math.min(255, Math.round(Number(part) || 0)))));
       }
       if (stripes.length >= 2) claims.push({ index, stripes });
@@ -1212,7 +1213,7 @@ export const register = (ctx) => {
         date: String(game?.gameDate || game?.startDate || ""),
         seasons: engine.mxWarSettings.warSettingsOf(world).mechanics.weather === true,
         frozen,
-        claims: claimsOf(world, colors),
+        claims: claimsOf(world, colors, await diplomaticOnMap(ctx, world).catch(() => null)),
         groups: groupNames.map((name) => ({ name, color: String(groups[name]?.color || "#e11d48") })),
         groupRegions,
         regionTypes: regionTypesOf(world),
