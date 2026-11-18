@@ -109,8 +109,9 @@ export const seatProjectOps = (ops, { board = [], world = {}, country = "", mint
   };
   const named = (raw) => clean((isRecord(raw?.project) ? raw.project.name || raw.project.title : "") || raw?.name || raw?.title);
   const onBoard = (name) => list(board).find((row) => sameName(row?.name, name)) ?? null;
+  const ownRow = (row) => isRecord(row) && (!clean(row.ownerCode) || sameName(row.ownerCode, country));
   // Its own open work, and what this request opens.
-  let open = list(board).filter((row) => isRecord(row) && isProjectOpen(row) && (!clean(row.ownerCode) || sameName(row.ownerCode, country))).length;
+  let open = list(board).filter((row) => ownRow(row) && isProjectOpen(row)).length;
   for (const raw of list(ops)) {
     if (!isRecord(raw)) continue;
     const op = opOf(raw);
@@ -124,6 +125,13 @@ export const seatProjectOps = (ops, { board = [], world = {}, country = "", mint
       const name = named(raw);
       if (!name) continue;
       const restated = onBoard(name);
+      // A board keeps one entry of a name: one of that name another country's
+      // (what the seat's services know of, or on the host's board the
+      // countries the AI plays) is theirs, and a create was taken as its restatement.
+      if (restated && !ownRow(restated)) {
+        refuse("theirs");
+        continue;
+      }
       if (!restated && open >= SEAT_OPEN_PROJECTS_MOST) {
         refuse("most");
         continue;

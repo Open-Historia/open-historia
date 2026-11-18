@@ -148,6 +148,8 @@ test("a seat runs a bounded number of projects at once, and none of another coun
   assert.equal(refusal, PROJECT_REFUSALS.most);
   const theirs = seatProjectOps([create("Latvian collapse", { ownerCode: victim }), { op: "create", project: { name: "Nested", ownerCode: victim } }], { board: [], world: world(), country: guest, mint: ids() });
   assert.deepEqual(theirs, { ops: [], refusal: PROJECT_REFUSALS.theirs });
+  // A create named as another country's entry on the board was taken as its restatement: its summary was the page's.
+  assert.deepEqual(seatProjectOps([create("Theirs", { summary: "Ours now." })], { board, world: world(), country: guest, mint: ids() }), { ops: [], refusal: PROJECT_REFUSALS.theirs });
 });
 
 test("a seat's plan holds to its own country and is priced, whatever wrote it", () => {

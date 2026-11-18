@@ -21,7 +21,7 @@
 // reason (rule 10): what it has waiting in the queue (SEAT_WAITING_MOST) and
 // how fast it may add to it (QUEUE_RATE_PER_SECOND, QUEUE_BURST); what it may
 // open and write a round (THREADS_PER_ROUND, LINES_PER_ROUND, FLAGS_PER_ROUND);
-// how long its advisor's conversations may grow (ADVISOR_SEAT_CHARS_MOST);
+// how long its advisor's conversations may grow (ADVISOR_SEAT_BYTES_MOST);
 // and its readings on the host's AI, one at a time (each country's once,
 // whoever asks) and READINGS_WAITING_MOST at most. The host's own requests are
 // its own computer's and are not held to them. What the host's AI answers each
@@ -33,17 +33,18 @@
 
 // What one player may have waiting in the host's queue at once, and how many it
 // may add a second (a burst of QUEUE_BURST, then QUEUE_RATE_PER_SECOND).
-export const SEAT_WAITING_MOST = 16;
+export const SEAT_WAITING_MOST = 32;
 export const QUEUE_RATE_PER_SECOND = 2;
-export const QUEUE_BURST = 20;
+export const QUEUE_BURST = 40;
 // What one player may open and write in a round: conversations, lines in them
 // (and a conversation's renaming or its new members), and flag changes.
 export const THREADS_PER_ROUND = 12;
 export const LINES_PER_ROUND = 200;
 export const FLAGS_PER_ROUND = 3;
-// How long one player's advisor conversations may grow, in characters as kept
-// (the file every seat's are kept in is held to 64 MB by the server).
-export const ADVISOR_SEAT_CHARS_MOST = 4_000_000;
+// How long one player's advisor conversations may grow, in bytes as kept (the
+// file every seat's are kept in is held to 64 MB by the server: seven guests'
+// at this most leave the host's own conversation more than half of it).
+export const ADVISOR_SEAT_BYTES_MOST = 4 * 1024 * 1024;
 // Readings on the host's AI one player may have under way or waiting.
 export const READINGS_WAITING_MOST = 6;
 
@@ -125,7 +126,8 @@ export const createSeatBounds = ({ now = () => Date.now() } = {}) => {
 // Whether a seat's advisor conversations, as a change would leave them
 // (`next`), are past what the host keeps for one player, and longer than they
 // were (`was`): a change that shortens them is always taken.
+const bytesOf = (value) => new TextEncoder().encode(JSON.stringify(value ?? [])).length;
 export const advisorPastBound = (was, next) => {
-  const after = JSON.stringify(next ?? []).length;
-  return after > ADVISOR_SEAT_CHARS_MOST && after > JSON.stringify(was ?? []).length;
+  const after = bytesOf(next);
+  return after > ADVISOR_SEAT_BYTES_MOST && after > bytesOf(was);
 };

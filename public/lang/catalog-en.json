@@ -15792,7 +15792,7 @@
  "You could not be moved to {{to}}.",
  "You could not be moved to {{to}}: another player holds it.",
  "You do not draw the line: it runs where the two sides’ land meets on your map. Paint the land each side holds in the map editor, then name the sides here.",
- "You have 16 requests waiting for the host already: wait for them to be answered.",
+ "You have 32 requests waiting for the host already: wait for them to be answered.",
  "You have as many lines being built as can be: wait for one to be finished.",
  "You have changed flags 3 times this round: change it again next round.",
  "You have changed this scenario since you downloaded it. Updating replaces it with the community hub's checked file, so your changes to it will be lost. To keep them, clone the scenario first. Games already started on it keep working.",

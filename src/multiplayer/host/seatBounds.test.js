@@ -8,7 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { DROPPED, createWorldQueue } from "./worldQueue.js";
-import { ADVISOR_SEAT_CHARS_MOST, FLAGS_PER_ROUND, QUEUE_BURST, QUEUE_RATE_PER_SECOND, READINGS_WAITING_MOST, advisorPastBound, createSeatBounds } from "./seatBounds.js";
+import { ADVISOR_SEAT_BYTES_MOST, FLAGS_PER_ROUND, QUEUE_BURST, QUEUE_RATE_PER_SECOND, READINGS_WAITING_MOST, advisorPastBound, createSeatBounds } from "./seatBounds.js";
 import { failureKindOf, failureWords, guestFailureWords } from "./failureWords.js";
 
 test("the queue counts what each player has waiting, and drops what a player let go of still had waiting", async () => {
@@ -82,11 +82,13 @@ test("readings on the host's AI: the same one under way is that one, a player's 
 });
 
 test("a player's advisor conversations grow only so far; a change that shortens them is always taken", () => {
-  const big = [{ role: "user", text: "x".repeat(ADVISOR_SEAT_CHARS_MOST) }];
+  const big = [{ role: "user", text: "x".repeat(ADVISOR_SEAT_BYTES_MOST) }];
   assert.equal(advisorPastBound([], [{ role: "user", text: "hello" }]), false);
   assert.equal(advisorPastBound([], big), true);
   assert.equal(advisorPastBound(big, [...big, { role: "user", text: "more" }]), true);
   assert.equal(advisorPastBound([...big, { role: "user", text: "more" }], big), false);
+  // Measured as the server measures the file: in bytes, so a language written in three-byte letters counts as such.
+  assert.equal(advisorPastBound([], [{ role: "user", text: "国".repeat(Math.ceil(ADVISOR_SEAT_BYTES_MOST / 2.5)) }]), true);
 });
 
 test("a failure of the AI is told to the host as it came, and to every other player in the host's words", () => {
