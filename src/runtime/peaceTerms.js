@@ -432,6 +432,21 @@ export const withTurnPeaceOffers = (offers, { wars = [], round = 0 } = {}) => {
   });
 };
 
+// An offer's id: its war, who makes it and the round, unique among the
+// world's offers (`offers`). One maker's offers to two people in one war and
+// round had the same id, and the second took the first's place without a word:
+// Russia's terms to Latvia were gone once it put terms to Estonia, and Latvia's
+// answer was "This is not yours to answer." (the review of 2026-11-18, wars 7).
+// The first keeps the id it always had; another is numbered after it. Made by
+// the host when it applies the request (rule 8), so every screen reads the same.
+const OFFER_ID_MOST = 80;
+export const peaceOfferId = (offers, { warId = "", from = "", round = 0 } = {}) => {
+  const taken = new Set(list(offers).map((entry) => clean(entry?.id, OFFER_ID_MOST)));
+  const base = clean(`peace:${clean(warId)}:${fold(from)}:${Math.max(0, Math.round(figure(round)))}`, OFFER_ID_MOST - 4);
+  if (!taken.has(base)) return base;
+  for (let serial = 2; ; serial += 1) if (!taken.has(`${base}:${serial}`)) return `${base}:${serial}`;
+};
+
 // An offer of peace an AI makes a person, checked: a war between the AI's
 // country and the person's, the AI's side played by nobody, the person's
 // country played. Returns { offer } or { reason } in words.
@@ -441,7 +456,8 @@ export const withTurnPeaceOffers = (offers, { wars = [], round = 0 } = {}) => {
 //   players      the countries people play
 //   source       who made it (OFFER_SOURCES)
 //   chatId, messageId   where it was made, where that is known
-export const offerFromAi = ({ from = "", to = "", terms = null, wars = [], players = [], round = 0, date = "", source = "skip", chatId = "", messageId = "" } = {}) => {
+//   offers       the world's offers, which its id is unique among (peaceOfferId)
+export const offerFromAi = ({ from = "", to = "", terms = null, wars = [], players = [], round = 0, date = "", source = "skip", chatId = "", messageId = "", offers = [] } = {}) => {
   const played = new Set(list(players).map(fold).filter(Boolean));
   if (!clean(from) || !clean(to)) return { reason: "nobody named" };
   if (!played.has(fold(to))) return { reason: `${clean(to)} is played by nobody` };
@@ -451,7 +467,7 @@ export const offerFromAi = ({ from = "", to = "", terms = null, wars = [], playe
   if (theirs.some((member) => played.has(fold(member)))) return { reason: `${clean(from)}'s side is led by a person` };
   const now = Math.max(0, Math.round(figure(round)));
   const offer = normalizePeaceOffer({
-    id: `peace:${clean(war.id)}:${fold(from)}:${now}`,
+    id: peaceOfferId(offers, { warId: war.id, from, round: now }),
     warId: war.id,
     from: clean(from),
     to: clean(to),

@@ -640,3 +640,24 @@ test("a treaty cession uses the map's baked donor when the old World override is
     "the map's seed legal donor must not retain a pre-cession statistics baseline");
   assert.equal(next.countryStats.Aland.continuity.progressionBlocked, true);
 });
+
+// One maker's terms to two people in one war and round had one id, and the second took the first's place without a
+// word: Latvia's offer was gone from its view, and its answer was "not yours" (the review of 2026-11-18, wars 7).
+test("terms one country puts to two players in the same war and round are two offers, each its own to answer", () => {
+  const players = ["Russia", "Latvia", "Estonia"];
+  let world = { wars: [{ id: "war-1", title: "The Baltic War", status: "active", sideA: ["Russia"], sideB: ["Latvia", "Estonia"], startDate: "2014-01-01" }], peaceOffers: [] };
+  const terms = { territory: TERRITORY_AS_HELD };
+  const first = playerDiplomacy(world, { op: "propose", ref: "war-1", to: "Latvia", terms, country: "Russia", players, date: "2014-04-01", round: 3 });
+  world = first.world;
+  const second = playerDiplomacy(world, { op: "propose", ref: "war-1", to: "Estonia", terms, country: "Russia", players, date: "2014-04-01", round: 3 });
+  assert.equal(first.offerId, "peace:war-1:russia:3", "the first keeps the id it always had");
+  assert.notEqual(second.offerId, first.offerId);
+  assert.deepEqual(second.world.peaceOffers.map((offer) => [offer.to, offer.status]), [["Latvia", "open"], ["Estonia", "open"]]);
+  const answer = playerDiplomacy(second.world, { op: "accept", ref: first.offerId, country: "Latvia", players, date: "2014-04-01", round: 3 });
+  assert.equal(answer.error, "", "Latvia answers its own");
+  // An AI's offers to two players in one round, the same.
+  const ai = { wars: [{ id: "war-2", status: "active", sideA: ["Borduria"], sideB: ["Aland", "Cisland"] }], peaceOffers: [] };
+  const toAland = offerPeace(ai, { from: "Borduria", to: "Aland", terms, players: ["Aland", "Cisland"], round: 8 });
+  const toCisland = offerPeace(toAland.world, { from: "Borduria", to: "Cisland", terms, players: ["Aland", "Cisland"], round: 8 });
+  assert.deepEqual(toCisland.world.peaceOffers.map((offer) => [offer.id, offer.to, offer.status]), [["peace:war-2:borduria:8", "Aland", "open"], ["peace:war-2:borduria:8:2", "Cisland", "open"]]);
+});

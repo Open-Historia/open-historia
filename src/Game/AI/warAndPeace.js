@@ -57,6 +57,7 @@ import {
   normalizeTerms,
   offerFromAi,
   openOfferBetween,
+  peaceOfferId,
   reparationsDue,
   reparationsOf,
   treatyFromSkip,
@@ -729,7 +730,7 @@ export const declinePeaceOffer = (world, offerId, { round = 0 } = {}) => {
 //   chatId, messageId   the thread and the message that carry it
 // Returns { world, offer, reason }: `reason` says why nothing was offered ("" when it was).
 export const offerPeace = (world, { from = "", to = "", terms = null, players = [], date = "", round = 0, source = "skip", chatId = "", messageId = "" } = {}) => {
-  const made = offerFromAi({ from, to, terms, wars: world?.wars, players, round, date, source, chatId, messageId });
+  const made = offerFromAi({ from, to, terms, wars: world?.wars, players, round, date, source, chatId, messageId, offers: world?.peaceOffers });
   if (!made.offer) return { world, offer: null, reason: made.reason };
   return { world: { ...world, peaceOffers: withOffer(world?.peaceOffers, made.offer) }, offer: made.offer, reason: "" };
 };
@@ -761,7 +762,7 @@ export const proposePeace = (world, { warId = "", from = "", to: named = "", ter
   const turn = Math.max(0, Math.round(figure(round)));
   const own = sides[mine].find((member) => fold(member) === fold(from)) ?? clean(from);
   const [offer] = normalizePeaceOffers([{
-    id: `peace:${clean(warId)}:${fold(own)}:${turn}`,
+    id: peaceOfferId(world?.peaceOffers, { warId, from: own, round: turn }),
     warId: clean(warId),
     from: own,
     to,
