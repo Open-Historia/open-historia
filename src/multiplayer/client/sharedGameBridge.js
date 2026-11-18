@@ -7,6 +7,7 @@
 // when a shared game opens.
 
 import { remoteRuntimeActive } from "./remoteRuntime.js";
+import { baseForRecord } from "./roundBase.js";
 
 let requester = null;
 let role = ""; // "host" | "guest" | "" (no shared game)
@@ -18,6 +19,16 @@ export const inSharedGame = () => remoteRuntimeActive();
 // events are in the page's documents, none of them shown yet. The time controls
 // open the Events panel on it, as they do on a time skip the page ran itself.
 export const SHARED_ROUND_LANDED = "oh:shared-round-landed";
+
+// The world this page held before the newest round landed (client/roundBase.js),
+// which the Events panel replays the round's events on, one at a time, as it
+// replays a skip single player ran (time.jsx, the staged reveal). Kept by
+// sharedGame.js as the round lands; null for any turn but that round's.
+let roundBase = null;
+export const setSharedRoundBase = (base) => {
+  roundBase = base ?? null;
+};
+export const sharedRoundBase = (record) => (remoteRuntimeActive() ? baseForRecord(roundBase, record) : null);
 
 // The role says which one this page is: the host's screen or a guest's. For
 // useSyncExternalStore.

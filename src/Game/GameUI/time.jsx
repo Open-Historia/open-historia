@@ -85,7 +85,7 @@ import {
     turnRecordId,
 } from "./turnReveal.js";
 import { prehistoryHasContent } from "../../runtime/scenarioPrehistory.js";
-import { SHARED_ROUND_LANDED, inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { SHARED_ROUND_LANDED, inSharedGame, requestFromHost, sharedRoundBase } from "../../multiplayer/client/sharedGameBridge.js";
 import { rememberSkipLength, scheduleFrontsPrethink, stopFrontsPrethink } from "../AI/frontPrethink.js";
 
 dayjs.extend(advancedFormat);
@@ -3753,9 +3753,13 @@ const DateWidget = ({
     useEffect(() => {
         if (liveStageBase) landedBaseRef.current = { world: liveStageBase, from: liveRange.from };
     }, [liveStageBase, liveRange.from]);
+    // Or, for a round a shared game's host resolved, the world as this page
+    // held it before the round landed (multiplayer/client/roundBase.js): the
+    // page has no restore point of its own, and the host ran the skip.
     const landedBaseFor = (record) => {
         const kept = landedBaseRef.current;
-        return kept?.world && record?.fromDate && kept.from === record.fromDate ? kept.world : null;
+        if (kept?.world && record?.fromDate && kept.from === record.fromDate) return kept.world;
+        return sharedRoundBase(record);
     };
     // The land war of a turn being written, fought before its story (foreseenFronts.js).
     const [foreseen, setForeseen] = useState(() => foreseenFronts());

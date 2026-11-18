@@ -26,7 +26,8 @@ import { GENERATION_COMPLETE_EVENT, adoptStoredAiRecord } from "../../Game/AI/te
 import { planWorldWrite, revealedTurnOf, suggestionsOutlived, unroutedChanges } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
-import { SHARED_ROUND_LANDED, setSharedGamePeople, setSharedGameRole, setSharedRequester } from "./sharedGameBridge.js";
+import { SHARED_ROUND_LANDED, setSharedGamePeople, setSharedGameRole, setSharedRequester, setSharedRoundBase } from "./sharedGameBridge.js";
+import { roundBaseOf } from "./roundBase.js";
 import { createLoopbackScreenSide } from "../transport/loopback.js";
 import { createClientSession } from "../session/client.js";
 import { probeNetwork } from "../transport/peer.js";
@@ -216,6 +217,10 @@ const applyToRuntime = (view) => {
     if (turn && owner.turnKey !== undefined && turn.key !== owner.turnKey) {
       unseenEvents.markTurnUnseen(turn.eventIds);
       landed = turn;
+      // And the world as this page held it before the round, which the Events
+      // panel stages the round's events on (client/roundBase.js), read before
+      // the landing view replaces it.
+      setSharedRoundBase(roundBaseOf({ heldWorld: owner.runtime.held("world"), heldGame: owner.runtime.held("game"), world }));
       // Whatever the AI suggested was for the round that has just ended.
       owner.suggestedInRound = undefined;
       owner.runtime.patch("world", { actionSuggestions: undefined }, { quiet: true });
@@ -583,6 +588,7 @@ export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
   set({ ...IDLE });
   setSharedGameRole("");
   setSharedGamePeople([]);
+  setSharedRoundBase(null);
   // This device's own features again, and its own language.
   setSharedGameFeatures(null);
   setWorldLanguage("");
