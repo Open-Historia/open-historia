@@ -155,6 +155,9 @@ test("both shared-game sends shut the composer until the ack and follow a thread
   assert.match(composer, /if \(!shared\) setPlayerInput\(""\);/);
   assert.match(composer, /if \(taken === true\) setPlayerInput\(/);
   assert.match(helper, /return false;[\s\S]*return true;/, "sayToHost says whether the line was taken");
+  // And a vote's form, once the host has taken the line that calls it.
+  const poll = chat.slice(chat.indexOf("const handlePlayerCreatePoll = async "), chat.indexOf("const current = chatRef.current ?? chat;", chat.indexOf("const handlePlayerCreatePoll = async ")));
+  assert.match(poll, /const taken = await submitPlayerText\(line, \{ poll:[\s\S]*if \(taken === true\) \{\s*setPollComposerOpen\(false\);/);
   assert.equal((chat.match(/requestFromHost\("say"/g) ?? []).length, 1, "no other path says a line to the host");
   // The composer is only drawn while nothing is loading.
   assert.match(chat, /\) : !isLoading \? \(\s*<div data-diplomacy-composer="modern"/);

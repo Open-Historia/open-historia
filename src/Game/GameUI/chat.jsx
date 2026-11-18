@@ -2091,11 +2091,15 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             const line = `I call a vote: ${pollEvent.question}`;
             // In a shared game the host calls it with the line (the "say"
             // request's `poll`), and the governments at the table answer it there.
+            // The vote's form is cleared once the host has taken it: one refused
+            // stays to be changed and called again, as a letter does.
             if (inSharedGame()) {
-                setPollComposerOpen(false);
-                setPollQuestion("");
-                setPollOptionsText("Yes\nNo\nAbstain");
-                await submitPlayerText(line, { poll: { question: pollEvent.question, options: pollEvent.options.map((option) => option.label) } });
+                const taken = await submitPlayerText(line, { poll: { question: pollEvent.question, options: pollEvent.options.map((option) => option.label) } });
+                if (taken === true) {
+                    setPollComposerOpen(false);
+                    setPollQuestion("");
+                    setPollOptionsText("Yes\nNo\nAbstain");
+                }
                 return;
             }
             const current = chatRef.current ?? chat;
