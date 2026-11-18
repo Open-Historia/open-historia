@@ -54,6 +54,22 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A December 1912 save: two letters written as 13 quoted paragraphs, and the British draft carried only the
+    // closing line. Letters are now marked whole and paired with their recipients (GameUI/advisorDrafts.js).
+    id: "2026-11-advisor-letters-whole",
+    kind: "minor",
+    date: "2026-11-18",
+    channel: "beta",
+    banners: [
+      {
+        title: "Advisor letters arrive whole",
+        items: [
+          "A letter the Advisor drafts in several paragraphs now goes into the Diplomacy composer whole, to the right recipient. When letters can't be matched to their recipients safely, they get no Draft button, and the Advisor's reply says to ask for them again.",
+        ],
+      },
+    ],
+  },
+  {
     // A Beta maintenance release for legacy Projects and their saved state.
     // A recovery operation always creates a separate game: old work is never
     // silently dropped just to fit the board, and in-play work can be shelved

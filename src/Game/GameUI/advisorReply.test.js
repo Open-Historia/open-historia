@@ -10,12 +10,107 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { describeReplyProblems, filterAdvisorDeployments, planAdvisorActionEdits } from "./advisorBlocks.js";
-import { buildMessageDrafts } from "./advisorDrafts.js";
+import { buildMessageDrafts, splitAtBlockquotes } from "./advisorDrafts.js";
 import { buildInstitutionDrafts } from "./advisorInstitutionDrafts.js";
 import { parseAdvisorReply } from "./advisorReply.js";
 import { actionProposalsFromReply } from "./advisorActionReview.js";
 
 const fence = (lang, body) => "```" + lang + "\n" + body + "\n```";
+
+// A 1912 Tangier reply separated every paragraph into an independent Markdown
+// quote; the old final-N positional heuristic associated Britain with a sign-off
+// and Spain with the signature. Withhold ambiguous legacy buttons.
+test("December 1912 Tangier: fragmented unmarked multi-letter reply fails closed", () => {
+  const british = ["> Monsieur l'Ambassadeur,", "> The full first paragraph.", "> Second paragraph.", "> Third paragraph.", "> Fourth paragraph.", "> Final consideration.", "> Lucien Vauclair"];
+  const spanish = ["> Monsieur le Ministre,", "> Spain's first paragraph.", "> Spain's second paragraph.", "> Spain's closing.", "> Yours faithfully,", "> Lucien Vauclair"];
+  const raw = [
+    "Two dispatches:", ...british.join("\n\n").split("\n"), ...spanish.join("\n\n").split("\n"),
+    fence("senddraft", JSON.stringify([{ country: "British Empire" }, { country: "Kingdom of Spain" }])),
+  ].join("\n\n");
+  const parsed = parseAdvisorReply(raw);
+  assert.deepEqual(parsed.messageDrafts, []);
+  assert.match(parsed.draftProblems.join(" "), /held 1 letter.s. for 2 recipient/);
+  assert.match(parsed.text, /Monsieur l'Ambassadeur/);
+  assert.match(parsed.text, /Yours faithfully/);
+});
+
+test("explicit numbered draft markers preserve two whole multi-paragraph letters and their Send buttons", () => {
+  const raw = [
+    "Two diplomatic notes:", "",
+    "[[draft:1]]",
+    "> Monsieur l'Ambassadeur,", "",
+    "> London, the first full paragraph.", "",
+    "> Second full paragraph.", "",
+    "> Lucien Vauclair",
+    "[[/draft:1]]", "",
+    "[[draft:2]]",
+    "> Monsieur le Ministre,", "",
+    "> Madrid, the first full paragraph.", "",
+    "> Second Madrid paragraph.", "",
+    "> Lucien Vauclair",
+    "[[/draft:2]]", "",
+    fence("senddraft", JSON.stringify([{ country: "British Empire" }, { country: "Kingdom of Spain" }])),
+    "", "Please confirm the final text.",
+  ].join("\n");
+  const parsed = parseAdvisorReply(raw);
+  assert.deepEqual(parsed.draftProblems, []);
+  assert.equal(parsed.messageDrafts?.length, 2);
+  assert.deepEqual(parsed.messageDrafts.map(x => [x.country, x.quoteIndex]), [["British Empire", 0], ["Kingdom of Spain", 1]]);
+  assert.equal(parsed.messageDrafts[0].text, "Monsieur l'Ambassadeur,\n\nLondon, the first full paragraph.\n\nSecond full paragraph.\n\nLucien Vauclair");
+  assert.equal(parsed.messageDrafts[1].text, "Monsieur le Ministre,\n\nMadrid, the first full paragraph.\n\nSecond Madrid paragraph.\n\nLucien Vauclair");
+  assert.deepEqual(splitAtBlockquotes(parsed.text).filter(x => x.type === "quote").map(x => x.quoteIndex), [0, 1]);
+  assert.doesNotMatch(parsed.text, /\[\[(?:\/)?draft:/);
+  assert.match(parsed.text, /Please confirm the final text/);
+});
+
+test("numbered draft markers survive prior ordinary blockquotes without changing recipient alignment", () => {
+  const raw = [
+    "Previously you wrote:", "> A quotation of the player's message.", "",
+    "My proposed correspondence:", "",
+    "[[draft:1]]", "> British first paragraph.", "", "> British second paragraph.", "[[/draft:1]]", "",
+    "[[draft:2]]", "> Spanish first paragraph.", "", "> Spanish second paragraph.", "[[/draft:2]]", "",
+    fence("senddraft", JSON.stringify([{ country: "British Empire" }, { country: "Kingdom of Spain" }])),
+  ].join("\n");
+  const parsed = parseAdvisorReply(raw);
+  assert.deepEqual(parsed.draftProblems, []);
+  assert.deepEqual(parsed.messageDrafts.map(x => [x.country, x.quoteIndex]), [["British Empire", 1], ["Kingdom of Spain", 2]]);
+  assert.match(parsed.messageDrafts[0].text, /^British first paragraph\./);
+  assert.match(parsed.messageDrafts[1].text, /^Spanish first paragraph\./);
+});
+
+test("marked letter and conflicting legacy JSON text must never disagree in the composer", () => {
+  const raw = [
+    "[[draft:1]]",
+    "> Monsieur l'Ambassadeur,",
+    "> Here is the entire approved British note.",
+    "[[/draft:1]]",
+    fence("senddraft", JSON.stringify([{
+      country: "British Empire",
+      text: "Only the sign-off, not the letter.",
+    }])),
+  ].join("\n");
+  const parsed = parseAdvisorReply(raw);
+  assert.deepEqual(parsed.messageDrafts, []);
+  assert.match(parsed.draftProblems.join(" "), /JSON text differs from its marked letter/);
+  assert.match(parsed.text, /entire approved British note/);
+});
+
+test("invalid or missing marked-letter boundaries never yield partial diplomatic handoffs", () => {
+  const metadata = fence("senddraft", JSON.stringify([{ country: "British Empire" }, { country: "Kingdom of Spain" }]));
+  const malformed = [
+    ["[[draft:1]]", "> One letter.", "[[/draft:1]]", "[[draft:2]]", "> Missing end"],
+    ["[[draft:1]]", "> One letter.", "[[/draft:2]]", "[[draft:2]]", "> Another letter.", "[[/draft:2]]"],
+    ["[[draft:1]]", "> A letter.", "[[/draft:1]]"],
+    ["[[draft:1]]", "> A letter.", "An unquoted invented paragraph.", "[[/draft:1]]", "[[draft:2]]", "> Another.", "[[/draft:2]]"],
+  ];
+  for (const lines of malformed) {
+    const parsed = parseAdvisorReply([...lines, metadata].join("\n"));
+    assert.deepEqual(parsed.messageDrafts, [], lines.join("|"));
+    assert.ok(parsed.draftProblems.length, lines.join("|"));
+  }
+});
+
+
 
 // Stands in for gameState.js normalizeActionEntry: an id, and null for an
 // entry with nothing in it.
@@ -428,4 +523,27 @@ test("an order the advisor already gave is not queued again, and the advisor is 
   assert.deepEqual(next.map((action) => action.title), ["Raise taxes", "Deploy request: 3rd Army", "Deploy request: 1st Fleet", "Build roads"]);
   assert.deepEqual(items.map((item) => item.title), ["Build roads"]);
   assert.match(problems[0], /"Raise taxes" is already queued \(a1\)/);
+});
+
+// One recipient: nothing to pair, so an unmarked letter of several paragraphs is
+// read whole (a model that writes no markers still gets its button).
+test("an unmarked letter of several paragraphs to one recipient keeps its button, whole", () => {
+  const parsed = parseAdvisorReply([
+    "Here is the note:", "",
+    "> Your Majesty,", "", "> First paragraph.", "", "> Yours, the Ambassador", "",
+    fence("senddraft", JSON.stringify([{ country: "Kingdom of Spain" }])),
+  ].join("\n"));
+  assert.deepEqual(parsed.draftProblems, []);
+  assert.deepEqual(parsed.messageDrafts.map((draft) => [draft.country, draft.text, draft.quoteIndex]), [
+    ["Kingdom of Spain", "Your Majesty,\n\nFirst paragraph.\n\nYours, the Ambassador", 0],
+  ]);
+  assert.deepEqual(splitAtBlockquotes(parsed.text).filter((part) => part.type === "quote").length, 1, "shown as one quote");
+});
+
+test("draft markers never reach the screen, with or without a senddraft block", () => {
+  assert.equal(parseAdvisorReply("Intro\n[[draft:1]]\n> Hi\n[[/draft:1]]\nDone.").text, "Intro\n> Hi\nDone.");
+  const broken = parseAdvisorReply(["[[draft:1]]", "> A letter.", fence("senddraft", JSON.stringify([{ country: "Spain" }]))].join("\n"));
+  assert.deepEqual(broken.messageDrafts, []);
+  assert.match(broken.draftProblems.join(" "), /left letter 1 open/);
+  assert.doesNotMatch(broken.text, /\[\[/);
 });

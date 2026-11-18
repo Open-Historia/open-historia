@@ -10,7 +10,7 @@
 // kept on the message: what the advisor offered and the panel did not draw, told
 // to it before the next question (advisorBlocks.js describeReplyProblems).
 import { extractFencedJson, filterAdvisorDeployments, validateChartConfig } from "./advisorBlocks.js";
-import { buildMessageDrafts } from "./advisorDrafts.js";
+import { buildMessageDrafts, draftLetters } from "./advisorDrafts.js";
 import { buildInstitutionDrafts } from "./advisorInstitutionDrafts.js";
 import { stripAdvisorActionHistoryAnnotations } from "../AI/advisorActionHistory.js";
 
@@ -80,7 +80,10 @@ export const parseAdvisorReply = (rawText, { allowedUnitTypes = null, streaming 
   const { rest, json: projectsRaw, truncated: projectsTruncated } = extractFencedJson(afterDeploy, "projects", { salvageTruncated: true, streaming });
 
   const draftProblems = blockProblems(draftsRaw, draftsReason);
-  const messageDrafts = Array.isArray(draftsRaw) ? buildMessageDrafts(draftsRaw, afterActions, draftProblems) : null;
+  // The drafted letters, each one quote, and the reply as it is shown: draft
+  // markers never reach the screen, with or without a senddraft block.
+  const letters = draftLetters(rest, Array.isArray(draftsRaw) ? draftsRaw.length : 0);
+  const messageDrafts = Array.isArray(draftsRaw) ? buildMessageDrafts(draftsRaw, letters, draftProblems) : null;
   const institutionDraftProblems = blockProblems(institutionDraftsRaw, institutionDraftsReason);
   const institutionDrafts = buildInstitutionDrafts(institutionDraftsRaw, institutionDraftProblems);
   // A deployment the advisor is recommending, ready to place with one click.
@@ -88,7 +91,7 @@ export const parseAdvisorReply = (rawText, { allowedUnitTypes = null, streaming 
   const deployments = filterAdvisorDeployments(deployRaw, allowedUnitTypes, deployProblems);
 
   return {
-    text: stripAdvisorActionHistoryAnnotations(rest.trim()),
+    text: stripAdvisorActionHistoryAnnotations(letters.text.trim()),
     chartConfig: chart.config,
     chartProblem: chart.problem,
     actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null,

@@ -811,9 +811,9 @@ const formatAdvisorDate = (dateStr) => {
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
 const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment }) => {
-    const { text, chartConfig, chartProblem, messageDrafts: parsedDrafts, institutionDrafts, deployments } = msg.role === "advisor"
+    const { text, chartConfig, chartProblem, draftProblems, messageDrafts: parsedDrafts, institutionDrafts, deployments } = msg.role === "advisor"
         ? parseAdvisorReply(msg.text, { allowedUnitTypes: allowedUnitTypes ? allowedUnitTypes.split(",") : null, streaming: Boolean(msg.streaming) })
-        : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, institutionDrafts: null, deployments: null };
+        : { text: msg.text, chartConfig: null, chartProblem: "", draftProblems: [], messageDrafts: null, institutionDrafts: null, deployments: null };
     // Each letter's own id (advisorDrafts.js draftIdOf), which the message sent
     // from it carries: how its button knows it went.
     const messageDrafts = Array.isArray(parsedDrafts)
@@ -844,6 +844,12 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
             drafts={canDraft ? messageDrafts : null}
             onDraftMessage={canDraft ? onDraftMessage : undefined}
             />
+        )}
+        {/* What went wrong in detail is the advisor's to read (its receipt); the player is told what it means for them. */}
+        {Array.isArray(draftProblems) && draftProblems.length > 0 && !msg.streaming && (
+            <div role="alert" style={{ color: "#fca5a5", fontSize: "0.72rem", marginTop: "0.5rem" }}>
+                Some letters drafted here have no Draft button: they could not be matched to their recipients safely. Ask the advisor to draft them again.
+            </div>
         )}
         {chartConfig && <AdvisorChart config={chartConfig} />}
         {/* Not while streaming: a chart still arriving is not a broken one. */}
