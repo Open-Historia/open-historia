@@ -309,6 +309,8 @@ const NEW_UPDATES = [
           "Orders your advisor proposes can be approved and cancelled in a shared game, and an AI suggestion you queue shows as queued. When the host turns an order down, the Actions panel says why.",
           "Every player's agents now report and steal documents in a shared game, not only the host's. What your agents bring back is yours alone.",
           "The host chooses the language a shared game's world is written in when opening the lobby, and every player's AI writes in it. If you read another language, the game translates it on your own device.",
+          "Players on the website and the Android app can join a shared game hosted on the desktop app again.",
+          "In a shared game your Projects board changes only through your own panel and advisor, and a project can no longer take land from a country another player plays.",
         ],
       },
       {
