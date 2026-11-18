@@ -352,6 +352,7 @@ func _run() -> void:
 		if countries.size() == 1 and str((countries[0] as Dictionary).get("name", "")) == "Germany":
 			target = str(chat.get("id", ""))
 			thread = (chat.get("messages", []) as Array).duplicate()
+	await _wait(15.5)
 	thread.append({"id": "msg-outreach-check", "role": "leader", "speaker": "Germany", "code": "DEU", "text": "Berlin would like to follow up on our talks about trade.", "time": panel.game_date})
 	await main.engine.request("chat.patch", {"id": target, "set": {"messages": thread}})
 	var for_target := func() -> Array: return notices._items.filter(func(item: Variant) -> bool: return str((item as Dictionary).get("chatId", "")) == target)
