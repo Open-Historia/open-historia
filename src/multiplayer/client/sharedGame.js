@@ -33,6 +33,7 @@ import { probeNetwork } from "../transport/peer.js";
 import { hostingHere, joinFailure, scenarioDiffers, scenarioMissing, unreadableFromHost } from "./joinProgress.js";
 import { chooseStandInScenario } from "./standIn.js";
 import { setSharedGameFeatures } from "../../runtime/gameFeatures.js";
+import { setWorldLanguage } from "../../runtime/i18n.js";
 import { relayChannelFactory, usesCustomRelays } from "../signaling/relays.js";
 import { describeClock, offsetClock, readSignalingClock } from "./clock.js";
 import { loadDeviceIdentity } from "../identity.js";
@@ -269,6 +270,8 @@ const makeClient = (send) => createGameClient({
     if (current) current.hostNotices = notices;
     // The host's feature switches are the game's on this screen too.
     if (lobby?.features) setSharedGameFeatures(lobby.features);
+    // The language the host's world is written in, for every request this page makes (runtime/i18n.js).
+    if (lobby?.settings) setWorldLanguage(lobby.settings.language);
     // And who plays which country: a seat a person's device holds (game/messages.js SEAT `held`), not one they watch.
     if (lobby) setSharedGamePeople((Array.isArray(lobby.seats) ? lobby.seats : []).filter((seat) => seat?.held === true && seat?.status !== "watching").map((seat) => seat.country));
     set({
@@ -601,8 +604,9 @@ export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
   set({ ...IDLE });
   setSharedGameRole("");
   setSharedGamePeople([]);
-  // This device's own features again.
+  // This device's own features again, and its own language.
   setSharedGameFeatures(null);
+  setWorldLanguage("");
   // Back to this device's own documents, and the library's own entry.
   setSharedGameEntry(null);
   await refreshLibraryCatalog({ force: true }).catch(() => {});

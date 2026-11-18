@@ -10,6 +10,7 @@
 import React, { useEffect, useState } from "react";
 import { useLibraryState } from "../../runtime/library.js";
 import { MAX_SEATS, SEATS_AVAILABLE_NOW, DEFAULT_SETTINGS } from "../host/settings.js";
+import { LANGUAGES, readingLanguageName } from "../../runtime/i18n.js";
 import { hostSharedGame, joinSharedGame, useSharedGame } from "../client/sharedGame.js";
 import PublicLobbies from "./PublicLobbies.jsx";
 
@@ -183,6 +184,15 @@ const HostPanel = ({ onClose, onEnterGame }) => {
               <select style={input} value={settings.replies} onChange={update("replies")}>
                 <option value="host">Your AI key</option>
                 <option value="own">Each player&apos;s own AI key</option>
+              </select>
+            </Field>
+            {/* The language the world is written in, a rule of the game
+                (host/settings.js `language`): every player's requests write
+                in it, and each translates on their own device. */}
+            <Field title="The world is written in" hint="Players who read another language translate it on their own device.">
+              <select style={input} value={settings.language || ""} onChange={update("language")}>
+                <option value="">{`The language you play in (${readingLanguageName(activeGame?.language || "")})`}</option>
+                {LANGUAGES.map((entry) => <option key={entry.code} value={entry.code}>{entry.native === entry.name ? entry.name : `${entry.native} (${entry.name})`}</option>)}
               </select>
             </Field>
           </div>

@@ -24,6 +24,7 @@ import {
   useSharedGame,
 } from "../client/sharedGame.js";
 import { OWN_MAP_NOTE, hostLines, joinStage } from "../client/joinProgress.js";
+import { languageDisplayName } from "../../runtime/i18n.js";
 
 const glass = {
   background: "rgba(19,19,21,0.86)",
@@ -180,6 +181,14 @@ const RepliesSetting = ({ shared }) => {
   );
 };
 
+// The language the world is written in, a rule of the game the host set in
+// the lobby (host/settings.js `language`), for everyone to see.
+const WorldLanguage = ({ shared }) => {
+  const code = String(shared.lobby?.settings?.language || "");
+  if (!code) return null;
+  return <div style={{ ...small, marginTop: "0.5rem", textAlign: "end" }}>{`The world is written in ${languageDisplayName(code)}.`}</div>;
+};
+
 // The host's invite code, its relays, and who is coming in or could not
 // (client/joinProgress.js): in the lobby, and under Players while the game
 // runs, where a game taken up again opens and its players need the code to
@@ -240,6 +249,7 @@ const Lobby = ({ shared, me }) => {
         <div style={{ ...small, marginBottom: "0.35rem", textTransform: "uppercase" }}>Players</div>
         <SeatList seats={lobby?.seats} host={role === "host"} />
         <RepliesSetting shared={shared} />
+        <WorldLanguage shared={shared} />
       </div>
 
       {!me && lobby && role !== "host" && shared.standIn !== "ready" && !error ? (
@@ -328,6 +338,7 @@ const RoundBar = ({ shared, me, watching = "" }) => {
           {role === "host" ? <HostInvite shared={shared} /> : null}
           {role !== "host" && (me || watching) ? <CountryPicker lobby={shared.lobby} asking={Boolean(me)} /> : null}
           <RepliesSetting shared={shared} />
+          <WorldLanguage shared={shared} />
         </div>
       ) : null}
     </div>

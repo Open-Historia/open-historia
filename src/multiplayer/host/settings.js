@@ -12,11 +12,17 @@
 //     device on the writer's own key ("own"). The owner, 2026-11-15: "build C
 //     and D, and the host can choose, but no sending api keys". A key never
 //     leaves the device it is on: with "own" the device writes the governments'
-//     words itself and sends the words (the "reply" request).
+//     words itself and sends the words (the "reply" request);
+//   - the language the world is written in (`language`), a rule of the game
+//     (the owner, 2026-11-18: "Host sets it"): every request the game makes,
+//     on any screen, writes in it; each player translates on their own device
+//     (runtime/i18n.js setWorldLanguage). "" is the language the host plays
+//     in, made a code when the game is shared (host/engineMain.js).
 // The schema is shared with the players' screens, which show these settings,
 // and is closed like every other message.
 
 import { bool, int, literal, num, obj, str, validate } from "../protocol/validate.js";
+import { LANGUAGES } from "../../runtime/i18n.js";
 
 export const MAX_SEATS = 64;
 // What the seat slider can be set to today; the rest of it is "coming later".
@@ -24,6 +30,8 @@ export const SEATS_AVAILABLE_NOW = 8;
 
 // Who writes an AI government's reply to a player's message.
 export const REPLY_MODES = Object.freeze(["host", "own"]);
+// The languages a world can be written in (runtime/i18n.js LANGUAGES), by code.
+export const WORLD_LANGUAGES = Object.freeze(LANGUAGES.map((entry) => entry.code));
 
 export const DEFAULT_SETTINGS = Object.freeze({
   v: 1,
@@ -40,6 +48,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   cheats: "off",
   payment: "host",
   replies: "host",
+  language: "",
 });
 
 export const SETTINGS_SCHEMA = obj({
@@ -57,6 +66,7 @@ export const SETTINGS_SCHEMA = obj({
   cheats: str(8, { enum: ["off", "host", "vote"] }),
   payment: str(8, { enum: ["host"] }),
   replies: str(8, { enum: REPLY_MODES }),
+  language: str(16, { enum: ["", ...WORLD_LANGUAGES] }),
 });
 
 // Settings the host typed, made whole and safe: unknown keys are dropped,

@@ -72,8 +72,10 @@ import { POLL_LABEL_MAX_CHARS, POLL_OPTION_LIMIT, POLL_QUESTION_MAX_CHARS } from
 // and a flag is changed through the host (the "flag" request). A country's
 // parties are filled in once, by the replies setting, as a stat sheet is
 // ("parties", "ownParties"), and a goal's progress read on the player's own
-// device is kept with the goal ("goalProgress").
-export const SHARED_GAME_VERSION = "14";
+// device is kept with the goal ("goalProgress"). Version 15: those requests,
+// orders kept by the screen's own id ("order" `ref`, "reword"), and the
+// world's language among the host's settings (host/settings.js `language`).
+export const SHARED_GAME_VERSION = "15";
 
 // The documents a player's view holds: the game itself first (a screen that
 // asks for one before the first view arrives waits for it), then the three a

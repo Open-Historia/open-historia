@@ -55,6 +55,7 @@ import {
 } from "../../runtime/institutionalGovernance.js";
 import { commitWithVotingRuleBackfill } from "../../Game/AI/institutionGovernanceRetry.js";
 import { normalizeSettings } from "./settings.js";
+import { setWorldLanguage, writingLanguageCode } from "../../runtime/i18n.js";
 import { getActiveFeatures, sharedGameFeaturesOf } from "../../runtime/gameFeatures.js";
 import { credentialFromAddress, installWriteCredential } from "../../runtime/writeCredential.js";
 import { sessionFromRecord } from "./sessionRecord.js";
@@ -327,8 +328,12 @@ const boot = async () => {
   const openGame = async ({ settings: input, name } = {}) => {
     const checked = normalizeSettings(input ?? {});
     if (!checked.ok) throw new Error(checked.error);
-    const settings = checked.settings;
     const docs = await store.read();
+    // The world's language, a rule of the game (host/settings.js `language`):
+    // the one the host plays in unless the host chose another, named in the
+    // lobby so every screen writes in it, this window's requests first.
+    const settings = { ...checked.settings, language: checked.settings.language || writingLanguageCode(docs.world?.language || docs.game?.language) };
+    setWorldLanguage(settings.language);
     // The host's own country; it changes if the host's people found one of
     // their own (host/foundings.js).
     let host = clean(docs.game?.country);
@@ -565,6 +570,7 @@ const boot = async () => {
         await stopping.stop();
         writeInOrder = (label, write) => write();
         setHostingSharedGame(false);
+        setWorldLanguage("");
         report();
         loopback.close();
         await fetch("/api/multiplayer/engine/close", { method: "POST" }).catch(() => {});
