@@ -80,6 +80,7 @@ test("a shared round never lands as a canned turn, and takes the game's lock in 
 });
 
 test("the engine names every country a person plays to the round's espionage, with each one's own candidates", () => {
-  assert.match(gameplay, /const espionageCandidatesFor = \(person\) => espionageCandidatesAgainst\(canonicalEspionagePolity\(person\)\);/);
+  // Each against the polities the skip named for that person (spiesOnPlayers.js), or the ledgers' rivals.
+  assert.match(gameplay, /const espionageCandidatesFor = \(person\) => espionageCandidatesAgainst\(canonicalEspionagePolity\(person\), namedAgainst\(person\)\);/);
   assert.match(gameplay, /playerPolity: normalizeString\(baseGame\.country\),\n\s*candidates: espionageCandidates,[\s\S]{0,400}?playerPolities: humanCountriesOf\(baseGame\),\n\s*candidatesFor: espionageCandidatesFor,/);
 });
