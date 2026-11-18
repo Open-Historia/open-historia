@@ -291,6 +291,21 @@ test("a large message arrives whole, both ways", async () => {
   setup.host.stop();
 });
 
+// A paying device's answer to a round is the largest message a player sends, in many frames: the rate is of
+// messages, so its frames are no flood, and its player is not struck or removed (the review of 2026-11-18).
+test("a large message in many frames is one message to the rate limit", async () => {
+  const setup = world({ hostLimits: { messagesPerSecond: 5, messageBurst: 10, strikesToRemove: 5 } });
+  setup.host.start();
+  const player = setup.join("Ana");
+  assert.ok(await until(() => player.client.state === "connected"));
+  player.client.send({ t: "blob", data: "orders ".repeat(300_000) });
+  assert.ok(await until(() => setup.events.messages.length === 1, 5000));
+  player.client.send({ t: "chat", text: "and still here" });
+  assert.ok(await until(() => setup.events.messages.length === 2, 2000));
+  assert.equal(player.client.state, "connected");
+  setup.host.stop();
+});
+
 test("when the host closes the game, players are told", async () => {
   const setup = world();
   setup.host.start();

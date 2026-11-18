@@ -310,9 +310,14 @@ export const createHostSession = ({
 
   const handleMessage = (player, frame) => {
     if (player.status !== "connected") return;
-    if (!allowMessage(player)) return strike(player, "too many messages");
+    // A message is charged once, when it is whole or refused. A large one comes
+    // in many frames (protocol/codec.js), and charging each frame struck a paying
+    // device's own answer to a round (near PLAYER_MESSAGE_MAX_CHARS, 50 to 300
+    // frames) as a flood and removed the player. A message's frames are bounded
+    // by the decoder itself: its size, its number of parts, two at once.
     const decoded = player.decoder.feed(frame);
     if (decoded.pending) return;
+    if (!allowMessage(player)) return strike(player, "too many messages");
     if (decoded.error) return strike(player, decoded.error);
     const checked = validate(schema, decoded.message);
     if (!checked.ok) return strike(player, `an invalid message (${checked.error})`);
