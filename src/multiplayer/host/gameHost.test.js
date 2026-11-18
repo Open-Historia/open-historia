@@ -3666,7 +3666,8 @@ test("the host whose country is gone may take a free one, and plays it from then
   assert.equal(s.store.docs.game.country, ESTONIA);
   assert.deepEqual(moved, [{ from: LATVIA, to: ESTONIA, host: true }]);
   assert.deepEqual(s.store.docs.game.humanCountries, [RUSSIA, ESTONIA]);
-  assert.equal(s.store.docs.actions.find((action) => action.id === "order-lv").ownerCode, LATVIA, "Latvia's order is not Estonia's");
+  // Latvia's order is not Estonia's: it went with Latvia, which nobody can carry it out for (FOLLOWUPS A3).
+  assert.ok(!s.store.docs.actions.some((action) => action.id === "order-lv"), "Latvia's order is not Estonia's");
   assert.equal(s.store.docs.chat.find((chat) => chat.id === "chat-lv-est").player, LATVIA, "nor its thread");
   assert.deepEqual(s.store.docs.world.projects, [], "nor its programme");
   assert.equal(s.store.docs.world.seatBoards[LATVIA][0].id, "proj-lv");
