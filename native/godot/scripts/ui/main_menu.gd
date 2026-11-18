@@ -15,6 +15,7 @@ signal scenario_imported(id: String, note: String)
 signal open_history
 signal scenario_updated(id: String)
 
+const PROJECT_RECOVERY := preload("res://scripts/ui/project_recovery_dialog.gd")
 const CARD_WIDTH := 305.0
 const SCENARIO_PILL_MOST := 176.0
 const CARD_GAP := 16
@@ -1562,7 +1563,7 @@ func _open_card_menu(anchor: Button, game: Dictionary) -> void:
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 0)
 	stack.custom_minimum_size.x = 208
-	for label in ["Edit", "Clone", "Unarchive" if game.get("archived", false) else "Archive", "Export"]:
+	for label in ["Edit", "Clone", "Recover Projects…", "Unarchive" if game.get("archived", false) else "Archive", "Export"]:
 		var row := Button.new()
 		row.text = label
 		row.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -1585,6 +1586,10 @@ func _open_card_menu(anchor: Button, game: Dictionary) -> void:
 			row.pressed.connect(func() -> void:
 				popup.hide()
 				_clone_game(game))
+		elif label == "Recover Projects…":
+			row.pressed.connect(func() -> void:
+				popup.hide()
+				_recover_projects(game))
 		elif label == "Archive" or label == "Unarchive":
 			row.pressed.connect(func() -> void:
 				popup.hide()
@@ -1615,6 +1620,17 @@ func _open_card_menu(anchor: Button, game: Dictionary) -> void:
 	popup.popup_hide.connect(func() -> void: popup.queue_free())
 	var at := anchor.get_screen_position() + Vector2(anchor.size.x - 210, anchor.size.y + 6)
 	popup.popup(Rect2i(Vector2i(at), Vector2i(210, 0)))
+
+
+func _recover_projects(game: Dictionary) -> void:
+	var dialog: Control = PROJECT_RECOVERY.new()
+	dialog.call("setup", engine, game)
+	dialog.connect("created", _on_projects_recovered)
+	add_child(dialog)
+
+
+func _on_projects_recovered(_id: String) -> void:
+	refresh_requested.emit()
 
 
 func _archive_game(game: Dictionary) -> void:
