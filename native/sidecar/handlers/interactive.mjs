@@ -79,10 +79,7 @@ export const register = (ctx) => {
     };
   };
 
-  const finishedTitle = (result, fallback) => {
-    const events = list(result?.events);
-    return clean(events[events.length - 1]?.title) || fallback;
-  };
+  const finishedTitle = (result, fallback) => engine.interactiveCompletion.sceneCompletionTitle(result, fallback);
 
   if (standIn) {
     const BEAT = "[stand-in beat]";

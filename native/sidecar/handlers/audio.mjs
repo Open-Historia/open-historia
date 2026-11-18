@@ -445,7 +445,7 @@ export const register = (ctx) => {
     inMenu: flags.scene === "menu",
     loading: flags.scene === "loading",
     atWar: flags.forced || ledgerWar,
-    war: flags.war,
+    war: flags.war && Boolean(flags.forced || ledgerWar),
   });
 
   const apply = () => {

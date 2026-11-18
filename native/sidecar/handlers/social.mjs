@@ -200,9 +200,8 @@ export const register = (ctx) => {
     const { world, game, feed, country, round, flag } = await context(force);
     const social = sf();
     const account = social.playerAccount(world, country);
-    const leader = social.leaderOf(world, country)?.name ?? "";
     const running = busy();
-    const shown = tab === "search" ? [] : social.socialFeedView(feed, { tab, country, leader });
+    const shown = tab === "search" ? [] : social.socialFeedView(feed, { tab, country });
     return {
       enabled: enabled(),
       look: look(),
@@ -219,7 +218,7 @@ export const register = (ctx) => {
       canPost: Boolean(country) && !running,
       tab,
       posts: shown.map((post) => postView(post, { feed, round, country, flag })),
-      mentionCount: feed.filter((post) => social.mentionsPlayer(post, { feed, country, leader }) && Number(post.round) >= round).length,
+      mentionCount: feed.filter((post) => social.mentionsPlayer(post, { feed, country }) && Number(post.round) >= round).length,
       newest: social.newestPostNumber(feed),
       maxChars: social.SOCIAL_POST_MAX_CHARS,
       pollMin: social.POLL_CHOICES_MIN,
