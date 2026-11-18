@@ -1,7 +1,7 @@
 /*! Open Historia — the bunker door over the landing page © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The top of the page is a blast door. Its two leaves meet at a toothed seam
-// (the owner's sketch: straight runs joined by slants, so one leaf's tooth sits
-// in the other's notch) and the four ages are painted across both of them.
+// (the idea of the owner's sketch, drawn as machined lugs: straight runs of one
+// length joined by 45-degree flanks, so one leaf's tooth sits in the other's notch) and the four ages are painted across both of them.
 // "Demo in your browser" opens it: the locking bars and the frame's pins draw
 // back, the leaves pop out of their teeth, slide apart into the walls, and the
 // view walks into the bunker behind before the demo opens.
@@ -23,10 +23,28 @@
   if (!hero || !realms || !plate || !window.CSS || !CSS.supports || !CSS.supports("transform-style", "preserve-3d")) return;
   var calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)");
 
-  // The seam, read off the owner's sketch from top to bottom: [share of the
-  // height, offset from the middle in teeth]. Slants join straight runs; the
-  // top comes in on a long slant, and one run leans a little, as drawn.
-  var SEAM = [[0, -1.6], [0.095, 1], [0.218, 1], [0.295, -1], [0.449, -1], [0.531, 0.9], [0.641, 1.1], [0.738, -1], [0.846, -1], [0.913, 1], [1, 1]];
+  // The seam is made from three numbers, not traced: the teeth's depth (they
+  // stand DEPTH either side of the middle), their flanks at FLANK degrees from
+  // the vertical, and a pitch near PITCH flank-heights per tooth, rounded so a
+  // whole number of teeth fills the height. Every run is the same length, the
+  // top and bottom runs are half runs, and both leaves share the one line, so
+  // they mate exactly.
+  var FLANK = 45;
+  var PITCH = 2.4;
+  function seamPoints(W, H, depth) {
+    var rise = (2 * depth) / Math.tan(FLANK * Math.PI / 180);
+    var teeth = Math.max(3, Math.min(9, Math.round(H / (rise * PITCH))));
+    var unit = H / teeth, run = unit - rise, side = -1, y = 0, pts = [[W / 2 - depth, 0]];
+    for (var i = 0; i < teeth; i += 1) {
+      y += i === 0 ? run / 2 : run;
+      pts.push([W / 2 + side * depth, y]);
+      y += rise;
+      side = -side;
+      pts.push([W / 2 + side * depth, y]);
+    }
+    pts.push([W / 2 + side * depth, H]);
+    return pts;
+  }
   // When things happen, in ms from the click (door.css holds the same numbers).
   var NAVIGATE_BY = 4200;
 
@@ -241,9 +259,8 @@
     var T = Math.max(22, Math.min(78, W * 0.052));
     var P = Math.max(760, Math.min(1400, W * 0.85));
     var band = W < 700 ? 9 : 14;
-    var pts = SEAM.map(function (stop) { return [W / 2 + stop[1] * A, stop[0] * H]; });
-    var right = W / 2 + 1.1 * A;
-    var d = W / 2 + 1.6 * A + (W / 2) * (T + 40) / P + 60;
+    var pts = seamPoints(W, H, A);
+    var d = W / 2 + A + (W / 2) * (T + 40) / P + 60;
     var u = 1.45 * A;
     geo = { W: W, H: H, A: A, T: T, P: P, pts: pts, d: d };
     var s = hero.style;
