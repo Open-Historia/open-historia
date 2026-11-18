@@ -370,6 +370,20 @@ const boot = async () => {
     },
   });
 
+  // This window going (the app closed, the window closed by the app before it
+  // quits: electron/main.cjs) tells every guest the game is closed before
+  // their connection drops, as Stop does (session/host.js stop sends each a
+  // goodbye). Without it a guest was left reconnecting to a host that was
+  // gone (2026-11-18). The app asks it of the window first (farewell), since
+  // a window destroyed outright never sees pagehide.
+  const farewell = () => {
+    if (!session) return;
+    logDebugEvent("shared game", "this window is closing: every player is told the game is closed");
+    session.stop();
+  };
+  window.__ohSharedGameFarewell = farewell;
+  window.addEventListener("pagehide", farewell);
+
   // Every AI call of a shared game is made in this window. The host's own
   // screen is told as each one finishes, and is sent what this window logs: its
   // AI debug console and its diagnostics log then cover the game it hosts.

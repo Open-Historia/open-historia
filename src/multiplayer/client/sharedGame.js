@@ -44,6 +44,7 @@ import { loadDeviceIdentity } from "../identity.js";
 import { parseInvite } from "../invite.js";
 import { HOST_MESSAGES, SHARED_GAME_VERSION } from "../game/messages.js";
 import { advisorChangesOf } from "../game/advisorChanges.js";
+import { cutOffRefusal, hostGoneWords, keepEndedNotice, takeEndedNotice } from "./hostGone.js";
 
 const IDLE = Object.freeze({
   mode: "off", // off | opening | lobby | playing | ended
@@ -72,7 +73,11 @@ const IDLE = Object.freeze({
   error: "",
 });
 
-let state = IDLE;
+// A shared game the host's going ended on the page before this one: the menu
+// says why, once (client/hostGone.js). Nothing else of it is kept: the page
+// opens the menu, never the dead game.
+const endedBefore = typeof sessionStorage === "undefined" ? "" : takeEndedNotice(sessionStorage);
+let state = endedBefore ? { ...IDLE, mode: "ended", role: "guest", error: endedBefore } : IDLE;
 const listeners = new Set();
 const set = (patch) => {
   state = { ...state, ...patch };
@@ -619,6 +624,17 @@ export const joinSharedGame = async ({ token, name } = {}) => {
       }
       if (!["rejected", "lost", "invalid"].includes(connection)) return;
       logDebugEvent("shared game", `joining ended: ${connection} (${detail.reason || detail.message || "no reason given"})`, undefined, { problem: true });
+      // The host gone for good, from a game this page was in: it ends as
+      // Leave ends it (its stand-in closed, back to the menu), and the menu
+      // says why (client/hostGone.js). It was left "reconnecting" for good,
+      // playing a dead game with nothing said.
+      const gone = hostGoneWords(detail.reason);
+      if (gone && session.player) {
+        keepEndedNotice(typeof sessionStorage === "undefined" ? null : sessionStorage, gone);
+        set({ mode: "ended", error: gone });
+        void leaveSharedGame().finally(() => window.location.reload());
+        return;
+      }
       set({ mode: "ended", error: joinFailure({ connection, reason: detail.reason, message: detail.message, network: state.network }) });
     },
     // Dropped by the session, and said here: a lobby that cannot be read
@@ -650,9 +666,24 @@ export const joinSharedGame = async ({ token, name } = {}) => {
 
 // --- Playing ---------------------------------------------------------------------
 
-export const sharedRequest = (t, fields = {}) => (current?.client
-  ? current.client.request(t, fields)
-  : Promise.resolve({ ok: false, error: "Not in a shared game." }));
+// Cut off from the host, nothing a guest does is taken: refused with that
+// reason (client/hostGone.js). What it asked before the drop goes again once
+// the connection is back (gameClient.js resend).
+export const sharedRequest = (t, fields = {}) => {
+  const refused = cutOffRefusal(state);
+  if (refused) return Promise.resolve({ ok: false, error: refused });
+  return current?.client
+    ? current.client.request(t, fields)
+    : Promise.resolve({ ok: false, error: "Not in a shared game." });
+};
+
+// The menu's word on a shared game the host's going ended, put away; false
+// while a shared game is still open on this page (Leave closes that).
+export const dismissEndedNotice = () => {
+  if (current) return false;
+  set({ ...IDLE });
+  return true;
+};
 // The game's own panels reach the host through the bridge.
 setSharedRequester(sharedRequest);
 

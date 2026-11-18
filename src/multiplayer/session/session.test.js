@@ -490,3 +490,31 @@ test("a flood of offers keeps nobody of the game out, and a newcomer over the li
   assert.notEqual(flood.client.state, "connected");
   setup.host.stop();
 });
+
+// "I closed the lobby but this person says they are still in it" (the owner, 2026-11-18): a guest whose connection
+// to the host dropped, and whose host never came back, was left "reconnecting" for good, playing a dead game.
+test("a player who lost a host that is gone for good is told so once its lobby leaves the relays", async () => {
+  const setup = world();
+  setup.host.start();
+  const player = setup.join("Ana", { beaconGoneMs: 800, reconnectMostMs: 60_000 });
+  assert.ok(await until(() => player.client.state === "connected"));
+  // The host's computer gone with no goodbye (the app closed, a crash): its connection drops and its lobby goes.
+  setup.rtc.drop();
+  setup.host.stop();
+  assert.ok(await until(() => player.log.states.some((entry) => entry.state === "reconnecting"), 5000), "said at once");
+  assert.ok(await until(() => player.client.state === "lost", 10_000), JSON.stringify(player.log.states.map((entry) => entry.state)));
+  assert.equal(player.log.states.at(-1).reason, "host-gone");
+});
+
+test("a player who cannot get back to the host is told so after a bounded time, even with its lobby heard", async () => {
+  const setup = world();
+  setup.host.start();
+  const player = setup.join("Ana", { beaconGoneMs: 60_000, reconnectMostMs: 1500 });
+  assert.ok(await until(() => player.client.state === "connected"));
+  // The host still on the relays, but every connection it answers never opens.
+  setup.rtc.block("failed");
+  setup.rtc.drop();
+  assert.ok(await until(() => player.client.state === "lost", 10_000), JSON.stringify(player.log.states.map((entry) => entry.state)));
+  assert.equal(player.log.states.at(-1).reason, "host-gone");
+  setup.host.stop();
+});
