@@ -6,15 +6,22 @@
 // new country is nobody's: the AI plays its troops, and what only its
 // government knows reaches no one.
 //
-// The seat follows only when all three hold in one event, so a player who
-// sponsors a breakaway or sets up a puppet keeps their own seat:
-//   - the event creates the polity (polityChanges create; the resolver adds one
+// The seat follows only when all of these hold, so a player who sponsors a
+// breakaway, sets up a puppet or releases a colony keeps their own seat:
+//   - one event creates the polity (polityChanges create; the resolver adds one
 //     for a name a transfer founds, runtime/polityFounding.js);
 //   - it resolves an order of that seat's (impacts.actionIds; an order naming
 //     no owner is the host's, runtime/humanPolities.js orderOwner);
 //   - it moves that seat's own land to the new polity: a regionTransfers entry
 //     from the seat to it, or of a region in the seat's area when the seat is a
-//     group (a faction's land is its countries', runtime/groups.js).
+//     group (a faction's land is its countries', runtime/groups.js);
+//   - and the seat's own polity has ended with the round, as the world has it
+//     after it (polityEnded): a country whose record is dissolved, or that the
+//     game no longer counts among its countries; a group that is gone, or that
+//     controls no ground but the new country's. A France that released Corsica
+//     as a puppet goes on, and its player with it: they had been moved to
+//     one-region Corsica, with France's whole army and spy service, and France
+//     was left to the AI (the review of 2026-11-18, wars 1).
 // A restore counts as a create: a resistance that brings back a lost state.
 // What the new country is (its government, leader, goals, figures) is the
 // model's to write from the story, as for any polity it founds; nothing of the
@@ -24,19 +31,42 @@
 
 import { interceptTableOf, withInterceptTable } from "../../runtime/spycraft.js";
 import { AIR_ARM_UNIT, airArmId } from "../../runtime/fronts/airStrike.js";
-import { withSeatAdvisor, withSeatAdvisorMoved } from "../../runtime/seatAdvisors.js";
+import { advisorOfSeat, withSeatAdvisor, withSeatAdvisorMoved } from "../../runtime/seatAdvisors.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const same = (left, right) => Boolean(clean(left)) && clean(left).toLocaleLowerCase() === clean(right).toLocaleLowerCase();
 const list = (value) => (Array.isArray(value) ? value : []);
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
+// Whether `country`, a seat's own polity, has ended with a founding of `to`,
+// read from the world after the round (`world`, and `countries`, the game's
+// whole list as it is now) and never from words: a group (one of the world's,
+// or one that held an area as the round began, `areas`) is gone, or controls
+// no ground that is not `to`'s now (its area released, or all of it the new
+// country's); any other polity is gone as seatSuccessions has it (its record
+// dissolved, or not among the game's countries any more). Without the world
+// after the round, nothing has ended.
+export const polityEnded = ({ world, country, to, countries = null, areas = {} } = {}) => {
+  if (!isRecord(world)) return false;
+  const groups = isRecord(world.groups) ? world.groups : {};
+  const group = Object.keys(groups).find((key) => same(key, country) || same(groups[key]?.name, country));
+  if (group || Object.values(isRecord(areas) ? areas : {}).some((name) => same(name, country))) {
+    if (!group) return true;
+    const owners = isRecord(world.regionOwnershipOverrides) ? world.regionOwnershipOverrides : {};
+    return !Object.entries(isRecord(world.groupAreas) ? world.groupAreas : {})
+      .some(([regionId, name]) => same(name, group) && !same(owners[regionId], to));
+  }
+  return seatSuccessions({ world, seated: [country], countries }).gone.length > 0;
+};
+
 // `events`: the events the round just added. `actions`: the order queue.
 // `seated`: the countries people play. `host`: the host's own country.
 // `areas`: the groups' areas as the round began (world.groupAreas, region id ->
-// group). Returns [{ from, to, eventId }], at most one per seat, never onto a
-// country someone already plays nor two seats onto one.
-export const seatFoundings = ({ events = [], actions = [], seated = [], host = "", areas = {} } = {}) => {
+// group). `world` and `countries`: the world after the round, and the game's
+// countries now, which say whether a seat's own polity ended (polityEnded).
+// Returns [{ from, to, eventId }], at most one per seat, never onto a country
+// someone already plays nor two seats onto one.
+export const seatFoundings = ({ events = [], actions = [], seated = [], host = "", areas = {}, world = null, countries = null } = {}) => {
   const ownerOf = new Map(list(actions).map((action) => [clean(action?.id), clean(action?.ownerCode) || clean(host)]));
   const moves = [];
   const taken = (name) => seated.some((seat) => same(seat, name) && !moves.some((move) => same(move.from, seat)))
@@ -54,7 +84,7 @@ export const seatFoundings = ({ events = [], actions = [], seated = [], host = "
       const ours = (transfer) => same(transfer?.fromCode, seat) || same(areas?.[clean(transfer?.regionId)], seat);
       const to = created.find((name) => !same(name, seat) && !taken(name)
         && list(impacts.regionTransfers).some((transfer) => same(transfer?.toCode, name) && ours(transfer)));
-      if (to) moves.push({ from: clean(seat), to, eventId: clean(event?.id) });
+      if (to && polityEnded({ world, country: seat, to, countries, areas })) moves.push({ from: clean(seat), to, eventId: clean(event?.id) });
     }
   }
   return moves;
@@ -176,15 +206,49 @@ export const withSeatMoved = ({ actions, world, chats, intercepts, advisor }, { 
 // with other people, which are closed. Everything was keyed by the country, so
 // a newcomer read the last player's private letters and inherited their orders,
 // which the next skip carried out in the newcomer's name (the gap audit of
-// 2026-11-18). `people`: the countries people play, the let-go one included.
+// 2026-11-18). A conversation is one with other people when another of its
+// parties is played by a person now (`people`, the let-go one included), or by
+// its own record: the let-go seat's person and another person each wrote in it
+// (every line a person writes is stored with role "user", its speaker the
+// seat's country). Judged by who played at that moment alone, two players'
+// letters passed to the next player of the country once the other player had
+// gone to the AI or been let go (the review of 2026-11-18, views 3); and a
+// conversation a guest had in the host's own thread (whose owner is not
+// named) was never closed. And what is open between the person and other
+// people lapses with them: treaties put by them or to them, and terms of peace
+// a person put (source "player"), theirs or another's to them. Left open, the
+// other side signed an alliance its maker had left, and the next player of the
+// country was bound by it (views 4). `round`: the game's, for the lapse.
 // Returns the documents changed and the orders withdrawn (for the map's undo).
 export const PERSONAL_SEAT_RECORDS = Object.freeze(["playerGoals", "seatAdvice"]);
-export const withSeatLetGo = ({ actions, world, chats, advisor }, { country, people = [] } = {}) => {
+// The names of the people who wrote in a thread, by its record: its lines'
+// speakers, in its messages and its log. A person's line with no speaker is
+// the thread's owner's (`owner`), and in a thread whose owner is not named,
+// the host's ("?": someone, never the let-go seat).
+const peopleWhoWrote = (chat, owner) => {
+  const lines = [
+    ...list(chat?.messages).map((line) => (clean(line?.role) === "user" ? clean(line?.speaker || line?.code) || owner || "?" : "")),
+    ...list(chat?.events).map((entry) => (clean(entry?.kind) === "message" && clean(entry?.role) === "user" ? clean(entry?.by || entry?.code) || owner || "?" : "")),
+  ];
+  return lines.filter(Boolean);
+};
+const lapsed = (offers, keep, round) => (Array.isArray(offers)
+  ? offers.map((offer) => (isRecord(offer) && clean(offer.status || "open") === "open" && !keep(offer)
+    ? { ...offer, status: "lapsed", ...(Number(round) > 0 ? { answeredRound: Math.trunc(Number(round)) } : {}) }
+    : offer))
+  : offers);
+export const withSeatLetGo = ({ actions, world, chats, advisor }, { country, people = [], round = 0 } = {}) => {
   const others = list(people).filter((name) => !same(name, country));
   const withdrawn = list(actions).filter((action) => same(action?.ownerCode, country) && clean(action?.status || "planned") === "planned");
   const between = (chat) => {
-    const parties = [clean(chat?.player), ...list(chat?.countries).map((entry) => clean(typeof entry === "object" && entry ? entry.name ?? entry.code : entry))].filter(Boolean);
-    return parties.some((name) => same(name, country)) && parties.some((name) => others.some((other) => same(other, name)));
+    // (A thread whose owner is not named is the host's: a let-go seat is
+    // never the host's, and is in it as one of its countries, or not at all.)
+    const owner = clean(chat?.player);
+    const parties = [owner, ...list(chat?.countries).map((entry) => clean(typeof entry === "object" && entry ? entry.name ?? entry.code : entry))].filter(Boolean);
+    if (!parties.some((name) => same(name, country))) return false;
+    if (parties.some((name) => others.some((other) => same(other, name)))) return true;
+    const wrote = peopleWhoWrote(chat, owner);
+    return wrote.some((name) => same(name, country)) && wrote.some((name) => !same(name, country));
   };
   return {
     withdrawn,
@@ -195,6 +259,12 @@ export const withSeatLetGo = ({ actions, world, chats, advisor }, { country, peo
         ...Object.fromEntries(PERSONAL_SEAT_RECORDS
           .filter((key) => isRecord(world[key]))
           .map((key) => [key, Object.fromEntries(Object.entries(world[key]).filter(([name]) => !same(name, country)))])),
+        ...(Array.isArray(world.treatyOffers)
+          ? { treatyOffers: lapsed(world.treatyOffers, (offer) => !same(offer.from, country) && !same(offer.to, country), round) }
+          : {}),
+        ...(Array.isArray(world.peaceOffers)
+          ? { peaceOffers: lapsed(world.peaceOffers, (offer) => clean(offer.source) !== "player" || (!same(offer.from, country) && !same(offer.to, country)), round) }
+          : {}),
       }
       : world,
     // Closed, and retired for the country let go: the next player of that
@@ -205,6 +275,57 @@ export const withSeatLetGo = ({ actions, world, chats, advisor }, { country, peo
       : chat)),
     // (A seat let go is never the host's, whose conversation is the file itself.)
     advisor: Array.isArray(advisor) ? withSeatAdvisor(advisor, country, []) : advisor,
+  };
+};
+
+// The host's own country is gone, and the host takes a free one (the owner's
+// decision 11, for every player): the game is played as `to` from then on
+// (game.country). What single player keeps as the player's without naming it
+// is the game country's, and would pass to `to` with it: the orders that name
+// no owner, the board's own entries (world.projects), the threads that name no
+// owner, the intercepts file's own table and its seal (world.spySeal), the
+// advisor file's own conversation. They are written down as `from`'s, under
+// its name, as every other seat's are kept; and what was kept under `to`'s name
+// for its next player (a former player's board, its service's table and seal)
+// is the game's own now. What is the person's is not carried over: the host
+// starts `to` afresh, as any player who takes a free country does. Pure.
+export const withGameCountryChanged = ({ actions, world, chats, intercepts, advisor }, { from, to }) => {
+  const own = (row) => !clean(row?.ownerCode) || same(row.ownerCode, from);
+  const records = (value) => (isRecord(value) ? value : {});
+  const without = (record, name) => Object.fromEntries(Object.entries(records(record)).filter(([key]) => !same(key, name)));
+  const under = (record, name) => Object.entries(records(record)).find(([key]) => same(key, name))?.[1];
+  let next = world;
+  if (isRecord(world)) {
+    const board = list(world.projects);
+    const boards = without(without(world.seatBoards, from), to);
+    const kept = [...list(under(world.seatBoards, from)), ...board.filter(own)];
+    if (kept.length) boards[clean(from)] = kept;
+    const seals = without(without(world.seatSeals, from), to);
+    if (clean(world.spySeal)) seals[clean(from)] = world.spySeal;
+    const { spySeal: _old, ...rest } = world;
+    const theirSeal = under(world.seatSeals, to);
+    next = {
+      ...rest,
+      projects: [...board.filter((row) => !own(row)), ...list(under(world.seatBoards, to))],
+      seatBoards: boards,
+      seatSeals: seals,
+      ...(theirSeal ? { spySeal: theirSeal } : {}),
+    };
+  }
+  const moveTables = (file) => {
+    if (!isRecord(file)) return file;
+    const theirs = interceptTableOf(file, to);
+    return withInterceptTable(withInterceptTable(withInterceptTable(file, from, interceptTableOf(file, "")), to, {}), "", theirs);
+  };
+  const moveCounsel = (file) => (Array.isArray(file)
+    ? withSeatAdvisor(withSeatAdvisor(withSeatAdvisor(file, from, advisorOfSeat(file, "")), to, []), "", advisorOfSeat(file, to))
+    : file);
+  return {
+    actions: actions === undefined ? undefined : list(actions).map((action) => (clean(action?.ownerCode) ? action : { ...action, ownerCode: clean(from) })),
+    world: next,
+    chats: chats === undefined ? undefined : list(chats).map((chat) => (clean(chat?.player) ? chat : { ...chat, player: clean(from) })),
+    intercepts: moveTables(intercepts),
+    advisor: moveCounsel(advisor),
   };
 };
 

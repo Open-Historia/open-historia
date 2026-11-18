@@ -26,7 +26,7 @@ import { roundRulesOf } from "./hostRules.js";
 import { SOCIAL_POST_MAX_CHARS } from "../../runtime/socialFeed.js";
 import { ownReplyAsked } from "../client/ownReplies.js";
 import { pendingSharedThread } from "../client/sharedThreads.js";
-import { sessionFromRecord } from "./sessionRecord.js";
+import { sessionFromRecord, sessionRecordOf } from "./sessionRecord.js";
 import { advisorChangesOf } from "../game/advisorChanges.js";
 import { advisorOfSeat } from "../../runtime/seatAdvisors.js";
 import { PAYER_GONE_MS } from "./roundPayers.js";
@@ -797,7 +797,9 @@ test("a player whose people found a country plays it from then on, with their qu
   const s = setup({
     onSeatsMoved: (moves) => moved.push(...moves),
     roundWrites: (docs) => {
-      // The host's order (no owner) and the guest's both found a country.
+      // The host's order (no owner) and the guest's both found a country, and the old states end with it (a seat
+      // follows a founding only then: host/foundings.js polityEnded).
+      for (const name of [LATVIA, RUSSIA]) docs.world.polityOverrides[name] = { ...docs.world.polityOverrides[name], status: "dissolved" };
       docs.actions = docs.actions.map((action) => ({ ...action, status: "resolved" }));
       docs.actions.push(
         { id: "order-ru-found", status: "resolved", ownerCode: RUSSIA, text: "Found the Pskov Republic" },
@@ -1035,9 +1037,13 @@ test("the war room's fortified lines and fleets are the seat's own, held to the 
   assert.match(s.ack(s.guest, id(14)).error, /Nothing was asked/);
 });
 
-test("a player puts terms of peace to another player by name, and that player's own answer makes the peace", async () => {
+test("a player puts terms of peace to another player by name, and that player's own answer makes the peace", async (t) => {
   // "Peace between people: offers between players, each country making its own peace" (the owner, 2026-11-15).
   // The host answered every such proposal "That side is led by another player", and nothing else could be done.
+  // (The engine reads who people play from the game while it hosts, runtime/humanPolities.js.)
+  const { setHostingSharedGame } = await import("../../runtime/humanPolities.js");
+  setHostingSharedGame(true, { host: LATVIA });
+  t.after(() => setHostingSharedGame(false));
   const s = setup();
   s.store.docs.world.wars = [{ id: "war-1", title: "The Baltic War", status: "active", sideA: [RUSSIA], sideB: [LATVIA], startedDate: "2014-03-01" }];
   // Russia holds a region of Latvia's.
@@ -2335,8 +2341,9 @@ test("a player who holds a seat is let back in however many newcomers came meanw
   assert.equal(s.host.roomFor("device-new"), false);
   assert.equal(s.host.openSeats(), 0);
   assert.equal(s.host.roomFor("device-guest"), true);
-  // Released by the host: a seat is free, and the guest is a newcomer again.
+  // Released by the host: a seat is free, and the guest is a newcomer again (in the game's order).
   s.host.control.kick(RUSSIA);
+  await s.clock.flush();
   assert.equal(s.host.roomFor("device-new"), true);
   assert.equal(s.host.openSeats(), 1);
   s.host.join({ id: "p-new", device: "device-new", name: "New" });
@@ -2969,4 +2976,278 @@ test("a player who leaves keeps their country for the grace, then the AI plays i
   s.host.join(s.guest);
   await s.clock.flush();
   assert.equal(status(RUSSIA), "human", "theirs again when they are back");
+});
+
+// --- WHO A REQUEST ACTS FOR, AND WHAT FOLLOWS A SEAT ---------------------------------------
+// The review of 2026-11-18, cluster "seats": a seat was looked up before its request waited in the queue, and what
+// the host kept for a seat was kept by the country's name, so renames, foundings, releases, kicks and changes of
+// country left things behind or applied them to the wrong country.
+
+const EMPIRE = "Russian Empire";
+// The game's own rename (server/polityRename.js): re-keyed, the old name kept.
+const renamed = (docs, from, to) => {
+  const { [from]: old, ...rest } = docs.world.polityOverrides;
+  docs.world.polityOverrides = { ...rest, [to]: { ...old, code: to, name: to, formerNames: [from] } };
+};
+
+test("a request that waits behind a round acts for the seat as the round left it: renamed, its order, goal and own AI's answer are the new name's", async () => {
+  let release;
+  const s = setup({
+    holdResolve: new Promise((resolve) => { release = resolve; }),
+    countriesOf: gameCountries,
+    settings: { replies: "own" },
+    roundWrites: (docs) => renamed(docs, RUSSIA, EMPIRE),
+  });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  // A line left to the guest's own device to answer, before the round.
+  await s.request(s.guest, { t: "say", id: id(2), thread: null, to: [ESTONIA], text: "Moscow to Tallinn." });
+  const asked = s.ack(s.guest, id(2)).result;
+  assert.equal(asked.answer, "own");
+  await playRound(s, [s.hostPlayer, s.guest]);
+  assert.equal(s.to(s.guest, "round").at(-1).phase, "resolving");
+  const waiting = [
+    s.request(s.guest, { t: "order", id: id(3), text: "An order given while the round resolves." }),
+    s.request(s.guest, { t: "goal", id: id(4), text: "A goal set while the round resolves." }),
+    s.request(s.guest, { t: "reply", id: id(5), thread: asked.chatId, line: asked.line, lines: [{ speaker: ESTONIA, text: "Tallinn hears you." }] }),
+  ];
+  await s.clock.flush();
+  release();
+  await Promise.all(waiting);
+  await s.clock.flush();
+  assert.equal(s.store.docs.game.humanCountries.includes(EMPIRE), true);
+  assert.equal(s.store.docs.actions.find((action) => /while the round resolves/.test(action.text))?.ownerCode, EMPIRE);
+  assert.deepEqual(Object.keys(s.store.docs.world.playerGoals ?? {}), [EMPIRE]);
+  assert.equal(s.ack(s.guest, id(5)).ok, true, "the answer its own AI wrote is taken, though a round renamed its country meanwhile");
+  assert.ok(s.shown(s.guest).actions.some((action) => /while the round resolves/.test(action.text)), "and its view shows the order");
+});
+
+test("the host releases a player while a round resolves: what they sent before goes with their seat, what they send after is refused, and a pick that waited does not take it first", async () => {
+  let release;
+  const s = setup({ holdResolve: new Promise((resolve) => { release = resolve; }), campaign: "game-baltic" });
+  const third = { id: "p-third", device: "device-third", name: "Third" };
+  const newcomer = { id: "p-new", device: "device-new", name: "New" };
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  s.host.join(third);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.request(third, { t: "pick", id: id(2), country: ESTONIA });
+  await s.host.control.start();
+  await playRound(s, [s.hostPlayer, s.guest, third]);
+  assert.equal(s.to(s.guest, "round").at(-1).phase, "resolving");
+  s.host.join(newcomer);
+  const waiting = [
+    s.request(third, { t: "order", id: id(10), text: "Third's order before the release." }),
+    s.request(newcomer, { t: "pick", id: id(11), country: ESTONIA }),
+  ];
+  await s.clock.flush();
+  assert.equal(s.host.control.kick(ESTONIA), "device-third");
+  await s.clock.flush();
+  // Saved at once, while the round still resolves: an engine closed now keeps the host's word.
+  assert.deepEqual(s.store.shared.at(-1).released, [{ device: "device-third", country: ESTONIA }]);
+  const late = s.request(third, { t: "order", id: id(12), text: "Third's order after the release." });
+  release();
+  await Promise.all([...waiting, late]);
+  await s.clock.flush();
+  assert.equal(s.ack(newcomer, id(11)).error, "taken", "a pick that waited found the seat still its player's");
+  assert.equal(s.ack(third, id(12)).error, `You no longer play ${ESTONIA}.`);
+  assert.ok(!s.store.docs.actions.some((action) => /Third's order/.test(action.text)), "what they ordered before went with their seat");
+  assert.match(s.to(third, "notice").at(-1).text, /^The host released you from Republic of Estonia\. You can take another free country/);
+  // They do not take it back; anyone else may.
+  await s.request(third, { t: "pick", id: id(13), country: ESTONIA });
+  assert.equal(s.ack(third, id(13)).error, "released");
+  await s.request(newcomer, { t: "pick", id: id(14), country: ESTONIA });
+  assert.equal(s.ack(newcomer, id(14)).ok, true);
+});
+
+test("the session is saved at once, whatever the round is doing, and once more at Stop; a release saved before its seat was let go is let go when the game is taken up", async () => {
+  let release;
+  const campaign = "game-baltic";
+  const s = setup({ holdResolve: new Promise((resolve) => { release = resolve; }), campaign });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await playRound(s, [s.hostPlayer, s.guest]);
+  assert.equal(s.to(s.guest, "round").at(-1).phase, "resolving");
+  s.host.control.kick(RUSSIA, { ban: true });
+  assert.equal(s.host.control.setReplies("own"), true);
+  await s.clock.flush();
+  const saved = s.store.shared.at(-1);
+  assert.deepEqual(saved.banned, ["device-guest"]);
+  assert.equal(saved.settings.replies, "own", "a change of who answers is saved");
+  assert.equal(saved.seats.find((seat) => seat.country === RUSSIA)?.device, "device-guest", "its seat is let go in the game's order, after the round");
+  // The engine is closed before the round lands: taken up again, the banned player's seat is let go first.
+  const t = setup({ campaign, restored: sessionFromRecord(saved, { campaign, hostDevice: "device-host" }) });
+  t.host.join(t.hostPlayer);
+  await t.clock.flush();
+  assert.equal(t.to(t.hostPlayer, "lobby").at(-1).seats.find((seat) => seat.country === RUSSIA)?.held, false);
+  // And Stop writes the session once more, as it stands.
+  const writes = s.store.shared.length;
+  await s.host.stop();
+  release();
+  assert.ok(s.store.shared.length > writes);
+  assert.equal(s.store.shared.at(-1).settings.replies, "own");
+});
+
+test("a change of country asked before a round that renames both countries follows them, and its player's own go with them", async () => {
+  const SSR = "Estonian SSR";
+  const s = setup({ countriesOf: gameCountries, roundWrites: (docs) => { renamed(docs, RUSSIA, EMPIRE); renamed(docs, ESTONIA, SSR); } });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "pick", id: id(2), country: ESTONIA });
+  await playRound(s, [s.hostPlayer, s.guest]);
+  await s.request(s.guest, { t: "order", id: id(3), text: "A private plan of the guest's." });
+  assert.deepEqual(s.to(s.hostPlayer, "lobby").at(-1).changes, [{ from: EMPIRE, to: SSR, name: "Guest" }]);
+  assert.equal(await s.host.control.seat({ op: "allow", from: EMPIRE }), true);
+  await s.clock.flush();
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA, SSR]);
+  assert.ok(!s.store.docs.actions.some((action) => action.text === "A private plan of the guest's."), "the order they gave as the Empire went with them");
+});
+
+test("a player who releases part of their own land as a puppet keeps their seat and their army", async () => {
+  const PSKOV = "Pskov Republic";
+  const s = setup({
+    countriesOf: gameCountries,
+    roundWrites: (docs) => {
+      docs.actions.push({ id: "order-ru-puppet", status: "resolved", ownerCode: RUSSIA, text: "Release Pskov as a puppet state" });
+      docs.events.push(founding({ id: "ev-pskov", from: RUSSIA, to: PSKOV, order: "order-ru-puppet" }));
+      docs.world.polityOverrides[PSKOV] = { code: PSKOV, name: PSKOV, status: "active" };
+      docs.world.units = [{ id: "ru-army", name: "6th Army", type: "infantry", ownerCode: RUSSIA, strength: 90, lng: 28.3, lat: 57.8, status: "idle", source: "player" }];
+    },
+  });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await playRound(s, [s.hostPlayer, s.guest]);
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA, RUSSIA]);
+  assert.equal(s.store.docs.world.units[0].ownerCode, RUSSIA, "Russia's army stays Russia's");
+  assert.equal(s.store.docs.game.seatFoundings, undefined);
+  assert.ok(!s.to(s.guest, "notice").some((entry) => /you now play/.test(entry.text)));
+});
+
+test("a peace between rounds that annexes a played country lets its seat go at once: its player watches, and gives no more orders for it", async (t) => {
+  const { setHostingSharedGame } = await import("../../runtime/humanPolities.js");
+  setHostingSharedGame(true, { host: LATVIA });
+  t.after(() => setHostingSharedGame(false));
+  const s = setup({ world: mapWorld(), countriesOf: gameCountries });
+  s.store.docs.world.wars = [{ id: "war-1", title: "The Baltic War", status: "active", sideA: [ESTONIA], sideB: [LATVIA], startedDate: "2014-03-01" }];
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: ESTONIA });
+  await s.host.control.start();
+  // Estonia's player puts terms that hand all Estonia to Latvia; the host takes them.
+  await s.request(s.guest, { t: "peace", id: id(2), op: "propose", ref: "war-1", to: LATVIA, terms: { territory: "as held", annexed: { country: ESTONIA } } });
+  assert.equal(s.ack(s.guest, id(2)).ok, true);
+  const offer = s.store.docs.world.peaceOffers.find((entry) => entry.status === "open");
+  await s.request(s.hostPlayer, { t: "peace", id: id(3), op: "accept", ref: offer.id });
+  assert.equal(s.ack(s.hostPlayer, id(3)).ok, true);
+  assert.equal(s.store.docs.world.regionOwnershipOverrides["reg-ee"], LATVIA);
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA], "not at the next round's landing: now");
+  assert.match(s.to(s.guest, "notice").at(-1).text, /Republic of Estonia is gone/);
+  await s.request(s.guest, { t: "order", id: id(4), text: "Raise the Estonian militia." });
+  assert.equal(s.ack(s.guest, id(4)).ok, false);
+  assert.ok(!s.to(s.hostPlayer, "lobby").at(-1).countries.includes(ESTONIA), "the lobby no longer offers it");
+});
+
+test("a peace a leader made in a table's answer that ends the writer's country lets its seat go in the next entry", async () => {
+  const s = setup({
+    replyTo: async (_info, store) => {
+      store.docs.world.polityOverrides[RUSSIA] = { ...store.docs.world.polityOverrides[RUSSIA], status: "dissolved" };
+      return { landed: [{ id: "landing-peace-treaty:war-2:2014-04-01", concerns: [ESTONIA, RUSSIA] }] };
+    },
+  });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "say", id: id(2), thread: null, to: [ESTONIA], text: "We give up." });
+  await s.clock.flush();
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA]);
+  assert.match(s.to(s.guest, "notice").at(-1).text, /Russian Federation is gone/);
+});
+
+test("a request sent again after the game is shared again is answered as it was, and applied once", async () => {
+  const campaign = "game-baltic";
+  const s = setup({ campaign });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "say", id: id(2), thread: null, to: [LATVIA], text: "A letter to Riga." });
+  const first = s.ack(s.guest, id(2));
+  assert.equal(first.ok, true);
+  await s.clock.flush();
+  // The engine closes; the game is shared again, and the guest's page sends the letter again (it had no answer).
+  const record = s.store.shared.at(-1);
+  const t = setup({ campaign, restored: sessionFromRecord(record, { campaign, hostDevice: "device-host" }) });
+  t.store.docs.chat = structuredClone(s.store.docs.chat);
+  t.host.join(t.hostPlayer);
+  t.host.join(t.guest);
+  await t.clock.flush();
+  await t.request(t.guest, { t: "say", id: id(2), thread: null, to: [LATVIA], text: "A letter to Riga." });
+  assert.deepEqual(t.ack(t.guest, id(2)), first);
+  assert.equal(t.store.docs.chat.flatMap((chat) => chat.messages ?? []).filter((line) => line.text === "A letter to Riga.").length, 1);
+});
+
+test("a founding the seats never followed (the engine closed after its round's turn was written) is followed when the game is taken up", async () => {
+  const campaign = "game-baltic";
+  const PSKOV = "Pskov Republic";
+  // Saved as the round began: the seats had followed the world through round-1's event.
+  const record = sessionRecordOf({
+    campaign, started: true, round: 2, hostDevice: "device-host", followed: "round-1",
+    seats: [{ country: RUSSIA, device: "device-guest", name: "Guest", status: "human" }],
+  });
+  const world = structuredClone(createStore().docs.world);
+  world.polityOverrides[RUSSIA] = { ...world.polityOverrides[RUSSIA], status: "dissolved" };
+  world.polityOverrides[PSKOV] = { code: PSKOV, name: PSKOV, status: "active" };
+  const t = setup({ campaign, world, restored: sessionFromRecord(record, { campaign, hostDevice: "device-host" }) });
+  // What the round wrote before the engine closed: Russia's own order founded the Pskov Republic, and Russia ended.
+  t.store.docs.events.push({ id: "round-1", title: "An old round" }, founding({ id: "ev-pskov", from: RUSSIA, to: PSKOV, order: "order-ru-found" }));
+  t.store.docs.actions.push({ id: "order-ru-found", status: "resolved", ownerCode: RUSSIA, text: "Found the Pskov Republic" });
+  t.host.join(t.hostPlayer);
+  await t.clock.flush();
+  assert.deepEqual(t.to(t.hostPlayer, "lobby").at(-1).seats.map((seat) => [seat.country, seat.status]), [[LATVIA, "human"], [PSKOV, "away"]]);
+  assert.deepEqual(t.store.docs.game.seatFoundings, [{ from: RUSSIA, to: PSKOV }]);
+  assert.equal(t.store.shared.at(-1).followed, "ev-pskov");
+});
+
+test("the host whose country is gone may take a free one, and plays it from then on; what was the old country's stays its own", async () => {
+  const moved = [];
+  const s = setup({
+    countriesOf: gameCountries,
+    onSeatsMoved: (moves) => moved.push(...moves),
+    // Latvia is annexed whole, its record dissolved (runtime/gameState.js dissolvePolity).
+    roundWrites: (docs) => {
+      docs.world.polityOverrides[LATVIA] = { ...docs.world.polityOverrides[LATVIA], status: "dissolved" };
+    },
+  });
+  // The host's own records, named by nobody: an order queued, a thread, a programme on its board.
+  s.store.docs.world.projects = [{ id: "proj-lv", name: "Riga Metro", status: "active", progress: 10 }];
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await playRound(s, [s.hostPlayer, s.guest]);
+  assert.match(s.to(s.hostPlayer, "notice").at(-1).text, /Republic of Latvia is gone\. You can take any free country/);
+  assert.deepEqual(s.to(s.hostPlayer, "lobby").at(-1).seats.find((seat) => seat.you)?.status, "watching");
+  await s.request(s.hostPlayer, { t: "pick", id: id(2), country: ESTONIA });
+  assert.equal(s.ack(s.hostPlayer, id(2)).ok, true);
+  assert.equal(s.store.docs.game.country, ESTONIA);
+  assert.deepEqual(moved, [{ from: LATVIA, to: ESTONIA, host: true }]);
+  assert.deepEqual(s.store.docs.game.humanCountries, [RUSSIA, ESTONIA]);
+  assert.equal(s.store.docs.actions.find((action) => action.id === "order-lv").ownerCode, LATVIA, "Latvia's order is not Estonia's");
+  assert.equal(s.store.docs.chat.find((chat) => chat.id === "chat-lv-est").player, LATVIA, "nor its thread");
+  assert.deepEqual(s.store.docs.world.projects, [], "nor its programme");
+  assert.equal(s.store.docs.world.seatBoards[LATVIA][0].id, "proj-lv");
+  assert.equal(s.shown(s.hostPlayer).game.country, ESTONIA);
+  assert.ok(!s.shown(s.hostPlayer).actions.some((action) => action.id === "order-lv"));
+  // A host whose country stands still plays its own.
+  await s.request(s.hostPlayer, { t: "pick", id: id(3), country: LATVIA });
+  assert.equal(s.ack(s.hostPlayer, id(3)).error, "The host plays its own game's country.");
 });

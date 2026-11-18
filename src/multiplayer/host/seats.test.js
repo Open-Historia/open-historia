@@ -145,6 +145,56 @@ test("the host can release a country from a player", () => {
   assert.equal(seats.list()[0].device, null, "released for good: the device cannot reclaim it");
 });
 
+// "Release" told the host its player could no longer come back to the country, and the player took it straight
+// back (the review of 2026-11-18, core 6 / ui 3).
+test("a player the host released does not take that country back, under any name, unless the host gives it", () => {
+  const { seats } = book();
+  seats.claim("France", { device: "a", name: "Ana" });
+  seats.start();
+  seats.release("France");
+  assert.deepEqual(seats.claim("France", { device: "a", name: "Ana" }), { ok: false, reason: "released" });
+  assert.equal(seats.claim("Spain", { device: "a", name: "Ana" }).ok, true, "another country is theirs to take");
+  assert.equal(seats.claim("Spain", { device: "a" }).ok, true);
+  assert.equal(seats.releasedFrom("France", "a"), true);
+  // Renamed, it is the same country.
+  assert.equal(seats.move("France", "French Republic"), true);
+  assert.deepEqual(seats.released(), [{ device: "a", country: "French Republic" }]);
+  assert.deepEqual(seats.claim("French Republic", { device: "z" }).ok, true, "anyone else may take it");
+  // Saved with the game, and kept when it is taken up again; the host's yes overrides it.
+  const again = book().seats;
+  again.restore([], { released: seats.released() });
+  again.setCountries(["French Republic", "Spain"]);
+  again.start();
+  assert.deepEqual(again.claim("French Republic", { device: "a" }), { ok: false, reason: "released" });
+  assert.equal(again.claim("French Republic", { device: "a", approved: true }).ok, true);
+  // Kept off at once, before the seat itself is let go.
+  const { seats: early } = book();
+  early.claim("Italy", { device: "b" });
+  early.start();
+  early.keepOff("Italy", "b");
+  assert.equal(early.seatOf("b").country, "Italy", "still theirs until it is let go");
+  assert.equal(early.releasedFrom("Italy", "b"), true);
+});
+
+test("a seat keeps its id while its player is away, the AI minds it and its country is renamed; a seat taken anew is another", () => {
+  const { seats, advance } = book();
+  seats.claim("France", { device: "a" });
+  seats.start();
+  const { id } = seats.seatOf("a");
+  assert.ok(id);
+  seats.left("a");
+  advance(60_000);
+  seats.expire();
+  seats.move("France", "French Empire");
+  seats.returned("a");
+  assert.equal(seats.seatOf("a").id, id);
+  assert.equal(seats.seatById(id).country, "French Empire");
+  seats.claim("Spain", { device: "a", approved: true });
+  assert.notEqual(seats.seatOf("a").id, id, "a change of country is a new seat");
+  assert.equal(seats.seatById(id), null);
+  assert.notEqual(seats.list().find((seat) => seat.country === "French Empire").id, id, "and the one left behind is no longer theirs");
+});
+
 test("a seat follows its people to a country they founded, which no one else may then take", () => {
   const { seats } = book();
   seats.claim("France", { device: "a", name: "Ana" });

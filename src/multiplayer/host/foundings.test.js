@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { SEAT_KEYED_WORLD_RECORDS, formerNamesOf, groundHeldBy, seatFoundings, seatSuccessions, withSeatLetGo, withSeatMoved } from "./foundings.js";
+import { SEAT_KEYED_WORLD_RECORDS, formerNamesOf, groundHeldBy, polityEnded, seatFoundings, seatSuccessions, withSeatLetGo, withSeatMoved } from "./foundings.js";
 import { advisorOfSeat, withSeatAdvisor } from "../../runtime/seatAdvisors.js";
 
 const BURGHERS = "The Free Townsmen of Gullhaven";
@@ -41,21 +41,73 @@ const actions = [
   // The host's order names no owner.
   { id: "order-mvpo8u5k-f", status: "resolved", text: "Hill Kingdom is founded as a new country" },
 ];
+// The world after those two rounds: the burghers' area released, the hill folk's ground all the new kingdom's.
+const founded = {
+  groups: { [BURGHERS]: { name: BURGHERS }, [HILL]: { name: HILL } },
+  groupAreas: { reg_mvp0kbey39: HILL },
+  regionOwnershipOverrides: { reg_mvoy42nk1k2i: "Saltport", reg_mvp0k6s938: "Saltport", reg_mvp0kbey39: "Hill Kingdom" },
+};
 
 test("a seat follows its people to the country their own order founded with their land", () => {
-  assert.deepEqual(seatFoundings({ events: [saltport, hillKingdom], actions, seated: [HILL, BURGHERS], host: HILL }), [
+  assert.deepEqual(seatFoundings({ events: [saltport, hillKingdom], actions, seated: [HILL, BURGHERS], host: HILL, world: founded }), [
     { from: BURGHERS, to: "Saltport", eventId: saltport.id },
     { from: HILL, to: "Hill Kingdom", eventId: hillKingdom.id },
   ]);
+  // Without the world after the round, nothing says the old polity ended: nobody moves.
+  assert.deepEqual(seatFoundings({ events: [saltport, hillKingdom], actions, seated: [HILL, BURGHERS], host: HILL }), []);
 });
 
 test("no seat moves for a country founded on someone else's land, by someone else's order, or already played", () => {
   const puppet = { ...saltport, impacts: { ...saltport.impacts, regionTransfers: [{ fromCode: "Kestrelmark", toCode: "Saltport", regionId: "r" }] } };
-  assert.deepEqual(seatFoundings({ events: [puppet], actions, seated: [BURGHERS], host: HILL }), []);
-  assert.deepEqual(seatFoundings({ events: [saltport], actions: [{ ...actions[0], ownerCode: "Kestrelmark" }], seated: [BURGHERS], host: HILL }), []);
-  assert.deepEqual(seatFoundings({ events: [saltport], actions, seated: [BURGHERS, "Saltport"], host: HILL }), []);
+  assert.deepEqual(seatFoundings({ events: [puppet], actions, seated: [BURGHERS], host: HILL, world: founded }), []);
+  assert.deepEqual(seatFoundings({ events: [saltport], actions: [{ ...actions[0], ownerCode: "Kestrelmark" }], seated: [BURGHERS], host: HILL, world: founded }), []);
+  assert.deepEqual(seatFoundings({ events: [saltport], actions, seated: [BURGHERS, "Saltport"], host: HILL, world: founded }), []);
   const update = { ...saltport, impacts: { ...saltport.impacts, polityChanges: [{ operation: "update", code: "Saltport" }] } };
-  assert.deepEqual(seatFoundings({ events: [update], actions, seated: [BURGHERS], host: HILL }), []);
+  assert.deepEqual(seatFoundings({ events: [update], actions, seated: [BURGHERS], host: HILL, world: founded }), []);
+});
+
+// France released Corsica as a puppet, and its player was moved to one-region Corsica with France's whole army and
+// spy service; France, which goes on with all its other land, was left to the AI (the review of 2026-11-18, wars 1).
+test("a player who releases a colony or sets up a puppet from their own land keeps their seat, and nothing moves", () => {
+  const corsica = {
+    id: "event-1",
+    impacts: {
+      actionIds: ["order-1"],
+      polityChanges: [{ operation: "create", code: "Corsica", name: "Corsica" }],
+      regionTransfers: [{ basis: "independence", fromCode: "France", regionId: "FRA.5_1", toCode: "Corsica" }],
+    },
+  };
+  const orders = [{ id: "order-1", ownerCode: "France", status: "resolved", text: "Release Corsica as a puppet state" }];
+  const after = { polityOverrides: { France: { name: "France", status: "active" }, Corsica: { name: "Corsica", status: "active" } }, regionOwnershipOverrides: { "FRA.5_1": "Corsica" } };
+  assert.deepEqual(seatFoundings({ events: [corsica], actions: orders, seated: ["France", "Germany"], host: "Germany", world: after, countries: ["France", "Corsica", "Germany"] }), []);
+  // France goes on without a record of its own too, as long as the game counts it among its countries.
+  assert.deepEqual(seatFoundings({ events: [corsica], actions: orders, seated: ["France"], world: { regionOwnershipOverrides: { "FRA.5_1": "Corsica" } }, countries: ["France", "Corsica"] }), []);
+  // A France that ends with it, its record dissolved, is the new country: its seat follows.
+  const ended = { ...after, polityOverrides: { ...after.polityOverrides, France: { name: "France", status: "dissolved" } } };
+  assert.deepEqual(seatFoundings({ events: [corsica], actions: orders, seated: ["France"], world: ended, countries: ["Corsica"] }), [{ from: "France", to: "Corsica", eventId: "event-1" }]);
+  // A group that keeps ground of its own beside the state it set up keeps its seat.
+  const faction = "The Narva Committee";
+  const breakaway = { id: "ev-2", impacts: { actionIds: ["order-2"], polityChanges: [{ operation: "create", code: "Narva Republic" }], regionTransfers: [{ regionId: "reg-narva", fromCode: "Estonia", toCode: "Narva Republic" }] } };
+  const areas = { "reg-narva": faction, "reg-tartu": faction };
+  const kept = { groups: { [faction]: { name: faction } }, groupAreas: areas, regionOwnershipOverrides: { "reg-narva": "Narva Republic" } };
+  assert.deepEqual(seatFoundings({ events: [breakaway], actions: [{ id: "order-2", ownerCode: faction }], seated: [faction], areas, world: kept }), []);
+});
+
+test("a seat's own polity has ended by the world after the round, never by what the event says", () => {
+  const world = {
+    polityOverrides: { France: { name: "France", status: "active" }, Prussia: { name: "Prussia", status: "dissolved" } },
+    groups: { "Hill folk": { name: "Hill folk" }, Burghers: { name: "Burghers" } },
+    groupAreas: { r1: "Hill folk", r2: "Burghers", r3: "Burghers" },
+    regionOwnershipOverrides: { r1: "Hill Kingdom", r2: "Saltport" },
+  };
+  assert.equal(polityEnded({ world, country: "France", to: "Corsica", countries: ["France"] }), false, "a country with a living record goes on");
+  assert.equal(polityEnded({ world, country: "Prussia", to: "Germany" }), true, "one dissolved has ended");
+  assert.equal(polityEnded({ world, country: "Burgundy", to: "Dijon", countries: ["France"] }), true, "one the game no longer counts has ended");
+  assert.equal(polityEnded({ world, country: "Burgundy", to: "Dijon" }), false, "without the game's list, one with no record goes on");
+  assert.equal(polityEnded({ world, country: "Hill folk", to: "Hill Kingdom" }), true, "a group whose ground is all the new country's");
+  assert.equal(polityEnded({ world, country: "Burghers", to: "Saltport" }), false, "a group that keeps ground of its own");
+  assert.equal(polityEnded({ world, country: "Riders", to: "Steppe Khanate", areas: { r9: "Riders" } }), true, "a group that is gone");
+  assert.equal(polityEnded({ country: "Prussia", to: "Germany" }), false, "nothing without the world");
 });
 
 test("what was the old seat's goes with it: queued orders, its board, its agents and its threads; what was done stays", () => {
@@ -173,15 +225,17 @@ test("a faction founds a state on its area, whose land is still its countries'; 
     },
   };
   const areas = { "reg-narva": faction };
-  assert.deepEqual(seatFoundings({ events: [event], actions: [{ id: "order-narva", ownerCode: faction }], seated: [faction], areas }), [
+  // After the round its whole area is the new state's.
+  const world = { groups: { [faction]: { name: faction } }, groupAreas: areas, regionOwnershipOverrides: { "reg-narva": "Narva Republic" } };
+  assert.deepEqual(seatFoundings({ events: [event], actions: [{ id: "order-narva", ownerCode: faction }], seated: [faction], areas, world }), [
     { from: faction, to: "Narva Republic", eventId: "ev-narva" },
   ]);
-  assert.deepEqual(seatFoundings({ events: [event], actions: [{ id: "order-narva", ownerCode: "Russia" }], seated: ["Russia"], areas }), []);
+  assert.deepEqual(seatFoundings({ events: [event], actions: [{ id: "order-narva", ownerCode: "Russia" }], seated: ["Russia"], areas, world }), []);
 });
 
 test("a state brought back counts as founded", () => {
   const event = { ...hillKingdom, impacts: { ...hillKingdom.impacts, polityChanges: [{ operation: "restore", code: "Hill Kingdom" }] } };
-  assert.equal(seatFoundings({ events: [event], actions, seated: [HILL], host: HILL })[0]?.to, "Hill Kingdom");
+  assert.equal(seatFoundings({ events: [event], actions, seated: [HILL], host: HILL, world: founded })[0]?.to, "Hill Kingdom");
 });
 
 test("a seat reads under every name its government had", () => {
@@ -243,4 +297,66 @@ test("a seat let go takes its person's own with it, and leaves its government's 
   assert.deepEqual(advisorOfSeat(advisor, HILL), []);
   assert.deepEqual(advisorOfSeat(advisor, BURGHERS).map((entry) => entry.text), ["Burghers ask."]);
   assert.deepEqual(advisorOfSeat(advisor, "").map((entry) => entry.text), ["Host asks."]);
+});
+
+// Two players wrote privately; one dropped and the AI minded their country; then the host let the other go: the
+// thread stayed open for whoever played France next, with both players' letters (the review of 2026-11-18, views 3).
+test("a conversation with other people is told by its own record, whoever plays now", () => {
+  const chats = [
+    { id: "t1", player: "France", countries: [{ code: "Germany", name: "Germany" }], messages: [
+      { id: "m1", role: "user", speaker: "France", code: "France", text: "We strike Belgium in May." },
+      { id: "m2", role: "user", speaker: "Germany", code: "Germany", text: "Agreed, keep it quiet." },
+    ] },
+    // The host's own thread (its owner not named), in which France's player wrote to the host.
+    { id: "t2", countries: [{ name: "France" }], messages: [{ id: "m3", role: "user", text: "London asks." }, { id: "m4", role: "user", speaker: "France", text: "Paris answers." }] },
+    // France's player with a government the AI plays: the state's, for the next player.
+    { id: "t3", player: "France", countries: [{ name: "Italy" }], messages: [{ id: "m5", role: "user", speaker: "France", text: "Rome?" }, { id: "m6", role: "leader", speaker: "Italy", text: "Paris." }] },
+    // The host wrote to France before France was a person's, and France's player never answered: the state's.
+    { id: "t4", countries: [{ name: "France" }], messages: [{ id: "m7", role: "user", text: "London to Paris." }, { id: "m8", role: "leader", speaker: "France", text: "Noted." }] },
+  ];
+  // Germany's player is gone (the AI minds Germany): only England and France are people now.
+  const out = withSeatLetGo({ chats }, { country: "France", people: ["England", "France"] }).chats;
+  assert.deepEqual(out.map((chat) => [chat.id, chat.status ?? "open", chat.retiredFor ?? []]), [
+    ["t1", "closed", ["France"]],
+    ["t2", "closed", ["France"]],
+    ["t3", "open", []],
+    ["t4", "open", []],
+  ]);
+});
+
+// A let-go player's alliance offer to the host was signed after they were gone, binding whoever played France next
+// (the review of 2026-11-18, views 4).
+test("what a let-go player put to other people and nobody answered lapses with them", () => {
+  const world = {
+    treatyOffers: [
+      { id: "tr-1", from: "France", to: "England", type: "alliance", status: "open", round: 3 },
+      { id: "tr-2", from: "Spain", to: "France", type: "non_aggression", status: "open", round: 3 },
+      { id: "tr-3", from: "Spain", to: "England", type: "alliance", status: "open", round: 3 },
+      { id: "tr-4", from: "France", to: "England", type: "alliance", status: "signed", round: 2 },
+    ],
+    peaceOffers: [
+      { id: "pe-1", warId: "w1", from: "France", to: "Germany", status: "open", source: "player" },
+      { id: "pe-2", warId: "w2", from: "Spain", to: "France", status: "open", source: "player" },
+      // Terms an AI government put to France stand for whoever plays it next.
+      { id: "pe-3", warId: "w1", from: "Germany", to: "France", status: "open", source: "chat" },
+    ],
+  };
+  const out = withSeatLetGo({ world }, { country: "France", people: ["England", "France", "Spain"], round: 4 }).world;
+  assert.deepEqual(out.treatyOffers.map((offer) => [offer.id, offer.status]), [["tr-1", "lapsed"], ["tr-2", "lapsed"], ["tr-3", "open"], ["tr-4", "signed"]]);
+  assert.equal(out.treatyOffers[0].answeredRound, 4);
+  assert.deepEqual(out.peaceOffers.map((offer) => [offer.id, offer.status]), [["pe-1", "lapsed"], ["pe-2", "lapsed"], ["pe-3", "open"]]);
+});
+
+test("a treaty or terms of peace a person put are taken only while that person plays their country", async () => {
+  const { answerTreaty } = await import("../../runtime/treatyOffers.js");
+  const { playerDiplomacy } = await import("../../Game/AI/warAndPeace.js");
+  const world = {
+    treatyOffers: [{ id: "tr-1", from: "France", to: "England", type: "alliance", status: "open", round: 3 }],
+    wars: [{ id: "w1", status: "active", sideA: ["France"], sideB: ["England"] }],
+    peaceOffers: [{ id: "pe-1", warId: "w1", from: "France", to: "England", status: "open", source: "player", round: 3 }],
+  };
+  assert.equal(answerTreaty(world, { op: "sign", ref: "tr-1", country: "England", players: ["England"] }).error, "maker-gone");
+  assert.equal(answerTreaty(world, { op: "decline", ref: "tr-1", country: "England", players: ["England"] }).error, "", "declining is always the answerer's");
+  assert.equal(playerDiplomacy(world, { op: "accept", ref: "pe-1", country: "England", players: ["England"] }).error, "maker-gone");
+  assert.equal(playerDiplomacy(world, { op: "decline", ref: "pe-1", country: "England", players: ["England"] }).error, "");
 });

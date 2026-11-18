@@ -855,6 +855,9 @@ export const playerDiplomacy = (world, { op = "", ref = "", terms = null, to = "
     const offer = normalizePeaceOffers(world?.peaceOffers).find((entry) => entry.id === clean(ref, 80));
     if (!offer || offer.status !== "open") return nothing("not-open");
     if (fold(offer.to) !== who) return nothing("not-yours");
+    // Terms a person put are taken only while that person plays their country
+    // (multiplayer/host/foundings.js withSeatLetGo lapses a let-go player's).
+    if (op === "accept" && offer.source === "player" && !list(players).some((name) => fold(name) === fold(offer.from))) return nothing("maker-gone");
     const next = op === "accept" ? acceptPeaceOffer(world, offer.id, { date, round, players, regions }) : declinePeaceOffer(world, offer.id, { round });
     return next === world ? nothing("not-open") : { world: next, error: "", accepted: op === "accept", to: offer.from };
   }

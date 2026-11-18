@@ -28,7 +28,7 @@ const bounded = (value) => Math.max(0, Math.min(HOST_ANSWERS_MAX, Math.trunc(Num
 
 export const createHostAnswers = ({ limit = 0 } = {}) => {
   let most = bounded(limit);
-  // seat → { round, used }
+  // seat (its id, host/seats.js: a rename starts no count afresh) → { round, used }
   const used = new Map();
   const usedBy = (seat, round) => {
     const entry = used.get(fold(seat));

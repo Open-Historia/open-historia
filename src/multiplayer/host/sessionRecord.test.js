@@ -50,3 +50,11 @@ test("the record keeps who paid last and what the Game Master changed; one from 
   assert.deepEqual(olderTaken.gameMaster, []);
   assert.equal(normalizeSettings(olderTaken.settings).settings.hostAnswers, 0);
 });
+
+test("the record keeps who the host released from which country; one kept before that still reads", () => {
+  const record = sessionRecordOf({ campaign: "game-baltic", started: true, round: 4, hostDevice: "device-host", seats: [], released: [{ device: "device-ana", country: "France" }, { device: "", country: "Spain" }] });
+  assert.deepEqual(record.released, [{ device: "device-ana", country: "France" }]);
+  assert.deepEqual(sessionFromRecord(record, { campaign: "game-baltic", hostDevice: "device-host" }).released, [{ device: "device-ana", country: "France" }]);
+  const { released: _none, ...older } = record;
+  assert.deepEqual(sessionFromRecord(older, { campaign: "game-baltic", hostDevice: "device-host" }).released, []);
+});

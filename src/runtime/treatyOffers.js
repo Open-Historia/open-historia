@@ -126,9 +126,12 @@ export const proposeTreaty = (world, { from = "", to = "", type = "", title = ""
 //   op        "sign" | "decline" (the one it was put to), "withdraw" (the one who put it)
 //   ref       the offer's id
 //   country   who is answering: the offer must be theirs to answer
+//   players   the countries people play now, where they are known: a treaty is signed only while the one who put it
+//             still plays their country (multiplayer/host/foundings.js withSeatLetGo lapses a let-go player's offers)
 // Returns { world, error, agreement }: `error` is a word for why nothing was done ("" when it was): "not-open",
-// "not-yours", "at-war" (the two went to war since: it lapses). Signed, `agreement` is the world's new agreement.
-export const answerTreaty = (world, { op = "", ref = "", country = "", date = "", round = 0 } = {}) => {
+// "not-yours", "at-war" (the two went to war since: it lapses), "maker-gone" (its maker does not play their country
+// now). Signed, `agreement` is the world's new agreement.
+export const answerTreaty = (world, { op = "", ref = "", country = "", date = "", round = 0, players = null } = {}) => {
   const offers = normalizeTreatyOffers(world?.treatyOffers);
   const offer = offers.find((entry) => entry.id === clean(ref, 160));
   const nothing = (error) => ({ world, error, agreement: null });
@@ -142,6 +145,7 @@ export const answerTreaty = (world, { op = "", ref = "", country = "", date = ""
   if (op !== "sign" && op !== "decline") return nothing("unknown");
   if (fold(offer.to) !== fold(country)) return nothing("not-yours");
   if (op === "decline") return { world: { ...world, treatyOffers: normalizeTreatyOffers(marked("declined")) }, error: "", agreement: null };
+  if (Array.isArray(players) && !players.some((name) => fold(name) === fold(offer.from))) return nothing("maker-gone");
   if (warBetween(world?.wars, offer.from, offer.to)) {
     return { world: { ...world, treatyOffers: normalizeTreatyOffers(marked("lapsed")) }, error: "at-war", agreement: null };
   }

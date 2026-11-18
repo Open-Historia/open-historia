@@ -133,6 +133,7 @@ const REFUSAL_LABELS = {
   full: "The game is full.",
   "not-a-country": "That country is not in this game.",
   "ask-host": "Ask the host to change your country.",
+  released: "The host released you from that country.",
 };
 
 // A free country to take. `asking`: the player already plays one and the game
@@ -392,7 +393,7 @@ const RoundBar = ({ shared, me, watching = "" }) => {
           {role === "host" ? <ChangeRequests changes={shared.lobby?.changes} /> : null}
           <SeatList seats={shared.lobby?.seats} ready={round?.ready ?? []} host={role === "host"} />
           {role === "host" ? <HostInvite shared={shared} /> : null}
-          {role !== "host" && (me || watching) ? <CountryPicker lobby={shared.lobby} asking={Boolean(me)} /> : null}
+          {(role !== "host" || watching) && (me || watching) ? <CountryPicker lobby={shared.lobby} asking={Boolean(me)} /> : null}
           <RepliesSetting shared={shared} />
           <WorldLanguage shared={shared} />
           <RoundRules shared={shared} />

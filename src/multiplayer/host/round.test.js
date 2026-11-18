@@ -393,6 +393,75 @@ test("a game started at the campaign's round names that round, and a player's re
   assert.equal(round.status().phase, "revealing");
 });
 
+// A page holds the landed turn before the round's entry ends (a view pushed after the skip's commit), and says it has
+// read it, naming the round the skip wrote: that read came while the machine still named the round being resolved,
+// and was dropped, so the reveal ran its full time (the review of 2026-11-18, core 8).
+test("a reading said while the round is still being resolved counts once it lands, for the round it names", async () => {
+  const clock = createClock();
+  let campaign = 7;
+  let release;
+  const round = createRoundMachine({
+    settings: { roundMinutes: 10, countdownSeconds: 0, revealSeconds: 60 },
+    now: clock.now,
+    timers: clock.timers,
+    onResolve: async () => {
+      await new Promise((resolve) => { release = resolve; });
+      campaign += 1;
+      return { round: campaign };
+    },
+  });
+  round.setPlayers(["a", "b"]);
+  round.start(7);
+  round.setReady("a", true);
+  round.setReady("b", true);
+  await clock.flush();
+  assert.equal(round.status().phase, "resolving");
+  round.revealedBy("a", 8);
+  round.revealedBy("b", 7);
+  release();
+  await clock.flush();
+  assert.equal(round.status().phase, "revealing", "b named another round: the reveal waits for b");
+  round.revealedBy("b", 8);
+  assert.equal(round.status().phase, "planning", "a's early reading counted");
+  // Both early, and the reveal is over as soon as the round lands.
+  round.setReady("a", true);
+  round.setReady("b", true);
+  await clock.flush();
+  round.revealedBy("a", 9);
+  round.revealedBy("b", 9);
+  release();
+  await clock.flush();
+  assert.equal(round.status().phase, "planning");
+  assert.equal(round.status().round, 9);
+});
+
+test("what the round holds for a player follows their seat to a new name: a reading said early counts under it", async () => {
+  const clock = createClock();
+  let release;
+  const round = createRoundMachine({
+    settings: { roundMinutes: 10, countdownSeconds: 0, revealSeconds: 60 },
+    now: clock.now,
+    timers: clock.timers,
+    onResolve: async () => {
+      await new Promise((resolve) => { release = resolve; });
+      // The round renamed b's country; the host moves the seat before the round lands (host/gameHost.js followSeats).
+      round.rename("b", "b2");
+      round.setPlayers(["a", "b2"]);
+      return { round: 8 };
+    },
+  });
+  round.setPlayers(["a", "b"]);
+  round.start(7);
+  round.setReady("a", true);
+  round.setReady("b", true);
+  await clock.flush();
+  round.revealedBy("a", 8);
+  round.revealedBy("b", 8);
+  release();
+  await clock.flush();
+  assert.equal(round.status().phase, "planning", "both had read it, b under its old name");
+});
+
 test("a game taken up again goes on at the campaign's round", () => {
   const clock = createClock();
   const round = createRoundMachine({ now: clock.now, timers: clock.timers });

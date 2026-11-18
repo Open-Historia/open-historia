@@ -16,10 +16,12 @@
 
 import { NAME, bool, int, list, literal, obj, str, validate } from "../protocol/validate.js";
 import { SETTINGS_SCHEMA, normalizeSettings } from "./settings.js";
-import { GAME_MASTER_LOG_MAX, GAME_MASTER_SUMMARY_MAX } from "../game/messages.js";
+import { GAME_MASTER_LOG_MAX, GAME_MASTER_SUMMARY_MAX, HOST_MESSAGES } from "../game/messages.js";
 import { keptGameMasterLog } from "./gameMaster.js";
 
 export const SESSION_RECORD_VERSION = 1;
+// The most requests' answers the record keeps, for all devices together.
+export const ANSWERS_SAVED_MOST = 256;
 
 const COUNTRY = NAME(200);
 const DEVICE = str(64, { min: 1 });
@@ -47,6 +49,17 @@ const SCHEMA = obj({
   ownLines: list(obj({ line: str(160, { min: 1 }), thread: str(120, { min: 1 }), seat: COUNTRY }), 400),
   // Devices the host has banned from this game.
   banned: list(DEVICE, 256),
+  // Players the host released from a country, who do not take it back (host/seats.js).
+  released: list(obj({ device: DEVICE, country: COUNTRY }), 256),
+  // The answers each device's latest requests were given (host/gameHost.js):
+  // one its page sends again after the game is shared again is answered as it
+  // was, never applied twice.
+  answers: list(obj({ device: DEVICE, ack: HOST_MESSAGES.ack }), ANSWERS_SAVED_MOST),
+  // The last of the game's events the seats followed the world through
+  // (host/gameHost.js followSeats; "^" for before any): what landed after it
+  // (a round whose engine closed before the seats followed it, rounds played
+  // alone) is read when the game is shared again.
+  followed: str(200),
   // The game's settings as they stood (host/settings.js), changes made during
   // the game included: a game taken up again starts from them, so a host
   // sharing it another day is shown its rules, not the defaults.
@@ -56,12 +69,12 @@ const SCHEMA = obj({
   lastPayer: str(64),
   // What the Game Master changed in this game (host/gameMaster.js).
   gameMaster: list(obj({ round: int(0, 1_000_000), date: str(40), summary: str(GAME_MASTER_SUMMARY_MAX, { min: 1 }) }), GAME_MASTER_LOG_MAX),
-}, ["watching", "changes", "ownLines", "banned", "settings", "lastPayer", "gameMaster"]);
+}, ["watching", "changes", "ownLines", "banned", "released", "answers", "followed", "settings", "lastPayer", "gameMaster"]);
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
 // The record of a session as it stands.
-export const sessionRecordOf = ({ campaign, started, round, hostDevice, seats = [], watching = [], changes = [], ownLines = [], banned = [], settings = null, lastPayer = "", gameMaster = [] }) => ({
+export const sessionRecordOf = ({ campaign, started, round, hostDevice, seats = [], watching = [], changes = [], ownLines = [], banned = [], released = [], answers = [], followed = "", settings = null, lastPayer = "", gameMaster = [] }) => ({
   v: SESSION_RECORD_VERSION,
   campaign: clean(campaign).slice(0, 160),
   started: Boolean(started),
@@ -80,6 +93,12 @@ export const sessionRecordOf = ({ campaign, started, round, hostDevice, seats = 
   ownLines: ownLines.slice(-400).map((entry) => ({ line: clean(entry.line).slice(0, 160), thread: clean(entry.thread).slice(0, 120), seat: clean(entry.seat).slice(0, 200) }))
     .filter((entry) => entry.line && entry.thread && entry.seat),
   banned: [...new Set(banned.map((device) => clean(device).slice(0, 64)).filter(Boolean))].slice(0, 256),
+  released: released.map((entry) => ({ device: clean(entry?.device).slice(0, 64), country: clean(entry?.country).slice(0, 200) }))
+    .filter((entry) => entry.device && entry.country).slice(-256),
+  answers: answers.filter((entry) => clean(entry?.device) && validate(HOST_MESSAGES.ack, entry?.ack).ok)
+    .map((entry) => ({ device: clean(entry.device).slice(0, 64), ack: validate(HOST_MESSAGES.ack, entry.ack).value }))
+    .slice(-ANSWERS_SAVED_MOST),
+  followed: clean(followed).slice(0, 200),
   ...(settings && normalizeSettings(settings).ok ? { settings: normalizeSettings(settings).settings } : {}),
   lastPayer: clean(lastPayer).slice(0, 64),
   gameMaster: keptGameMasterLog(gameMaster),
@@ -102,6 +121,9 @@ export const sessionFromRecord = (record, { campaign, hostDevice }) => {
     changes: value.changes ?? [],
     ownLines: value.ownLines ?? [],
     banned: value.banned ?? [],
+    released: value.released ?? [],
+    answers: value.answers ?? [],
+    followed: value.followed ?? "",
     settings: value.settings ?? null,
     lastPayer: value.lastPayer ?? "",
     gameMaster: value.gameMaster ?? [],

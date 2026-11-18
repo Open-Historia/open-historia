@@ -27,6 +27,20 @@
 // room while a player was away, and that player could not get back to the
 // seat that is theirs.
 //
+// Each seat a person takes has an id of its own (`id`), kept while its player
+// is away or the AI minds it, and when its country is renamed or its people
+// found one (move), and never given to another seat: what the host keeps for a
+// seat in memory is kept by it, and a request acts for the seat it was sent
+// by, as that seat is when the request is applied (host/gameHost.js). A
+// change of country, a release or a country gone ends the seat; a seat taken
+// next is another. Kept by the country's name, a rename left the host's own
+// records under the old name, and a request that waited behind the round
+// that renamed the country acted for a name nobody played.
+//
+// A player the host released from a country cannot take it back (a ban keeps
+// them out of the game): the book remembers who was released from what, and
+// the game saves it with the seats.
+//
 // Pure: time comes in through `now`.
 
 export const SEAT_STATUS = Object.freeze({ HUMAN: "human", AWAY: "away", AI: "ai" });
@@ -39,10 +53,23 @@ export const createSeatBook = ({
   now = () => Date.now(),
 } = {}) => {
   const choosable = new Set(countries.map(String));
-  const seats = new Map(); // country → { country, device, name, status, since }
+  const seats = new Map(); // country → { id, country, device, name, status, since }
   // Players whose country is gone, who watch it: device → { device, name, was }.
   const watchers = new Map();
+  // The devices the host released from a country: country → Set(device).
+  const released = new Map();
   let started = false;
+  let minted = 0;
+  const mint = () => {
+    minted += 1;
+    return `seat-${minted}`;
+  };
+  const releasedFrom = (country, device) => Boolean(device) && Boolean(released.get(String(country))?.has(device));
+  const keepOff = (country, device) => {
+    if (!device || !String(country ?? "")) return;
+    if (!released.has(String(country))) released.set(String(country), new Set());
+    released.get(String(country)).add(device);
+  };
 
   const byDevice = (device) => [...seats.values()].find((seat) => seat.device === device) ?? null;
   const people = () => [...seats.values()].filter((seat) => seat.status === SEAT_STATUS.HUMAN || seat.status === SEAT_STATUS.AWAY);
@@ -58,6 +85,8 @@ export const createSeatBook = ({
     // seat is another device's is theirs until the host releases it, whoever
     // minds it meanwhile. A player whose country is gone takes any free
     // country, whatever the host allows newcomers (the owner's decision 11).
+    // One the host released from a country does not take it back, unless the
+    // host gives it to them (`approved`).
     claim(country, { device, name, approved = false }) {
       const key = String(country ?? "");
       if (!choosable.has(key)) return refusal("not-a-country");
@@ -65,17 +94,20 @@ export const createSeatBook = ({
       const mine = byDevice(device);
       const watching = watchers.has(device);
       if (current && current.device && current.device !== device) return refusal("taken");
+      if (!approved && releasedFrom(key, device) && current?.device !== device) return refusal("released");
       if (started && !mine && !watching && !approved && !allowMidGameJoin) return refusal("game-started");
       if (started && mine && mine.country !== key && !approved) return refusal("ask-host");
       if (!mine && !watching && members().size >= maxPlayers) return refusal("full");
       if (mine && mine.country !== key) {
         // Changing country in the lobby frees the old one; mid-game the old one
         // goes to the AI.
-        if (started) seats.set(mine.country, { ...mine, status: SEAT_STATUS.AI, device: null, since: now() });
+        if (started) seats.set(mine.country, { ...mine, id: mint(), status: SEAT_STATUS.AI, device: null, since: now() });
         else seats.delete(mine.country);
       }
       watchers.delete(device);
-      seats.set(key, { country: key, device, name: String(name ?? ""), status: SEAT_STATUS.HUMAN, since: now() });
+      // Its own seat taken again (a player choosing it twice) is the same seat.
+      const id = mine && mine.country === key ? mine.id : mint();
+      seats.set(key, { id, country: key, device, name: String(name ?? ""), status: SEAT_STATUS.HUMAN, since: now() });
       return { ok: true, country: key };
     },
 
@@ -128,7 +160,7 @@ export const createSeatBook = ({
 
     // The host takes a country back from a player (a kick), or hands the AI's;
     // or lets go of a player who watches a country that is gone. Returns the
-    // device that held it, or null.
+    // device that held it, or null. Its player does not take it back (claim).
     release(country) {
       const seat = seats.get(String(country));
       if (!seat) {
@@ -137,10 +169,17 @@ export const createSeatBook = ({
         watchers.delete(watcher.device);
         return watcher.device;
       }
-      if (started) seats.set(seat.country, { ...seat, status: SEAT_STATUS.AI, device: null, since: now() });
+      keepOff(seat.country, seat.device);
+      if (started) seats.set(seat.country, { ...seat, id: mint(), status: SEAT_STATUS.AI, device: null, since: now() });
       else seats.delete(seat.country);
       return seat.device ?? null;
     },
+    // Said at once, when the host releases a player, before the seat itself
+    // is let go in the game's order (host/gameHost.js kick): from then on that
+    // device does not take the country back.
+    keepOff,
+    // Whether the host released `device` from `country`.
+    releasedFrom,
 
     // A seat's country is gone (dissolved, or annexed): the seat is no more,
     // and its player watches it, or takes a free country.
@@ -148,6 +187,7 @@ export const createSeatBook = ({
       const seat = seats.get(String(country));
       if (!seat) return null;
       seats.delete(seat.country);
+      released.delete(seat.country);
       if (seat.device) watchers.set(seat.device, { device: seat.device, name: seat.name, was: seat.country });
       return { ...seat };
     },
@@ -165,15 +205,17 @@ export const createSeatBook = ({
     // joined: every seat its device's again. Its players are away until they
     // reconnect; one the AI was already minding stays so. The host's own seat
     // is claimed afresh after, from the game's own country.
-    restore(saved, { hostDevice = "", watching = [] } = {}) {
+    restore(saved, { hostDevice = "", watching = [], released: kept = [] } = {}) {
       for (const entry of watching) {
         if (entry?.device && entry.device !== hostDevice) watchers.set(entry.device, { device: entry.device, name: String(entry.name ?? ""), was: String(entry.was ?? "") });
       }
+      for (const entry of kept) if (entry?.device !== hostDevice) keepOff(entry?.country, entry?.device);
       for (const seat of saved) {
         const country = String(seat?.country ?? "");
         if (!country || seat?.device === hostDevice) continue;
         choosable.add(country);
         seats.set(country, {
+          id: mint(),
           country,
           device: seat.device || null,
           name: String(seat.name ?? ""),
@@ -198,6 +240,11 @@ export const createSeatBook = ({
       choosable.add(key);
       seats.delete(seat.country);
       seats.set(key, { ...seat, country: key });
+      // Who was released from it was released from it under its new name too.
+      if (released.has(seat.country)) {
+        for (const device of released.get(seat.country)) keepOff(key, device);
+        released.delete(seat.country);
+      }
       return true;
     },
 
@@ -206,6 +253,10 @@ export const createSeatBook = ({
     },
 
     seatOf: (device) => byDevice(device),
+    // The seat by its id, wherever it is now (null once it has ended).
+    seatById: (id) => (id ? [...seats.values()].find((seat) => seat.id === id) ?? null : null),
+    // Who the host released from what, for the game to save: [{ device, country }].
+    released: () => [...released.entries()].flatMap(([country, devices]) => [...devices].map((device) => ({ device, country }))),
     // The player whose country is gone, who watches it.
     watcherOf: (device) => (watchers.has(device) ? { ...watchers.get(device) } : null),
     watching: () => [...watchers.values()].map((entry) => ({ ...entry })),

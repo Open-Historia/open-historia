@@ -81,6 +81,11 @@ export const createRoundMachine = ({
   const ready = new Set();
   const lastActive = new Map();
   const revealed = new Set();
+  // Reads said while the round is still being resolved, each with the round
+  // it names: a page may hold the landed turn before the round's entry ends,
+  // and names the round the skip wrote, which the machine learns only when it
+  // lands (onResolve). Counted then, for the round that landed.
+  const early = new Map();
 
   const counted = () => [...present];
   const isReady = (seat) => {
@@ -141,6 +146,7 @@ export const createRoundMachine = ({
     // the round's events as the last step of resolving it, and one with little
     // to read may say so before the phase is announced.
     revealed.clear();
+    early.clear();
     emit();
     Promise.resolve()
       .then(() => onResolve({ round }))
@@ -149,6 +155,8 @@ export const createRoundMachine = ({
           // The campaign's round the skip wrote, which its turn record and its
           // Events panel name, and every player's "read" names too.
           if (followsCampaign && Number.isFinite(Number(landed?.round)) && Number(landed.round) > 0) round = Math.trunc(Number(landed.round));
+          for (const [seat, number] of early) if (number === round && present.has(seat)) revealed.add(seat);
+          early.clear();
           failure = null;
           phase = "revealing";
           revealEnds = now() + settings.revealSeconds * 1000;
@@ -158,6 +166,7 @@ export const createRoundMachine = ({
         (error) => {
           // A round that could not be resolved goes back to planning, with the
           // orders still queued, rather than skipping ahead, and says why.
+          early.clear();
           failure = { round, reason: String(error?.message || error || "").replace(/\s+/g, " ").trim().slice(0, 280) };
           startPlanning({ sameRound: true });
         },
@@ -223,6 +232,7 @@ export const createRoundMachine = ({
         present.delete(seat);
         ready.delete(seat);
         revealed.delete(seat);
+        early.delete(seat);
       }
       for (const seat of next) present.add(seat);
       emit();
@@ -241,12 +251,34 @@ export const createRoundMachine = ({
     touch(seat) {
       if (present.has(seat)) lastActive.set(seat, now());
     },
+    // A seat's country renamed, or founded anew by its people (host/seats.js
+    // move): what the round holds for that player follows it, read or ready.
+    rename(from, to) {
+      if (!from || !to || from === to) return;
+      for (const set of [present, ready, revealed]) {
+        if (set.delete(from)) set.add(to);
+      }
+      for (const held of [lastActive, early]) {
+        if (held.has(from)) {
+          held.set(to, held.get(from));
+          held.delete(from);
+        }
+      }
+    },
     // A player's client finished showing a round's events: counted for the
-    // round it names only, never for one still being resolved.
+    // round it names only. Said while the round is resolved, it names the
+    // round as it will land, and is counted when it lands, for that round
+    // (early): before, a read that came in that window named the landed round,
+    // was dropped, and the reveal ran its full time.
     revealedBy(seat, number = round) {
-      if (Number(number) !== round || !["resolving", "revealing"].includes(phase) || !present.has(seat)) return;
+      if (!present.has(seat)) return;
+      if (phase === "resolving") {
+        early.set(seat, Number(number));
+        return;
+      }
+      if (Number(number) !== round || phase !== "revealing") return;
       revealed.add(seat);
-      if (phase === "revealing") evaluate();
+      evaluate();
     },
     // `campaignRound`: the campaign's round (game.round), the one to plan.
     start(campaignRound) {
