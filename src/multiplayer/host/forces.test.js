@@ -38,12 +38,23 @@ test("the rules a deployment is held to: the scenario's types, a place on the ma
   assert.match(deployFor(state(), FRANCE, { ...ask, lat: "north" }, ids(1)).error, /not a place on the map/);
 
   const full = state();
-  full.world.units = Array.from({ length: MAX_UNITS_PER_PLAYER }, (_, n) => unit(`fr-${n}`, FRANCE));
-  assert.match(deployFor(full, FRANCE, ask, ids(1)).error, /at most 15 formations/);
+  full.world.units = Array.from({ length: MAX_UNITS_PER_PLAYER }, (_, n) => unit(`fr-${n}`, FRANCE, { source: "player" }));
+  assert.match(deployFor(full, FRANCE, ask, ids(1)).error, /raises at most 15 formations of their own/);
   // The beaten are not counted, and nor is anyone else's army.
   full.world.units[0].status = "defeated";
-  full.world.units.push(...Array.from({ length: 20 }, (_, n) => unit(`de-${n}`, GERMANY)));
+  full.world.units.push(...Array.from({ length: 20 }, (_, n) => unit(`de-${n}`, GERMANY, { source: "player" })));
   assert.equal(deployFor(full, FRANCE, ask, ids(1)).error, undefined);
+
+  // Only what the player raised counts: a country the scenario gave a large army, and the formations the story
+  // raised for it, could never raise one (the gap audit of 2026-11-18).
+  const armed = state();
+  armed.world.units = [
+    ...Array.from({ length: 30 }, (_, n) => unit(`fr-scenario-${n}`, FRANCE, { source: "scenario" })),
+    ...Array.from({ length: 5 }, (_, n) => unit(`fr-story-${n}`, FRANCE, { source: "ai" })),
+  ];
+  assert.equal(deployFor(armed, FRANCE, ask, ids(1)).error, undefined);
+  armed.world.units.push(...Array.from({ length: MAX_UNITS_PER_PLAYER }, (_, n) => unit(`fr-raised-${n}`, FRANCE, { source: "player", status: n ? "idle" : "pending" })));
+  assert.match(deployFor(armed, FRANCE, ask, ids(1)).error, /raises at most 15/, "those it raised, pending or confirmed, do");
 
   const busy = state();
   busy.actions = Array.from({ length: 12 }, (_, n) => ({ id: `a-${n}`, status: "planned", text: "x", ownerCode: FRANCE }));

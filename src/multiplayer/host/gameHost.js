@@ -44,7 +44,7 @@ import { deployFor, disbandFor, revertOrderFor } from "./forces.js";
 import { ordersThisRound } from "./orderCap.js";
 import { agentOrderFor } from "./agents.js";
 import { institutionThreadRefusal } from "./institutions.js";
-import { acceptStructure, canSettleStructure, moveStructure } from "../../runtime/structurePlacement.js";
+import { acceptStructure, canSettleStructure, moveStructure, structureMoveRefusal } from "../../runtime/structurePlacement.js";
 import { applyWarRoomOp, cleanWarRoomOp } from "../../runtime/fronts/warRoomOps.js";
 import { applyFortifyOp, cleanFortifyOp } from "../../runtime/fronts/fortifyOps.js";
 import { applyFleetOp, cleanFleetOp } from "../../runtime/naval/fleetOps.js";
@@ -1010,13 +1010,17 @@ export const createGameHost = ({
     // A structure the map could only place approximately, settled by the player
     // it belongs to (runtime/structurePlacement.js): Accept keeps it where it
     // stands, Move puts it at a point. A correction of the map, not an order, so
-    // it is taken at any time.
+    // it is taken at any time. A point Move names is held to the host's own map
+    // (structurePlacement.js structureMoveRefusal): the structure's country's own
+    // land, or the sea off it.
     settle: async (connection, { marker, move, lng, lat }, seat) => {
+      const chart = move ? await Promise.resolve().then(readChart).catch(() => null) : null;
       let refusal = "";
       await store.updateWorld((world) => {
         const found = list(world?.markers).find((entry) => clean(entry?.id) === clean(marker));
         if (!found) refusal = "That structure is not on the map.";
         else if (!canSettleStructure(found, { playerCountry: seat.country, world })) refusal = "That structure is not yours to settle.";
+        else if (move) refusal = structureMoveRefusal(found, { lng, lat }, { chart });
         if (refusal) return null;
         const markers = move ? moveStructure(world.markers, found.id, { lng, lat }) : acceptStructure(world.markers, found.id);
         return { ...world, markers };

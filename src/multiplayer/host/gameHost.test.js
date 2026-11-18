@@ -672,7 +672,14 @@ test("with each player's own AI, a missing sheet is written on the asking device
 });
 
 test("a structure the map placed approximately is settled by the player it belongs to, and by nobody else", async () => {
-  const s = setup();
+  // The host's own map: Russia's ground east of 27 degrees and north of 55, the sea west of 21, within reach of
+  // Russia's shore east of 18; everything else land of others.
+  const chart = {
+    holds: (country, lng, lat) => (lng < 21 ? null : lng >= 27 && lat >= 55 ? country === RUSSIA : false),
+    sea: (lng) => lng < 21,
+    landNear: (country, lng) => country === RUSSIA && lng >= 18,
+  };
+  const s = setup({ readChart: async () => chart });
   // Russia's base, placed near a capital because the map did not know its town.
   s.store.docs.world.markers = [
     { id: "base-ru", name: "Forward base", kind: "base", ownerCode: RUSSIA, lng: 30, lat: 59, approximate: { asked: "Novaya Gavan", country: RUSSIA, near: "capital" } },
@@ -693,7 +700,18 @@ test("a structure the map placed approximately is settled by the player it belon
   assert.match(s.ack(s.guest, id(4)).error, /not on the map/);
   assert.deepEqual([marker("base-ru").lng, marker("base-ru").lat, Boolean(marker("base-ru").approximate)], [30, 59, true]);
 
+  // Not onto another's land, nor far out to sea: any point on Earth was taken, another player's capital included.
+  await s.request(s.guest, { t: "settle", id: id(8), marker: "base-ru", move: true, lng: 24.1, lat: 56.9 });
+  assert.match(s.ack(s.guest, id(8)).error, /its own country's land/);
+  await s.request(s.guest, { t: "settle", id: id(9), marker: "base-ru", move: true, lng: 5, lat: 56.9 });
+  assert.match(s.ack(s.guest, id(9)).error, /its own country's land/);
+  assert.deepEqual([marker("base-ru").lng, marker("base-ru").lat], [30, 59]);
+  // The sea off its own coast is a place for it.
+  await s.request(s.guest, { t: "settle", id: id(10), marker: "base-ru", move: true, lng: 19.5, lat: 58 });
+  assert.equal(s.ack(s.guest, id(10)).ok, true);
+
   // Its owner moves it: it stands at the point, the mark is gone, and everyone's map shows it there.
+  s.store.docs.world.markers[0] = { ...s.store.docs.world.markers[0], lng: 30, lat: 59, approximate: { asked: "Novaya Gavan", country: RUSSIA, near: "capital" } };
   await s.request(s.guest, { t: "settle", id: id(5), marker: "base-ru", move: true, lng: 31.25, lat: 60.5 });
   assert.equal(s.ack(s.guest, id(5)).ok, true);
   assert.deepEqual([marker("base-ru").lng, marker("base-ru").lat, "approximate" in marker("base-ru")], [31.25, 60.5, false]);

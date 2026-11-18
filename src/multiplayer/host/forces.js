@@ -16,8 +16,15 @@ import { normalizeUnitEntry } from "../../runtime/gameState.js";
 // Orders carried over unanswered are not this round's (host/orderCap.js).
 import { ordersThisRound } from "./orderCap.js";
 
-// The plan's ceiling for a person's formations (the AI's own cap is the
-// engine's, gameState.js MAX_UNITS_PER_POLITY).
+// The plan's ceiling for the formations a person raises (the AI's own cap is
+// the engine's, gameState.js MAX_UNITS_PER_POLITY). It counts only what the
+// player raised (source "player": deployFor's own, which the skip confirms and
+// keeps so) and that still stands: the formations a country came with, those
+// the story raised for it and those it holds on a battlefield are its own, and
+// are not the player's to count against. Counting every formation of the
+// country, a well-armed one could never raise one, while single player has no
+// ceiling at all (the gap audit of 2026-11-18). How many the world lets stand
+// is the skip's to judge by the country's manpower.
 export const MAX_UNITS_PER_PLAYER = 15;
 export const UNIT_NAME_MAX_CHARS = 80;
 export const UNIT_COMPOSITION_MAX_CHARS = 200;
@@ -50,8 +57,8 @@ export const deployFor = ({ world, actions }, seat, request, { orderId, unitId, 
   const type = clean(request?.type).toLowerCase();
   if (!owner) return { error: "Take a country first." };
   if (!deployable(type, world?.allowedUnitTypes)) return { error: "This scenario does not allow that kind of unit." };
-  const mine = list(world?.units).filter((unit) => same(unit?.ownerCode, owner) && clean(unit?.status) !== "defeated");
-  if (mine.length >= MAX_UNITS_PER_PLAYER) return { error: `A player fields at most ${MAX_UNITS_PER_PLAYER} formations. Stand one down first.` };
+  const raised = list(world?.units).filter((unit) => same(unit?.ownerCode, owner) && clean(unit?.source) === "player" && clean(unit?.status) !== "defeated");
+  if (raised.length >= MAX_UNITS_PER_PLAYER) return { error: `A player raises at most ${MAX_UNITS_PER_PLAYER} formations of their own. Stand one of them down first.` };
   if (ordersThisRound(actions, owner).length >= maxOrders) return { error: `At most ${maxOrders} orders a round.` };
   const strength = Math.max(1, Math.min(100, Math.round(Number(request?.strength) || 100)));
   const name = clean(request?.name).slice(0, UNIT_NAME_MAX_CHARS);

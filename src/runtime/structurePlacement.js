@@ -49,6 +49,31 @@ const settle = (markers, id, change) => {
 
 export const acceptStructure = (markers, id) => settle(markers, id, {});
 
+// How far out to sea a structure may be moved off its country's own land: an
+// island base, a platform off its coast.
+export const STRUCTURE_SEA_KM = 300;
+const MOVE_REFUSED = Object.freeze({
+  chart: "The map could not be read to see whose ground that is: try again.",
+  ground: "A structure is moved onto its own country's land, or to the sea off it.",
+});
+
+// Where Move may put a structure in a shared game, held to the host's own map
+// (runtime/warRoomChart.js chartOf): onto land its country holds (its
+// ownerCode: a puppet's structure onto the puppet's), or out to sea within
+// STRUCTURE_SEA_KM of that land. "" when it may, else why not, in words. Any
+// point on Earth was taken, another player's capital included (the gap audit
+// of 2026-11-18). Single player puts it where the player clicks, as it always has.
+export const structureMoveRefusal = (marker, { lng, lat } = {}, { chart = null } = {}) => {
+  if (!chart || typeof chart.holds !== "function") return MOVE_REFUSED.chart;
+  const owner = text(marker?.ownerCode);
+  const held = chart.holds(owner, Number(lng), Number(lat));
+  if (held === true) return "";
+  if (held === false) return MOVE_REFUSED.ground;
+  const offShore = typeof chart.sea === "function" && chart.sea(Number(lng), Number(lat))
+    && typeof chart.landNear === "function" && chart.landNear(owner, Number(lng), Number(lat), STRUCTURE_SEA_KM);
+  return offShore ? "" : MOVE_REFUSED.ground;
+};
+
 // A point off the earth, or no point at all, changes nothing.
 export const moveStructure = (markers, id, { lng, lat } = {}) => {
     const x = Number(lng); const y = Number(lat);
