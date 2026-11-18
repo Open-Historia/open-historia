@@ -77,11 +77,13 @@
 <link rel="stylesheet" href="/story/vendor/maplibre-gl.css?v=761a1130f0" />
 <link rel="stylesheet" href="/story/story.css?v=aa6c4ca184" />
 <link rel="stylesheet" href="/story/game-ui.css?v=5abfb562f4" />
+<link rel="stylesheet" href="/story/door.css?v=5596e17d8d" />
 <script defer src="/story/vendor/maplibre-gl.js?v=28ab0f7e9d"></script>
 <script defer src="/story/map-data.js?v=b0c663183f"></script>
 <script defer src="/story/game-ui.js?v=c804d7730b"></script>
 <script defer src="/story/story.js?v=f7c62d6acd"></script>
 <script defer src="/story/site.js?v=7d995e59d0"></script>
+<script defer src="/story/door.js?v=1352f721dd"></script>
 </head>
 <body>
 
@@ -117,7 +119,9 @@
 <!-- The hero: four ages side by side. Each age is a scene clipped to its
      slanted frame (.scene) and a layer that is not clipped (.spill): the
      bombers and the searchlight, the red line, the dragon and the royal
-     ribbon are drawn there, so they cross the seams into the next age. -->
+     ribbon are drawn there, so they cross the seams into the next age.
+     story/door.js paints them across the two leaves of a blast door, whose
+     toothed seam splits the ages; "Demo in your browser" opens it. -->
 <section class="hero" id="top">
   <div class="realms">
 
@@ -695,7 +699,7 @@
     <div class="plate-side">
       <div class="cta-row">
         <a id="primaryDownload" class="btn btn-primary" href="#download" data-download-app><span class="i">⬇</span> Download the App</a>
-        <a class="btn btn-ghost" href="/play/"><span class="i">▶</span> Demo in your browser</a>
+        <a class="btn btn-ghost" href="/play/" data-door-open><span class="i">▶</span> Demo in your browser</a>
       </div>
       <p class="hero-note" id="heroNote">The browser version is a demo — it streams the world map over the network, so expect lag. The <a href="#download">desktop app</a> runs locally and is how the game is meant to be played.</p>
       <ul class="seals" aria-label="At a glance">
