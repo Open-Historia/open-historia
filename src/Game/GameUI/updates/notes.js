@@ -54,6 +54,27 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The review of everything (2026-11-18) found these in the game's own code while fixing shared games: planted
+    // intelligence ran as another country's real work, a doubt stalled real work for good, an accepted invitation
+    // never admitted the player, a structure moved across the date line went nowhere.
+    id: "2026-11-intelligence-and-fixes",
+    kind: "minor",
+    date: "2026-11-18",
+    channel: "beta",
+    banners: [
+      {
+        title: "Intelligence you can trust",
+        items: [
+          "A programme you hear of through an agent who was turned against you is only what your service believes: it never becomes real.",
+          "Doubtful intelligence now settles: once a new agent of yours reports from that country, the entry is marked Confirmed or Fabricated.",
+          "Another country's real programme is no longer stopped because your service doubted the news, and an operation your agent reported shows on the battlefield.",
+          "When you accept an invitation to join an institution, you become a member as soon as its members vote you in.",
+          "Another country's project can no longer take your regions, and moving a building across the date line now works.",
+        ],
+      },
+    ],
+  },
+  {
     // "the diplomatic map is shit, redesign it and make it have full integration with the political world", then "only on
     // alpha for now and ... be a major update" (the owner, 2026-11-15): four views (runtime/diplomaticViews.js), a legend
     // that counts what is shown (GameUI/DiplomaticLegend.jsx), lines from the focus country's capital, kept for each game.
@@ -284,7 +305,7 @@ const NEW_UPDATES = [
               "A shared game remembers who plays which country: share it again days later and every player gets their own country back.",
               "Your country stays yours while you are away: after the minutes the lobby states, the AI plays it until you return.",
               "Once the game has started, changing country needs the host's say. A player whose country is gone takes a free one or watches.",
-              "When the host releases a country, its player's queued orders, goal, advice and private conversations go with them.",
+              "A player the host releases cannot take that country back, and their queued orders, goal, advice, letters and open offers go with them.",
             ],
           },
           {
@@ -320,7 +341,7 @@ const NEW_UPDATES = [
             heading: "Answers",
             icon: "book",
             items: [
-              "The host chooses whose AI answers messages to countries the AI plays: the host's, or each player's own.",
+              "The host chooses whose AI answers messages to countries the AI plays, the host's or each player's own, and how many a round the host's answers.",
               "With each player's own AI, the host sets how many messages a round its AI answers for governments that can act, such as one at war with you.",
               "A country's figures, parties and military ratings are written once for everyone, and cannot be rebuilt from scratch.",
               "No API key is ever sent to the host or to anyone else.",
@@ -331,8 +352,9 @@ const NEW_UPDATES = [
             icon: "gear",
             items: [
               "The host can let players take turns to pay for each round's AI request, each on their own AI.",
-              "The lobby warns that the paying player's device sees that round's whole request, every player's orders and secrets included.",
+              "The lobby warns that the paying player's device sees that round's whole request, every player's orders and secrets included, and could change what happens in it.",
               "If the paying player's AI fails or they leave, the round waits: the host can try again or pay for it.",
+              "A player whose device has no AI that can pay is passed over, and each player's own AI settings decide what their turn spends.",
             ],
           },
           {
@@ -358,7 +380,7 @@ const NEW_UPDATES = [
             items: [
               "What another player has only ordered stays theirs until the round is played: forces being raised, convoys, lines being fortified and a fleet's new orders.",
               "What already stands on the map is seen by everyone.",
-              "Your Projects board changes only through your own panel and advisor, and no project takes land from a country another player plays.",
+              "Your Projects board changes only through your own panel and advisor, and your projects act on your own country, never on another player's.",
             ],
           },
           {
@@ -376,6 +398,7 @@ const NEW_UPDATES = [
             items: [
               "Every player's agents report, steal documents and run operations for their own service, and what they bring back is theirs alone.",
               "Each time skip knows every player's spies, and who spies on each player.",
+              "Another player's spies never stall your projects, and nothing on your board gives their agents away.",
             ],
           },
         ],
@@ -412,7 +435,7 @@ const NEW_UPDATES = [
             items: [
               "Call a vote in a group conversation and its governments vote in it; each country votes once, for itself.",
               "In institutions every player casts their own vote, and the AI never votes for another player.",
-              "An invitation to an institution reaches its player with an Accept button, and accepting admits you once the members vote yes.",
+              "An invitation to an institution reaches the player it is for, in a conversation of its own with an Accept button.",
             ],
           },
           {
@@ -437,8 +460,9 @@ const NEW_UPDATES = [
             icon: "swords",
             items: [
               "Two players fighting on one front can both order air strikes there without replacing each other's.",
-              "The limit of 15 formations counts only those you raised yourself.",
-              "When your people found a new country, your armies and air strikes go with you, and so do the structures on your new land.",
+              "You raise formations on your own land or the sea off it, and the limit of 15 counts only those you raised yourself.",
+              "Releasing a colony or a puppet from your own land no longer moves you onto it: you keep your country and its army.",
+              "When your people found a new country and the old one ends, your armies and air strikes go with you, and so do the structures on your new land.",
             ],
           },
           {
