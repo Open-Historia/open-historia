@@ -1788,6 +1788,18 @@ export const createGameHost = ({
         ...(opens ? { chatId } : {}),
         ...(answerLine({ connection, chatId, seat: seat.country, parties, institutional, written, world: docs?.world, line: message.id }) ?? {}),
       };
+      // A person at the table who is away answers on coming back, and the
+      // writer is told so: a line to a player who had gone was met by silence
+      // (the gap audit of 2026-11-18). Once their seat is the AI's, their
+      // government answers like any other (answerLine).
+      const away = seats.list()
+        .filter((entry) => entry.status === SEAT_STATUS.AWAY && !same(entry.country, seat.country) && parties.some((name) => same(name, entry.country)))
+        .map((entry) => entry.country);
+      if (away.length) {
+        tell(seat.country, "info", away.length === 1
+          ? `${away[0]}'s player is away, and will read it on coming back.`
+          : `${away.join(", ")}: their players are away, and will read it on coming back.`);
+      }
       return Object.keys(result).length ? { error: "", result } : "";
     },
     // With settings.payment "cycle": the answer the paying device's own AI gave

@@ -1307,6 +1307,28 @@ test("with each player's own AI, a vote called at a table of governments is answ
   assert.deepEqual(s.ack(s.guest, id(4)).result.governments, [ESTONIA]);
 });
 
+test("writing to a player who has gone: told they are away, and once the AI has their country its government answers", async () => {
+  // Nobody answered in a thread a leaver had opened, and nobody was told (the gap audit of 2026-11-18).
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "say", id: id(2), thread: null, to: [LATVIA], text: "Moscow to Riga." });
+  const thread = s.store.docs.chat.find((chat) => chat.player === RUSSIA).id;
+  s.host.leave(s.guest);
+  await s.clock.flush();
+  await s.request(s.hostPlayer, { t: "say", id: id(3), thread, to: [], text: "Riga answers Moscow." });
+  assert.equal(s.ack(s.hostPlayer, id(3)).ok, true);
+  assert.match(s.to(s.hostPlayer, "notice").at(-1).text, /Russian Federation's player is away, and will read it on coming back\./);
+  assert.deepEqual(s.replies, [], "a person, away, is not answered for");
+  // The grace runs out: the AI plays Russia, and its government answers in the thread its player opened.
+  await s.clock.advance(2 * 60_000);
+  await s.request(s.hostPlayer, { t: "say", id: id(4), thread, to: [], text: "Riga asks again." });
+  await s.clock.flush();
+  assert.deepEqual(s.replies, [{ chatId: thread, seat: LATVIA }]);
+});
+
 test("a Retry asks the host for the governments' answer to the player's last line again, and sends no line", async () => {
   // A group Retry sent its line a second time, and a one-on-one one asked the player's own key for a reply the host
   // never took (the gap audit of 2026-11-18).
