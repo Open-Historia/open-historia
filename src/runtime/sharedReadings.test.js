@@ -30,5 +30,5 @@ test("the readings after a round, when fronts are built, and for an agent's targ
   const engine = source("../multiplayer/host/engineMain.js");
   assert.match(engine, /setHostReadsFigures\(settings\.replies !== "own"\);\n\s*preparing = true;/, "before the game's start, its fronts' readings too");
   assert.match(engine, /setHostReadsFigures\(status\?\.lobby\?\.settings\?\.replies !== "own"\);/, "and as the host changes it");
-  assert.match(engine, /setHostingSharedGame\(false\);\n\s*setHostReadsFigures\(true\);/, "and single player's again once sharing stops");
+  assert.match(engine, /setHostingSharedGame\(false\);\n\s*setWorldLanguage\(""\);\n\s*setHostReadsFigures\(true\);/, "and single player's again once sharing stops");
 });

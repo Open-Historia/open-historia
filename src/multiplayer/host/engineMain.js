@@ -731,8 +731,8 @@ const boot = async () => {
         await stopping.stop();
         writeInOrder = (label, write) => write();
         setHostingSharedGame(false);
-        setHostReadsFigures(true);
         setWorldLanguage("");
+        setHostReadsFigures(true);
         report();
         loopback.close();
         await fetch("/api/multiplayer/engine/close", { method: "POST" }).catch(() => {});

@@ -213,8 +213,9 @@ test("the turn hands the engine's joinings to the war ledger, and the war room h
   const gameplay = read("gameplay.js");
   assert.match(gameplay, /updates: \[\.\.\.warUpdates, \.\.\.frontWarStarts\(turnFronts\), \.\.\.frontWarJoins\(turnFronts\)\],/);
   // (And a country such a route goes into is asked for its sheet: runtime/statsBackend.test.js.)
-  assert.match(gameplay, /export const warRoomRouteAttacks = \(\{ world, game, record \} = \{\}\) =>\n {2}routesIntoOthers\(\{ world, game, record, campaignId: activeCampaignId\(\), loadRegions: createRenderedRegionsReader\(\) \}\)\.then\(\(found\) => \{/);
-  assert.match(read("gameplayLazy.js"), /export const warRoomRouteAttacks = async \(\.\.\.args\) => \(await gameplay\(\)\)\.warRoomRouteAttacks\(\.\.\.args\);/);
+  assert.match(gameplay, /export const warRoomRouteAttacks = \(\{ world, game, record, ask = true \} = \{\}\) =>\n {2}routesIntoOthers\(\{ world, game, record, campaignId: activeCampaignId\(\), loadRegions: createRenderedRegionsReader\(\) \}\)\.then\(\(found\) => \{/);
+  // (In a shared game the page finds them only, and asks its host for their figures: Game/AI/sharedRatings.test.js.)
+  assert.match(read("gameplayLazy.js"), /export const warRoomRouteAttacks = async \(\.\.\.args\) => \{\n {2}const run = \(await gameplay\(\)\)\.warRoomRouteAttacks;\n {2}if \(!inSharedGame\(\)\) return run\(\.\.\.args\);/);
   const panel = read("../GameUI/warRoom.jsx");
   // Troops picked out can be told to advance with no route drawn for them: a key on the tool rail, carried out by the panel.
   assert.match(read("../GameUI/warRoomRail.jsx"), /<RailKey label="Advance" [^>]*onClick=\{\(\) => onOrder\("advance"\)\}>/);

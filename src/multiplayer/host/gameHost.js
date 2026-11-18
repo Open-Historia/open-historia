@@ -1337,8 +1337,8 @@ export const createGameHost = ({
         // orderTransport) has an id of the host's that tells nothing of anyone
         // else's (host/onlyOrdered.js opaqueId).
         const made = sent.op === "transport" ? clean(list(result.transports).at(-1)?.id) : "";
-        const transports = made && result.transports ? withRenamed(result.transports, made, opaqueId("t", result.transports.map((entry) => entry?.id))) : result.transports;
-        return { world: { ...world, battlefields: result.battlefields, ...(transports ? { transports } : null) } };
+        if (made && result.transports) result.transports = withRenamed(result.transports, made, opaqueId("t", result.transports.map((entry) => entry?.id)));
+        return { world: { ...world, battlefields: result.battlefields, ...(result.transports ? { transports: result.transports } : null) } };
       });
       round.touch(seat.country);
       return refusal;
