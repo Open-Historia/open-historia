@@ -61,6 +61,14 @@ export const createRoundMachine = ({
   let settings = clampSettings(initialSettings);
   let phase = "lobby";
   let round = 0;
+  // ONE ROUND NUMBER: the campaign's (game.round), when the host gives it. It
+  // used to count from 1 in each sitting, while the Events panel and every
+  // turn record count the campaign's rounds: the round bar and the panel named
+  // two numbers, and a player's "I have read the round" (sent with the turn
+  // record's number) never matched, so every reveal ran its full time (the gap
+  // audit of 2026-11-18). Following the campaign, the number is the campaign's
+  // round being planned, and the round a skip lands is the one it wrote.
+  let followsCampaign = false;
   let planningEnds = 0;
   let countdownEnds = 0;
   let planningStarted = 0;
@@ -133,7 +141,10 @@ export const createRoundMachine = ({
     Promise.resolve()
       .then(() => onResolve({ round }))
       .then(
-        () => {
+        (landed) => {
+          // The campaign's round the skip wrote, which its turn record and its
+          // Events panel name, and every player's "read" names too.
+          if (followsCampaign && Number.isFinite(Number(landed?.round)) && Number(landed.round) > 0) round = Math.trunc(Number(landed.round));
           failure = null;
           phase = "revealing";
           revealEnds = now() + settings.revealSeconds * 1000;
@@ -150,7 +161,8 @@ export const createRoundMachine = ({
   };
 
   const startPlanning = ({ sameRound = false } = {}) => {
-    if (!sameRound) round += 1;
+    // Following the campaign, the landed round is already the next to plan.
+    if (!sameRound && !followsCampaign) round += 1;
     phase = "planning";
     planningStarted = now();
     planningEnds = planningStarted + settings.roundMinutes * 60 * 1000;
@@ -228,15 +240,23 @@ export const createRoundMachine = ({
       revealed.add(seat);
       if (phase === "revealing") evaluate();
     },
-    start() {
+    // `campaignRound`: the campaign's round (game.round), the one to plan.
+    start(campaignRound) {
       if (phase !== "lobby") return;
+      if (Number.isFinite(Number(campaignRound)) && Number(campaignRound) > 0) {
+        followsCampaign = true;
+        round = Math.trunc(Number(campaignRound));
+        startPlanning({ sameRound: true });
+        return;
+      }
       startPlanning();
     },
     // A shared game taken up again (host/sessionRecord.js): planning the round
     // it was at. A round being resolved when the game was stopped had not
     // landed, and is planned again with its orders.
-    resumeAt(number) {
+    resumeAt(number, { campaign = false } = {}) {
       if (phase !== "lobby") return;
+      followsCampaign = campaign;
       round = Math.max(1, Math.trunc(Number(number) || 1));
       startPlanning({ sameRound: true });
     },

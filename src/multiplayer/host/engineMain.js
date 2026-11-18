@@ -381,6 +381,7 @@ const boot = async () => {
       countriesOf: (now) => gameCountries(now.world, now.game),
       campaign,
       restored,
+      campaignRound: Number(docs.game?.round) || 0,
       store,
       resolveRound: async ({ daysPerRound, humanCountries, signal }) => {
         // The game's own lock, waited for and taken in one step: a stat sheet

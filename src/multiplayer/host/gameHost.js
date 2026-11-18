@@ -175,6 +175,9 @@ export const createGameHost = ({
   // (host/sessionRecord.js sessionFromRecord), taken up again: null for a new one.
   campaign = "",
   restored = null,
+  // The campaign's round (game.round) when the game is shared: the round
+  // machine names the campaign's rounds (host/round.js, one round number).
+  campaignRound = 0,
   // `store` reads and writes the game's documents (read, update*), and the
   // session's own record (writeShared).
   store,
@@ -536,6 +539,9 @@ export const createGameHost = ({
         roundAbort = null;
       }
       await followSeats(before).catch((error) => log("warn", "a seat did not follow its country", { error: String(error?.message || error) }));
+      // The campaign's round the skip wrote: the round machine names it from
+      // here on (host/round.js, one round number).
+      return { round: Number((await store.read())?.game?.round) || 0 };
     }),
   });
 
@@ -1605,7 +1611,8 @@ export const createGameHost = ({
         if (seats.started) return;
         seats.start();
         await queue.run("start", recordHumans);
-        round.start();
+        // The campaign's own round: one number on every screen (host/round.js).
+        round.start(Number((await store.read())?.game?.round) || 0);
         broadcastLobby();
       },
       pause: () => round.pause(),
@@ -1682,7 +1689,10 @@ export const createGameHost = ({
           .catch((error) => log("warn", "a saved seat did not follow its country", { error: String(error?.message || error) }));
       }
       if (restored?.started) {
-        round.resumeAt(restored.round);
+        // The campaign's round as the save has it now; a session kept before
+        // the machine followed the campaign kept its own count instead.
+        const atRound = Number(campaignRound) || 0;
+        round.resumeAt(atRound || restored.round, { campaign: atRound > 0 });
         // Paused until the host resumes it: its players come back one by one,
         // and a round left to run meanwhile would end on the host alone.
         round.pause();

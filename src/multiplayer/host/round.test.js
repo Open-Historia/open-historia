@@ -355,3 +355,47 @@ test("a round that fails says why until one lands", async () => {
   assert.equal(round.status().phase, "revealing");
   assert.equal(round.status().failure, null);
 });
+
+// One round number, the campaign's (the gap audit of 2026-11-18). The machine counted from 1 in each sitting while
+// every turn record and the Events panel count the campaign's rounds: the round bar and the panel named two numbers,
+// and a player's "I have read the round", sent with the turn record's number, never matched, so every reveal ran its
+// full time.
+test("a game started at the campaign's round names that round, and a player's reading of the round the skip wrote counts", async () => {
+  const clock = createClock();
+  let campaign = 7;
+  const round = createRoundMachine({
+    settings: { roundMinutes: 10, countdownSeconds: 0, revealSeconds: 60 },
+    now: clock.now,
+    timers: clock.timers,
+    // The skip writes the campaign's next round, and says which.
+    onResolve: async () => {
+      campaign += 1;
+      return { round: campaign };
+    },
+  });
+  round.setPlayers(["a", "b"]);
+  round.start(7);
+  assert.equal(round.status().round, 7, "the campaign's round, not 1");
+  round.setReady("a", true);
+  round.setReady("b", true);
+  await clock.flush();
+  assert.equal(round.status().phase, "revealing");
+  assert.equal(round.status().round, 8, "the round the skip wrote, as its turn record names it");
+  round.revealedBy("a", 8);
+  round.revealedBy("b", 8);
+  assert.equal(round.status().phase, "planning", "every player read it: planning begins without waiting out the reveal");
+  assert.equal(round.status().round, 8, "and no second count is added");
+  // A reading of another round still counts for nothing.
+  round.setReady("a", true);
+  round.setReady("b", true);
+  await clock.flush();
+  round.revealedBy("a", 3);
+  assert.equal(round.status().phase, "revealing");
+});
+
+test("a game taken up again goes on at the campaign's round", () => {
+  const clock = createClock();
+  const round = createRoundMachine({ now: clock.now, timers: clock.timers });
+  round.resumeAt(12, { campaign: true });
+  assert.equal(round.status().round, 12);
+});
