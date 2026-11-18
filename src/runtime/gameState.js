@@ -875,11 +875,16 @@ export const normalizeChatEntry = (entry, index = 0) => {
   // (multiplayer/host/projection.js threadOwner). Single player's threads name
   // nobody: they are the player's.
   const owner = normalizeOptionalString(entry.player);
+  // A shared game's conversation between people, retired for a country whose
+  // seat was let go (multiplayer/host/foundings.js withSeatLetGo): the next
+  // player of that country is not shown it. Single player's threads have none.
+  const retiredFor = normalizeArray(entry.retiredFor).map(normalizeOptionalString).filter(Boolean).slice(0, 16);
 
   return {
     countries: projected?.countries?.length ? projected.countries : countries,
     id: normalizeOptionalString(entry.id) || generateId(`chat-${index}`),
     ...(owner ? { player: owner } : {}),
+    ...(retiredFor.length ? { retiredFor } : {}),
     ...(institutionId ? { institutionId } : {}),
     ...(lifecycleInstitutionId ? { lifecycleInstitutionId } : {}),
     ...(lifecycleCaseIds.length ? { lifecycleCaseIds } : {}),

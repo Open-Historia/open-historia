@@ -448,6 +448,10 @@ export const projectChats = (chats, viewer, { host = "" } = {}) => list(chats).f
   const isOwner = same(owner, viewer);
   const isMemberOf = list(chat.countries).some((entry) => same(nameOf(entry), viewer));
   if (!isOwner && !isMemberOf) return [];
+  // A conversation between people that was the last player's of this country,
+  // retired when the seat was let go (host/foundings.js withSeatLetGo): not
+  // the next player's to read.
+  if (list(chat.retiredFor).some((name) => same(name, viewer))) return [];
   const { player: _player, ...rest } = chat;
   // The viewer is the implicit player of every thread it sees; whoever else is
   // in it, the thread's owner included, is listed.

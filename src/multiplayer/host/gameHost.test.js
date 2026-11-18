@@ -2083,3 +2083,24 @@ test("the host cancels a round that hangs; it waits with its orders until the ho
   assert.equal(s.to(s.guest, "round").at(-1).phase, "revealing");
   assert.equal(s.to(s.guest, "round").at(-1).failed, 0);
 });
+
+test("a seat the host takes back leaves the next player of that country none of the last player's orders, goal or letters", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "order", id: id(2), text: "Mass troops at Narva" });
+  await s.request(s.guest, { t: "goal", id: id(3), text: "Take back the Baltic coast" });
+  await s.request(s.guest, { t: "say", id: id(4), thread: null, to: [LATVIA], text: "A private word, Riga." });
+  assert.ok(s.store.docs.actions.some((action) => action.text === "Mass troops at Narva"));
+  assert.ok(s.store.docs.world.playerGoals?.[RUSSIA]);
+  s.host.control.kick(RUSSIA);
+  await s.clock.flush();
+  assert.equal(s.store.docs.actions.some((action) => action.text === "Mass troops at Narva"), false, "its queued order went with its player");
+  assert.equal(s.store.docs.world.playerGoals?.[RUSSIA], undefined);
+  const letter = s.store.docs.chat.find((chat) => (chat.messages ?? []).some((message) => message.text === "A private word, Riga."));
+  assert.equal(letter.status, "closed", "a letter between people is not the next player's to read");
+  assert.equal(projectForViewer({ ...s.store.docs, game: { ...s.store.docs.game, country: LATVIA } }, RUSSIA).chat.some((chat) => chat.id === letter.id), false, "nor sent to the next player of Russia");
+  assert.equal(projectForViewer({ ...s.store.docs, game: { ...s.store.docs.game, country: LATVIA } }, LATVIA).chat.some((chat) => chat.id === letter.id), true, "the other person keeps it, closed");
+});

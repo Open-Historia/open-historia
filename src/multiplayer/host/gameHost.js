@@ -24,7 +24,7 @@
 import { createRoundMachine } from "./round.js";
 import { createWorldQueue } from "./worldQueue.js";
 import { SEAT_STATUS, createSeatBook } from "./seats.js";
-import { seatFoundings, seatSuccessions, withSeatMoved } from "./foundings.js";
+import { seatFoundings, seatSuccessions, withSeatLetGo, withSeatMoved } from "./foundings.js";
 import { sessionRecordOf } from "./sessionRecord.js";
 import { REPLY_MODES, roundSettingsOf } from "./settings.js";
 import { projectForViewer } from "./projection.js";
@@ -674,6 +674,28 @@ export const createGameHost = ({
     if (inEntry) await recordHumans();
     else await queue.run("who-plays-what", recordHumans);
   };
+
+  // A seat let go (host/foundings.js withSeatLetGo): the person's own queued
+  // orders withdrawn, and what each moved on the map undone in the same write,
+  // as their own "unorder" would; their goal and advice cleared; their
+  // conversations with other people closed. `people`: who played what before.
+  const seatLetGo = async (country, people) => {
+    await store.updateForces(({ world, actions }) => {
+      const out = withSeatLetGo({ actions, world }, { country, people });
+      if (!out.withdrawn.length && JSON.stringify(out.world) === JSON.stringify(world)) return null;
+      const at = new Date(now()).toISOString();
+      const reverted = out.withdrawn.reduce((next, order) => revertOrderFor(next, order, country, { at }), out.world);
+      return { actions: out.actions, world: reverted };
+    });
+    await store.updateChats((chats) => {
+      const out = withSeatLetGo({ chats }, { country, people });
+      return JSON.stringify(out.chats) === JSON.stringify(list(chats)) ? null : out.chats;
+    });
+    log("info", "a seat was let go: its player's own orders, goal, advice and conversations with people went with them", { country });
+  };
+  // Outside an entry (a host control): one of its own, in the queue's order.
+  const letSeatGo = (country, people) => queue.run("seat-let-go", () => seatLetGo(country, people))
+    .catch((error) => log("warn", "a let-go seat's own records were not all cleared", { country, error: String(error?.message || error) }));
 
   // --- Requests ------------------------------------------------------------------
 
@@ -1694,10 +1716,12 @@ export const createGameHost = ({
         const named = seats.list().find((entry) => same(entry.country, country))?.country
           ?? seats.watching().find((entry) => same(entry.was, country))?.was;
         if (!named || same(named, hostCountry)) return null;
+        const people = seats.humanCountries();
         const device = seats.release(named);
         if (device) {
           changes.delete(device);
           if (ban) banned.add(device);
+          void letSeatGo(named, people);
         }
         void seatsChanged();
         return device;
@@ -1720,8 +1744,11 @@ export const createGameHost = ({
           return true;
         }
         const done = await queue.run("change-of-country", async () => {
+          const people = seats.humanCountries();
           const result = seats.claim(change.to, { device: change.device, name: change.name, approved: true });
           if (!result.ok) return result.reason;
+          // Its player has left the country it played: what was theirs goes with them, and what is its government's stays.
+          await seatLetGo(change.from, people);
           for (const connection of connections.values()) if (connection.device === change.device) connection.sent.clear();
           await seatsChanged({ inEntry: true });
           return "";

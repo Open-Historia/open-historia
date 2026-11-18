@@ -95,6 +95,45 @@ export const withSeatMoved = ({ actions, world, chats, intercepts }, { from, to,
   intercepts: host || !isRecord(intercepts) ? intercepts : withInterceptTable(withInterceptTable(intercepts, from, {}), to, interceptTableOf(intercepts, from)),
 });
 
+// A seat let go (the host takes the country back, or lets its player change
+// to another): what was that PERSON's goes, and the country's government keeps
+// what is its own (its board, its agents and what they brought back, its seal)
+// for whoever plays it next. The person's own: the orders they queued and had
+// not seen carried out (withdrawn, as their own "unorder" would), their
+// standing goal, the advice a round brought them, and their conversations
+// with other people, which are closed. Everything was keyed by the country, so
+// a newcomer read the last player's private letters and inherited their orders,
+// which the next skip carried out in the newcomer's name (the gap audit of
+// 2026-11-18). `people`: the countries people play, the let-go one included.
+// Returns the documents changed and the orders withdrawn (for the map's undo).
+export const PERSONAL_SEAT_RECORDS = Object.freeze(["playerGoals", "seatAdvice"]);
+export const withSeatLetGo = ({ actions, world, chats }, { country, people = [] } = {}) => {
+  const others = list(people).filter((name) => !same(name, country));
+  const withdrawn = list(actions).filter((action) => same(action?.ownerCode, country) && clean(action?.status || "planned") === "planned");
+  const between = (chat) => {
+    const parties = [clean(chat?.player), ...list(chat?.countries).map((entry) => clean(typeof entry === "object" && entry ? entry.name ?? entry.code : entry))].filter(Boolean);
+    return parties.some((name) => same(name, country)) && parties.some((name) => others.some((other) => same(other, name)));
+  };
+  return {
+    withdrawn,
+    actions: actions === undefined ? undefined : list(actions).filter((action) => !withdrawn.includes(action)),
+    world: world && typeof world === "object"
+      ? {
+        ...world,
+        ...Object.fromEntries(PERSONAL_SEAT_RECORDS
+          .filter((key) => isRecord(world[key]))
+          .map((key) => [key, Object.fromEntries(Object.entries(world[key]).filter(([name]) => !same(name, country)))])),
+      }
+      : world,
+    // Closed, and retired for the country let go: the next player of that
+    // country is not shown it (multiplayer/host/projection.js projectChats);
+    // the other person keeps it, closed.
+    chats: chats === undefined ? undefined : list(chats).map((chat) => (between(chat) && !list(chat?.retiredFor).some((name) => same(name, country))
+      ? { ...chat, status: "closed", retiredFor: [...list(chat?.retiredFor), clean(country)] }
+      : chat)),
+  };
+};
+
 // What became of the countries people play, as the world now has them, read
 // from the game's own records and never from words (server/polityRename.js,
 // runtime/gameState.js, runtime/groups.js):

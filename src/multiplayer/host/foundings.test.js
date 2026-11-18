@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { SEAT_KEYED_WORLD_RECORDS, formerNamesOf, seatFoundings, seatSuccessions, withSeatMoved } from "./foundings.js";
+import { SEAT_KEYED_WORLD_RECORDS, formerNamesOf, seatFoundings, seatSuccessions, withSeatLetGo, withSeatMoved } from "./foundings.js";
 
 const BURGHERS = "The Free Townsmen of Gullhaven";
 const HILL = "Hill folk";
@@ -157,4 +157,25 @@ test("what became of the countries people play is read from the world's own reco
   assert.deepEqual(found.gone, ["Latvia", "Ukraine", "Burgundy"]);
   // Without the game's list, a country with no record of its own is never taken for gone.
   assert.deepEqual(seatSuccessions({ world: {}, seated: ["Kestrelmark", "Burgundy"] }), { renamed: [], gone: [] });
+});
+
+// A released seat handed the next player of its country the last player's private letters and queued orders, which
+// the next skip carried out in the newcomer's name (the gap audit of 2026-11-18).
+test("a seat let go takes its person's own with it, and leaves its government's own to the next player", () => {
+  const out = withSeatLetGo({
+    actions: [{ id: "a", ownerCode: HILL, status: "planned" }, { id: "b", ownerCode: HILL, status: "resolved" }, { id: "c", ownerCode: BURGHERS, status: "planned" }],
+    world: { playerGoals: { [HILL]: { text: "Rule the hills" }, [BURGHERS]: { text: "Trade" } }, seatAdvice: { [HILL]: [{ title: "Raise levies" }] }, seatBoards: { [HILL]: [{ id: "p" }] }, seatSeals: { [HILL]: "a".repeat(64) } },
+    chats: [
+      { id: "t1", player: HILL, countries: [{ name: BURGHERS }] },
+      { id: "t2", player: BURGHERS, countries: [{ name: HILL }, { name: "Lowland Republic" }] },
+      { id: "t3", player: HILL, countries: [{ name: "Lowland Republic" }] },
+    ],
+  }, { country: HILL, people: [HILL, BURGHERS] });
+  assert.deepEqual(out.withdrawn.map((action) => action.id), ["a"], "its queued orders, never what was done");
+  assert.deepEqual(out.actions.map((action) => action.id), ["b", "c"]);
+  assert.deepEqual(Object.keys(out.world.playerGoals), [BURGHERS]);
+  assert.deepEqual(out.world.seatAdvice, {});
+  assert.deepEqual(out.world.seatBoards[HILL], [{ id: "p" }], "the government's board stays");
+  assert.equal(out.world.seatSeals[HILL], "a".repeat(64), "and its service's seal");
+  assert.deepEqual(out.chats.map((chat) => chat.status ?? "open"), ["closed", "closed", "open"], "its letters with people closed; with the AI's governments, the state's");
 });
