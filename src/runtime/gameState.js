@@ -790,6 +790,9 @@ const normalizeChatMessage = (message, index = 0) => {
   // The advisor's drafted letter a player's message was sent from (the
   // composer stamps its id: GameUI/advisorDrafts.js sentLetterDate).
   const fromDraft = normalizeOptionalString(message.fromDraft).slice(0, 160);
+  // In a shared game, the country whose player's own device wrote a
+  // government's words (runtime/chatThreads.js keeps it in the log).
+  const writtenBy = normalizeOptionalString(message.writtenBy).slice(0, 200);
 
   return {
     code: normalizeOptionalString(message.code),
@@ -806,6 +809,7 @@ const normalizeChatMessage = (message, index = 0) => {
     ...(eventId ? { eventId } : {}),
     ...(catchUp ? { catchUp, ...(catchUpLabel ? { catchUpLabel } : {}) } : {}),
     ...(fromDraft ? { fromDraft } : {}),
+    ...(writtenBy ? { writtenBy } : {}),
   };
 };
 

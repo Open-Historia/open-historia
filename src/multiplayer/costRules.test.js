@@ -11,7 +11,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { HOST_ANSWER_CHOICES, PAYER_SEES_AND_CHANGES, costRulesOf, gameMasterRuleOf, ownAiUsesOf, payerLineOf, payersLinesOf, roundCostLinesOf } from "./costRules.js";
+import { ANSWERS_PER_ROUND_CHOICES, HOST_ANSWER_CHOICES, PAYER_SEES_AND_CHANGES, costRulesOf, gameMasterRuleOf, ownAiUsesOf, payerLineOf, payersLinesOf, roundCostLinesOf } from "./costRules.js";
 import { HOST_ANSWERS_MAX, normalizeSettings } from "./host/settings.js";
 
 const rules = (input, viewer) => costRulesOf(normalizeSettings(input).settings, viewer);
@@ -20,9 +20,13 @@ const OWN_USES = "Your own AI answers your advisor and its report, AI suggestion
 test("the lobby says who pays for the round, for the governments the AI plays, and what is always each player's own", () => {
   assert.deepEqual(rules({}), [
     "The host's AI makes each round's request.",
-    "The host's AI answers messages to countries the AI plays, and writes the stat sheets, parties and military figures.",
+    "The host's AI answers up to 20 of your messages a round to countries the AI plays, Councils and hearings included; past that, the round reads them. It writes the stat sheets, parties and military figures.",
     OWN_USES,
   ]);
+  // The number is the host's (host/settings.js answersPerRound, the review of 2026-11-18: rule 10).
+  assert.match(rules({ answersPerRound: 5 })[1], /up to 5 of your messages a round/);
+  assert.match(rules({ answersPerRound: 0 })[1], /answers no messages between rounds: the round reads what you write/);
+  assert.ok(ANSWERS_PER_ROUND_CHOICES.includes(0) && ANSWERS_PER_ROUND_CHOICES.includes(20) && ANSWERS_PER_ROUND_CHOICES.at(-1) === HOST_ANSWERS_MAX);
   const cycle = rules({ payment: "cycle" });
   assert.match(cycle[0], /each player's device in turn, on that player's own AI key\. No key is sent/);
   assert.doesNotMatch(cycle[0], /only carries/, "it does more than carry: its answer is the round");
@@ -31,10 +35,12 @@ test("the lobby says who pays for the round, for the governments the AI plays, a
   assert.match(cycle[2], /passed over until it has one/);
   const own = rules({ replies: "own" });
   assert.match(own[1], /Your own AI answers your messages to countries the AI plays, and writes the stat sheets, parties and military figures you are the first to open/);
-  assert.equal(own[2], "Countries at war with you, your overlord or puppet, institutions and a conversation with a vote open are not answered between rounds: the round reads what you write to them.");
-  assert.equal(rules({ replies: "own", hostAnswers: 3 })[2], "Countries at war with you, your overlord or puppet, institutions and a conversation with a vote open are answered by the host's AI, up to 3 of your messages a round; past that, the round reads them.");
+  // What a device writes stands for everyone, and what a player has a stake in is the host's AI's (security S6).
+  assert.equal(own[2], "The figures a player's device writes for a country the AI plays stand for every player. Your own country's figures, and those of a country at war with you, are written by the host's AI.");
+  assert.equal(own[3], "Countries at war with you, your overlord or puppet, institutions and a conversation with a vote open are not answered between rounds: the round reads what you write to them.");
+  assert.equal(rules({ replies: "own", hostAnswers: 3 })[3], "Countries at war with you, your overlord or puppet, institutions and a conversation with a vote open are answered by the host's AI, up to 3 of your messages a round; past that, the round reads them.");
   // The host's own messages are never counted: what every guest reads is not what the host does.
-  assert.equal(rules({ replies: "own" }, { host: true })[2], "As the host, your messages to every country the AI plays are answered by your own AI.");
+  assert.equal(rules({ replies: "own" }, { host: true })[3], "As the host, your messages to every country the AI plays are answered by your own AI.");
   assert.ok(HOST_ANSWER_CHOICES.includes(0) && HOST_ANSWER_CHOICES.at(-1) === HOST_ANSWERS_MAX);
 });
 

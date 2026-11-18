@@ -146,6 +146,10 @@ export const normalizeChatEvent = (entry, index = 0) => {
             ...(asText(entry.catchUp) ? { catchUp: asText(entry.catchUp), ...(asText(entry.catchUpLabel) ? { catchUpLabel: asText(entry.catchUpLabel) } : {}) } : {}),
             // The advisor's drafted letter a player's line was sent from (GameUI/advisorDrafts.js).
             ...(asText(entry.fromDraft) ? { fromDraft: asText(entry.fromDraft) } : {}),
+            // In a shared game, the country whose player's own device wrote this
+            // government's words (multiplayer/host/gameHost.js "reply"): its
+            // account, which binds the government to nothing.
+            ...(asText(entry.writtenBy) ? { writtenBy: asText(entry.writtenBy).slice(0, 200) } : {}),
         };
     }
     if (kind === "reaction") {
@@ -292,6 +296,7 @@ export const eventsFromLegacyChat = (chat) => {
             catchUp: asText(message?.catchUp),
             catchUpLabel: asText(message?.catchUpLabel),
             fromDraft: asText(message?.fromDraft),
+            writtenBy: asText(message?.writtenBy),
         });
         // Reactions were a map on the message; each becomes its own event.
         const reactions = message?.reactions && typeof message.reactions === "object" ? message.reactions : {};
@@ -363,6 +368,7 @@ export const projectChatThread = (events) => {
                 ...(event.eventId ? { eventId: event.eventId } : {}),
                 ...(event.catchUp ? { catchUp: event.catchUp, ...(event.catchUpLabel ? { catchUpLabel: event.catchUpLabel } : {}) } : {}),
                 ...(event.fromDraft ? { fromDraft: event.fromDraft } : {}),
+                ...(event.writtenBy ? { writtenBy: event.writtenBy } : {}),
             };
             messages.push(message);
             messageById.set(event.id, message);
@@ -585,6 +591,7 @@ export const withUnloggedMessages = (events, messages, { threadId = "" } = {}) =
             catchUp: asText(message?.catchUp),
             catchUpLabel: asText(message?.catchUpLabel),
             fromDraft: asText(message?.fromDraft),
+            writtenBy: asText(message?.writtenBy),
         });
     }
     return additions.length ? normalizeChatEvents([...log, ...additions]) : log;

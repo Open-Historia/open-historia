@@ -636,6 +636,8 @@ const boot = async () => {
       // seat always may (host/seats.js hasRoom).
       roomFor: (device) => gameHost?.roomFor(device) ?? false,
       openSeats: () => gameHost?.openSeats() ?? 0,
+      // A player of the game is let through however many others ask to join.
+      knows: (device) => gameHost?.isMember(device) ?? false,
       // A connection closing after "stop" still reports its leaving.
       onJoin: (player) => gameHost?.join(player),
       onLeave: (player) => gameHost?.leave(player),

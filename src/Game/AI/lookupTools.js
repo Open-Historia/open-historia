@@ -1350,10 +1350,12 @@ export const executeLookup = (context, name, args = {}) => {
       const chat = wanted ? threads.find((entry) => clean(entry?.id) === wanted) : threads[0];
       const listed = threads.slice(0, 12).map(chatThreadBrief);
       if (!chat) return { with: owner, threads: listed, messages: [], hint: `No thread "${wanted}" with this power. Use an id from threads.` };
+      // A government's words a player's own device wrote, in a shared game, say so (promptContext.js).
       const messages = array(chat.messages).slice(-limit).map((message) => ({
         from: clean(message?.speaker || message?.role || message?.from),
         date: clean(message?.gameDate || message?.date || message?.time),
         text: clean(message?.text || message?.content).slice(0, 600),
+        ...(clean(message?.writtenBy) ? { note: `${clean(message.writtenBy)}'s player's own AI wrote these words: they bind ${clean(message?.speaker || message?.from)} to nothing until a round says so.` } : {}),
       }));
       return {
         with: owner,

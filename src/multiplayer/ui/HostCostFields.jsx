@@ -5,13 +5,16 @@
 //     plainly (the owner's words, decision 14);
 //   - with each player's own AI answering, how many answers of the host's AI
 //     each player has a round from a government whose answer can act
-//     (`hostAnswers`), none unless the host says;
+//     (`hostAnswers`), none unless the host says; with the host's own AI
+//     answering, how many of each player's messages it answers a round
+//     (`answersPerRound`);
 //   - whether the host may use the Game Master (`cheats`), which every player's
 //     lobby says (decision 8).
 // Then the lines every player will read under "Who pays" (multiplayer/costRules.js).
 
 import React from "react";
-import { HOST_ANSWER_CHOICES, costRulesOf } from "../costRules.js";
+import { ANSWERS_PER_ROUND_CHOICES, HOST_ANSWER_CHOICES, costRulesOf } from "../costRules.js";
+import { DEFAULT_SETTINGS } from "../host/settings.js";
 
 const label = { color: "rgba(255,255,255,0.72)", display: "block", fontSize: "0.72rem", fontWeight: 600, letterSpacing: "0.04em", marginBottom: "0.4rem", textTransform: "uppercase" };
 const input = { background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.04))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))", borderRadius: "9px", color: "#f8fafc", fontSize: "0.9rem", outline: "none", padding: "0.7rem 0.85rem", width: "100%", boxSizing: "border-box" };
@@ -44,7 +47,13 @@ export const HostCostFields = ({ settings, setSettings }) => {
             {HOST_ANSWER_CHOICES.map((count) => <option key={count} value={String(count)}>{count === 0 ? "None" : count === 1 ? "1 message" : `${count} messages`}</option>)}
           </select>
         </Field>
-      ) : null}
+      ) : (
+        <Field title="Your AI answers each player, a round" hint="Messages to countries the AI plays, Councils and hearings included. Past this, the round reads what they write.">
+          <select style={input} value={String(settings.answersPerRound ?? DEFAULT_SETTINGS.answersPerRound)} onChange={(event) => set("answersPerRound", Number(event.target.value))}>
+            {ANSWERS_PER_ROUND_CHOICES.map((count) => <option key={count} value={String(count)}>{count === 0 ? "None" : `${count} messages`}</option>)}
+          </select>
+        </Field>
+      )}
       <Field title="Game Master" hint={settings.cheats === "host" ? "Every change it makes is told to every player and listed in the lobby." : undefined}>
         <select style={input} value={settings.cheats === "host" ? "host" : "off"} onChange={(event) => set("cheats", event.target.value)}>
           <option value="off">Off</option>

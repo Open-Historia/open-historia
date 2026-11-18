@@ -22,17 +22,41 @@
 
 // `label`: an identifier for what an entry is ("round", "who-plays-what", a
 // request's type), for the host's log; never words a player reads.
+//
+// An entry may name whose it is (`owner`: a player's device, for the requests
+// it sent). The host counts what each one has waiting (waitingOf), so that one
+// player cannot fill the one queue every other player and the round wait in
+// (host/seatBounds.js), and drops what a player it let go still had waiting
+// (drop): before, a kicked or banned player's backlog still ran, under the
+// country it no longer played, and the kick's own cleaning waited behind it
+// (the review of 2026-11-18, security S2).
+export const DROPPED = "dropped";
+
 export const createWorldQueue = ({ onSettled = () => {} } = {}) => {
   let tail = Promise.resolve();
   let running = "";
   let waiting = 0;
+  // owner → the entries of theirs still waiting, each { dropped }.
+  const owned = new Map();
 
   // Applies `fn` when its turn comes; resolves or rejects with what it did.
-  // An entry that fails does not stop the ones after it.
-  const run = (label, fn) => {
+  // An entry that fails does not stop the ones after it. One dropped while it
+  // waited rejects, its error's `code` DROPPED and its message the reason,
+  // without being applied.
+  const run = (label, fn, { owner = "" } = {}) => {
     waiting += 1;
+    const ticket = { dropped: "" };
+    if (owner) {
+      if (!owned.has(owner)) owned.set(owner, new Set());
+      owned.get(owner).add(ticket);
+    }
     const entry = tail.then(async () => {
       waiting -= 1;
+      if (owner) {
+        owned.get(owner)?.delete(ticket);
+        if (!owned.get(owner)?.size) owned.delete(owner);
+      }
+      if (ticket.dropped) throw Object.assign(new Error(ticket.dropped), { code: DROPPED });
       running = String(label || "a change");
       try {
         return await fn();
@@ -47,6 +71,16 @@ export const createWorldQueue = ({ onSettled = () => {} } = {}) => {
 
   return {
     run,
+    // How many entries of `owner`'s are waiting (the one being applied not among them).
+    waitingOf: (owner) => owned.get(owner)?.size ?? 0,
+    // Every entry of `owner`'s still waiting is not applied: each rejects with
+    // `reason` when its turn comes. Returns how many there were.
+    drop(owner, reason = "This was not applied.") {
+      const tickets = owned.get(owner);
+      if (!tickets) return 0;
+      for (const ticket of tickets) ticket.dropped = String(reason);
+      return tickets.size;
+    },
     // What is being applied now ("" for nothing), and how many wait behind it.
     get running() {
       return running;

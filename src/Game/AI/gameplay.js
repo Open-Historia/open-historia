@@ -15652,7 +15652,10 @@ export const runChatActionBatch = async ({
   const lines = recent.map((message) => {
     const absent = absentFrom(message);
     // A line with no name on it was written by the thread's own player.
-    return `[${message.id}] ${message.speaker || (message.role === "user" ? threadOwner || player : "someone")}: ${message.text}`
+    // (Words a player's own device wrote for a government, in a shared game, bind it to nothing: promptContext.js.)
+    const writtenBy = normalizeString(message.writtenBy);
+    return `[${message.id}] ${message.speaker || (message.role === "user" ? threadOwner || player : "someone")}`
+      + `${writtenBy ? ` (as ${writtenBy}'s player's own AI wrote it: it binds ${message.speaker} to nothing until a round says so)` : ""}: ${message.text}`
       + (absent.length ? ` (not heard by ${absent.join(", ")})` : "");
   });
   const transcript = [

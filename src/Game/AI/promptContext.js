@@ -784,12 +784,18 @@ export const buildHistoricalAnchorText = (
     .join("\n");
 };
 
+// A shared game's line whose government's words a player's own device wrote
+// (`writtenBy`, multiplayer/host/gameHost.js "reply") is told as that: its
+// player's account, which binds the government to nothing, never the
+// government's own word (the review of 2026-11-18, security S7).
 const buildDiplomaticMessageLine = (message) => {
   const speaker = normalizeString(message?.speaker || message?.role || "message");
   const text = normalizeString(message?.text);
   const date = normalizeString(message?.time);
   const dateLabel = date ? formatDateReadable(date) : "";
-  return `${dateLabel ? `[${dateLabel}] ` : ""}${speaker}: ${text}`;
+  const writtenBy = normalizeString(message?.writtenBy);
+  const who = writtenBy ? `${speaker} (as ${writtenBy}'s player's own AI wrote it: it binds ${speaker} to nothing until a round says so)` : speaker;
+  return `${dateLabel ? `[${dateLabel}] ` : ""}${who}: ${text}`;
 };
 
 const getLatestDiplomaticMemory = (chat) => {

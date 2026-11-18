@@ -458,3 +458,20 @@ test("a small message never overtakes a large one on its way, either way", async
   assert.deepEqual(setup.events.messages.map((entry) => entry.message.data.length), [order.length, 5]);
   setup.host.stop();
 });
+
+test("a flood of offers keeps nobody of the game out, and a newcomer over the limit is told the host is busy", async () => {
+  // The per-device limit is by a key a joiner makes for itself: fresh keys spent what everyone together may ask,
+  // and a seated player coming back waited without a word (the review of 2026-11-18, security S12).
+  const seated = createIdentity();
+  const lines = [];
+  const setup = world({ seats: 4, hostLimits: { offersPerMinute: 1 }, hostOptions: { knows: (device) => device === seated.id, log: (text) => lines.push(text) } });
+  setup.host.start();
+  const first = setup.join("Ana");
+  assert.ok(await until(() => first.client.state === "connected"));
+  const flood = setup.join("Ben");
+  assert.ok(await until(() => lines.some((line) => /told to try again/.test(line))), "the newcomer over the limit is denied, busy");
+  const back = setup.join("Cleo", { device: seated });
+  assert.ok(await until(() => back.client.state === "connected"), "a player of the game is let through");
+  assert.notEqual(flood.client.state, "connected");
+  setup.host.stop();
+});

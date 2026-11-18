@@ -76,6 +76,9 @@ export const createHostSession = ({
   // never seen them. Without them, the connections open now are counted.
   roomFor = null,
   openSeats = null,
+  // Whether a device is a player of the game (host/gameHost.js isMember): it
+  // is let through however many others are asking to join.
+  knows = null,
   onJoin = () => {},
   onLeave = () => {},
   onMessage = () => {},
@@ -103,6 +106,8 @@ export const createHostSession = ({
   const answered = new Map();
   const banned = new Set();
   const offerLog = [];
+  // When this minute's offers were told "busy".
+  const busyLog = [];
   const deviceOffers = new Map();
 
   const seated = () => [...players.values()].filter((player) => player.status === "connected").length;
@@ -150,16 +155,26 @@ export const createHostSession = ({
     channel?.publish(signPayload("deny", { t: "deny", v: PROTOCOL_VERSION, session, reason, ts: now() }));
   };
 
+  // "" when an offer may be answered; "device" when its device has asked too
+  // often (ignored), "busy" when everyone together has (denied "busy", so the
+  // joiner tries again later and is told why). A device the game knows (a
+  // player in it: `knows`) is never held to what everyone together may ask:
+  // the per-device limit is by a key a joiner makes for itself, so a flood of
+  // offers under fresh keys kept every seated player out, and they waited
+  // without a word (the review of 2026-11-18, security S12).
   const withinRate = (device) => {
     const cutoff = now() - 60_000;
     while (offerLog.length && offerLog[0] < cutoff) offerLog.shift();
-    if (offerLog.length >= limits.offersPerMinute) return false;
+    while (busyLog.length && busyLog[0] < cutoff) busyLog.shift();
+    for (const [key, times] of deviceOffers) if (!times.some((at) => at >= cutoff)) deviceOffers.delete(key);
     const mine = (deviceOffers.get(device) ?? []).filter((at) => at >= cutoff);
-    if (mine.length >= limits.offersPerDevicePerMinute) return false;
-    offerLog.push(now());
+    if (mine.length >= limits.offersPerDevicePerMinute) return "device";
+    const member = byDevice.has(device) || (typeof knows === "function" && Boolean(knows(device)));
+    if (!member && offerLog.length >= limits.offersPerMinute) return "busy";
+    if (!member) offerLog.push(now());
     mine.push(now());
     deviceOffers.set(device, mine);
-    return true;
+    return "";
   };
 
   // One message at a time to each player: a large one (a view of the world is
@@ -328,7 +343,14 @@ export const createHostSession = ({
       return;
     }
     if (pending.has(offer.session)) return;
-    if (!withinRate(offer.device)) return log(`an offer from ${offer.name} was over the rate limit and was ignored`);
+    const rate = withinRate(offer.device);
+    if (rate === "busy" && busyLog.length < limits.offersPerMinute) {
+      // As many denials a minute as offers, at most: a flood is not answered in kind.
+      busyLog.push(now());
+      log(`an offer from ${offer.name} came while too many were asking at once, and was told to try again`);
+      return deny(offer.session, "busy");
+    }
+    if (rate) return log(`an offer from ${offer.name} was over the rate limit and was ignored`);
     if (banned.has(offer.device) || isBanned(offer.device)) return deny(offer.session, "banned");
     if (offer.version !== roomInfo.version) {
       log(`${offer.name} is on another version of the game (${offer.version}, this is ${roomInfo.version}) and was turned away`);

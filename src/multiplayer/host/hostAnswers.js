@@ -65,3 +65,13 @@ export const hostAnswersSpent = (limit) => (bounded(limit) > 0
 export const hostTurnsSpent = (limit) => (bounded(limit) > 0
   ? `The host's AI answers at most ${bounded(limit)} of your messages a round to a government that can act on them, and you have had them this round. Ask again next round.`
   : "In this game the host's AI holds no Council or hearing turns between rounds. The round reads the institution's business.");
+
+// And with the host's own AI answering every government ("host"): the number
+// the host set for each player a round (settings.answersPerRound), a Council's
+// or a hearing's turn and a Retry among them.
+export const liveAnswersSpent = (limit) => (bounded(limit) > 0
+  ? `The host's AI answers at most ${bounded(limit)} of your messages a round. This one waits for the round, which reads it.`
+  : "In this game the host's AI does not answer messages between rounds. Yours is written, and the round reads it.");
+export const liveTurnsSpent = (limit) => (bounded(limit) > 0
+  ? `The host's AI answers at most ${bounded(limit)} of your messages a round, Councils and hearings among them, and you have had them this round. Ask again next round.`
+  : "In this game the host's AI holds no Council or hearing turns between rounds. The round reads the institution's business.");

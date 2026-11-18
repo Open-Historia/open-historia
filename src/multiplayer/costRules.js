@@ -15,12 +15,15 @@
 //
 // Pure but for the settings' own bounds.
 
-import { HOST_ANSWERS_MAX } from "./host/settings.js";
+import { DEFAULT_SETTINGS, HOST_ANSWERS_MAX } from "./host/settings.js";
 
 // The choices the host is offered for its number of answers a round (host/settings.js hostAnswers).
 export const HOST_ANSWER_CHOICES = Object.freeze([0, 1, 2, 3, 5, 10, 20, HOST_ANSWERS_MAX]);
 
 const hostAnswersOf = (settings) => Math.max(0, Math.trunc(Number(settings?.hostAnswers) || 0));
+// The choices the host is offered for its number of answers a round with its own AI answering (`answersPerRound`).
+export const ANSWERS_PER_ROUND_CHOICES = Object.freeze([0, 5, 10, 20, HOST_ANSWERS_MAX]);
+const answersPerRoundOf = (settings) => Math.max(0, Math.trunc(Number(settings?.answersPerRound ?? DEFAULT_SETTINGS.answersPerRound) || 0));
 
 // What the paying player's device can do with a round, in the owner's words
 // when he chose it (decision 14: "that round's payer sees every player's orders
@@ -42,6 +45,8 @@ export const costRulesOf = (settings = {}, { host = false } = {}) => {
   }
   if (settings?.replies === "own") {
     lines.push("Your own AI answers your messages to countries the AI plays, and writes the stat sheets, parties and military figures you are the first to open.");
+    // What a device writes stands for everyone (the review of 2026-11-18, security S6).
+    lines.push("The figures a player's device writes for a country the AI plays stand for every player. Your own country's figures, and those of a country at war with you, are written by the host's AI.");
     const most = hostAnswersOf(settings);
     if (host) {
       lines.push("As the host, your messages to every country the AI plays are answered by your own AI.");
@@ -51,7 +56,11 @@ export const costRulesOf = (settings = {}, { host = false } = {}) => {
         : "Countries at war with you, your overlord or puppet, institutions and a conversation with a vote open are not answered between rounds: the round reads what you write to them.");
     }
   } else {
-    lines.push("The host's AI answers messages to countries the AI plays, and writes the stat sheets, parties and military figures.");
+    // A number the host sets (host/settings.js answersPerRound; rule 10).
+    const most = answersPerRoundOf(settings);
+    lines.push(most > 0
+      ? `The host's AI answers up to ${most} of your messages a round to countries the AI plays, Councils and hearings included; past that, the round reads them. It writes the stat sheets, parties and military figures.`
+      : "The host's AI answers no messages between rounds: the round reads what you write to countries the AI plays. It writes the stat sheets, parties and military figures.");
   }
   lines.push("Your own AI answers your advisor and its report, AI suggestions, Plan it and Improve on your projects, Assess progress on your goal, your generals and Rostra Search.");
   return lines;

@@ -666,9 +666,12 @@ test("a stat sheet is written by the host when a player's Stats pane has none, a
   assert.deepEqual(s.sheets, [{ country: RUSSIA, seat: RUSSIA }]);
   assert.equal(s.shown(s.guest).world.countryStats[RUSSIA].capital, "A capital");
   assert.equal(s.shown(s.hostPlayer).world.countryStats[RUSSIA].capital, "A capital", "a sheet is public");
-  // The host's reason for failing is the player's answer.
+  // The host's reason for failing is the player's answer, in the host's words; the host reads the provider's own
+  // (host/failureWords.js: they name the host's model and provider).
   await s.request(s.guest, { t: "sheet", id: id(3), country: ESTONIA });
-  assert.equal(s.ack(s.guest, id(3)).error, "The model did not answer.");
+  assert.equal(s.ack(s.guest, id(3)).error, "The host could not write that country's figures.");
+  await s.request(s.hostPlayer, { t: "sheet", id: id(4), country: ESTONIA });
+  assert.equal(s.ack(s.hostPlayer, id(4)).error, "The model did not answer.");
   // On the host's own key, as many as are asked for: no count a round.
   for (let n = 0; n < 12; n += 1) await s.request(s.guest, { t: "sheet", id: id(10 + n), country: n % 2 ? LATVIA : RUSSIA });
   assert.ok(Array.from({ length: 12 }, (_, n) => s.ack(s.guest, id(10 + n)).ok).every(Boolean));
@@ -707,11 +710,19 @@ test("with each player's own AI, a missing sheet is written on the asking device
   // A country another person plays is that player's own to read: a rival's figures are nobody else's to write first.
   await s.request(s.guest, { t: "sheet", id: id(10), country: LATVIA });
   assert.match(s.ack(s.guest, id(10)).error, /player of that country opens them/);
-  // What is no whole sheet is refused with the reason.
+  // The player's own country is never its own device's to write: the war and the spies act on those figures
+  // (host/ownReadings.js). The host's AI writes it, as it writes a sheet where the host's AI answers.
   await s.request(s.guest, { t: "sheet", id: id(11), country: RUSSIA });
-  assert.deepEqual(s.ack(s.guest, id(11)).result, { answer: "own" }, "the player's own country is its own to read");
-  await s.request(s.guest, { t: "ownSheet", id: id(6), country: RUSSIA, sheet: { stability: 3 } });
-  assert.match(s.ack(s.guest, id(6)).error, /not a whole stat sheet/);
+  assert.deepEqual([s.ack(s.guest, id(11)).ok, s.ack(s.guest, id(11)).result], [true, undefined]);
+  assert.deepEqual(s.sheets.at(-1), { country: RUSSIA, seat: RUSSIA });
+  await s.request(s.guest, { t: "ownSheet", id: id(6), country: RUSSIA, sheet: { capital: "Moscow", stability: 100 } });
+  assert.match(s.ack(s.guest, id(6)).error, /not left to your device/);
+  // What is no whole sheet is refused with the reason.
+  delete s.store.docs.world.countryStats[ESTONIA];
+  await s.request(s.guest, { t: "sheet", id: id(12), country: ESTONIA });
+  await s.request(s.guest, { t: "ownSheet", id: id(13), country: ESTONIA, sheet: { stability: 3 } });
+  assert.match(s.ack(s.guest, id(13)).error, /not a whole stat sheet/);
+  s.store.docs.world.countryStats[ESTONIA] = { capital: "Tallinn", stability: 62 };
   // Once the host's AI writes the figures again, a device's are not taken.
   s.host.control.setReplies("host");
   await s.request(s.guest, { t: "ownSheet", id: id(7), country: RUSSIA, sheet: { capital: "Moscow" } });
@@ -1260,7 +1271,8 @@ test("with each player's own AI, a reading is left once, to the first to ask, un
 
 test("with each player's own AI, countries' figures are left to the asking device, and taken from it once, only for what it was left", async () => {
   const taken = [];
-  const s = setup({ settings: { replies: "own" }, rateMilitary: async () => assert.fail("the host's AI is not asked"), takeRatings: async (ratings) => { taken.push(...ratings); } });
+  const rated = [];
+  const s = setup({ settings: { replies: "own" }, rateMilitary: async ({ countries }) => { rated.push(...countries); }, takeRatings: async (ratings) => { taken.push(...ratings); } });
   s.host.join(s.hostPlayer);
   s.host.join(s.guest);
   await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
@@ -1268,7 +1280,9 @@ test("with each player's own AI, countries' figures are left to the asking devic
   await s.request(s.guest, { t: "ratings", id: id(2), countries: [ESTONIA, LATVIA, RUSSIA] });
   const answer = s.ack(s.guest, id(2));
   assert.equal(validate(HOST_MESSAGES.ack, answer).ok, true);
-  assert.deepEqual(answer.result, { answer: "own", countries: [ESTONIA, RUSSIA] }, "the host's country is the host's own device's to rate");
+  assert.deepEqual(answer.result, { answer: "own", countries: [ESTONIA] }, "the host's country is the host's own device's to rate");
+  // Its own country's figures are the host's AI's to rate (host/ownReadings.js).
+  assert.deepEqual(rated, [RUSSIA]);
   const figures = { quality: 55, technology: 50, land: 60, sea: 20, air: 30, spending: 45, manpowerShare: 10, cavalryShare: 0.1, siegeShare: 0.1 };
   // Figures for a country not left to it are refused; those left to it are taken once.
   await s.request(s.guest, { t: "ownRatings", id: id(3), ratings: [{ country: LATVIA, military: figures }] });
@@ -1898,8 +1912,11 @@ test("a round that cannot be resolved says why on every screen until one is, and
   assert.equal(after.phase, "planning");
   assert.equal(after.round, 1, "the same round, planned again");
   assert.equal(after.failed, 1);
-  assert.match(after.failure, /quota is used up/);
-  assert.match(s.to(s.guest, "notice").at(-1).text, /Round 1 could not be resolved: The model's quota is used up/);
+  // The host reads why as it came; every other player in the host's words (host/failureWords.js).
+  assert.equal(after.failure, "The host's AI could not write the round.");
+  assert.match(s.to(s.hostPlayer, "round").at(-1).failure, /quota is used up/);
+  assert.equal(s.to(s.guest, "notice").at(-1).text, "Round 1 could not be resolved: The host's AI could not write the round. Its orders are still queued, and the host can end the round again.");
+  assert.match(s.to(s.hostPlayer, "notice").at(-1).text, /Round 1 could not be resolved: The model's quota is used up/);
   assert.equal(validate(HOST_MESSAGES.round, after).ok, true);
   assert.ok(s.store.docs.actions.some((action) => action.text === "Hold the line at Narva" && action.status === "planned"));
   // The host tries again, and it lands: the failure is no longer said.

@@ -24,6 +24,13 @@
 //     are the host's requests, so they are a number the host sets, none unless
 //     it says (rule 3: anything extra is off by default). Beyond it a line is
 //     still written, and the round reads it;
+//   - with `replies` "host", how many of each player's messages a round the
+//     host's AI answers (`answersPerRound`), a Council's or a hearing's turn
+//     and a Retry counted as a message. They were answered without limit, so
+//     one guest writing each line to a new conversation spent the host's whole
+//     day of requests, and then every round failed for everyone (the review of
+//     2026-11-18, security S5; rule 10: anything extra is a number the host
+//     sets). Beyond it a line is still written, and the round reads it;
 //   - who answers a player's message to a government the AI plays (`replies`):
 //     the host's computer on the host's key ("host"), or the writer's own
 //     device on the writer's own key ("own"). The owner, 2026-11-15: "build C
@@ -58,7 +65,7 @@ export const HOST_ANSWERS_MAX = 50;
 // Keys a record or a lobby from before they existed may lack: read as their
 // default (normalizeSettings), never a reason to refuse the whole of it. A
 // session record whose settings did not read was dropped whole, seats and all.
-const LATER_KEYS = Object.freeze(["hostAnswers", "postsPerRound"]);
+const LATER_KEYS = Object.freeze(["hostAnswers", "postsPerRound", "answersPerRound"]);
 // The most Rostra posts the host may allow each player a round.
 export const POSTS_PER_ROUND_MAX = 50;
 // The languages a world can be written in (runtime/i18n.js LANGUAGES), by code.
@@ -82,6 +89,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   language: "",
   hostAnswers: 0,
   postsPerRound: 5,
+  answersPerRound: 20,
 });
 
 export const SETTINGS_SCHEMA = obj({
@@ -102,6 +110,7 @@ export const SETTINGS_SCHEMA = obj({
   language: str(16, { enum: ["", ...WORLD_LANGUAGES] }),
   hostAnswers: int(0, HOST_ANSWERS_MAX),
   postsPerRound: int(1, POSTS_PER_ROUND_MAX),
+  answersPerRound: int(0, HOST_ANSWERS_MAX),
 }, LATER_KEYS);
 
 // Whether the host may use the Game Master in this game (`cheats`).

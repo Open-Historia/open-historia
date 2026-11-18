@@ -22,18 +22,21 @@
 // in node and the same code runs in the host's engine window.
 
 import { createRoundMachine } from "./round.js";
-import { createWorldQueue } from "./worldQueue.js";
+import { DROPPED, createWorldQueue } from "./worldQueue.js";
+import { BOUND_REFUSALS, SEAT_WAITING_MOST, advisorPastBound, createSeatBounds } from "./seatBounds.js";
+import { failureWords, guestFailureWords } from "./failureWords.js";
+import { stakeIn } from "./ownReadings.js";
 import { SEAT_STATUS, createSeatBook } from "./seats.js";
 import { formerNamesOf, groundHeldBy, seatFoundings, seatSuccessions, withGameCountryChanged, withSeatLetGo, withSeatMoved } from "./foundings.js";
 import { holdSeatRecords, returnSeatRecords } from "./heldSeats.js";
 import { sessionRecordOf } from "./sessionRecord.js";
 import { DEFAULT_SETTINGS, REPLY_MODES, gameMasterAllowed, roundSettingsOf } from "./settings.js";
-import { createHostAnswers, hostAnswersSpent, hostTurnsSpent } from "./hostAnswers.js";
+import { createHostAnswers, hostAnswersSpent, hostTurnsSpent, liveAnswersSpent, liveTurnsSpent } from "./hostAnswers.js";
 import { createRoundPayers } from "./roundPayers.js";
 import { GAME_MASTER_COMMAND_MAX, gameMasterEntryOf, gameMasterNotice, keptGameMasterLog, withGameMasterEntry } from "./gameMaster.js";
 import { projectForViewer } from "./projection.js";
 import { COUNTRY_MAX_CHARS, HOST_MESSAGES, ORDER_MAX_CHARS, ORDER_TITLE_MAX, THREAD_MEMBERS_MAX, THREAD_TITLE_MAX, VIEW_KEYS } from "../game/messages.js";
-import { createPlayerPollEvent, eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
+import { createPlayerPollEvent, eventsFromLegacyChat, projectChatThread, withUnloggedMessages } from "../../runtime/chatThreads.js";
 import { openDemandOf, playerAnswerEvent, playerDemandEvent } from "../../runtime/demandCheck.js";
 import { livePuppetsFor } from "../../runtime/puppets.js";
 import { validate } from "../protocol/validate.js";
@@ -87,7 +90,11 @@ const AT_ONCE = new Set(["ready", "revealed", "viewed", "paid", "payLookup", "pa
 // Judged by the device that sends them, not by a seat (host/roundPayers.js:
 // only the device a request was sent to may answer it). A payer the host let
 // go of had its answer refused for having no seat, and the round waited for ever.
-const SEATLESS = new Set(["pick", "unpick", "paid", "payLookup", "payAlive", "canPay"]);
+// And what a page did with a view, which a player watching a country that is
+// gone is sent as well: its word was refused, so its whole view was sent again
+// every minute and a gap it reported was never mended (the review of
+// 2026-11-18, security S11). It needs a view of its own (receive).
+const SEATLESS = new Set(["pick", "unpick", "paid", "payLookup", "payAlive", "canPay", "viewed"]);
 // Their thinking is the AI's, done outside the queue so it holds nobody up;
 // what they write is put in the queue (a stat sheet under the game's own lock,
 // an institution's business by the desk, engineMain.js).
@@ -336,6 +343,10 @@ export const createGameHost = ({
   // With "own": the answers of the host's AI each player may have a round from
   // a government whose answer can act (settings.hostAnswers, host/hostAnswers.js).
   const hostAnswers = createHostAnswers({ limit: settings.hostAnswers });
+  // With "host": every answer of the host's AI each player may have a round
+  // (settings.answersPerRound), which was without limit.
+  const liveAnswers = createHostAnswers({ limit: settings.answersPerRound ?? DEFAULT_SETTINGS.answersPerRound });
+  const answersNow = () => (replies === "own" ? hostAnswers : liveAnswers);
   // The settings as they stand, the host's changes during the game included.
   const settingsNow = () => ({ ...settings, replies, hostAnswers: hostAnswers.limit });
   // With settings.payment "cycle": whose device makes each round's request
@@ -415,6 +426,15 @@ export const createGameHost = ({
   // A request that waits for the round being resolved is said to at once, and
   // its page waits for its answer (host/requestWaits.js).
   const waits = createRequestWaits({ tell: (device, message) => answerDevice(device, message), thinking: THINKING });
+  // How much each player can make the host do (host/seatBounds.js), kept by
+  // the seat's id, as all the host keeps for a seat.
+  const bounds = createSeatBounds({ now });
+  // A reading on the host's AI for a seat: the same one under way is that one,
+  // and a player's run one after another, so many at most; the host's own are
+  // not held to the number.
+  const hostReading = (connection, seat, key, job) => bounds.read(seat.id || seat.country, key, job, isHost(connection) ? { most: Infinity } : {});
+  // Why the host's AI did not do it, as the asker is told (host/failureWords.js).
+  const failureFor = (connection, failure, fallback) => failureWords(failure, { toHost: isHost(connection), fallback }).slice(0, 280) || fallback;
 
   // The session as it stands, saved with the game (host/sessionRecord.js) at
   // once, one write at a time, once for however many changes asked while one
@@ -519,7 +539,17 @@ export const createGameHost = ({
     ...(gameMasterLog.length ? { gameMaster: gameMasterLog } : {}),
   });
 
-  const roundMessage = (status) => ({
+  // Why the last round failed, in the host's words, for every player but the
+  // host (host/failureWords.js); a round the host called off says so to all.
+  let failedForGuests = "";
+  let failedPayer = "";
+  const seesFailure = (connection) => !connection || isHost(connection) || (Boolean(failedPayer) && connection.device === failedPayer);
+  const failureSeenBy = (status, connection) => {
+    if (!status.failure) return "";
+    if (seesFailure(connection) || roundCancelled) return status.failure.reason;
+    return failedForGuests || "The host's AI could not write the round.";
+  };
+  const roundMessage = (status, connection = null) => ({
     t: "round",
     phase: status.phase,
     round: status.round,
@@ -529,7 +559,7 @@ export const createGameHost = ({
     counted: status.counted.length,
     needed: status.needed,
     failed: status.failure?.round ?? 0,
-    failure: clean(status.failure?.reason).slice(0, 300),
+    failure: clean(failureSeenBy(status, connection)).slice(0, 300),
     // Whose device makes this round's request, with settings.payment "cycle".
     ...(payingCountry(status) && fits(payingCountry(status)) ? { payer: payingCountry(status) } : {}),
   });
@@ -595,10 +625,13 @@ export const createGameHost = ({
   // Each view names the view it follows and what every document adds up to, so
   // the page can tell it has all of it (client/remoteRuntime.js check). Pushes
   // run one at a time, in order.
-  const pushViews = () => {
+  // `only`: one connection's, when only its page asked (resend): a page asking
+  // for its whole view again had every player's projected each time, every two
+  // seconds if it liked (the review of 2026-11-18, security S2).
+  const pushViews = (only = null) => {
     pushing = pushing.then(async () => {
       if (stopped) return;
-      const seated = [...connections.values()].filter((connection) => viewerOf(connection));
+      const seated = [...connections.values()].filter((connection) => viewerOf(connection) && (!only || connection === only));
       if (!seated.length) return;
       const docs = await store.read();
       for (const connection of seated) {
@@ -639,7 +672,7 @@ export const createGameHost = ({
     connection.resyncAt = now();
     connection.sent.clear();
     log("info", "a player is sent their whole view again", { player: connection.id, why });
-    void pushViews();
+    void pushViews(connection);
   };
   // Views a page has not said it applied, long after they were sent.
   const checkAcks = () => {
@@ -712,8 +745,7 @@ export const createGameHost = ({
     now,
     timers,
     onChange: (status) => {
-      const message = roundMessage(status);
-      for (const connection of connections.values()) send(connection, message);
+      for (const connection of connections.values()) send(connection, roundMessage(status, connection));
       onStatus({ lobby: lobbyFor(null), round: status });
       if (status.phase === "resolving") waits.roundBegan();
       // Where the rounds are is saved with the game, to be taken up there again.
@@ -771,9 +803,15 @@ export const createGameHost = ({
         // planning without a word, and fail again twenty minutes later.
         if (!stopped) {
           const why = clean(error?.message || error).slice(0, 280) || "the host's AI did not answer.";
+          // The host is told it as it came, and so is the device that paid the
+          // round, of its own AI; everyone else in the host's words
+          // (host/failureWords.js): the provider's own named the host's model,
+          // and its round bar too.
+          failedPayer = carry ? payer.device : "";
+          failedForGuests = carry ? `${payer.country}'s device could not make the round's request.` : guestFailureWords(error, "The host's AI could not write the round.");
           log("warn", "the round could not be resolved", { round: number, error: why });
           for (const connection of connections.values()) {
-            send(connection, notice("warn", `Round ${number} could not be resolved: ${why} Its orders are still queued, and the host can end the round again.`));
+            send(connection, notice("warn", `Round ${number} could not be resolved: ${seesFailure(connection) ? why : failedForGuests} Its orders are still queued, and the host can end the round again.`));
           }
         }
         throw error;
@@ -1041,7 +1079,20 @@ export const createGameHost = ({
     const settled = turn.then(() => {}, () => {});
     table.tail = settled;
     void settled.then(() => {
-      if (table.tail === settled) tables.delete(chatId);
+      if (table.tail === settled && !table.waiting.size) tables.delete(chatId);
+    });
+    return turn;
+  };
+  // And each seat's answers on the host's AI one after another, whatever the
+  // table: a line to a new conversation each time was as many requests at once.
+  // `who`: the seat's id.
+  const seatAnswers = new Map();
+  const inSeatTurn = (who, job) => {
+    const turn = (seatAnswers.get(who) ?? Promise.resolve()).then(job);
+    const settled = turn.then(() => {}, () => {});
+    seatAnswers.set(who, settled);
+    void settled.then(() => {
+      if (seatAnswers.get(who) === settled) seatAnswers.delete(who);
     });
     return turn;
   };
@@ -1058,7 +1109,7 @@ export const createGameHost = ({
     const who = seat.id;
     if (table.waiting.has(who)) return;
     table.waiting.add(who);
-    void onTable(chatId, async () => {
+    void inSeatTurn(seat.id, () => onTable(chatId, async () => {
       table.waiting.delete(who);
       const outcome = await replyTo({ chatId, seat: seat.country });
       // (Its writing was an entry in the queue: every view follows on its own,
@@ -1067,7 +1118,7 @@ export const createGameHost = ({
         tellSeat(seat.id, "warn", `The host's AI could not be reached: ${governments.join(", ")} did not answer. Write again to ask once more.`.slice(0, 500));
       }
       return outcome;
-    }).catch((error) => {
+    })).catch((error) => {
       table.waiting.delete(who);
       log("warn", "reply failed", { error: String(error?.message || error) });
     });
@@ -1077,10 +1128,15 @@ export const createGameHost = ({
   // seat this round (host/hostAnswers.js). The host's own lines are its own
   // key's either way and are never counted, and a line written while the
   // seat's answer at that table still waits is answered with it, for nothing.
+  // With "host", one of every answer the host's AI gives this seat this round
+  // (settings.answersPerRound), on the same terms.
   // (Counted for the seat, by its id: a rename starts no count afresh.)
   const hostAnswerFor = (connection, seat, chatId) => isHost(connection)
     || Boolean(chatId && tables.get(chatId)?.waiting.has(seat.id))
-    || hostAnswers.take(seat.id, round.status().round);
+    || answersNow().take(seat.id, round.status().round);
+  // What the writer is told when it has had them (host/hostAnswers.js).
+  const answersSpent = () => (replies === "own" ? hostAnswersSpent(hostAnswers.limit) : liveAnswersSpent(liveAnswers.limit));
+  const turnsSpent = () => (replies === "own" ? hostTurnsSpent(hostAnswers.limit) : liveTurnsSpent(liveAnswers.limit));
 
   // A line left to its writer's own device to answer.
   const awaitOwnReply = (line, entry) => {
@@ -1122,11 +1178,12 @@ export const createGameHost = ({
       awaitOwnReply(line, { thread: chatId, seat: writer.id });
       return { answer: "own", line, governments: governments.slice(0, 16) };
     }
-    // Past what the host's AI gives each player a round with each player's own
-    // AI (settings.hostAnswers, host/hostAnswers.js): the line stands, and the
-    // round reads it. A Retry (the "answer" request) counts as the line did.
-    if (replies === "own" && !hostAnswerFor(connection, writer, chatId)) {
-      tell(seat, "info", hostAnswersSpent(hostAnswers.limit));
+    // Past what the host's AI gives each player a round (settings.hostAnswers
+    // with each player's own AI, settings.answersPerRound with the host's,
+    // host/hostAnswers.js): the line stands, and the round reads it. A Retry
+    // (the "answer" request) counts as the line did.
+    if (!hostAnswerFor(connection, writer, chatId)) {
+      tell(seat, "info", answersSpent());
       return { answer: "round" };
     }
     answerOnHost(chatId, writer, governments);
@@ -1453,12 +1510,19 @@ export const createGameHost = ({
       try {
         if (replies === "own" && !(await hasSheet(name))) {
           if (playedByAnother(name, seat)) return "Its figures are written when the player of that country opens them.";
-          if (!leaveReading("sheet", name, seat)) return "Its figures are being written on another player's device: they show here when they are done.";
-          return { error: "", result: { answer: "own" } };
+          // Figures the war and the spies act on, of a country the asker has a
+          // stake in, are the host's AI's to write (host/ownReadings.js).
+          if (!stakeIn(name, seat, (await store.read())?.world)) {
+            if (!leaveReading("sheet", name, seat)) return "Its figures are being written on another player's device: they show here when they are done.";
+            return { error: "", result: { answer: "own" } };
+          }
         }
-        await readCountry({ country: name, seat: seat.country });
+        // One at a time for each player, each country's once (host/seatBounds.js).
+        const reading = hostReading(connection, seat, `sheet|${fold(name)}`, () => readCountry({ country: name, seat: seat.country }));
+        if (!reading) return BOUND_REFUSALS.readings;
+        await reading;
       } catch (failure) {
-        return clean(failure?.message || failure).slice(0, 280) || "The host could not write that country's figures.";
+        return failureFor(connection, failure, "The host could not write that country's figures.");
       }
       round.touch(seat.country);
       return "";
@@ -1491,22 +1555,28 @@ export const createGameHost = ({
     // none: what stands is never rated again.
     ratings: async (connection, { countries }, seat) => {
       const known = list(countries).map((name) => countriesNow.find((country) => same(country, name))).filter(Boolean);
-      const wanted = known.length ? unratedOf((await store.read())?.world ?? {}, known) : [];
+      const world = known.length ? (await store.read())?.world ?? {} : {};
+      const wanted = known.length ? unratedOf(world, known) : [];
       if (!wanted.length) return "";
+      // With each player's own AI: what no other person plays and the asker has
+      // no stake in (host/ownReadings.js) is left to its device; its own
+      // country's and its enemies' the host's AI rates.
+      const hosts = replies === "own" ? wanted.filter((name) => !playedByAnother(name, seat) && stakeIn(name, seat, world)) : wanted;
       if (replies === "own") {
         // (Those another device is rating come with the view when it is done.)
         const left = [];
         for (const name of wanted) {
           if (left.length >= RATINGS_LEFT_MOST) break;
-          if (!playedByAnother(name, seat) && leaveReading("military", name, seat)) left.push(name);
+          if (!playedByAnother(name, seat) && !stakeIn(name, seat, world) && leaveReading("military", name, seat)) left.push(name);
         }
+        if (hosts.length) void rateMilitary({ countries: hosts }).catch((failure) => log("warn", "the host could not rate the figures a player has a stake in", { error: String(failure?.message || failure) }));
         return left.length ? { error: "", result: { answer: "own", countries: left } } : "";
       }
       let refused = "";
       try {
-        refused = clean((await rateMilitary({ countries: wanted }))?.refused);
+        refused = clean((await rateMilitary({ countries: hosts }))?.refused);
       } catch (failure) {
-        return clean(failure?.message || failure).slice(0, 280) || "The host could not rate those figures.";
+        return failureFor(connection, failure, "The host could not rate those figures.");
       }
       round.touch(seat.country);
       // A rating not made is said, with why (rule 10): the ranking stayed part
@@ -1610,16 +1680,23 @@ export const createGameHost = ({
     // but the seat's.
     advisor: async (connection, { records, threads, receipts }, seat) => {
       if (typeof store.updateAdvisor !== "function") return "Your advisor's conversation is not kept here.";
+      let refusal = "";
       try {
         await store.updateAdvisor((file) => {
           const own = advisorOfSeat(file, seat.country, { gameCountry: hostCountry });
           const next = withAdvisorChanges(own, { records, threads, receipts });
+          // Every seat's is kept in one file, which every request reads: one
+          // player's grows only as far as the host keeps (host/seatBounds.js).
+          if (!isHost(connection) && advisorPastBound(own, next)) {
+            refusal = BOUND_REFUSALS.advisor;
+            return null;
+          }
           return JSON.stringify(next) === JSON.stringify(own) ? null : withSeatAdvisor(file, seat.country, next, { gameCountry: hostCountry });
         });
       } catch (failure) {
         return clean(failure?.message || failure).slice(0, 300) || "Your advisor's conversation could not be saved.";
       }
-      return "";
+      return refusal;
     },
     goal: async (connection, { text }, seat) => {
       // The game's own rule for a standing goal (runtime/playerGoal.js).
@@ -1723,9 +1800,7 @@ export const createGameHost = ({
       // A Council's or a hearing's turn is the host's AI answering for the
       // governments there, which vote and decide: with each player's own AI,
       // one of the answers the host gives this seat this round.
-      if (replies === "own" && ["council", "hearing"].includes(call) && !hostAnswerFor(connection, seat, "")) {
-        return hostTurnsSpent(hostAnswers.limit);
-      }
+      if (["council", "hearing"].includes(call) && !hostAnswerFor(connection, seat, "")) return turnsSpent();
       try {
         // A Council's or a hearing's turn is the table's next (onTable).
         const made = await institution({ seat: seat.country, call, args: args ?? {}, onTable });
@@ -1817,9 +1892,14 @@ export const createGameHost = ({
           if (!leaveReading("parties", name, seat)) return "Its parties are being filled in on another player's device: they show here when they are done.";
           return { error: "", result: { answer: "own" } };
         }
-        await compileParties({ country: name });
+        // One reading of a country's parties at a time, whoever asks, and a
+        // player's one after another (host/seatBounds.js): a burst for one
+        // country was as many requests.
+        const reading = hostReading(connection, seat, `parties|${fold(name)}`, () => compileParties({ country: name }));
+        if (!reading) return BOUND_REFUSALS.readings;
+        await reading;
       } catch (failure) {
-        return clean(failure?.message || failure).slice(0, 280) || "The host could not fill in those parties.";
+        return failureFor(connection, failure, "The host could not fill in those parties.");
       }
       round.touch(seat.country);
       return "";
@@ -1863,16 +1943,24 @@ export const createGameHost = ({
       if (!same(name, seat.country) && !(isHost(connection) && ais)) {
         return "You change your own country's flag; the host changes those of the countries the AI plays.";
       }
+      // A few a round (host/seatBounds.js): each sends every player the flags again.
+      const turn = round.status().round;
+      if (!isHost(connection) && bounds.spent("flags", seat.id, turn)) return BOUND_REFUSALS.flags;
       try {
         await setFlag({ country: name, image: clean(image) });
       } catch (failure) {
         return clean(failure?.message || failure).slice(0, 280) || "The flag could not be changed.";
       }
+      if (!isHost(connection)) bounds.take("flags", seat.id, turn);
       round.touch(seat.country);
       return "";
     },
     thread: async (connection, { op, thread, title, members }, seat) => {
       const id = clean(thread);
+      // A new name or new members is a line of the thread's log: so many a round (host/seatBounds.js).
+      const counted = op !== "close" && !isHost(connection);
+      const turn = round.status().round;
+      if (counted && bounds.spent("lines", seat.id, turn)) return BOUND_REFUSALS.lines;
       const docs = await store.read();
       const gameDate = clean(docs?.game?.gameDate);
       let refusal = "";
@@ -1925,12 +2013,20 @@ export const createGameHost = ({
           }
           added = joining.map((country) => ({ id: mintId("join", now), kind: "member_joined", time: gameDate, by: seat.country, member: { name: country, code: country } }));
         }
-        const events = [...(list(chat.events).length ? list(chat.events) : eventsFromLegacyChat(chat)), ...added];
+        // What was said before they joined is in the log before their joining
+        // (runtime/chatThreads.js withUnloggedMessages, in the order it was
+        // said), so each reads it only from there on (host/projection.js
+        // logSeenBy). A line written beside the log was folded in after it,
+        // and a country added read every earlier letter between the others
+        // (the review of 2026-11-18, security S15).
+        const log = list(chat.events).length ? withUnloggedMessages(chat.events, chat.messages, { threadId: chat.id }) : eventsFromLegacyChat(chat);
+        const events = [...log, ...added];
         const projected = projectChatThread(events);
         next[index] = { ...chat, events, countries: projected.countries, title: projected.title, polls: projected.polls, demands: projected.demands };
         return next;
       });
       if (refusal) return refusal;
+      if (counted) bounds.take("lines", seat.id, turn);
       round.touch(seat.country);
       return "";
     },
@@ -1941,6 +2037,12 @@ export const createGameHost = ({
       if (!thread && !recipients.length) return "Say it to someone.";
       if (recipients.some((country) => same(country, seat.country))) return "A government does not write to itself.";
       if (recipients.some((country) => !countriesNow.some((known) => same(known, country)))) return "Unknown country.";
+      // So many lines and new conversations a round (host/seatBounds.js): every
+      // round's commit carries the conversations whole.
+      const turn = round.status().round;
+      const counted = !isHost(connection);
+      if (counted && bounds.spent("lines", seat.id, turn)) return BOUND_REFUSALS.lines;
+      if (counted && !clean(thread) && bounds.spent("threads", seat.id, turn)) return BOUND_REFUSALS.threads;
       // A letter written while a round is being resolved waits in the queue
       // behind it, and is the next round's.
       // Dated by the game, as a government's own reply is (chat.jsx `time`):
@@ -2026,6 +2128,10 @@ export const createGameHost = ({
         return next;
       });
       if (refusal) return refusal;
+      if (counted) {
+        bounds.take("lines", seat.id, turn);
+        if (opens) bounds.take("threads", seat.id, turn);
+      }
       round.touch(seat.country);
       // The AI governments in the thread answer (the game's own diplomacy),
       // after the player's view shows what they wrote (answerLine). A thread
@@ -2128,10 +2234,15 @@ export const createGameHost = ({
         // Only a government at this table that nobody plays is answered for,
         // under its own name as the thread has it.
         const governments = [owner, ...members].filter((name) => name && !same(name, seat.country) && !people.some((human) => same(human, name)));
+        // Each line says whose device wrote it (`writtenBy`), so that the
+        // round's request reads it as that player's account of the
+        // government's words, which binds the government to nothing until the
+        // round says so (Game/AI/promptContext.js): it went in as the
+        // government's own (the review of 2026-11-18, security S7).
         written = said.flatMap((entry) => {
           const name = governments.find((government) => same(government, entry.speaker));
           return name
-            ? [{ id: mintId("message", now), role: "leader", speaker: name, code: name, text: entry.text, ...(gameDate ? { time: gameDate } : {}) }]
+            ? [{ id: mintId("message", now), role: "leader", speaker: name, code: name, text: entry.text, writtenBy: seat.country, ...(gameDate ? { time: gameDate } : {}) }]
             : [];
         });
         if (!written.length) {
@@ -2186,10 +2297,17 @@ export const createGameHost = ({
     const needsSeat = !SEATLESS.has(message.t);
     // A request for what the host's game has switched off (host/featureGates.js).
     const switchedOff = featureRefusal(message, features);
+    // An entry of the queue, and held to what one player may have waiting in
+    // it and add to it (host/seatBounds.js); the host's own are its own.
+    const queued = !AT_ONCE.has(message.t) && !THINKING.has(message.t);
+    const bounded = queued && !isHost(connection);
     let error = "";
     let result = null;
     if (needsSeat && (!seat || seat.status !== SEAT_STATUS.HUMAN)) error = "Take a country first.";
+    else if (!needsSeat && message.t === "viewed" && !viewerOf(connection)) error = "Take a country first.";
     else if (switchedOff) error = switchedOff;
+    else if (bounded && queue.waitingOf(connection.device) >= SEAT_WAITING_MOST) error = BOUND_REFUSALS.waiting;
+    else if (bounded && !bounds.admit(connection.device)) error = BOUND_REFUSALS.rate;
     else {
       try {
         // A refusal's words, or { error, result } from a request that made
@@ -2207,14 +2325,20 @@ export const createGameHost = ({
           return handler(connection, message, acting);
         };
         if (id && !AT_ONCE.has(message.t)) waits.begin({ device: connection.device, id, t: message.t, resolving: round.status().phase === "resolving" });
-        const outcome = await (AT_ONCE.has(message.t) || THINKING.has(message.t) ? apply() : queue.run(message.t, apply));
+        // An entry is its device's (host/worldQueue.js), so what one player
+        // has waiting is counted, and dropped when the host lets it go.
+        const outcome = await (queued ? queue.run(message.t, apply, { owner: connection.device }) : apply());
         if (outcome && typeof outcome === "object") {
           error = clean(outcome.error).slice(0, 300);
           result = outcome.result && Object.keys(outcome.result).length ? outcome.result : null;
         } else error = clean(outcome).slice(0, 300);
       } catch (failure) {
-        log("warn", "request failed", { t: message.t, error: String(failure?.message || failure) });
-        error = "The host could not do that.";
+        // One the host let go of while it waited was never applied, and says why.
+        if (failure?.code === DROPPED) error = clean(failure.message).slice(0, 300);
+        else {
+          log("warn", "request failed", { t: message.t, error: String(failure?.message || failure) });
+          error = "The host could not do that.";
+        }
       }
     }
     if (id) {
@@ -2244,7 +2368,7 @@ export const createGameHost = ({
       const connection = connections.get(player.id);
       send(connection, lobbyFor(connection));
       if (isHost(connection)) hostReturned();
-      send(connection, roundMessage(round.status()));
+      send(connection, roundMessage(round.status(), connection));
       // A paying device back on a new connection is sent the request again.
       payers.joined(player.device);
       void seatsChanged();
@@ -2396,6 +2520,10 @@ export const createGameHost = ({
         // A round its device was paying fails now, with why, and waits for the host.
         payers.released(device);
         sessionChanged();
+        // What its player still had waiting is not applied: it is ahead of the
+        // release below, still for a seat its player held, and the release
+        // waited behind it (the review of 2026-11-18, security S2).
+        queue.drop(device, ban ? "The host has sent you away from this game." : "The host took your country back.");
         void queue.run("seat-let-go", () => releaseSeat({ id: seat?.id ?? "", device, told: !ban }))
           .catch((error) => log("warn", "a released seat was not let go", { error: String(error?.message || error) }));
         return device;
@@ -2511,7 +2639,7 @@ export const createGameHost = ({
       // last write (a change of who answers made just before Stop) is kept.
       if (campaign && typeof store.writeShared === "function") await writeSession();
     },
-    pushViews,
+    pushViews: () => pushViews(),
     // Whether a device is banned from this game (session/host.js isBanned).
     isBanned: (device) => banned.has(device),
     // Whether a device may come in (session/host.js roomFor): a player in the
@@ -2521,6 +2649,8 @@ export const createGameHost = ({
     roomFor: (device) => !stopped && !banned.has(device) && seats.hasRoom(device, { waiting: waitingFor(device) }),
     // Seats a newcomer could take, for the lobby's beacon.
     openSeats: () => seats.open({ waiting: waitingFor("") }),
+    // Whether a device is a player of this game, seated or watching (session/host.js knows).
+    isMember: (device) => Boolean(device) && !banned.has(device) && (device === hostSeat.device || Boolean(seats.seatOf(device)) || Boolean(seats.watcherOf(device))),
     // A change made outside a request (an AI government's answer being
     // written, an institution's business): applied in the queue's order, and
     // every view follows.
