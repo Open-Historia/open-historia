@@ -336,7 +336,7 @@ func _run() -> void:
 	await _shoot("wr-12-line-built")
 	room.store.set_values({"draft": null})
 	await _idle()
-	var operation: Dictionary = await main.engine.request("warroom.test.operation", {"name": "Operation Black Forest", "summary": "Strike across the Rhine at Saarbrucken, Karlsruhe, Freiburg im Breisgau, Kaiserslautern, Trier, Mannheim and Stuttgart."})
+	var operation: Dictionary = await main.engine.request("warroom.test.operation", {"name": "Operation Black Forest", "summary": "Strike across the Rhine at Saarbrucken, Karlsruhe, Freiburg im Breisgau, Kaiserslautern, Trier, Mannheim and Stuttgart.", "focus": {"lng": 9.18, "lat": 48.78}})
 	_check("an operation is put on the Board", operation.get("ok", false), str(operation.get("error", "")))
 	await room.refresh()
 	await _wait(0.6)

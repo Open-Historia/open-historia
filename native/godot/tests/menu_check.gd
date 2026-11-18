@@ -587,7 +587,7 @@ func _library() -> void:
 	if popup:
 		for node in popup.find_children("*", "Button", true, false):
 			rows.append((node as Button).text)
-	_check("the card's menu offers Edit, Clone, Archive, Export", rows == ["Edit", "Clone", "Archive", "Export"], str(rows))
+	_check("the card's menu offers Edit, Clone, Recover Projects…, Archive, Export", rows == ["Edit", "Clone", "Recover Projects…", "Archive", "Export"], str(rows))
 	await _shoot("m81-card-menu")
 	if popup == null:
 		return
