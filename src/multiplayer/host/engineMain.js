@@ -135,9 +135,10 @@ const store = {
   // The agents' traffic, one table per spymaster (runtime/spycraft.js).
   updateIntercepts: (fn) => mutateInterceptsState(fn),
   // The world and the order queue changed together or not at all (a formation
-  // and the order that tells the skip of it): one commit, as a turn's own is.
-  // `fn({ world, actions, game })` returns the documents it changed, or null.
-  updateForces: (fn) => mutateCanonicalTurnState(({ world, actions, game }) => fn({ world, actions, game }) || null),
+  // and the order that tells the skip of it; a peace and the event that tells
+  // it, host/landings.js): one commit, as a turn's own is.
+  // `fn({ world, actions, game, events })` returns the documents it changed, or null.
+  updateForces: (fn) => mutateCanonicalTurnState(({ world, actions, game, events }) => fn({ world, actions, game, events }) || null),
   // The shared game's session, kept with the campaign (host/sessionRecord.js).
   // Only this window writes it, in the host's one order, through the game's
   // own write queue.

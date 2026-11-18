@@ -638,3 +638,26 @@ test("an event written for a player's own order and kept off the timeline is tol
     if (viewer !== RUSSIA) assert.equal(view.includes("CANARY-RU-REFUSED"), false, `${viewer} is not told of another's refused order`);
   }
 });
+
+// A person's terms of peace to another person were in every player's view (the gap audit of 2026-11-18, N2): the
+// screens showed them to the two alone, the network to everyone.
+test("terms of peace are the two parties' own until they are taken, and a call to arms the defender's and its ally's until answered", () => {
+  const docs = state();
+  const offer = (id, from, to, status) => ({ id, warId: "war-1", from, to, terms: { territory: "restored" }, date: "2014-04-01", round: 4, status, source: "player" });
+  docs.world.peaceOffers = [
+    offer("open-ru-lv", RUSSIA, LATVIA, "open"),
+    offer("declined-lv-ru", LATVIA, RUSSIA, "declined"),
+    offer("open-est-ru", ESTONIA, RUSSIA, "open"),
+    offer("taken-est-lv", ESTONIA, LATVIA, "accepted"),
+  ];
+  const call = (id, defender, ally, status) => ({ id, warId: "war-1", defender, ally, attackers: [ESTONIA], date: "2014-04-01", round: 4, status });
+  docs.world.callsToArms = [call("ask-ru-lv", RUSSIA, LATVIA, "open"), call("ask-est-ru", ESTONIA, RUSSIA, "lapsed"), call("joined-ru-est", RUSSIA, ESTONIA, "honoured")];
+  const offers = (viewer) => projectForViewer(docs, viewer).world.peaceOffers.map((entry) => entry.id).sort();
+  const calls = (viewer) => projectForViewer(docs, viewer).world.callsToArms.map((entry) => entry.id).sort();
+  assert.deepEqual(offers(LATVIA), ["declined-lv-ru", "open-ru-lv", "taken-est-lv"]);
+  assert.deepEqual(offers(RUSSIA), ["declined-lv-ru", "open-est-ru", "open-ru-lv", "taken-est-lv"]);
+  assert.deepEqual(offers(ESTONIA), ["open-est-ru", "taken-est-lv"], "a peace taken is everyone's to know");
+  assert.deepEqual(calls(LATVIA), ["ask-ru-lv", "joined-ru-est"]);
+  assert.deepEqual(calls(ESTONIA), ["ask-est-ru", "joined-ru-est"]);
+  assert.ok(!text(projectForViewer(docs, ESTONIA)).includes("open-ru-lv"), "not a byte of another's terms");
+});

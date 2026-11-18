@@ -58,6 +58,8 @@ import { playerDiplomacy } from "../../Game/AI/warAndPeace.js";
 import { warBetween } from "../../runtime/peaceTerms.js";
 import { answerTreaty, proposeTreaty } from "../../runtime/treatyOffers.js";
 import { featureRefusal } from "./featureGates.js";
+import { regionOwnerNow } from "../../runtime/gmAnnex.js";
+import { landingNotice, tellLandings } from "./landings.js";
 
 export const MAX_ORDERS_PER_ROUND = 12;
 // The answers a device's requests were given, kept so that one sent again (the
@@ -482,6 +484,13 @@ export const createGameHost = ({
   const tell = (country, level, text) => {
     for (const connection of connections.values()) {
       if (same(seatOf(connection)?.country, country)) send(connection, notice(level, text));
+    }
+  };
+  // A peace or a treaty that landed between rounds (host/landings.js), said to
+  // every screen beside its event: before, only the one who answered knew.
+  const tellEveryone = (landed) => {
+    for (const event of list(landed)) {
+      for (const connection of connections.values()) send(connection, notice("info", landingNotice(event)));
     }
   };
 
@@ -1181,34 +1190,43 @@ export const createGameHost = ({
     // seat's chat with it (the host's own table turn, runChatActionBatch, reads
     // the answer); put to another player (`to`), they wait for that player's
     // own answer. Whose answer it is is the seat's country and nothing the
-    // message says.
+    // message says. A peace made lands at once, and is told: an event on the
+    // timeline with the borders it moved, and a word to every player
+    // (host/landings.js), in the same write.
     peace: async (connection, { op, ref, terms, to }, seat) => {
       let refusal = "";
+      let landed = [];
       // (A peace taken may annex a country or cede regions by name: they are found on the map.)
       const map = op === "accept"
         ? await Promise.all([import("../../runtime/assets.js"), import("../../Game/AI/promptContext.js")])
           .then(async ([assets, context]) => ({ catalog: await assets.loadRegionCatalog(), rendered: context.filterToRenderedRegions }))
           .catch(() => null)
         : null;
-      await store.updateForces(({ world, game }) => {
+      await store.updateForces(({ world, game, events }) => {
         const regions = map ? map.rendered(map.catalog, world) : [];
         const outcome = playerDiplomacy(world, { op, ref, terms, to: clean(to), country: seat.country, players: humanCountriesOf(game), date: clean(game?.gameDate), round: game?.round, regions });
         if (outcome.error) {
           refusal = PEACE_REFUSALS[outcome.error] ?? "This is no longer open.";
           return null;
         }
-        return { world: outcome.world };
+        const baked = new Map(list(regions).map((region) => [clean(region?.id), region]));
+        const told = tellLandings({ before: world, after: outcome.world, events, game, ownerOf: (id) => (baked.has(id) ? regionOwnerNow(baked.get(id), {}) : "") });
+        landed = told?.landed ?? [];
+        return told ? { world: told.world, events: told.events } : { world: outcome.world };
       });
+      tellEveryone(landed);
       round.touch(seat.country);
       return refusal;
     },
     // A treaty between two players (runtime/treatyOffers.js): put to another
     // player's country, or signed, declined or withdrawn, as the seat's own
     // country and nothing the message says. Signed, it is an agreement of the
-    // world's, which every view, the wars and every prompt read.
+    // world's, which every view, the wars and every prompt read, and it is told
+    // as a peace is (host/landings.js).
     treaty: async (connection, { op, ref, to, type, title, terms }, seat) => {
       let refusal = "";
-      await store.updateForces(({ world, game }) => {
+      let landed = [];
+      await store.updateForces(({ world, game, events }) => {
         const date = clean(game?.gameDate);
         if (op === "propose") {
           const put = proposeTreaty(world, { from: seat.country, to: clean(to), type, title, terms, players: humanCountriesOf(game), date, round: game?.round });
@@ -1218,8 +1236,12 @@ export const createGameHost = ({
         const answer = answerTreaty(world, { op, ref, country: seat.country, date, round: game?.round });
         refusal = answer.error ? TREATY_REFUSALS[answer.error] ?? "That could not be done." : "";
         // (Signed after the two went to war, it lapses: that is written, and said.)
-        return answer.world === world ? null : { world: answer.world };
+        if (answer.world === world) return null;
+        const told = tellLandings({ before: world, after: answer.world, events, game });
+        landed = told?.landed ?? [];
+        return told ? { world: told.world, events: told.events } : { world: answer.world };
       });
+      tellEveryone(landed);
       round.touch(seat.country);
       return refusal;
     },

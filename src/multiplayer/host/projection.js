@@ -75,9 +75,9 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "airStrikes",
   "seaBattles",
   "blockades",
-  // War weariness, peace and alliances coming due (Game/AI/warAndPeace.js):
-  // what every government would know of. Only the country an offer or a call
-  // is addressed to may answer it (host/gameHost.js).
+  // War weariness, and the peaces made (Game/AI/warAndPeace.js): what every
+  // government would know of. (The offers and the calls to arms coming due are
+  // their parties' own until answered: FILTERED_WORLD_KEYS.)
   "warWeariness",
   // And what each country has left to fight with (runtime/warResources.js).
   "warResources",
@@ -94,10 +94,8 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   // And the water frozen now, and each climate zone's weather: there for all to see.
   "frozenRegions",
   "zoneWeather",
-  "peaceOffers",
   "reparations",
   "peaceTreaties",
-  "callsToArms",
   // Rostra, the social network (runtime/socialFeed.js): posts are public.
   "socialFeed",
   // The stat sheets, and how each has moved: public figures (see the limits above).
@@ -343,6 +341,20 @@ const FILTERED_WORLD_KEYS = Object.freeze({
   // it is an agreement, which everyone sees.
   treatyOffers: (world, viewer) => (Array.isArray(world.treatyOffers) ? world.treatyOffers : [])
     .filter((offer) => same(offer?.from, viewer) || same(offer?.to, viewer)),
+  // Terms of peace (Game/AI/warAndPeace.js world.peaceOffers) are the business
+  // of the two they pass between, as a treaty's are, until they are taken: an
+  // offer open, turned down or lapsed is theirs alone, and one taken is a peace
+  // everyone may know (world.peaceTreaties carries its terms too). A person's
+  // terms to another person were in every player's view (the gap audit of
+  // 2026-11-18, N2); the screens showed them to the two alone. Only the one an
+  // offer is put to may answer it (host/gameHost.js).
+  peaceOffers: (world, viewer) => list(world.peaceOffers)
+    .filter((offer) => same(offer?.from, viewer) || same(offer?.to, viewer) || clean(offer?.status) === "accepted"),
+  // A call to arms (runtime/alliances.js world.callsToArms) is the defender's
+  // and its ally's until the ally answers it: then it has joined the war or
+  // broken the treaty, which every government sees.
+  callsToArms: (world, viewer) => list(world.callsToArms)
+    .filter((call) => same(call?.defender, viewer) || same(call?.ally, viewer) || ["honoured", "refused"].includes(clean(call?.status))),
 
   // Its own government in full; every other only as the public sees it.
   politicalActors: (world, viewer) => {

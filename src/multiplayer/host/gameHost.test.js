@@ -104,12 +104,13 @@ const createStore = () => {
     updateChats: update("chat"),
     updateWorld: update("world"),
     updateGame: update("game"),
-    // The world and the queue together, as one commit.
+    // The world and the queue together, as one commit (and the event log with them).
     updateForces: async (fn) => {
-      const next = await fn({ world: structuredClone(docs.world), actions: structuredClone(docs.actions), game: structuredClone(docs.game) });
+      const next = await fn({ world: structuredClone(docs.world), actions: structuredClone(docs.actions), game: structuredClone(docs.game), events: structuredClone(docs.events) });
       if (!next) return;
       if (next.world) docs.world = next.world;
       if (next.actions) docs.actions = next.actions;
+      if (next.events) docs.events = next.events;
     },
   };
 };
@@ -1017,6 +1018,9 @@ test("a player puts terms of peace to another player by name, and that player's 
   // The host answered every such proposal "That side is led by another player", and nothing else could be done.
   const s = setup();
   s.store.docs.world.wars = [{ id: "war-1", title: "The Baltic War", status: "active", sideA: [RUSSIA], sideB: [LATVIA], startedDate: "2014-03-01" }];
+  // Russia holds a region of Latvia's.
+  s.store.docs.world.regionOwnershipOverrides = { "reg-latgale": RUSSIA };
+  s.store.docs.world.regionSovereigntyOverrides = { "reg-latgale": LATVIA };
   s.host.join(s.hostPlayer);
   s.host.join(s.guest);
   await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
@@ -1037,6 +1041,20 @@ test("a player puts terms of peace to another player by name, and that player's 
   await s.request(s.hostPlayer, { t: "peace", id: id(5), op: "accept", ref: offer.id });
   assert.equal(s.ack(s.hostPlayer, id(5)).ok, true);
   assert.equal(s.store.docs.world.wars[0].status, "ended");
+  // Made between rounds, it is told: an event on everyone's timeline with the ground it handed back, and a word to
+  // every player. It moved the borders on every map with no event and no word (the gap audit of 2026-11-18).
+  const told = s.store.docs.events.find((event) => event.id.startsWith("landing-peace-"));
+  assert.equal(told.title, `Peace between ${RUSSIA} and ${LATVIA}`);
+  assert.deepEqual(told.impacts.regionControlOps.map((op) => [op.regionId, op.fromCode, op.toCode]), [["reg-latgale", RUSSIA, LATVIA]]);
+  assert.ok(s.store.docs.world.simulationHistory.some((entry) => entry.eventIds.includes(told.id)), "on the timeline");
+  for (const player of [s.hostPlayer, s.guest]) {
+    assert.ok(s.shown(player).events.some((event) => event.id === told.id && event.playerRelated), "theirs to read");
+    assert.match(s.to(player, "notice").at(-1).text, /have made peace/);
+  }
+  // Answered again, nothing more is told.
+  const events = s.store.docs.events.length;
+  await s.request(s.hostPlayer, { t: "peace", id: id(6), op: "accept", ref: offer.id });
+  assert.equal(s.store.docs.events.length, events);
 });
 
 test("two players sign a treaty: one puts it, the other signs it, and it is an agreement every view holds", async () => {
@@ -1066,6 +1084,11 @@ test("two players sign a treaty: one puts it, the other signs it, and it is an a
     const agreement = s.store.docs.world.agreements.at(-1);
     assert.deepEqual([agreement.type, agreement.title, agreement.status, agreement.parties], ["non_aggression", "The Riga Pact", "active", [RUSSIA, LATVIA]]);
     assert.ok(s.shown(s.guest).world.agreements.some((entry) => entry.id === agreement.id), "and every view holds it");
+    // Signed between rounds, it is told as a peace is: an event, and a word to every player.
+    assert.ok(!s.store.docs.events.some((event) => event.id.startsWith("landing-treaty-") && event.id !== `landing-treaty-${agreement.id}`), "only proposed, it was told to nobody");
+    const told = s.store.docs.events.find((event) => event.id === `landing-treaty-${agreement.id}`);
+    assert.equal(told.description, "The Riga Pact: Neither attacks the other.");
+    assert.match(s.to(s.guest, "notice").at(-1).text, /have signed a treaty/);
   } finally {
     setHostingSharedGame(false);
   }
