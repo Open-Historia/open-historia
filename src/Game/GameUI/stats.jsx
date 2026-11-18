@@ -39,6 +39,8 @@ import { WarReportsList } from "./afterAction.jsx";
 import { institutionPortfolioForPolity } from "../../runtime/institutionLifecycleCore.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { inSharedGame, sharedGameRole, sharedRequestsHeld, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
+import { logSettingChange } from "../../runtime/debugLog.js";
+import { STATS_REFRESH_BATCH_MOST, STATS_REFRESH_MONTH_CHOICES, deviceStorage, readStatsRefreshMonths, writeStatsRefreshMonths } from "../AI/statsRefresh.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
 import {
     appendCountryStatHistorySample,
@@ -1296,6 +1298,76 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
     );
 };
 
+// The auto-refresh cadence, where it was before 2026-11-07 and back since
+// 2026-11-18: "NO SETTING FOR IT, JUST IN THE ADVANCED STATS MENU YOU CAN
+// CHOOSE WHAT INTERVAL IT CHECKS AT AND YOU CAN SET THE INTERVAL TO OFF. BY
+// DEFAULT ITS 6 MONTHS" (the owner). How often, in game time, the stat sheets
+// are brought up to date after a time skip (AI/statsRefresh.js; the request is
+// gameplay.js refreshStaleStatSheets). On this device: in a shared game the
+// host's is the one that runs, so a guest is not shown it.
+// Whole phrases written in this screen's own file, so the language packs carry
+// them (built in countryStats.js they were never collected).
+const countryStatsTrackingIntervalLabel = (months) => {
+    const count = Math.max(0, Math.trunc(Number(months) || 0));
+    if (!count) return "Off";
+    return count === 1 ? "Every month" : `Every ${count} months`;
+};
+
+const StatsRefreshCadence = () => {
+    const [interval, setChosen] = useState(() => readStatsRefreshMonths());
+    const role = useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole);
+    const refreshMost = STATS_REFRESH_BATCH_MOST;
+    if (role === "guest") return null;
+    const choose = (next) => {
+        writeStatsRefreshMonths(deviceStorage(), next);
+        const stored = readStatsRefreshMonths();
+        setChosen(stored);
+        logSettingChange("Stats auto-refresh cadence", stored ? `every ${stored} game months` : "off");
+    };
+    return (
+        <div style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "12px", marginBottom: "1rem", padding: "0.75rem 0.8rem" }}>
+            <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.72rem", fontWeight: 800, marginBottom: "0.5rem" }}>Auto-refresh cadence</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                {STATS_REFRESH_MONTH_CHOICES.map((months) => {
+                    const active = interval === months;
+                    return (
+                        <button
+                        key={months}
+                        type="button"
+                        className="oh-tap-row"
+                        aria-pressed={active}
+                        onClick={() => choose(months)}
+                        style={{
+                            backgroundColor: active ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.04)",
+                            border: `1px solid ${active ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)"}`,
+                            borderRadius: "999px",
+                            color: active ? "#f4f4f5" : "rgba(255,255,255,0.68)",
+                            cursor: "pointer",
+                            fontSize: "0.68rem",
+                            fontWeight: active ? 800 : 700,
+                            padding: "0.4rem 0.65rem",
+                        }}
+                        >
+                            {months === 0 ? "Off" : `${months} months`}
+                        </button>
+                    );
+                })}
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.62rem", lineHeight: 1.45, marginTop: "0.55rem" }}>
+                Current setting: <span style={{ color: "#dbeafe" }}>{countryStatsTrackingIntervalLabel(interval)}</span>.
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.62rem", lineHeight: 1.45, marginTop: "0.3rem" }}>
+                {interval === 0
+                    ? "Off: a country's stat sheet changes only when a time skip changes it, or when you refresh it from its ↻ menu."
+                    : `After a time skip, once ${interval} months of game time have passed since the last refresh, one background request brings up to date the stat sheets the news has changed, for up to ${refreshMost} countries, yours first. A long skip still makes at most one such request. It stops at the day's cap of requests nobody pressed a button for.`}
+            </div>
+            {role === "host" ? (
+                <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.62rem", lineHeight: 1.45, marginTop: "0.3rem" }}>In a shared game this runs only on the host, and only while the host&apos;s AI answers for every player.</div>
+            ) : null}
+        </div>
+    );
+};
+
 const AdvancedStatsModal = ({
     open,
     onClose,
@@ -1449,6 +1521,7 @@ const AdvancedStatsModal = ({
                     </div>
 
                     <aside style={{ backgroundColor: "rgba(9,9,10,0.24)", borderLeft: "1px solid rgba(255,255,255,0.07)", minHeight: 0, overflowY: "auto", padding: "0.9rem 0.85rem 1rem", ...(isMobile ? { borderLeft: "none", borderTop: "1px solid rgba(255,255,255,0.07)", overflowY: "visible" } : null) }}>
+                        <StatsRefreshCadence />
                         <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.58rem", fontWeight: 900, letterSpacing: "0.08em", textTransform: "uppercase" }}>Time range</div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.5rem" }}>
                             {[['all', 'All'], ['1y', '1 year'], ['5y', '5 years'], ['10y', '10 years']].map(([key, label]) => <button key={key} type="button" className="oh-tap-row" onClick={() => setRange(key)} style={advancedRangeStyle(range === key)}>{label}</button>)}

@@ -33,7 +33,7 @@ import { MILITARY_CHANGE_RULE, describeMilitaryStanding } from "../../runtime/mi
 import { warSettingsOf } from "../../runtime/warSettings.js";
 import { STATS_BACKEND_FIELD, conflictSheetTargets, hasStatsBackend, readableFigure, statsBackendInstruction, statsBackendOf, statsBackendPatch, statsBackendTurnRule } from "../../runtime/statsBackend.js";
 import { CONFLICT_BACKENDS_MOST, conflictBackendsRequest, readConflictBackends } from "./conflictBackends.js";
-import { compactStatSheet, describeStatsRefreshEvidence, deviceStorage, lastStatsRefreshRound, pickStatsRefreshCountries, readStatsRefreshEvery, readStatsRefreshUpdates, rememberStatsRefreshRound, statsRefreshPatch, statsRefreshRequest, statsRefreshRunDue } from "./statsRefresh.js";
+import { compactStatSheet, describeStatsRefreshEvidence, deviceStorage, lastStatsRefreshDate, pickStatsRefreshCountries, readStatsRefreshMonths, readStatsRefreshUpdates, rememberStatsRefreshDate, statsRefreshPatch, statsRefreshRequest, statsRefreshRunDue } from "./statsRefresh.js";
 import { MILITARY_BATCH_MOST, militaryRatingRequest, militaryTargets, nextRatingBatch, ratedFigures, ratedScaleOf, readMilitaryRatings, waitForRating, wantsRating } from "./militaryRating.js";
 import { peopleFor } from "../../runtime/militaryPower.js";
 import {
@@ -5264,8 +5264,8 @@ const afterJumpWritten = async (applied, { applyArgs, signal, phases = null, dat
     console.warn("[institution autonomy] post-turn ballot pass failed; the completed turn remains committed.", error);
   }
   reportJumpRequests(requests);
-  // The stat sheets kept up to date, at the pace the player picks (Settings,
-  // AI requests; Off by default): after the skip's requests are reported, as a background request
+  // The stat sheets kept up to date, at the interval the player picks in
+  // Advanced Statistics (6 game months unless changed; Off stops it): after the skip's requests are reported, as a background request
   // of its own that waits for the world to be idle. Never awaited: the skip is
   // done, and nothing here may hold it or count against it.
   void refreshStaleStatSheets().catch(() => null);
@@ -12619,8 +12619,9 @@ const buildTargetEconomicEvidence = ({ bundle, statCode, previous, normalizedWor
 // The automatic Stats refresh of tracked countries, a request after the skips
 // it fell due on, went on 2026-11-07, and with it the Historical tracking list
 // (a save's countryStatsTracking is left as it is and no longer read). It came
-// back on 2026-11-18 as a background request after the skip, never in it, on
-// a schedule the player sets: refreshStaleStatSheets.
+// back on 2026-11-18 as a background request after the skip, never in it, at
+// an interval in game months the player sets in Advanced Statistics:
+// refreshStaleStatSheets.
 
 // "Stats should be generated for countries you're going into conflict with,
 // either if you deploy a front on them, if you redirect a front to attack them
@@ -14376,13 +14377,14 @@ export const ensureCountryAssessed = (target, options = {}) =>
 
 // ---- Stat sheets kept up to date after time skips ---------------------------
 //
-// The background refresh, at the pace the player picks in Settings, Off by
-// default and as one of the picker's choices (statsRefresh.js says what, when
-// and why). Started once a time skip is written
+// The background refresh, at the interval in game months the player picks in
+// the Stats pane's Advanced Statistics, 6 months unless they pick another or
+// Off (statsRefresh.js says what, when and why). Started once a time skip is written
 // (afterJumpWritten), and a request of its own, never the skip's: a first
 // reading like the others (background, under the day's cap, after whatever is
 // running, one at a time a campaign, silent when it fails). At most one
-// request every so many skips, for the stale sheets: the players' own first.
+// request a skip, and only once the interval has passed in game time since the
+// last, for the stale sheets: the players' own first.
 // What it is told goes through the same write as the Stats pane's Refresh
 // (persistStatSheet), held to the same continuity rules.
 //
@@ -14390,19 +14392,19 @@ export const ensureCountryAssessed = (target, options = {}) =>
 // answers for everyone (runtime/sharedReadings.js): with each player's own AI
 // the host's AI makes no background readings, and a guest's page never asks.
 export const refreshStaleStatSheets = ({ reason = "after a time skip" } = {}) => {
-  const every = readStatsRefreshEvery();
-  if (!every || inSharedGame() || !hostReadsFigures()) return Promise.resolve(null);
+  const months = readStatsRefreshMonths();
+  if (!months || inSharedGame() || !hostReadsFigures()) return Promise.resolve(null);
   return firstReading("stats refresh", "the stale stat sheets", reason, async () => {
     const campaign = activeCampaignId();
     await waitForSimulationIdle();
     const bundle = await readGameStateBundle({ force: true });
     const round = Math.max(0, Math.trunc(Number(bundle.game?.round) || 0));
+    const currentDate = normalizeString(bundle.game?.gameDate || bundle.game?.startDate);
     const storage = deviceStorage();
-    if (!statsRefreshRunDue({ every, round, lastRound: lastStatsRefreshRound(storage, campaign) })) return null;
+    if (!statsRefreshRunDue({ months, date: currentDate, lastDate: lastStatsRefreshDate(storage, campaign), startDate: normalizeString(bundle.game?.startDate) })) return null;
     const world = normalizeWorldState(bundle.world);
     const definition = await loadStatSheetDefinition();
     const keys = definition.custom ? statSheetKeys(definition) : [];
-    const currentDate = normalizeString(bundle.game?.gameDate || bundle.game?.startDate);
     const players = humanCountriesOf(bundle.game);
     // Every country with a whole sheet, and what has changed under it since.
     const groups = new Set(Object.keys(world.groups || {}).map((key) => key.toLowerCase()));
@@ -14429,7 +14431,7 @@ export const refreshStaleStatSheets = ({ reason = "after a time skip" } = {}) =>
         fresh = economic.unaccountedCount;
         looked.set(name, { previous, economic });
       }
-      candidates.push({ name, assessedRound: previous?.continuity?.assessedRound, fresh });
+      candidates.push({ name, assessedDate: normalizeString(previous?.continuity?.assessedDate), fresh });
     }
     // Those at war with a player come after the players' own.
     const playing = new Set(players.map((name) => normalizeString(name).toLowerCase()));
@@ -14441,7 +14443,7 @@ export const refreshStaleStatSheets = ({ reason = "after a time skip" } = {}) =>
         if (side.some((name) => playing.has(normalizeString(name).toLowerCase()))) opponents.push(...sides[1 - index]);
       });
     }
-    const names = pickStatsRefreshCountries({ candidates, players, opponents, round, every }).filter((name) => looked.has(name));
+    const names = pickStatsRefreshCountries({ candidates, players, opponents, date: currentDate, months }).filter((name) => looked.has(name));
     if (names.length === 0) return null;
     // The scenario's strategic indices, as the Stats pane's own sheet has them.
     const loadedRows = definition.custom ? [] : normalizeArray((await loadStatIndexDefinition({ definition }))?.rows);
@@ -14467,7 +14469,7 @@ export const refreshStaleStatSheets = ({ reason = "after a time skip" } = {}) =>
     });
     // Counted as the request is made: one whose answer is lost was still spent.
     if (!backgroundAiAllowance().allowed || activeCampaignId() !== campaign) return null;
-    rememberStatsRefreshRound(storage, campaign, round);
+    rememberStatsRefreshDate(storage, campaign, currentDate);
     const response = await callAIWithTaskLimit(systemPrompt, [{ role: "user", parts: [{ text: userMessage }] }], {
       reasoningEnabled: false,
       taskKey: "countryStatSheet",
