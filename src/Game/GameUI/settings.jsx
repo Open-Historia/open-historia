@@ -78,7 +78,7 @@ import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
 // file readers with it.
 const BasemapPicker = lazy(() => import("../../Editor/BasemapPicker.jsx"));
 import { getLibraryState, saveGame, useLibraryState } from "../../runtime/library.js";
-import { readGameData } from "../../runtime/gameState.js";
+import { mutateGameData, readGameData } from "../../runtime/gameState.js";
 import { ECONOMIC_DISPLAY_CURRENCIES, getActiveEconomicDisplayCurrency, normalizeEconomicDisplayCurrency, setActiveEconomicDisplayCurrency, subscribeEconomicDisplayCurrency } from "../../runtime/economicDisplayCurrency.js";
 import { DISCORD_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { CommunityTile, DISCORD_BLURPLE, DiscordMark, REDDIT_ORANGERED, RedditMark } from "./communityLogos.jsx";
@@ -122,7 +122,7 @@ import { MUSIC_CREDIT, MUSIC_TRACKS, getNowPlaying, musicVolumeOf, subscribeNowP
 import { creditSiteOf } from "../../runtime/scenarioMusic.js";
 import { clearKeptMusic, keptMusicUsage } from "../../runtime/keptMusic.js";
 import { setVisitConsent, useVisitConsent } from "../../runtime/visitConsent.js";
-import { inSharedGame } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame, sharedGameRole, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 import {
     APP_UPDATE_MANUAL_CHECK_RESULT_EVENT,
     appUpdateCheckDescription,
@@ -1525,6 +1525,10 @@ const RequestBudgetSection = () => {
     const lookupsOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
     // Idle diplomacy has a switch of its own, outside that cap (2026-11-09).
     const idleDiplomacyOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.idleDiplomacy);
+    // Never in a shared game, whatever the switch says (GameUI/main.jsx): each
+    // attempt would be a request nobody set a number for, on whichever key
+    // (the map's rule 10). Its governments write in the round's one request.
+    const sharedNow = Boolean(useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole));
     const [groupAi, setGroupAi] = useState(() => readAdvisorGroupSettings());
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
 
@@ -1690,6 +1694,7 @@ const RequestBudgetSection = () => {
             <div style={settingsHelper}>
                 Off: between time skips, no country writes to you unless you write first.
             </div>
+            {sharedNow ? <div style={settingsHelper}>In a shared game countries write only with each round, never between rounds.</div> : null}
 
             <Toggle
             label="Individual AI responses in group chats"
@@ -2591,11 +2596,16 @@ const PlayerFocusSetting = () => {
     const library = useLibraryState();
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState("");
+    // In a shared game it is a rule of the game, the host's, stated in its
+    // lobby with the game's features (runtime/gameFeatures.js): shown, the
+    // same for every player, and not set here. A guest's choice used to be
+    // saved into its stand-in, where nothing read it.
+    const shared = Boolean(useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole));
     const gameId = library.activeGameId;
     const scenarioLevel = normalizePlayerFocus(playerFocusOf(library.runtimeScenario?.features));
     const override = library.activeGame?.features?.playerFocus?.level;
     const focus = normalizePlayerFocus(getActivePlayerFocus());
-    const following = !override;
+    const following = !override && !shared;
 
     const choose = async (value) => {
         if (!gameId) { setError("No game is open, so there is nothing to set it on."); return; }
@@ -2620,7 +2630,7 @@ const PlayerFocusSetting = () => {
         <div style={fieldGroupStyle}>
         <label style={{ ...labelStyle, fontWeight: 700 }}>Player focus — for this game</label>
         <select
-        disabled={saving || !gameId}
+        disabled={saving || !gameId || shared}
         value={following ? "" : focus}
         onChange={(event) => choose(event.target.value || null)}
         style={{ ...inputStyle, cursor: "pointer" }}
@@ -2643,6 +2653,7 @@ const PlayerFocusSetting = () => {
         <div style={{ marginTop: 6 }}>
         It never invents events for you: in a quiet stretch the world fills the skip as usual, and what you have going on — orders, milestones due, wars, open threads — is what the share is measured against.
         </div>
+        {shared ? <div style={{ marginTop: 6 }}>In this shared game the host&apos;s game sets it, for every player.</div> : null}
         {error ? <div style={{ color: "#fca5a5", marginTop: 6 }}>{error}</div> : null}
         </div>
         </div>
@@ -2922,9 +2933,12 @@ const EconomicDisplayCurrencySetting = () => {
         setSaving(true);
         setError("");
         try {
-            // A display preference: in a shared game this screen's own, for the
-            // session, never written into the game the host keeps.
-            if (!inSharedGame()) await saveGame(activeGameId, { gamePatch: { economicDisplayCurrency: next } });
+            // A display preference: in a shared game this device's own, laid
+            // over the host's game for as long as the game is open
+            // (multiplayer/client/seatWrites.js DEVICE_GAME_KEYS), and never
+            // written into the game the host keeps, nor into the stand-in.
+            if (inSharedGame()) await mutateGameData((game) => ({ ...game, economicDisplayCurrency: next }));
+            else await saveGame(activeGameId, { gamePatch: { economicDisplayCurrency: next } });
             setActiveEconomicDisplayCurrency(next);
             logSettingChange("GDP display currency", next);
         } catch (reason) {

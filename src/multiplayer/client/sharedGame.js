@@ -20,11 +20,11 @@ import { useSyncExternalStore } from "react";
 import { JSON_URLS, publishJsonWriteBatch } from "../../runtime/assets.js";
 import { activateGame, createGame, getLibraryState, libraryStandIns, refreshLibraryCatalog, setSharedGameEntry } from "../../runtime/library.js";
 import { closeStandIn, holdStandIn, standInMark } from "../../runtime/standInGames.js";
-import { normalizeActions, normalizeChats, normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
+import { normalizeActions, normalizeChats, normalizeEvents, normalizeGameData, normalizeWorldState } from "../../runtime/gameState.js";
 import { unseenEvents } from "../../runtime/unseenEvents.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { GENERATION_COMPLETE_EVENT, adoptStoredAiRecord } from "../../Game/AI/telemetry.js";
-import { planWorldWrite, revealedTurnOf, suggestionsOutlived, unroutedChanges } from "./seatWrites.js";
+import { planGameWrite, planWorldWrite, revealedTurnOf, suggestionsOutlived, unroutedChanges } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
 import { SHARED_ROUND_LANDED, setSharedGamePeople, setSharedGameRole, setSharedRequester, setSharedRoundBase, setSharedRoundDays } from "./sharedGameBridge.js";
@@ -147,6 +147,7 @@ const asThePageSavesIt = (key, value) => {
   if (key === "chat") return normalizeChats(value);
   if (key === "actions") return normalizeActions(value);
   if (key === "events") return normalizeEvents(value);
+  if (key === "game") return normalizeGameData(value);
   return value;
 };
 
@@ -174,6 +175,11 @@ const ownWrite = ({ key, wanted, held }) => {
       owner.runtime.patch("world", plan.device, { quiet: true });
     }
 
+  }
+  // How this screen shows the game (the GDP display currency): this device's own.
+  if (key === "game") {
+    const plan = planGameWrite(before, after);
+    if (Object.keys(plan.device).length) owner.runtime.patch("game", plan.device, { quiet: true });
   }
   return asThePageSavesIt(key, owner.runtime.held(key));
 };

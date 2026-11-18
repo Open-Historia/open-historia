@@ -102,3 +102,16 @@ test("a page's save of a view it did not change is no change, once the view is i
   const page = (await import("node:fs")).readFileSync(new URL("./sharedGame.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.match(page, /const before = asThePageSavesIt\(key, held\);\s*const after = asThePageSavesIt\(key, wanted\);[\s\S]*?unroutedChanges\(key, before, after\)[\s\S]*?planWorldWrite\(before, after\)/);
 });
+
+// A guest's GDP display currency was saved into its stand-in (where nothing read it), and then only for the session:
+// each view of the host's game put the host's back. It is how this screen shows the game: this device's own, laid over
+// every view of the game document, never sent and never the host's.
+test("how this screen shows the game is this device's own; the rest of the game document no screen changes", async () => {
+  const { planGameWrite } = await import("./seatWrites.js");
+  const held = { country: "France", round: 4, economicDisplayCurrency: "USD" };
+  assert.deepEqual(planGameWrite(held, { ...held, economicDisplayCurrency: "EUR" }), { device: { economicDisplayCurrency: "EUR" } });
+  assert.deepEqual(planGameWrite(held, held), { device: {} });
+  assert.deepEqual(planGameWrite(held, { ...held, round: 9, country: "Spain" }), { device: {} });
+  assert.deepEqual(unroutedChanges("game", held, { ...held, economicDisplayCurrency: "EUR" }), []);
+  assert.deepEqual(unroutedChanges("game", held, { ...held, round: 9, country: "Spain" }), ["country", "round"]);
+});

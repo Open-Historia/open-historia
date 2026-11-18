@@ -6,7 +6,11 @@
 //
 //   kept on this device   the AI's suggested orders. They are asked with the
 //                         player's own key, are nobody else's business, and are
-//                         for one round: the next round clears them.
+//                         for one round: the next round clears them. And how
+//                         this screen shows the game: the GDP display currency,
+//                         a field of the game document in single player, which
+//                         in a shared game is this device's own for as long as
+//                         the game is open, whatever the host's says.
 // Everything else in the document stays as the host's view has it. What a
 // player does to the world never comes this way: each screen asks the host
 // itself, by the request for what it does ("deploy", "disband", "order",
@@ -21,18 +25,22 @@ const list = (value) => (Array.isArray(value) ? value : []);
 const differs = (left, right) => JSON.stringify(left ?? null) !== JSON.stringify(right ?? null);
 
 export const DEVICE_WORLD_KEYS = Object.freeze(["actionSuggestions"]);
+export const DEVICE_GAME_KEYS = Object.freeze(["economicDisplayCurrency"]);
 
-// What a world the page wants to save would change, against the one it holds:
+// What a document the page wants to save would change of this device's own
+// fields, against the one it holds:
 //   device   fields kept on this device (field → value)
-export const planWorldWrite = (held, wanted) => {
+const planDeviceWrite = (keys, held, wanted) => {
   const plan = { device: {} };
   if (!isRecord(wanted)) return plan;
   const before = isRecord(held) ? held : {};
-  for (const key of DEVICE_WORLD_KEYS) {
+  for (const key of keys) {
     if (key in wanted && differs(before[key], wanted[key])) plan.device[key] = wanted[key];
   }
   return plan;
 };
+export const planWorldWrite = (held, wanted) => planDeviceWrite(DEVICE_WORLD_KEYS, held, wanted);
+export const planGameWrite = (held, wanted) => planDeviceWrite(DEVICE_GAME_KEYS, held, wanted);
 
 // WHAT NO DOOR TAKES (the map's rule 6: one door for every change a screen
 // makes). A page saves whole documents, and the host never sees a save: what
@@ -50,16 +58,16 @@ const empty = (value) => value === undefined || value === null || value === ""
   || (Array.isArray(value) && value.length === 0)
   || (isRecord(value) && Object.keys(value).length === 0);
 const same = (left, right) => (empty(left) && empty(right)) || !differs(left, right);
-const ROUTED_WORLD_KEYS = new Set(DEVICE_WORLD_KEYS);
+const ROUTED_KEYS = { world: new Set(DEVICE_WORLD_KEYS), game: new Set(DEVICE_GAME_KEYS) };
 const withoutOwnBubbles = (thread) => (isRecord(thread)
   ? { ...thread, messages: list(thread.messages).filter((message) => message?.role !== "error") }
   : thread);
 export const unroutedChanges = (key, held, wanted) => {
-  if (key === "world") {
+  if (ROUTED_KEYS[key]) {
     const before = isRecord(held) ? held : {};
     const after = isRecord(wanted) ? wanted : {};
     return [...new Set([...Object.keys(before), ...Object.keys(after)])]
-      .filter((field) => !ROUTED_WORLD_KEYS.has(field) && !same(before[field], after[field]))
+      .filter((field) => !ROUTED_KEYS[key].has(field) && !same(before[field], after[field]))
       .sort();
   }
   if (key === "chat") {
