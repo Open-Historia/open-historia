@@ -320,6 +320,10 @@ const RoundBar = ({ shared, me, watching = "" }) => {
           <button type="button" style={button} onClick={() => hostControl("resolveNow")}>End round now</button>
         </>
       ) : null}
+      {/* A round being resolved, called off by the host (gameHost.js cancelRound). */}
+      {role === "host" && round?.phase === "resolving" ? (
+        <button type="button" style={button} onClick={() => hostControl("cancelRound")}>Cancel round</button>
+      ) : null}
       <button type="button" style={showPlayers || asking ? primary : button} aria-expanded={showPlayers} onClick={() => setShowPlayers((open) => !open)}>{asking ? `Players (${asking} asking)` : "Players"}</button>
       <button type="button" style={button} onClick={leave}>{role === "host" ? "Stop" : "Leave"}</button>
       {round?.failed ? (

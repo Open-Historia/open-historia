@@ -129,8 +129,11 @@ const setup = (options = {}) => {
     countries: [LATVIA, RUSSIA, ESTONIA],
     store,
     resolveRound: async (info) => {
-      // A round held in "resolving" until the test lets it go.
-      if (options.holdResolve) await options.holdResolve;
+      // A round held in "resolving" until the test lets it go, or the host calls it off (the engine's own skip
+      // honours the round's signal).
+      if (options.holdResolve) {
+        await Promise.race([options.holdResolve, new Promise((resolve, reject) => info.signal?.addEventListener("abort", () => reject(info.signal.reason), { once: true }))]);
+      }
       resolved.push({ ...info, game: structuredClone(store.docs.game) });
       store.docs.events.push({ id: `round-${info.round}`, title: "The round's events", description: "", date: "2014-05-01" });
       // A time skip writes the campaign's next round, as the game's own does.
@@ -2045,4 +2048,38 @@ test("the lobby states the game's inputs every screen uses: its map's checksum a
   assert.deepEqual(lobby.features, features);
   assert.equal(lobby.scenario.hash, "abc");
   assert.equal(validate(HOST_MESSAGES.lobby, lobby).ok, true);
+});
+
+// Only Stop could end a round that hung, and a round that failed ran again at every deadline on the host's key, and
+// failed again (the gap audit of 2026-11-18). The host cancels a round being resolved; a round that failed or was
+// cancelled waits, with its orders, for the host to run it again (decision 9: it waits visibly, never written for it).
+test("the host cancels a round that hangs; it waits with its orders until the host runs it again", async () => {
+  let release;
+  const s = setup({ holdResolve: new Promise((resolve) => { release = resolve; }) });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  assert.equal(s.host.control.cancelRound(), false, "nothing to cancel while planning");
+  await s.request(s.guest, { t: "order", id: id(2), text: "Hold the line at Pskov" });
+  await playRound(s, [s.hostPlayer, s.guest]);
+  assert.equal(s.to(s.guest, "round").at(-1).phase, "resolving");
+  assert.equal(s.host.control.cancelRound(), true);
+  await s.clock.flush();
+  const status = s.to(s.guest, "round").at(-1);
+  assert.equal(status.phase, "planning");
+  assert.equal(status.failed, 1);
+  assert.match(s.to(s.guest, "notice").map((entry) => entry.text).join(" "), /The host cancelled round 1\. Its orders are still queued/);
+  assert.ok(s.store.docs.actions.some((action) => action.text === "Hold the line at Pskov" && action.status === "planned"));
+  // It does not run again by itself: everyone ready, the planning time over, and it still waits for the host.
+  await playRound(s, [s.hostPlayer, s.guest]);
+  await s.clock.advance(60 * 60 * 1000);
+  assert.equal(s.to(s.guest, "round").at(-1).phase, "planning");
+  assert.equal(s.resolved.length, 0, "nothing ran it again: it would be resolving");
+  // The host runs it again, and this time it lands.
+  release();
+  s.host.control.resolveNow();
+  await s.clock.flush();
+  assert.equal(s.to(s.guest, "round").at(-1).phase, "revealing");
+  assert.equal(s.to(s.guest, "round").at(-1).failed, 0);
 });

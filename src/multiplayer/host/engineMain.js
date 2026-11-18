@@ -557,6 +557,7 @@ const boot = async () => {
       }
       // A player's change of country, allowed or refused (the owner's decision 12).
       case "seat": return gameHost.control.seat({ op: clean(args?.op), from: clean(args?.from) });
+      case "cancelRound": return gameHost?.control.cancelRound();
       case "rotate": {
         const next = rotateInvite(campaign, identity);
         token = next.token;

@@ -291,6 +291,8 @@ export const createGameHost = ({
   let pushing = Promise.resolve();
   // The round being resolved, to stop if the shared game is.
   let roundAbort = null;
+  // Set when the host calls the round off (control.cancelRound).
+  let roundCancelled = false;
   // Every player's view after anything is applied: one push for however many
   // changes landed together.
   let pushWanted = null;
@@ -544,9 +546,19 @@ export const createGameHost = ({
       const start = await store.read();
       const before = { eventIds: new Set(list(start.events).map((event) => clean(event?.id))), areas: { ...(start.world?.groupAreas ?? {}) } };
       roundAbort = new AbortController();
+      roundCancelled = false;
       try {
         await resolveRound({ round: number, humanCountries: seats.humanCountries(), daysPerRound: settings.daysPerRound, signal: roundAbort.signal });
       } catch (error) {
+        // The host called it off (control.cancelRound): said as that, and the
+        // round waits with its orders, as one that failed does.
+        if (roundCancelled && !stopped) {
+          log("info", "the host cancelled the round", { round: number });
+          for (const connection of connections.values()) {
+            send(connection, notice("info", `The host cancelled round ${number}. Its orders are still queued, and the host can run it again.`));
+          }
+          throw new Error("The host cancelled the round.");
+        }
         // Said to everyone, with why: a round that failed used to go back to
         // planning without a word, and fail again twenty minutes later.
         if (!stopped) {
@@ -1651,6 +1663,15 @@ export const createGameHost = ({
       },
       pause: () => round.pause(),
       resume: () => round.resume(),
+      // A round being resolved, called off: its request is aborted, nothing it
+      // was writing lands, and it waits with its orders for the host to run it
+      // again. Only Stop could end a round that hung.
+      cancelRound() {
+        if (!roundAbort || round.status().phase !== "resolving") return false;
+        roundCancelled = true;
+        roundAbort.abort(new Error("The host cancelled the round."));
+        return true;
+      },
       resolveNow: () => round.resolveNow(),
       setRoundMinutes: (minutes) => round.setRoundMinutes(minutes),
       // Who answers a player's message to a government the AI plays, from here

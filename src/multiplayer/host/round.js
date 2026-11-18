@@ -118,6 +118,9 @@ export const createRoundMachine = ({
     timers.clearTimeout(timer);
     timer = null;
     if (paused || !["planning", "countdown", "revealing"].includes(phase)) return;
+    // A round that could not be resolved waits for the host (resolveNow): it
+    // ran again at every deadline, on the host's key, and failed again.
+    if (failure && phase !== "revealing") return;
     // Wake at the next deadline, and also when an idle player would turn
     // ready or the minimum planning time would run out, whichever is first.
     const moments = [deadline()];
@@ -182,6 +185,10 @@ export const createRoundMachine = ({
       return;
     }
     if (phase !== "planning" && phase !== "countdown") return;
+    // The round waits for the host's Retry after a failure (decision 9: it
+    // waits, visibly, and is never written for it): players may still give
+    // orders and say they are ready, and nothing runs it by itself.
+    if (failure) return undefined;
     const total = counted().length;
     // Nobody here: nothing is resolved until someone is (setPlayers looks again).
     if (total === 0) return undefined;
