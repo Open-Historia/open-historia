@@ -93,13 +93,18 @@ export const playerGoalOf = (world, player) => {
   return key ? goals[key].text : "";
 };
 
-// The world with the player's goal set (or, with no text, cleared).
+// The world with the player's goal set (or, with no text, cleared). The same
+// world, unchanged, when the goal already stands in those words (or there is
+// none to clear): its record, its date and its reading are kept, and nothing
+// is written. A shared game's host rewrote the whole world for a goal sent
+// again in the same words (multiplayer/host/gameHost.js "goal").
 export const withPlayerGoal = (world, player, text, { round = 0, date = "" } = {}) => {
   const name = asText(player);
   if (!name) return world;
   const goals = normalizePlayerGoals(world?.playerGoals);
   const key = Object.keys(goals).find((existing) => fold(existing) === fold(name)) ?? name;
   const wording = asText(text).slice(0, PLAYER_GOAL_MAX_CHARS);
+  if (wording ? goals[key]?.text === wording : !goals[key]) return world;
   const next = { ...goals };
   // The same goal keeps its reading; a reworded one starts again.
   const kept = goals[key]?.text === wording && goals[key]?.progress ? { progress: goals[key].progress } : {};

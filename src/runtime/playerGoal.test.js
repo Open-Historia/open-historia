@@ -32,6 +32,17 @@ test("a goal is set for the player's polity, kept through a save, and cleared by
   assert.equal(withPlayerGoal({}, "", "anything").playerGoals, undefined, "no player, nothing set");
 });
 
+// A shared game's host rewrote the whole world for a goal sent again in the same
+// words (FOLLOWUPS A10): the same words are the same world, so nothing is written.
+test("a goal set again in the same words changes nothing: the same world, its date and round kept", () => {
+  const world = withPlayerGoal({}, "Kingdom of Sardinia", "Unify Italy by 1870", { round: 3, date: "1859-04-01" });
+  assert.equal(withPlayerGoal(world, "kingdom of sardinia", "  Unify  Italy by 1870 "), world);
+  assert.equal(withPlayerGoal(world, "Kingdom of Sardinia", "Unify Italy by 1870", { round: 9, date: "1866-01-01" }), world, "its date stays the one it was set on");
+  const none = { playerGoals: {} };
+  assert.equal(withPlayerGoal(none, "Kingdom of Sardinia", ""), none, "no goal to clear, nothing to write");
+  assert.notEqual(withPlayerGoal(world, "Kingdom of Sardinia", "Win Lombardy first"), world);
+});
+
 test("a malformed store reads as no goals, and an overlong goal is cut", () => {
   assert.deepEqual(normalizePlayerGoals(null), {});
   assert.deepEqual(normalizePlayerGoals([]), {});

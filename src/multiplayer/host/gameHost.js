@@ -1751,8 +1751,12 @@ export const createGameHost = ({
       return refusal;
     },
     goal: async (connection, { text }, seat) => {
-      // The game's own rule for a standing goal (runtime/playerGoal.js).
-      await store.updateWorld((world) => withPlayerGoal(world, seat.country, text));
+      // The game's own rule for a standing goal (runtime/playerGoal.js): the
+      // same words again change nothing, and nothing is written.
+      await store.updateWorld((world) => {
+        const next = withPlayerGoal(world, seat.country, text);
+        return next === world ? null : next;
+      });
       round.touch(seat.country);
       return "";
     },

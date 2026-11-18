@@ -1335,6 +1335,22 @@ test("a goal's progress, read on the player's own device, is kept with that play
   assert.match(s.ack(s.guest, id(4)).error, /goal has changed/);
 });
 
+// FOLLOWUPS A10: the goal request rewrote world.json when its words had not changed.
+test("a goal sent again in the same words writes nothing, and keeps its reading", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "goal", id: id(2), text: "Hold the Baltic coast" });
+  await s.request(s.guest, { t: "goalProgress", id: id(3), goal: "Hold the Baltic coast", reading: { progress: 40, summary: "Halfway there." } });
+  const world = s.store.docs.world;
+  await s.request(s.guest, { t: "goal", id: id(4), text: " Hold the  Baltic coast " });
+  assert.equal(s.ack(s.guest, id(4)).ok, true);
+  assert.equal(s.store.docs.world, world, "world.json is not written again");
+  assert.equal(s.store.docs.world.playerGoals[RUSSIA].progress.progress, 40);
+});
+
 test("a demand made or answered rides on its line, entered by the host by the game's own rules", async () => {
   // On a page "make this a demand" and a demand card's answer were entries of the thread's log, dropped: only the
   // words reached the host. Russia (the guest) is the host's Latvia's overlord here.
