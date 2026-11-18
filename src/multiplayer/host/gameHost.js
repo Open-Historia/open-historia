@@ -294,6 +294,10 @@ export const createGameHost = ({
   // peace or a treaty between players: host/worldWords.js worldWordsOf); English if none.
   worldWords = null,
   onStatus = () => {},
+  // What the host's queue is still applying when it has run long ({ label,
+  // seconds, waiting, gaveUp }), and null once it is not: for the host's log
+  // and the host's screen (host/worldQueue.js onSlow).
+  onBusy = () => {},
   // Seats that followed their people to a country they founded
   // (host/foundings.js): [{ from, to, host }], `host` when it was the host's own
   // (and the host's own when its country was gone and it took another).
@@ -440,7 +444,31 @@ export const createGameHost = ({
     }
     return pushWanted;
   };
-  const queue = createWorldQueue({ onSettled: () => { void schedulePush(); } });
+  // An entry that runs long is said, and one that never ends no longer holds
+  // the queue (host/worldQueue.js): Start waited silently behind one.
+  let busy = null;
+  const queue = createWorldQueue({
+    onSettled: () => {
+      if (busy) {
+        log("info", "the host's queue is applying changes again", { after: busy.label, seconds: busy.seconds });
+        busy = null;
+        onBusy(null);
+      }
+      void schedulePush();
+    },
+    onSlow: ({ label, ms, waiting }) => {
+      busy = { label, seconds: Math.round(ms / 1000), waiting, gaveUp: false };
+      log("warn", `a change has been applied for ${busy.seconds} s: ${label}`, { waiting });
+      onBusy(busy);
+    },
+    onGaveUp: ({ label, ms, waiting }) => {
+      busy = { label, seconds: Math.round(ms / 1000), waiting, gaveUp: true };
+      log("warn", `a change never ended and no longer holds the queue: ${label}`, { seconds: busy.seconds, waiting });
+      onBusy(busy);
+    },
+    timers,
+    now,
+  });
   // A request that waits for the round being resolved is said to at once, and
   // its page waits for its answer (host/requestWaits.js).
   const waits = createRequestWaits({ tell: (device, message) => answerDevice(device, message), thinking: THINKING });

@@ -32,12 +32,39 @@
 // (the review of 2026-11-18, security S2).
 export const DROPPED = "dropped";
 
-export const createWorldQueue = ({ onSettled = () => {} } = {}) => {
+// An entry that never ends held every entry behind it, silently: the owner's
+// "Start the game" waited behind one and nothing happened, with nothing said
+// (2026-11-18). An entry is a write, and a write takes seconds; the AI's
+// thinking is done outside. So an entry that runs long is said (`onSlow`,
+// every SLOW_MS while it runs: what it is and for how long, for the host's log
+// and the host's screen), and one that has run GIVE_UP_MS no longer holds the
+// queue: what waits behind it is applied (`onGaveUp`), and it settles when it
+// settles. Whatever left it open (a write that waits on an entry queued behind
+// itself, a lock whose holder waits on the queue, a held entry never let go)
+// then costs minutes, said, and never the game. The round is a long entry by
+// nature (`long` labels): it is said, never passed over; it has its own
+// cancel and its own bounds on a silent AI (host/round.js).
+export const SLOW_MS = 20_000;
+export const GIVE_UP_MS = 180_000;
+const LONG_LABELS = Object.freeze(["round"]);
+
+export const createWorldQueue = ({
+  onSettled = () => {},
+  onSlow = () => {},
+  onGaveUp = () => {},
+  slowMs = SLOW_MS,
+  giveUpMs = GIVE_UP_MS,
+  long = LONG_LABELS,
+  timers = globalThis,
+  now = () => Date.now(),
+} = {}) => {
   let tail = Promise.resolve();
   let running = "";
+  let runningSince = 0;
   let waiting = 0;
   // owner → the entries of theirs still waiting, each { dropped }.
   const owned = new Map();
+  const longLabels = new Set(long);
 
   // Applies `fn` when its turn comes; resolves or rejects with what it did.
   // An entry that fails does not stop the ones after it. One dropped while it
@@ -50,6 +77,9 @@ export const createWorldQueue = ({ onSettled = () => {} } = {}) => {
       if (!owned.has(owner)) owned.set(owner, new Set());
       owned.get(owner).add(ticket);
     }
+    // The queue moves on when the entry settles, or when it is given up on.
+    let release = () => {};
+    const released = new Promise((resolve) => { release = resolve; });
     const entry = tail.then(async () => {
       waiting -= 1;
       if (owner) {
@@ -57,15 +87,38 @@ export const createWorldQueue = ({ onSettled = () => {} } = {}) => {
         if (!owned.get(owner)?.size) owned.delete(owner);
       }
       if (ticket.dropped) throw Object.assign(new Error(ticket.dropped), { code: DROPPED });
-      running = String(label || "a change");
+      const name = String(label || "a change");
+      const started = now();
+      let current = true;
+      running = name;
+      runningSince = started;
+      const slow = timers.setInterval(() => {
+        const ms = now() - started;
+        try { onSlow({ label: name, ms, waiting }); } catch { /* the watch never breaks the queue */ }
+        if (current && !longLabels.has(name) && ms >= giveUpMs) {
+          current = false;
+          running = "";
+          runningSince = 0;
+          try { onGaveUp({ label: name, ms, waiting }); } catch { /* as above */ }
+          // Said once: what runs now is the entries behind it.
+          timers.clearInterval(slow);
+          release();
+        }
+      }, slowMs);
       try {
         return await fn();
       } finally {
-        running = "";
+        timers.clearInterval(slow);
+        if (current) {
+          running = "";
+          runningSince = 0;
+        }
         onSettled(label);
+        release();
       }
     });
-    tail = entry.then(() => undefined, () => undefined);
+    entry.then(release, release);
+    tail = released;
     return entry;
   };
 
@@ -85,6 +138,8 @@ export const createWorldQueue = ({ onSettled = () => {} } = {}) => {
     get running() {
       return running;
     },
+    // How long the entry being applied has run, in ms (0 for none).
+    runningFor: () => (running ? Math.max(0, now() - runningSince) : 0),
     get waiting() {
       return waiting;
     },

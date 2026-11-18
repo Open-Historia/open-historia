@@ -351,6 +351,8 @@ const boot = async () => {
   // The Game Master at work on the host's command (control "gm"), for the
   // host's screen to say so.
   let gameMasterBusy = false;
+  // A change the host's queue has run long on, or given up waiting for.
+  let hostBusy = null;
 
   const loopback = createLoopbackEngineSide({
     onHello: ({ device, name }) => {
@@ -403,6 +405,8 @@ const boot = async () => {
       clockRefused: people.clockRefused === true,
       network,
       gameMasterBusy,
+      // What the host's queue has been applying for a long while (gameHost.js onBusy).
+      busy: hostBusy,
     });
   };
 
@@ -638,6 +642,17 @@ const boot = async () => {
         hostStatus = status;
         // The readings the game makes by itself follow who answers (runtime/sharedReadings.js).
         setHostReadsFigures(status?.lobby?.settings?.replies !== "own");
+        report();
+      },
+      // A change the queue has applied for long, in the host's diagnostics log
+      // and on the host's screen; null once the queue moves again.
+      onBusy: (busy) => {
+        hostBusy = busy;
+        if (busy) {
+          logDebugEvent("shared game", busy.gaveUp
+            ? `a change of the game (${busy.label}) never ended after ${busy.seconds} s: the changes waiting behind it are applied`
+            : `a change of the game (${busy.label}) has been applied for ${busy.seconds} s; ${busy.waiting} wait behind it`, undefined, { problem: true });
+        }
         report();
       },
       // The host's people founded a country: the engine plays it as the host's.

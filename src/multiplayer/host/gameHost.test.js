@@ -11,6 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createGameHost, MAX_ORDERS_PER_ROUND, VIEW_ACK_MS } from "./gameHost.js";
+import { GIVE_UP_MS, SLOW_MS } from "./worldQueue.js";
 import { digestText } from "../protocol/digest.js";
 import { startRemoteRuntime, stopRemoteRuntime } from "../client/remoteRuntime.js";
 import { normalizeSettings } from "./settings.js";
@@ -212,6 +213,7 @@ const setup = (options = {}) => {
     ...(options.institution ? { institution: options.institution } : {}),
     ...(options.gameMaster ? { gameMaster: options.gameMaster } : {}),
     ...(options.onSeatsMoved ? { onSeatsMoved: options.onSeatsMoved } : {}),
+    ...(options.onBusy ? { onBusy: options.onBusy } : {}),
     ...(options.countriesOf ? { countriesOf: options.countriesOf } : {}),
     ...(options.worldWords ? { worldWords: options.worldWords } : {}),
     campaign: options.campaign ?? "",
@@ -3706,4 +3708,31 @@ test("the host whose country is gone may take a free one, and plays it from then
   // A host whose country stands still plays its own.
   await s.request(s.hostPlayer, { t: "pick", id: id(3), country: LATVIA });
   assert.equal(s.ack(s.hostPlayer, id(3)).error, "The host plays its own game's country.");
+});
+
+// "Start the game does nothing" (the owner, 2026-11-18, two guests in): Start is an entry of the host's queue, and a
+// reading the engine made by itself had its write's entry held open (engineMain.js setReadingsOrder) and never let
+// go. Start waited behind it for good, and the host was told nothing. The reading here is in flight when Start is
+// pressed, as on the owner's computer (the two-browser run presses Start before any reading is made).
+test("Start pressed while a reading's write is held open is said on the host's screen, and the game starts", async () => {
+  const busy = [];
+  const s = setup({ onBusy: (entry) => busy.push(entry) });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  // The engine's reading: its write entered, never ended.
+  void s.host.write("reading:stat-sheet", () => new Promise(() => {}));
+  const starting = s.host.control.start();
+  await s.clock.flush();
+  assert.equal(s.to(s.guest, "lobby").at(-1).started, false, "behind the reading");
+  await s.clock.advance(SLOW_MS);
+  assert.equal(busy.at(-1)?.label, "reading:stat-sheet", "the host is told what it waits for");
+  assert.equal(busy.at(-1)?.gaveUp, false);
+  await s.clock.advance(GIVE_UP_MS);
+  await starting;
+  await s.clock.flush();
+  assert.equal(busy.some((entry) => entry?.gaveUp === true), true);
+  assert.equal(s.to(s.guest, "lobby").at(-1).started, true, "the game started");
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA, RUSSIA]);
+  assert.equal(busy.at(-1), null, "and the host's screen is told the queue moves again");
 });
