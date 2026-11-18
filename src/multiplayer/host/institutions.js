@@ -8,7 +8,8 @@
 // too, and its write came back "409".
 //
 // The country is never the asker's to name. Every call is run with the seat's
-// country as the player, every command carries the player's authority (the
+// country as the player (as the seat is when each of its writes is applied),
+// every command carries the player's authority (the
 // game's own rules then refuse a player acting for another government), and
 // the fields that say who acts are the seat's whatever the request said.
 // Only what the screens send is taken: a command type outside these lists, or
@@ -117,31 +118,43 @@ const idOf = (value) => text(value, 160);
 //   message, chatTurn({ chat, seat, ...flags }), readChats(), updateChats(fn)
 // Resolves { institutionId, proposalId, proposalStatus, chatId }.
 // `host` is the host's own country, or a function giving it as it is now.
-export const createInstitutionDesk = ({ host: hostOf = "", game }) => {
+// `write(label, fn)`: the host's one order (host/gameHost.js write). Each thing
+// a call writes is one entry of it, and the seat's country is taken when that
+// entry runs (rule 3): taken when the request arrived, a founding, a vote or a
+// message asked while a round was resolved was written, once the round had
+// landed, under the name the round had renamed or founded away, which nobody
+// played (FOLLOWUPS A1). Thinking (a Council's or a hearing's turn) is done
+// outside the queue (chatTurn writes its own entries).
+export const createInstitutionDesk = ({ host: hostOf = "", game, write = (_label, fn) => fn() }) => {
   const host = () => (typeof hostOf === "function" ? hostOf() : hostOf);
   // A thread this call made, for a guest: the guest's. Only the one the call
   // names, and only if it was not there before it: a thread anyone else made
   // meanwhile, or the host's own Council the guest now speaks in, keeps its owner.
-  const ownership = async (seat, before, chatId) => {
-    if (!chatId || same(seat, host()) || before.has(chatId)) return;
-    await game.updateChats((chats) => {
-      let changed = false;
-      const next = list(chats).map((chat) => {
-        if (clean(chat?.id) !== chatId || clean(chat?.player)) return chat;
-        changed = true;
-        return { ...chat, player: seat };
+  const ownership = async (seatNow, before, chatId) => {
+    if (!chatId || before.has(chatId)) return;
+    await write("institution-business", () => {
+      const seat = seatNow();
+      if (same(seat, host())) return null;
+      return game.updateChats((chats) => {
+        let changed = false;
+        const next = list(chats).map((chat) => {
+          if (clean(chat?.id) !== chatId || clean(chat?.player)) return chat;
+          changed = true;
+          return { ...chat, player: seat };
+        });
+        return changed ? next : null;
       });
-      return changed ? next : null;
     });
   };
   const chatIds = async () => new Set(list(await game.readChats()).map((chat) => clean(chat?.id)).filter(Boolean));
   // A Council's or a hearing's turn, in the table's own turn (host/gameHost.js
   // onTable): after any answer under way there, read from the thread as that
-  // left it. Run beside an answer, it read the thread as it was, minted the
-  // same line ids, and the second turn's lines were dropped.
-  const turnOf = async (onTable, chat, flags) => onTable(clean(chat.id), async () => {
+  // left it, for the seat as it is then. Run beside an answer, it read the
+  // thread as it was, minted the same line ids, and the second turn's lines
+  // were dropped.
+  const turnOf = async (onTable, chat, seatNow, flags) => onTable(clean(chat.id), async () => {
     const now = list(await game.readChats()).find((entry) => clean(entry?.id) === clean(chat.id)) ?? chat;
-    return game.chatTurn({ ...flags, chat: now });
+    return game.chatTurn({ ...flags, seat: seatNow(), chat: now });
   });
   const threadFor = async (seat, threadId) => {
     const chat = list(await game.readChats()).find((entry) => clean(entry?.id) === threadId);
@@ -152,9 +165,11 @@ export const createInstitutionDesk = ({ host: hostOf = "", game }) => {
     return chat;
   };
 
+  // Each call is given `inEntry(fn)`, which runs `fn(country)` as one entry of
+  // the host's order for the seat's country as it is then, and `seatNow()`.
   const calls = {
-    lifecycle: async (seat, { command }) => {
-      const result = await game.lifecycle({ playerCountry: seat, command: lifecycleCommandFor(command, seat) });
+    lifecycle: async ({ inEntry }, { command }) => {
+      const result = await inEntry((seat) => game.lifecycle({ playerCountry: seat, command: lifecycleCommandFor(command, seat) }));
       return {
         institutionId: idOf(result?.institution?.id || command?.institutionId),
         proposalId: idOf(result?.proposal?.id),
@@ -162,52 +177,51 @@ export const createInstitutionDesk = ({ host: hostOf = "", game }) => {
         chatId: idOf(result?.createdChat?.id),
       };
     },
-    negotiation: async (seat, { institutionId, caseIds }) => {
-      const result = await game.negotiation({ playerCountry: seat, institutionId: idOf(institutionId), caseIds: names(caseIds, 24) });
+    negotiation: async ({ inEntry }, { institutionId, caseIds }) => {
+      const result = await inEntry((seat) => game.negotiation({ playerCountry: seat, institutionId: idOf(institutionId), caseIds: names(caseIds, 24) }));
       return { institutionId: idOf(institutionId), chatId: idOf(result?.channel?.id) };
     },
-    channel: async (seat, { institutionId }) => {
-      const result = await game.channel({ playerCountry: seat, institutionId: idOf(institutionId) });
+    channel: async ({ inEntry }, { institutionId }) => {
+      const result = await inEntry((seat) => game.channel({ playerCountry: seat, institutionId: idOf(institutionId) }));
       return { institutionId: idOf(institutionId), chatId: idOf(result?.channel?.id) };
     },
-    proposal: async (seat, { institutionId, proposal }) => {
+    proposal: async ({ inEntry }, { institutionId, proposal }) => {
       const title = text(proposal?.title, 200);
       if (!title) throw new Error("A proposal needs a title.");
       // The kind of proposal by name (the advisor tables more than resolutions);
       // the institution's charter decides whether this player may table it.
       const kind = /^[a-z][a-z-]{0,39}$/.test(clean(proposal?.type)) ? clean(proposal.type) : "resolution";
-      const result = await game.proposal({ playerCountry: seat, institutionId: idOf(institutionId), proposal: { type: kind, title, summary: text(proposal?.summary, 1200) } });
+      const result = await inEntry((seat) => game.proposal({ playerCountry: seat, institutionId: idOf(institutionId), proposal: { type: kind, title, summary: text(proposal?.summary, 1200) } }));
       return { institutionId: idOf(institutionId), proposalId: idOf(result?.proposal?.id), proposalStatus: idOf(result?.proposal?.status) };
     },
-    voteRequest: async (seat, { institutionId, proposalId }) => {
-      const result = await game.voteRequest({ playerCountry: seat, institutionId: idOf(institutionId), proposalId: idOf(proposalId) });
+    voteRequest: async ({ inEntry }, { institutionId, proposalId }) => {
+      const result = await inEntry((seat) => game.voteRequest({ playerCountry: seat, institutionId: idOf(institutionId), proposalId: idOf(proposalId) }));
       return { institutionId: idOf(institutionId), proposalId: idOf(result?.proposal?.id || proposalId), proposalStatus: idOf(result?.proposal?.status) };
     },
-    governance: async (seat, { institutionId, command }) => {
-      const result = await game.governance({ playerCountry: seat, institutionId: idOf(institutionId), command: governanceCommandFor(command, seat) });
+    governance: async ({ inEntry }, { institutionId, command }) => {
+      const result = await inEntry((seat) => game.governance({ playerCountry: seat, institutionId: idOf(institutionId), command: governanceCommandFor(command, seat) }));
       return { institutionId: idOf(institutionId), proposalId: idOf(result?.proposal?.id || command?.proposalId), proposalStatus: idOf(result?.proposal?.status) };
     },
-    message: async (seat, { institutionId, text: said }) => {
+    message: async ({ inEntry }, { institutionId, text: said }) => {
       const line = text(said, 2000);
       if (!line) throw new Error("A message needs words.");
-      const result = await game.message({ playerCountry: seat, institutionId: idOf(institutionId), text: line });
+      const result = await inEntry((seat) => game.message({ playerCountry: seat, institutionId: idOf(institutionId), text: line }));
       return { institutionId: idOf(institutionId), chatId: idOf(result?.channel?.id) };
     },
     // The Council's turn on a proposal (chat.jsx runInstitutionCouncilTurn), on
     // the host's AI key: the player's comment said into the Council first.
-    council: async (seat, { institutionId, proposalId, kind, comment }, onTable) => {
+    council: async ({ inEntry, seatNow }, { institutionId, proposalId, kind, comment }, onTable) => {
       const id = idOf(institutionId);
       const proposal = idOf(proposalId);
       if (!id || !proposal) throw new Error("Which institution, and which proposal?");
       const mode = kind === "vote" ? "vote" : kind === "amendment" ? "amendment" : "debate";
       const line = text(comment, 2000);
-      const opened = line
-        ? await game.message({ playerCountry: seat, institutionId: id, text: line })
-        : await game.channel({ playerCountry: seat, institutionId: id });
+      const opened = await inEntry((seat) => (line
+        ? game.message({ playerCountry: seat, institutionId: id, text: line })
+        : game.channel({ playerCountry: seat, institutionId: id })));
       const chat = opened?.channel;
       if (!chat?.id) throw new Error("The Council could not be opened.");
-      await turnOf(onTable, chat, {
-        seat,
+      await turnOf(onTable, chat, seatNow, {
         playerMessage: mode === "amendment" ? line : "",
         institutionDebateRequested: mode === "debate",
         institutionProposalId: proposal,
@@ -217,20 +231,25 @@ export const createInstitutionDesk = ({ host: hostOf = "", game }) => {
       return { institutionId: id, proposalId: proposal, chatId: idOf(chat.id) };
     },
     // The governments at a hearing answering it (chat.jsx "Request response").
-    hearing: async (seat, { thread }, onTable) => {
-      const chat = await threadFor(seat, idOf(thread));
-      await turnOf(onTable, chat, { seat, playerMessage: "", lifecycleResponseRequested: true });
+    hearing: async ({ seatNow }, { thread }, onTable) => {
+      const chat = await threadFor(seatNow(), idOf(thread));
+      await turnOf(onTable, chat, seatNow, { playerMessage: "", lifecycleResponseRequested: true });
       return { chatId: idOf(chat.id) };
     },
   };
 
   // `onTable(chatId, job)`: the host's one turn per table (host/gameHost.js).
+  // `seat`: the asking seat's country, or a function giving it as it is now,
+  // which throws once that seat has ended (its player released, or their
+  // country gone or changed).
   return async ({ seat, call, args = {}, onTable = (_chatId, job) => job() }) => {
     const run = calls[call];
     if (!run) throw new Error("That is not something a player can do to an institution.");
+    const seatNow = () => clean(typeof seat === "function" ? seat() : seat);
+    const inEntry = (fn) => write("institution-business", () => fn(seatNow()));
     const before = await chatIds();
-    const made = await run(clean(seat), args && typeof args === "object" ? args : {}, onTable);
-    await ownership(clean(seat), before, made.chatId);
+    const made = await run({ inEntry, seatNow }, args && typeof args === "object" ? args : {}, onTable);
+    await ownership(seatNow, before, made.chatId);
     return made;
   };
 };

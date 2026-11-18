@@ -168,6 +168,38 @@ test("a Council's and a hearing's turn wait for the table's turn, and read the t
   }
 });
 
+// FOLLOWUPS A1: the business was written under the name the seat had when the request arrived; a round in between
+// had renamed it. Each write is an entry of the host's order, and takes the seat as it is when it runs.
+test("each write is an entry of the host's order, for the seat as it is when that entry runs; an ended seat writes nothing", async () => {
+  const state = fakeGame({ chats: [], made: { message: { channel: { id: "council-baltic" } } } });
+  let country = GUEST;
+  const entries = [];
+  const write = async (label, fn) => {
+    entries.push(label);
+    // What ran before this entry (a round) renamed the country.
+    country = "Russian Empire";
+    return fn();
+  };
+  const seat = () => {
+    if (!country) throw new Error("You no longer play Russia.");
+    return country;
+  };
+  const desk = createInstitutionDesk({ host: HOST, game: state.game, write });
+  await desk({ seat, call: "council", args: { institutionId: "baltic-pact", proposalId: "p1", kind: "debate", comment: "We object." } });
+  // The comment, and the Council it opened made the guest's: each an entry. The turn asks the AI outside one.
+  assert.deepEqual(entries, ["institution-business", "institution-business"]);
+  assert.deepEqual(state.calls.map((entry) => [entry.name, entry.args.playerCountry ?? entry.args.seat]), [["message", "Russian Empire"], ["chatTurn", "Russian Empire"]]);
+  // The seat ended before its entry ran: nothing is written.
+  const ended = async (label, fn) => {
+    country = "";
+    return fn();
+  };
+  const gone = createInstitutionDesk({ host: HOST, game: state.game, write: ended });
+  const calls = state.calls.length;
+  await assert.rejects(gone({ seat, call: "lifecycle", args: { command: { type: "found", name: "Baltic Pact" } } }), /no longer play/);
+  assert.equal(state.calls.length, calls);
+});
+
 // Any member closed or renamed an institution's Council or a hearing for every
 // member (the gap audit of 2026-11-18, N6).
 test("an institution's table keeps its name, its Council stays open, and a hearing closes once it is settled", () => {

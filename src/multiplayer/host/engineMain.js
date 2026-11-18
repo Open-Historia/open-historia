@@ -608,24 +608,26 @@ const boot = async () => {
       // reads what it changed in the notice every player is sent.
       gameMaster: async ({ command }) => applyGameMasterPreview(await previewGameMasterCommand(command)),
       // A player's institution business, run here for their country. Each
-      // thing it writes is an entry in the queue; a Council's or a hearing's
+      // thing it writes is an entry in the queue, for the seat as it is when
+      // the entry runs (host/institutions.js); a Council's or a hearing's
       // turn asks the AI outside it (tableTurn).
       institution: createInstitutionDesk({
         host: () => host,
+        write: (label, fn) => writeInOrder(label, fn),
         game: {
-          lifecycle: (args) => writeInOrder("institution-business", () => commitInstitutionLifecycleCommand(args)),
-          negotiation: (args) => writeInOrder("institution-business", () => ensureInstitutionLifecycleNegotiationChat(args)),
-          channel: (args) => writeInOrder("institution-business", () => ensureInstitutionalChannel(args)),
-          proposal: (args) => writeInOrder("institution-business", () => commitInstitutionalPlayerProposal(args)),
-          voteRequest: (args) => writeInOrder("institution-business", () => commitWithVotingRuleBackfill(
+          lifecycle: (args) => commitInstitutionLifecycleCommand(args),
+          negotiation: (args) => ensureInstitutionLifecycleNegotiationChat(args),
+          channel: (args) => ensureInstitutionalChannel(args),
+          proposal: (args) => commitInstitutionalPlayerProposal(args),
+          voteRequest: (args) => commitWithVotingRuleBackfill(
             () => commitInstitutionalPlayerVoteRequest(args),
             { institutionId: args.institutionId, proposalId: args.proposalId },
-          )),
-          governance: (args) => writeInOrder("institution-business", () => commitInstitutionGovernanceCommand(args)),
-          message: (args) => writeInOrder("institution-business", () => commitInstitutionalPlayerMessage(args)),
+          ),
+          governance: (args) => commitInstitutionGovernanceCommand(args),
+          message: (args) => commitInstitutionalPlayerMessage(args),
           chatTurn: (args) => tableTurn(args),
           readChats: () => readChatsState({ force: true }),
-          updateChats: (fn) => writeInOrder("institution-business", () => mutateChatsState(fn)),
+          updateChats: (fn) => mutateChatsState(fn),
         },
       }),
       onStatus: (status) => {

@@ -272,7 +272,8 @@ export const createGameHost = ({
   setFlag = async () => {},
   // An institution's business for a seat (host/institutions.js): resolves
   // { institutionId, proposalId, chatId } or rejects with the reason. Given
-  // `onTable(chatId, job)`, which runs a turn of a table in that table's turn.
+  // `onTable(chatId, job)`, which runs a turn of a table in that table's turn,
+  // and `seat()`, the seat's country as it is now (it throws once the seat has ended).
   institution = async () => {
     throw new Error("Institutions are not run here.");
   },
@@ -1870,8 +1871,16 @@ export const createGameHost = ({
       // one of the answers the host gives this seat this round.
       if (["council", "hearing"].includes(call) && !hostAnswerFor(connection, seat, "")) return turnsSpent();
       try {
-        // A Council's or a hearing's turn is the table's next (onTable).
-        const made = await institution({ seat: seat.country, call, args: args ?? {}, onTable });
+        // A Council's or a hearing's turn is the table's next (onTable). It
+        // asks the AI outside the queue, so it is not an entry itself: what it
+        // writes is, each for the seat as it is when that entry runs (rule 3),
+        // and refused once the seat has ended (FOLLOWUPS A1).
+        const seatNow = () => {
+          const now = seats.seatById(seat.id);
+          if (now?.device !== connection.device) throw new Error(`You no longer play ${seat.country}.`);
+          return now.country;
+        };
+        const made = await institution({ seat: seatNow, call, args: args ?? {}, onTable });
         const result = {};
         for (const key of ["institutionId", "proposalId", "proposalStatus", "chatId"]) {
           const value = clean(made?.[key]).slice(0, 160);

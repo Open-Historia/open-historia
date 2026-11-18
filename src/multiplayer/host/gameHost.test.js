@@ -1811,14 +1811,61 @@ test("an institution's business goes to the host's desk for the asker's seat, an
   const ack = s.ack(s.guest, id(3));
   assert.equal(ack.ok, true);
   assert.deepEqual(ack.result, { institutionId: "baltic-pact", chatId: "founding-1" });
-  assert.equal(asked.at(-1).seat, RUSSIA, "the seat's country, never one the request names");
+  // (The seat as it is when the desk writes: host/institutions.js.)
+  assert.equal(asked.at(-1).seat(), RUSSIA, "the seat's country, never one the request names");
   // The host's own screen asks the same way, for the host's country.
   await s.request(s.hostPlayer, { t: "institution", id: id(4), call: "channel", args: { institutionId: "baltic-pact" } });
-  assert.equal(asked.at(-1).seat, LATVIA);
+  assert.equal(asked.at(-1).seat(), LATVIA);
   // A refusal is said in the desk's own words.
   await s.request(s.guest, { t: "institution", id: id(5), call: "lifecycle", args: { command: { type: "seize" } } });
   assert.match(s.ack(s.guest, id(5)).error, /not something a player can do/);
   assert.equal(s.ack(s.guest, id(5)).result, undefined);
+});
+
+// FOLLOWUPS A1: an institution's business asked while a round was resolved was written, once the round had landed,
+// under the country name it had when it arrived: the round had renamed the country, and nobody played that name.
+test("an institution's business asked while a round resolves is written for the seat as the round left it", async () => {
+  const EMPIRE = "Russian Empire";
+  let release;
+  const written = [];
+  let s = null;
+  const desk = createInstitutionDesk({
+    host: LATVIA,
+    write: (label, fn) => s.host.write(label, fn),
+    game: {
+      lifecycle: async (args) => {
+        written.push(args);
+        return { institution: { id: "eurasian-union" } };
+      },
+      readChats: async () => s.store.docs.chat,
+      updateChats: async (fn) => s.store.updateChats(fn),
+    },
+  });
+  s = setup({
+    institution: desk,
+    holdResolve: new Promise((resolve) => { release = resolve; }),
+    // The round renames the guest's country (server/polityRename.js keeps the old name among its former names).
+    roundWrites: (docs) => {
+      const { [RUSSIA]: _old, ...rest } = docs.world.polityOverrides;
+      docs.world.polityOverrides = { ...rest, [EMPIRE]: { code: EMPIRE, name: EMPIRE, status: "active", formerNames: [RUSSIA] } };
+    },
+  });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.hostPlayer, { t: "ready", id: id(2), value: true });
+  await s.request(s.guest, { t: "ready", id: id(3), value: true });
+  assert.equal(s.to(s.guest, "round").at(-1).phase, "resolving");
+  const founding = s.host.receive(s.guest, { t: "institution", id: id(4), call: "lifecycle", args: { command: { type: "found", name: "Eurasian Union", founder: RUSSIA } } });
+  await s.clock.flush();
+  assert.deepEqual(written, [], "it waits behind the round");
+  release();
+  await founding;
+  await s.clock.flush();
+  assert.equal(s.ack(s.guest, id(4)).ok, true);
+  assert.deepEqual(written.map((args) => args.playerCountry), [EMPIRE], "written for the country the seat plays now");
+  assert.equal(written[0].command.authority, "player");
 });
 
 // Rostra, the social network (runtime/socialFeed.js): a guest posts through the
