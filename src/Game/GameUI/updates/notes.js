@@ -271,6 +271,8 @@ const NEW_UPDATES = [
     channel: "beta",
     banners: [
       {
+        theme: "sharedWorlds",
+        scene: "table",
         title: "Shared Worlds",
         subtitle: "One world, every player in it",
         lead: "Shared games are rebuilt so that everyone plays in the same world, each with their own country, their own secrets and their own say.",
@@ -308,6 +310,8 @@ const NEW_UPDATES = [
         ],
       },
       {
+        theme: "sharedWorlds",
+        scene: "ledger",
         title: "Who Pays",
         subtitle: "No key ever leaves your device",
         lead: "The host decides whose AI does what, and the lobby says plainly what each choice means for every player.",
@@ -342,6 +346,8 @@ const NEW_UPDATES = [
         ],
       },
       {
+        theme: "sharedWorlds",
+        scene: "secrets",
         title: "Yours Alone",
         subtitle: "What you plan stays yours",
         lead: "What a player plans, writes and learns is their own until the world sees it happen.",
@@ -375,6 +381,8 @@ const NEW_UPDATES = [
         ],
       },
       {
+        theme: "sharedWorlds",
+        scene: "envoys",
         title: "Between Players",
         subtitle: "Peace, treaties and votes",
         lead: "Players make peace, sign treaties and vote together, and the world's governments write to every one of them.",
@@ -418,6 +426,8 @@ const NEW_UPDATES = [
         ],
       },
       {
+        theme: "sharedWorlds",
+        scene: "fronts",
         title: "Fair Fronts",
         subtitle: "One war, fought by the same rules",
         lead: "Wars between players are fought on the same map, by the same rules, with every refusal explained.",

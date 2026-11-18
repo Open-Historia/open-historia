@@ -25,11 +25,13 @@ import { MUSIC_CHROME } from "./musicChrome.js";
 import { PROJECTS_CHROME } from "./projectsChrome.js";
 import { ROSTRA_CHROME } from "./rostraChrome.js";
 import { SEASONS_CHROME } from "./seasonsChrome.js";
+import { SHARED_WORLDS_CHROME } from "./sharedWorldsChrome.js";
 import { SWARMS_CHROME } from "./swarmsChrome.js";
 import { THEMES_CHROME } from "./themesChrome.js";
 import { WARS_AND_FRONTS_2_CHROME } from "./warsAndFronts2Chrome.js";
 
 export const THEMES = Object.freeze({
+  sharedWorlds: { Page: lazy(() => import("./SharedWorlds.jsx")), chrome: SHARED_WORLDS_CHROME },
   diplomaticAtlas: { Page: lazy(() => import("./DiplomaticAtlas.jsx")), chrome: DIPLOMATIC_ATLAS_CHROME },
   projects: { Page: lazy(() => import("./Projects.jsx")), chrome: PROJECTS_CHROME },
   aiOverhaul: { Page: lazy(() => import("./AiOverhaul.jsx")), chrome: AI_OVERHAUL_CHROME },
