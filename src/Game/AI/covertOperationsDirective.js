@@ -19,13 +19,22 @@ const killed = (operation) => (operation.kind === "assassinate" && operation.out
 
 const NO_CULPRIT = "Nobody in the world knows who was behind it, the target included: name no culprit, and have no government, investigator or press establish one, in this event or in any later one.";
 
-const lineFor = (operation) => {
+// What a government that knows of an operation does about it. One the AI plays
+// is the model's to decide; one a person plays decides by its player's own
+// orders, and the period is told so: "unless Spain chooses to act" left a
+// player's government's choice to the model. `isPerson` is false for every
+// polity where one person plays (single player): its lines are as they were.
+const PLAYERS_CHOICE = (polities) => (polities.length > 1
+  ? `${polities.join(" and ")} are each played by a person: only each one's own player's orders decide whether it acts on this.`
+  : `${polities[0]} is played by a person: only its player's own orders decide whether it acts on this.`);
+
+const lineFor = (operation, isPerson = () => false) => {
   const target = clean(operation.target);
   const owner = clean(operation.owner);
   const aim = attempt(operation);
   const carriedOut = operation.outcome === "success";
   if (operation.outcome === "foiled") {
-    return `- In ${target}, an attempt ${aim} never came off: the agent who was to carry it out had been turned by ${target}, which therefore knows that ${owner} ordered it. ${owner} does not know its agent was turned and must not learn it from this. Nothing visible happens unless ${target} chooses to act on what it knows.`;
+    return `- In ${target}, an attempt ${aim} never came off: the agent who was to carry it out had been turned by ${target}, which therefore knows that ${owner} ordered it. ${owner} does not know its agent was turned and must not learn it from this. ${isPerson(target) ? `Nothing visible happens unless ${target} acts on what it knows. ${PLAYERS_CHOICE([target])}` : `Nothing visible happens unless ${target} chooses to act on what it knows.`}`;
   }
   if (!operation.caught) {
     if (!carriedOut) return "";
@@ -38,11 +47,16 @@ const lineFor = (operation) => {
   if (!operation.identified) {
     return `- In ${target}, a foreign agent was caught trying ${aim}, ${how}. The agent died under interrogation without revealing who sent them. Write the arrest and the death in custody.${killed(operation)} ${NO_CULPRIT}`;
   }
-  return `- In ${target}, an agent of ${owner} was caught trying ${aim}, ${how}, and ${target} established that ${owner} sent them. Write the arrest, and what follows from it between ${target} and ${owner}.${killed(operation)}`;
+  const persons = [target, owner].filter(isPerson);
+  return `- In ${target}, an agent of ${owner} was caught trying ${aim}, ${how}, and ${target} established that ${owner} sent them. Write the arrest, and what follows from it between ${target} and ${owner}.${killed(operation)}${persons.length ? ` ${PLAYERS_CHOICE(persons)}` : ""}`;
 };
 
-export const covertOperationsBlock = (operations) => {
-  const lines = (Array.isArray(operations) ? operations : []).map(lineFor).filter(Boolean);
+// `people`: the polities people play. Their own choices are only said to be
+// theirs where several people play; one person is told as before.
+export const covertOperationsBlock = (operations, { people = [] } = {}) => {
+  const persons = new Set((Array.isArray(people) ? people : []).map((name) => clean(name).toLowerCase()).filter(Boolean));
+  const isPerson = (name) => persons.size > 1 && persons.has(clean(name).toLowerCase());
+  const lines = (Array.isArray(operations) ? operations : []).map((operation) => lineFor(operation, isPerson)).filter(Boolean);
   if (!lines.length) return "";
   return [
     COVERT_OPERATIONS_HEADER,

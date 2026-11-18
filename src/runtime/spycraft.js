@@ -803,29 +803,51 @@ export const spymastersOf = (game) => humanCountriesOf(game);
 // rival with a live agent acts on what it stole, a planted story is believed.
 // `intercepts` here are already DECRYPTED by the caller (the simulator knows
 // the truth; only the player is kept in the dark).
+// The world's last public expulsions, one line each: a fact every service
+// shares, told once however many services a brief is written for.
 // i18n-ignore: the model's briefing, never shown.
-export const espionageBrief = (world, intercepts, { playerPolity = "", hiddenTargets = [] } = {}) => {
+export const publicExpulsionLines = (world) => normalizeSpies(world?.spies)
+  .filter((spy) => spy.status === "exposed")
+  .slice(-4)
+  .map((spy) => `${spy.target} publicly expelled a ${spy.owner} agent on ${spy.exposedAt || "an earlier date"}.`);
+
+// What the brief says an agent's owner does with what it knows. An owner the AI
+// plays acts on it, which is what the brief is for. An owner a person plays
+// (`people`, a shared game's: every player's service is briefed, so one
+// player's agent sits inside another's country) is the person's to move: the
+// brief once told the model that a player's government "may act on what it
+// knows", and the skip wrote it confronting another with stolen plans its
+// player never ordered. Its knowledge is told, and whose choice it is.
+// i18n-ignore: the model's briefing, never shown.
+const playersChoice = (owner, what) => `${owner} is played by a person: only its player's own orders decide what it does with ${what}.`;
+
+// `people`: the polities people play. `expulsions: false` leaves out the
+// world's public expulsions (publicExpulsionLines), for a caller that tells
+// them once for several services.
+// i18n-ignore: the model's briefing, never shown.
+export const espionageBrief = (world, intercepts, { playerPolity = "", hiddenTargets = [], people = [], expulsions = true } = {}) => {
   const player = String(playerPolity ?? "").trim();
   const spies = normalizeSpies(world?.spies);
   const lines = [];
   const hidden = new Set((Array.isArray(hiddenTargets) ? hiddenTargets : []).map((name) => String(name ?? "").trim().toLowerCase()).filter(Boolean));
+  const persons = new Set((Array.isArray(people) ? people : []).map((name) => String(name ?? "").trim().toLowerCase()).filter(Boolean));
+  const isPerson = (name) => persons.has(String(name ?? "").trim().toLowerCase());
   const mine = spies.filter((spy) => spy.owner === player && isLive(spy) && !hidden.has(spy.target.toLowerCase()));
   const theirs = spies.filter((spy) => spy.target === player && (isLive(spy) || spy.status === "discovered"));
-  const finished = spies.filter((spy) => spy.status === "exposed").slice(-4);
 
   if (mine.length) {
     lines.push(`${player} has agents in: ${mine.map((s) => `${s.target}${s.status === "turned" ? " (TURNED by them — feeding false reports; the player does not know)" : ""}`).join("; ")}.`);
   }
   for (const spy of theirs) {
     if (spy.status === "turned") {
-      lines.push(`${spy.owner}'s agent in ${player} has been turned by ${player}. ${spy.owner} believes the agent is loyal${spy.coverStory ? ` and has been told: "${spy.coverStory}"` : ""}. ${spy.owner} should act on that belief.`);
+      lines.push(`${spy.owner}'s agent in ${player} has been turned by ${player}. ${spy.owner} believes the agent is loyal${spy.coverStory ? ` and has been told: "${spy.coverStory}"` : ""}. ${isPerson(spy.owner) ? playersChoice(spy.owner, "that belief") : `${spy.owner} should act on that belief.`}`);
     } else if (spy.status === "discovered") {
       lines.push(`${player} has caught an agent of ${spy.owner} and has not yet decided what to do with them.`);
     } else {
-      lines.push(`${spy.owner} has a live agent in ${player} and knows ${player}'s private diplomacy and plans. ${spy.owner} may act on what it knows.`);
+      lines.push(`${spy.owner} has a live agent in ${player} and knows ${player}'s private diplomacy and plans. ${isPerson(spy.owner) ? playersChoice(spy.owner, "what it knows") : `${spy.owner} may act on what it knows.`}`);
     }
   }
-  for (const spy of finished) lines.push(`${spy.target} publicly expelled a ${spy.owner} agent on ${spy.exposedAt || "an earlier date"}.`);
+  if (expulsions) lines.push(...publicExpulsionLines(world));
 
   // Targets we HAVE read and can no longer read. Without this the brief simply
   // goes quiet about them, and silence is indistinguishable from "nothing

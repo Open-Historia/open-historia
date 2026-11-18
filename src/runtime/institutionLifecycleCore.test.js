@@ -441,6 +441,34 @@ test("two withdrawal notices falling due in one skip both take effect", async ()
   assert.equal(due.events.every((event) => event.date === "2015-01-11" && event.playerRelated === false), true);
 });
 
+// The review of 2026-11-18, simulation 6: a lifecycle event was "about the player" for the host alone, so a guest's
+// own withdrawal was nobody's on the guest's screen (multiplayer/host/projection.js reads `concerns` for each seat).
+test("where several people play, a lifecycle event names the people it concerns; with one, nothing is added", async () => {
+  const { advanceInstitutionLifecycleCore } = await import("./institutionLifecycleCore.js");
+  const founded = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), playerCountry: "Republic of Latvia", date: "2014-08-20",
+    command: { type: "found", name: "Notice Union", minimumFoundingMembers: 1, accessionMode: "direct", withdrawalMode: "notice", withdrawalNoticeDays: 10 },
+  });
+  const id = founded.institution.id;
+  const people = ["Republic of Latvia", "Republic of Poland"];
+  let state = founded;
+  for (const polity of ["Republic of Estonia", "Republic of Poland"]) {
+    const guest = polity === "Republic of Poland";
+    state = applyInstitutionLifecycleCommandCore({ world: state.world, playerCountry: guest ? polity : "Republic of Latvia", people, date: "2014-09-01", command: { type: "apply", institutionId: id, polity, authority: guest ? "player" : "npc" } });
+  }
+  assert.deepEqual(state.events.at(-1).concerns, ["Republic of Poland"], "a guest's accession is the guest's");
+  for (const polity of ["Republic of Estonia", "Republic of Poland"]) {
+    state = applyInstitutionLifecycleCommandCore({ world: state.world, playerCountry: "Republic of Latvia", date: "2015-01-01", command: { type: "withdraw", institutionId: id, polity, authority: "npc" } });
+  }
+  const shared = advanceInstitutionLifecycleCore({ world: state.world, date: "2015-03-01", playerCountry: "Republic of Latvia", people });
+  const byTitle = Object.fromEntries(shared.events.map((event) => [event.title, event]));
+  assert.deepEqual(byTitle["Republic of Poland Leaves Notice Union"].concerns, ["Republic of Poland"]);
+  assert.equal("concerns" in byTitle["Republic of Estonia Leaves Notice Union"], false, "an AI's is nobody's");
+  const single = advanceInstitutionLifecycleCore({ world: state.world, date: "2015-03-01", playerCountry: "Republic of Latvia", people: ["Republic of Latvia"] });
+  assert.deepEqual(single.events, advanceInstitutionLifecycleCore({ world: state.world, date: "2015-03-01", playerCountry: "Republic of Latvia" }).events);
+  assert.equal(single.events.some((event) => "concerns" in event), false);
+});
+
 test("a withdrawal notice counts its days on the game calendar, BC years included", async () => {
   const { advanceInstitutionLifecycleCore } = await import("./institutionLifecycleCore.js");
   const founded = applyInstitutionLifecycleCommandCore({

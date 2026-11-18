@@ -34,15 +34,35 @@ const enemiesOf = (world, name) => {
 
 const line = (world, name, own) => {
   const { figures } = militaryProfile(world, name);
-  return `- ${name}${own ? " (the player's)" : ""}: troop quality ${Math.round(figures.quality)}, technology ${Math.round(figures.technology)}, spending ${Math.round(figures.spending)}, manpower ${figures.manpowerShare}% of its people, land ${Math.round(figures.land)}, sea ${Math.round(figures.sea)}, air ${Math.round(figures.air)}`;
+  return `- ${name}${own ? ` (${own})` : ""}: troop quality ${Math.round(figures.quality)}, technology ${Math.round(figures.technology)}, spending ${Math.round(figures.spending)}, manpower ${figures.manpowerShare}% of its people, land ${Math.round(figures.land)}, sea ${Math.round(figures.sea)}, air ${Math.round(figures.air)}`;
 };
 
 // The lines, or "" where the scenario does not weigh countries' figures or there is no player.
-//   most   how many of the player's enemies are listed at most
-export const describeMilitaryStanding = (world, player, { most = 6 } = {}) => {
+//   most    how many of the player's enemies are listed at most
+//   people  a shared game's world task: every polity people play, `player`
+//           among them. Each is listed as a player's, and then their enemies,
+//           one of each player's in turn, `most` in all: only the host's and
+//           the host's enemies were, so a guest who rearmed for years was
+//           never shown a figure to move (the review of 2026-11-18). One
+//           person is single player's, told exactly as before.
+export const describeMilitaryStanding = (world, player, { most = 6, people = [] } = {}) => {
   const name = clean(player);
   if (!name || warSettingsOf(world).mechanics.military !== true) return "";
-  return [line(world, name, true), ...enemiesOf(world, name).slice(0, most).map((enemy) => line(world, enemy, false))].join("\n");
+  const players = [name];
+  for (const other of list(people).map(clean)) if (other && !players.some((known) => fold(known) === fold(other))) players.push(other);
+  if (players.length === 1) return [line(world, name, "the player's"), ...enemiesOf(world, name).slice(0, most).map((enemy) => line(world, enemy, ""))].join("\n");
+  const listed = [...players];
+  const enemies = [];
+  const each = players.map((polity) => enemiesOf(world, polity));
+  for (let index = 0; enemies.length < most && each.some((rows) => index < rows.length); index += 1) {
+    for (const rows of each) {
+      const enemy = rows[index];
+      if (!enemy || enemies.length >= most || listed.some((known) => fold(known) === fold(enemy))) continue;
+      listed.push(enemy);
+      enemies.push(enemy);
+    }
+  }
+  return [...players.map((polity) => line(world, polity, "a player's")), ...enemies.map((enemy) => line(world, enemy, ""))].join("\n");
 };
 
 // What the model is told of them, under the lines.

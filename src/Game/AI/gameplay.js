@@ -331,7 +331,7 @@ import {
   isProjectOpen,
   spyProvenanceOps,
 } from "../../runtime/projects.js";
-import { activeSpies, applySpyOps, spyServicesOf, espionageBrief, intelligenceOf, interceptTableOf, isIntelligenceRated, mapInterceptTables, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, planCovertOperations, redactText, resolveEspionage, signalClarity, spymastersOf, withInterceptTable } from "../../runtime/spycraft.js";
+import { activeSpies, applySpyOps, spyServicesOf, espionageBrief, intelligenceOf, interceptTableOf, isIntelligenceRated, mapInterceptTables, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, planCovertOperations, publicExpulsionLines, redactText, resolveEspionage, signalClarity, spymastersOf, withInterceptTable } from "../../runtime/spycraft.js";
 import { assertPoliticalLandscapeConsistency, describeElectionsDue, normalizePoliticalLandscape } from "../../runtime/politics.js";
 import { foldLandscapeIntoActor, partiesCompiled } from "../../runtime/politicalLandscapeFold.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
@@ -367,6 +367,7 @@ import {
   resolveHelperValues,
 } from "./promptContext.js";
 import { SHARED_WORLD_TASKS } from "./sharedGameDirective.js";
+import { diplomaticSliceOptions, peoplesPressureLine, politicalCapsuleBound, politicalCapsulePeople, sharedBoardServiceLine, worldTaskPeople } from "./worldTaskPeople.js";
 import { SEAT_ADVICE_FIELD, mergeSeatAdvice, withSeatAdvice } from "./seatAdvice.js";
 import {
   HISTORY_CONSOLIDATION,
@@ -699,10 +700,11 @@ const loadPromptCatalog = async ({ force = false } = {}) => {
 // canonical stat sheet (world.countryStats, the store the Stats tab reads), then
 // a neutral 50 — so it is never "unknown" — and every other polity's the AI has
 // recorded, which the tasks writing polityChanges.reputation need to move from.
-const buildPlayerPolityReputationText = async (bundle) => {
+// `people`: every player of a shared game's world task (worldTaskPeople.js).
+const buildPlayerPolityReputationText = async (bundle, { people = [] } = {}) => {
   const playerCode = normalizeString(bundle.game.country);
   const world = bundle.world && typeof bundle.world === "object" ? bundle.world : {};
-  return describeReputationStanding(world, playerCode);
+  return describeReputationStanding(world, playerCode, { people });
 };
 
 // ---- Canonical war and diplomacy ledgers ------------------------------------
@@ -1519,8 +1521,8 @@ const buildGameMasterStorylineContext = (worldLike) => {
 // block like this) moved normally.
 //
 // The text is standingContext.js's, which the advisor reads too.
-const buildPlayerPolityIntelligenceText = (bundle) =>
-  describeIntelligenceStanding(bundle.world && typeof bundle.world === "object" ? bundle.world : {}, normalizeString(bundle.game.country));
+const buildPlayerPolityIntelligenceText = (bundle, { people = [] } = {}) =>
+  describeIntelligenceStanding(bundle.world && typeof bundle.world === "object" ? bundle.world : {}, normalizeString(bundle.game.country), { people });
 
 // The Game Master's exact Political Actor ids. The player's polity is always
 // listed. With the lookup functions any other polity's ids come from the
@@ -1637,16 +1639,17 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   const focusActors = normalizeArray(options?.chat?.countries)
     .map((country) => normalizeString(country?.name || country?.code))
     .filter(Boolean);
+  // Every player, in a world task of a shared game (worldTaskPeople.js): the
+  // slice, the standing, the intelligence and the military figures are each
+  // player's, by name. None otherwise, and single player's are as they were.
+  const people = worldTaskPeople(bundle?.game, taskKey);
   if (wants("canonicalWarContext")) {
     variables.canonicalWarContext = buildCanonicalWarContext(bundle.world, { round: bundle?.game?.round });
   }
   await pause?.();
   if (wants("canonicalDiplomaticContext")) {
-    variables.canonicalDiplomaticContext = buildBoundedDiplomaticContext(bundle.world, {
-      playerPolity: normalizeString(bundle?.game?.country),
-      focusActors,
-      maxActors: 8,
-    }).text;
+    variables.canonicalDiplomaticContext = buildBoundedDiplomaticContext(bundle.world,
+      diplomaticSliceOptions(normalizeString(bundle?.game?.country), { focusActors, people })).text;
   }
   await pause?.();
   if (wants("territorialControlContext")) {
@@ -1688,16 +1691,16 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   }
   await pause?.();
   if (wants("playerPolityReputationContext")) {
-    variables.playerPolityReputationContext = await buildPlayerPolityReputationText(bundle);
+    variables.playerPolityReputationContext = await buildPlayerPolityReputationText(bundle, { people });
   }
   await pause?.();
   // The intelligence rating is espionage's (server/gameFeatures.js): none shown, and so none asked to move, with it off.
   if (wants("playerPolityIntelligenceContext") && isActiveFeatureEnabled("espionage")) {
-    variables.playerPolityIntelligenceContext = buildPlayerPolityIntelligenceText(bundle);
+    variables.playerPolityIntelligenceContext = buildPlayerPolityIntelligenceText(bundle, { people });
   }
   // The player's and its enemies' military figures, which a turn moves (runtime/militaryStanding.js).
   if (wants("playerPolityMilitaryContext")) {
-    variables.playerPolityMilitaryContext = describeMilitaryStanding(bundle.world && typeof bundle.world === "object" ? bundle.world : {}, normalizeString(bundle.game.country));
+    variables.playerPolityMilitaryContext = describeMilitaryStanding(bundle.world && typeof bundle.world === "object" ? bundle.world : {}, normalizeString(bundle.game.country), { people });
   }
   // A time skip states the doctrine once, among its standing rules.
   if (wants("unitsSummary") && !JUMP_TASK_KEYS.has(taskKey)) {
@@ -3245,14 +3248,20 @@ ${pending}`);
           playerPolity: owner,
           // The covert operations the skip plans are the game country's (planCovertOperations).
           hiddenTargets: own ? normalizeArray(variables.covertHiddenTargets) : [],
+          // A player's agent inside another player's country: what it knows
+          // is told, and that its own player decides what it does with it.
+          people: spymasters,
+          // The world's public expulsions are every service's: told once, below.
+          expulsions: spymasters.length === 1,
         });
         if (brief) briefs.push(spymasters.length > 1 ? `${owner}'s service:\n${brief}` : brief);
       }
-      if (briefs.length) {
+      const expelled = spymasters.length > 1 ? publicExpulsionLines(world) : [];
+      if (briefs.length || expelled.length) {
         blocks.push(spymasters.length > 1
           ? `[Espionage]
-Known to you, not to the players, each of whose services sees only what it can decode. Let it shape events: a polity with an agent inside another acts on what it stole, a polity fed a planted story believes it, an expulsion sours relations. Never reveal in an event that an agent has been turned until it is discovered.
-${briefs.join("\n\n")}`
+Known to you, not to the players, each of whose services sees only what it can decode. Let it shape events: a polity the AI plays with an agent inside another acts on what it stole, a polity fed a planted story believes it, an expulsion sours relations. A player's government acts only by its own player's orders, whatever its service knows. Never reveal in an event that an agent has been turned until it is discovered.
+${[...briefs, ...(expelled.length ? [`Public expulsions:\n${expelled.join("\n")}`] : [])].join("\n\n")}`
           : `[Espionage]
 Known to you, not to the player, whose service sees only what it can decode. Let it shape events: a polity with an agent inside another acts on what it stole, a polity fed a planted story believes it, an expulsion sours relations. Never reveal in an event that an agent has been turned until it is discovered.
 ${briefs[0]}`);
@@ -3527,9 +3536,16 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
   if (isActiveFeatureEnabled("espionage") && taskKey === "projects") {
     try {
       const [world, game] = await Promise.all([readWorldState({ force: false }), readGameData()]);
-      const brief = espionageBrief(normalizeWorldState(world), await readOpenedIntercepts(), { playerPolity: normalizeString(game.country) });
+      // The board this pass keeps is the game country's (the host's seat in a
+      // shared game, whose service it is), so its brief is that service's; a
+      // player's agent inside it is told without deciding for that player.
+      const people = humanCountriesOf(game);
+      const brief = espionageBrief(normalizeWorldState(world), await readOpenedIntercepts(), { playerPolity: normalizeString(game.country), people });
       if (brief) {
-        const framing = "\n\n[Espionage]\nWhat the player's service has read, uncensored — the player sees only what it could decode. Never write that an agent has been turned, or that an entry came from a spy at all.\n[Doubted intelligence]\nAn entry marked doubted was sourced from an agent the service no longer trusts, and may be a fabrication it was fed. Where the board below says a FRESH agent is now inside that polity, settle it from what that new source shows: set verification \"confirmed\" with op update and let the entry run on if the programme is real, or \"refuted\" and fail it if the new material shows there was never anything there. Settle it only when the new source actually bears on it — leave it doubted otherwise, because guessing is what put the phantom on the board to begin with. Never write that any of this came from a spy, or that an agent was turned.\n";
+        const whose = people.length > 1
+          ? sharedBoardServiceLine(normalizeString(game.country))
+          : "What the player's service has read, uncensored — the player sees only what it could decode.";
+        const framing = `\n\n[Espionage]\n${whose}` + " Never write that an agent has been turned, or that an entry came from a spy at all.\n[Doubted intelligence]\nAn entry marked doubted was sourced from an agent the service no longer trusts, and may be a fabrication it was fed. Where the board below says a FRESH agent is now inside that polity, settle it from what that new source shows: set verification \"confirmed\" with op update and let the entry run on if the programme is real, or \"refuted\" and fail it if the new material shows there was never anything there. Settle it only when the new source actually bears on it — leave it doubted otherwise, because guessing is what put the phantom on the board to begin with. Never write that any of this came from a spy, or that an agent was turned.\n";
         systemPrompt = systemPrompt + framing + brief;
       }
     } catch {
@@ -10330,6 +10346,7 @@ const applySimulationResult = async ({
       world: nextWorld,
       date: nextGame.gameDate || nextGame.startDate || "",
       playerCountry: baseGame.country || "",
+      people: humanCountriesOf(baseGame),
     });
     nextWorld = lifecycle.world;
     // A departure that took effect this turn is on the timeline like any other,
@@ -10849,8 +10866,9 @@ const collectWorldInitiativePoliticalActors = (analysis, playerPolity = "", maxA
 
   // The human polity belongs in the context because endogenous domestic pressure
   // can matter to history, but the prompt below explicitly keeps that evidence
-  // separate from authority to invent a sovereign player choice.
-  push(playerPolity);
+  // separate from authority to invent a sovereign player choice. Every
+  // person's, where several play (worldTaskPeople.js politicalCapsulePeople).
+  for (const person of Array.isArray(playerPolity) ? playerPolity : [playerPolity]) push(person);
 
   for (const storyline of normalizeArray(analysis?.attentionStorylines)) {
     for (const participant of normalizeArray(storyline?.participants)) push(participant);
@@ -10864,13 +10882,17 @@ const collectWorldInitiativePoliticalActors = (analysis, playerPolity = "", maxA
   return out;
 };
 
-const buildWorldInitiativePoliticalDecisionContext = ({ world, analysis, playerPolity }) => {
-  const actorPolities = collectWorldInitiativePoliticalActors(analysis, playerPolity, 8);
+// `people`: every polity people play (a shared game's skip); each is one of
+// the HUMAN-controlled polities, its capsule asked for before the others'.
+const buildWorldInitiativePoliticalDecisionContext = ({ world, analysis, playerPolity, people = [] }) => {
+  const persons = politicalCapsulePeople(playerPolity, people);
+  const bound = politicalCapsuleBound(persons);
+  const actorPolities = collectWorldInitiativePoliticalActors(analysis, persons, bound);
   if (!actorPolities.length) return "";
 
   const set = buildBoundedPoliticalDecisionContextSet(world, {
     actorPolities,
-    maxActors: 8,
+    maxActors: bound,
     perActorMaxChars: 1900,
     maxTotalChars: 11000,
     limits: {
@@ -10885,7 +10907,7 @@ const buildWorldInitiativePoliticalDecisionContext = ({ world, analysis, playerP
     "[PRIVATE POLITICAL DECISION CONTEXT - ENGINE DATA]",
     set.text,
     "Use each actor capsule only as evidence about that actor's incentives, constraints and endogenous political motion.",
-    "For the HUMAN-controlled polity, internal pressure may produce non-sovereign social, party, institutional or public developments, but it is NOT consent or authority to invent a new executive, parliamentary, diplomatic, military, territorial or other sovereign choice. Such choices require exact prior player authority already present in canonical orders/process state.",
+    persons.length > 1 ? peoplesPressureLine(persons) : "For the HUMAN-controlled polity, internal pressure may produce non-sovereign social, party, institutional or public developments, but it is NOT consent or authority to invent a new executive, parliamentary, diplomatic, military, territorial or other sovereign choice. Such choices require exact prior player authority already present in canonical orders/process state.",
     "Do not reveal one actor's private political state to another unless that knowledge is explicitly present in the actor's own Political Knowledge or the objective canonical ledger.",
   ].join("\n");
 };
@@ -15515,7 +15537,11 @@ export const runChatActionBatch = async ({
   const statedGovernments = Array.isArray(governments)
     ? new Set(governments.map(regionKey).filter(Boolean))
     : null;
-  const threadOwner = !statedGovernments && peopleKeys.size > 1
+  // Whenever this engine hosts a shared game, not only while two or more
+  // people play: with the host alone left, a line into a departed guest's
+  // thread seated nobody, and nobody answered or was told (the review of
+  // 2026-11-18, simulation 5). Single player's threads are its player's.
+  const threadOwner = !statedGovernments && (peopleKeys.size > 1 || hostingSharedGame())
     ? normalizeString(stored.player) || normalizeString(savedGame?.country)
     : "";
   // Who else is a person here, and whom the AI answers for (tableSeats.js):
@@ -15966,7 +15992,9 @@ export const runPostTurnInstitutionBallots = async ({
       const actors = [...new Set(work.flatMap((item) => item.actors))];
       const politicalDecisionSet = buildBoundedPoliticalDecisionContextSet(bundle.world, {
         actorPolities: actors,
-        counterpartByActor: Object.fromEntries(actors.map((name) => [name, player])),
+        // Each voter's politics read against the person whose institution it
+        // votes in (the work item's), not the host in every institution.
+        counterpartByActor: Object.fromEntries(actors.map((name) => [name, work.find((item) => item.actors.includes(name))?.person || player])),
         maxActors: 32,
         perActorMaxChars: 900,
         maxTotalChars: 26000,
@@ -17019,7 +17047,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       ? planCovertOperations(normalizeWorldState(bundle.world), { round: (bundle.game?.round || 1) + 1, playerPolity: normalizeString(bundle.game?.country) })
       : [];
   }
-  const covertBrief = covertOperationsBlock(state.covertOperations);
+  // A player's government that learns of an operation decides by its own player's orders.
+  const covertBrief = covertOperationsBlock(state.covertOperations, { people: humanCountriesOf(bundle.game) });
   const covertHiddenTargets = untracedTargets(state.covertOperations);
 
   // Starts at 0 on a fresh jump, and at the failed segment on a retry.
@@ -17119,6 +17148,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         world: ledgerWorld,
         analysis: worldInitiative.analysis,
         playerPolity: normalizeString(bundle.game?.country),
+        people: humanCountriesOf(bundle.game),
       });
       // What the player has going on across THIS segment's window, and the
       // block that tells the simulator about it (playerFocus.js). Written with
@@ -17148,10 +17178,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         ...(segmentCount > 1 ? { targetDate: segmentTarget, targetDateReadable: formatDateReadable(segmentTarget) } : {}),
         ...(segmentIndex > 0 ? {
           canonicalWarContext: buildCanonicalWarContext(ledgerWorld, { round: bundle.game.round }),
-          canonicalDiplomaticContext: buildBoundedDiplomaticContext(ledgerWorld, {
-            playerPolity: normalizeString(bundle.game.country),
-            maxActors: 8,
-          }).text,
+          canonicalDiplomaticContext: buildBoundedDiplomaticContext(ledgerWorld,
+            diplomaticSliceOptions(normalizeString(bundle.game.country), { people: humanCountriesOf(bundle.game) })).text,
         } : {}),
       };
       reportProgress(segmentIndex);

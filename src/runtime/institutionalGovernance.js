@@ -865,8 +865,18 @@ const outcomeEventDescription = (status, { name, title, yes, no, abstain, veto, 
 // The proposal types whose ballot is a major event.
 const MAJOR_PROPOSAL_TYPES = new Set(["charter-amendment", "accession", "agreement", "treaty"]);
 
-const proposalOutcomeEvent = ({ institution, proposal, outcome, date = "", playerCountry = "" } = {}) => {
+// `playerRelated` is the acting seat's mark, as single player's always was.
+// Every other player's screen marks an event its own by the polities it says it
+// concerns (runtime/eventConcerns.js, multiplayer/host/projection.js), and an
+// outcome said none: a ballot a guest cast was "about the player" for one name
+// alone (the review of 2026-11-18, simulation 6). Where several people play
+// (`people`), it names the people who cast a ballot. With one, nothing is added.
+const proposalOutcomeEvent = ({ institution, proposal, outcome, date = "", playerCountry = "", people = null } = {}) => {
   if (!institution || !proposal || !outcome) return null;
+  const persons = peopleOf(people, playerCountry);
+  const voters = persons.length > 1
+    ? persons.filter((person) => Object.values(proposal?.voting?.ballots || {}).some((ballot) => lower(ballot?.polity) === lower(person)))
+    : [];
   const status = lower(outcome.status || proposal.status);
   const title = outcomeEventTitle(status, institution.name, proposal.title);
   const acceptedClauses = acceptedAmendments(proposal)
@@ -908,6 +918,7 @@ const proposalOutcomeEvent = ({ institution, proposal, outcome, date = "", playe
     tags: ["Diplomacy", "Politics"],
     notable: status === "passed" || status === "vetoed",
     playerRelated: playerBallot,
+    ...(voters.length ? { concerns: voters } : {}),
     source: "institutional-governance",
     agency: {
       principal: institution.name,
@@ -1009,7 +1020,7 @@ export const applyInstitutionGovernanceCommand = ({
     playerCountry,
   );
   const events = closedThisCommand
-    ? appendProposalOutcomeEvent(eventsInput, { institution, proposal, outcome, date, playerCountry })
+    ? appendProposalOutcomeEvent(eventsInput, { institution, proposal, outcome, date, playerCountry, people })
     : normalizeEvents(eventsInput);
   return {
     ...result, outcome, implementation, events, chats,

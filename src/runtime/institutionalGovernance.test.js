@@ -901,6 +901,26 @@ test("the post-turn settlement counts an unanswered ask and closes the ballot at
   assert.equal(second.events.length, 1);
 });
 
+// The review of 2026-11-18, simulation 6: a closed ballot was "about the player" for one name alone, and every other
+// player's screen reads `concerns` (multiplayer/host/projection.js).
+test("where several people play, a ballot's outcome names the people who voted in it; with one, nothing is added", () => {
+  const close = (people) => {
+    let world = vote(open().world, "A", "yes").world;
+    world = vote(world, "B", "yes").world;
+    return applyInstitutionGovernanceCommand({
+      world, chats: [], events: [], institutionId: "council", playerCountry: "A", date: "2000-01-06", people,
+      command: { type: "close-voting", proposalId: "p1", implementWhenPassed: false },
+    }).events.at(-1);
+  };
+  assert.deepEqual(close(["A", "B"]).concerns, ["A", "B"]);
+  assert.deepEqual(close(["A", "C"]).concerns, ["A"], "C cast no ballot");
+  const { createdAt: _when, ...single } = close(null);
+  assert.equal("concerns" in single, false);
+  const { createdAt: _then, ...one } = close(["A"]);
+  assert.deepEqual(one, single);
+  assert.equal(single.playerRelated, true);
+});
+
 test("a government that has voted is not counted as asked", async () => {
   const { settleInstitutionBallotsCore } = await import("./institutionalGovernance.js");
   const world = vote(open().world, "B", "yes").world;
