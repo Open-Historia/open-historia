@@ -46,6 +46,7 @@ import { migrateToCommonNames, needsCommonNames, scenarioPredatesCommonNames } f
 import COMMON_NAME_RENAMES from "./generated/commonNames.js";
 import { planRestorePointSlots, publicRestorePointIndex } from "../../../server/restorePoints.js";
 import { coverObjectUrl } from "./coverUrls.js";
+import { mapLogicFingerprint } from "../../../server/mapLogicFingerprint.js";
 import { createCoarseRegionsCache } from "./coarseRegionsCache.js";
 import { onMemoryPressure } from "../memoryPressure.js";
 import { musicTracksDropped, usedMusicTrackIds } from "../../../server/keptMusic.js";
@@ -953,44 +954,68 @@ const migrateOwnerSchemaNow = async (record, kind) => {
 // The active game is loaded once per read and handed down: it can hold a dozen
 // full-world restore points, and each load deserialises all of them. `known` is
 // the record when the caller already holds it (the write path, which just put it).
+// A scenario's map document as the runtime serves it (`assetKey` one of
+// SCENARIO_GEOJSON_ASSET_KEYS): its own, else what it borrows. The runtime read
+// below and the map's fingerprint (scenarioMapFingerprint) both go through it,
+// so a shared game checks a copy by what this build actually draws.
+const servedScenarioGeojson = async (scenario, assetKey) => {
+  // The scenario owns its geometry; migrate it as its OWN record.
+  if (scenario) await migrateOwnerSchema(scenario, "scenario");
+  let value = scenario?.geojson?.[assetKey];
+  if (value === undefined && assetKey === "regionsGeojson" && scenario && usesBuiltInMap(scenario)) {
+    value = await fetchBuiltInRegionsGeojson(bundledMapUrlOf(scenario));
+  }
+  if (value === undefined && assetKey === "regionsGeojson" && scenario && scenario.id !== DEFAULT_SCENARIO_ID) {
+    // Borrowing the stock world's record. Migrate it as DEFAULT'S record, never this
+    // scenario's: those owners live in default's owner-space, so resolving them
+    // against this world's polities would name Russia after whatever this
+    // scenario calls that token. This scenario's own ownership is in its
+    // world.regionOwnershipOverrides, migrated with its own record above.
+    const fallback = await getScenario(DEFAULT_SCENARIO_ID);
+    if (fallback) await migrateOwnerSchema(fallback, "scenario");
+    value = fallback?.geojson?.[assetKey];
+  }
+  // Web build: the default scenario's regions.geojson isn't in the seed (too
+  // big), so pull it from the content origin — otherwise its political map is blank.
+  //
+  // NOT gated on being the default scenario. A CLONE of Modern Day has its own
+  // id and no geometry of its own, so it fell through the borrow branch above
+  // into default's record — which, in the web build, is exactly the record that
+  // does not carry the file. The clone then rendered an empty FeatureCollection
+  // and showed no political map at all, while the scenario it was copied from
+  // looked fine. This is the last resort for ANY scenario that has ended up
+  // without region geometry, which is precisely the case the borrow was for.
+  if ((value === undefined || value === null) && assetKey === "regionsGeojson" && scenario) {
+    value = await fetchDefaultRegionsGeojson();
+  }
+  // geojson may be a raw uploaded string; parse-with-fallback like readJsonFile.
+  return parseJsonValue(value, cloneJson(EMPTY_FEATURE_COLLECTION));
+};
+
+// A scenario's map as the checksum a shared game's host states and each guest
+// checks its copy against (server/mapLogicFingerprint.js, the rule the desktop
+// store applies to its files): this build had no way to give one, so every
+// website and Android guest was told its copy of the host's map differs.
+export const scenarioMapFingerprint = async (scenarioId) => {
+  const scenario = await getScenario(String(scenarioId ?? "").trim());
+  if (!scenario) throw new Error(`Scenario not found: ${scenarioId}`);
+  const sizeOf = (bytes) => Number(bytes?.byteLength ?? bytes?.length ?? bytes?.size ?? 0) || 0;
+  return mapLogicFingerprint({
+    regions: await servedScenarioGeojson(scenario, "regionsGeojson"),
+    cities: await servedScenarioGeojson(scenario, "citiesGeojson"),
+    background: await servedScenarioGeojson(scenario, "backgroundData"),
+    ownBasemaps: await servedScenarioGeojson(scenario, "ownBasemapsData"),
+    tiles: { cities: sizeOf(scenario.pmtiles?.cities), countries: sizeOf(scenario.pmtiles?.countries), regions: sizeOf(scenario.pmtiles?.regions) },
+  });
+};
+
 const readRuntimeJsonAsset = async (assetKey, known) => {
   const activeGame = (known === undefined ? await getActiveGameRecord() : known) ?? null;
   // Above the geojson branch: it returns before anything else runs, and it is the
   // branch that serves the file `owner` physically lives in.
   if (activeGame) await migrateOwnerSchema(activeGame, "game");
   if (SCENARIO_GEOJSON_ASSET_KEYS.includes(assetKey)) {
-    const scenario = await getActiveRuntimeScenarioRecord(activeGame);
-    // The scenario owns its geometry; migrate it as its OWN record.
-    if (scenario) await migrateOwnerSchema(scenario, "scenario");
-    let value = scenario?.geojson?.[assetKey];
-    if (value === undefined && assetKey === "regionsGeojson" && scenario && usesBuiltInMap(scenario)) {
-      value = await fetchBuiltInRegionsGeojson(bundledMapUrlOf(scenario));
-    }
-    if (value === undefined && assetKey === "regionsGeojson" && scenario && scenario.id !== DEFAULT_SCENARIO_ID) {
-      // Borrowing the stock world's record. Migrate it as DEFAULT'S record, never this
-      // scenario's: those owners live in default's owner-space, so resolving them
-      // against this world's polities would name Russia after whatever this
-      // scenario calls that token. This scenario's own ownership is in its
-      // world.regionOwnershipOverrides, migrated with its own record above.
-      const fallback = await getScenario(DEFAULT_SCENARIO_ID);
-      if (fallback) await migrateOwnerSchema(fallback, "scenario");
-      value = fallback?.geojson?.[assetKey];
-    }
-    // Web build: the default scenario's regions.geojson isn't in the seed (too
-    // big), so pull it from the content origin — otherwise its political map is blank.
-    //
-    // NOT gated on being the default scenario. A CLONE of Modern Day has its own
-    // id and no geometry of its own, so it fell through the borrow branch above
-    // into default's record — which, in the web build, is exactly the record that
-    // does not carry the file. The clone then rendered an empty FeatureCollection
-    // and showed no political map at all, while the scenario it was copied from
-    // looked fine. This is the last resort for ANY scenario that has ended up
-    // without region geometry, which is precisely the case the borrow was for.
-    if ((value === undefined || value === null) && assetKey === "regionsGeojson" && scenario) {
-      value = await fetchDefaultRegionsGeojson();
-    }
-    // geojson may be a raw uploaded string; parse-with-fallback like readJsonFile.
-    return parseJsonValue(value, cloneJson(EMPTY_FEATURE_COLLECTION));
+    return servedScenarioGeojson(await getActiveRuntimeScenarioRecord(activeGame), assetKey);
   }
 
   // Restore points are the game's alone, from their own store.
@@ -2337,6 +2362,8 @@ export const handleScenarios = async ({ method, segments, body, rawBody, content
     if (sub === "import" && method === "PUT") return jsonResponse(await updateScenarioFromBundle(id, body ?? {}));
     if (sub === "basemap" && method === "PUT") return jsonResponse(await restoreScenarioBasemap(id, body?.payload));
     if (sub === "export" && method === "GET") return jsonResponse(await exportScenarioBundle(id));
+    // The map's checksum a shared game checks a guest's copy by (server.js twin).
+    if (sub === "fingerprint" && method === "GET") return jsonResponse({ fingerprint: await scenarioMapFingerprint(id) });
     if (sub === "languages" && segments[2] && method === "GET") {
       const code = decodeURIComponent(segments[2]);
       return jsonResponse({ code, strings: await readScenarioLanguagePack(id, code) });

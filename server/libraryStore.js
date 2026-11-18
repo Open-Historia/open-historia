@@ -1,6 +1,6 @@
 /*! Open Historia — portions (regions.geojson scenario asset + custom-map seeding) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import fs from "fs";
-import { mapFingerprint } from "./scenarioFingerprint.js";
+import { scenarioFilesFingerprint } from "./scenarioFingerprint.js";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "./gameFeatures.js";
 import { assertEconomicDisplayCurrencyChoice } from "./economicDisplayCurrency.js";
 import { layOutScenarioBundle } from "./mapProjection.js";
@@ -3611,19 +3611,29 @@ const scenarioMapFingerprint = (scenarioId) => {
   const id = String(scenarioId ?? "").trim();
   if (!id || !fs.existsSync(getScenarioMetaPath(id))) throw new Error(`The scenario "${id}" is not in this library.`);
   ensureScenarioOwnerSchema(id);
-  const parts = Object.keys(SCENARIO_GEOJSON_ASSET_FILES).map((assetKey) => {
+  const servedPath = (assetKey) => {
     const own = getScenarioUploadPath(id, assetKey);
-    if (fs.existsSync(own)) return { name: assetKey, path: own };
-    if (assetKey !== "regionsGeojson" || id === DEFAULT_SCENARIO_ID) return { name: assetKey, path: null };
+    if (fs.existsSync(own)) return own;
+    // The stock world's regions, for a scenario with none of its own, exactly as
+    // resolveRuntimeGeojsonAsset serves it: never for the built-in scenario.
+    if (assetKey !== "regionsGeojson" || id === DEFAULT_SCENARIO_ID) return null;
     const stockPath = resolveStockRegionsPath();
     if (stockPath && stockPath !== STOCK_REGIONS_PATH) ensureScenarioOwnerSchema(DEFAULT_SCENARIO_ID);
-    return { name: assetKey, path: stockPath || null };
-  });
-  for (const assetKey of Object.keys(PMTILES_ASSET_FILES)) {
+    return stockPath || null;
+  };
+  const tilePath = (assetKey) => {
     const own = getScenarioUploadPath(id, assetKey);
-    parts.push({ name: assetKey, path: fs.existsSync(own) ? own : null, sizeOnly: true });
-  }
-  return mapFingerprint(parts);
+    return fs.existsSync(own) ? own : null;
+  };
+  return scenarioFilesFingerprint({
+    files: {
+      regions: servedPath("regionsGeojson"),
+      cities: servedPath("citiesGeojson"),
+      background: servedPath("backgroundData"),
+      ownBasemaps: servedPath("ownBasemapsData"),
+    },
+    tiles: { cities: tilePath("cities"), countries: tilePath("countries"), regions: tilePath("regions") },
+  });
 };
 
 // Restore points, one file each (server/restorePoints.js): storage/snapshots/
