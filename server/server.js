@@ -142,6 +142,7 @@ import { handleMcpMessage, tokenMatches } from "./agentMcp.js";
 import { AGENT_WAIT_MS, createAgentQueue } from "./agentQueue.js";
 import { appKindOf } from "./appKind.js";
 import { createClockOffsetCache } from "./clockOffset.js";
+import { createStandInLeases } from "./standInLeases.js";
 import { ENGINE_CREDENTIAL_HEADER, hostedWriteRefusal } from "./oneWriter.js";
 import { createDiscordPresence, DISCORD_APPLICATION_ID, normalizePresence } from "./discordPresence.js";
 const app = express();
@@ -793,6 +794,25 @@ app.get("/api/multiplayer/clock", async (_req, res) => {
   } catch (error) {
     sendError(res, 500, error);
   }
+});
+
+// Which shared games' stand-ins a page of this server shows now (standInLeases.js):
+// renewed by that page, read by any page that starts, so one browser's start
+// never closes the stand-in another browser or device is playing on.
+const standInLeases = createStandInLeases();
+app.put("/api/stand-ins/:gameId/lease", (req, res) => {
+  if (!standInLeases.touch(req.params.gameId)) {
+    res.status(400).json({ error: "No such stand-in." });
+    return;
+  }
+  res.status(204).end();
+});
+app.delete("/api/stand-ins/:gameId/lease", (req, res) => {
+  standInLeases.release(req.params.gameId);
+  res.status(204).end();
+});
+app.get("/api/stand-ins/leases", (_req, res) => {
+  res.json({ held: standInLeases.held() });
 });
 
 app.get("/api/multiplayer/engine", (req, res) => {

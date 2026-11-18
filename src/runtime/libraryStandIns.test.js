@@ -33,8 +33,17 @@ globalThis.fetch = async (url, init = {}) => {
     return json(catalog);
   }
   if (/^\/api\/scenarios\//.test(path) || /^\/api\/games\//.test(path)) return json({});
+  // The desktop server's leases (server/standInLeases.js): which stand-ins a page of any browser shows now.
+  if (path === "/api/stand-ins/leases") return json({ held: [...leased] });
+  const lease = /^\/api\/stand-ins\/([^/]+)\/lease$/.exec(path);
+  if (lease) {
+    if (method === "PUT") leased.add(decodeURIComponent(lease[1]));
+    if (method === "DELETE") leased.delete(decodeURIComponent(lease[1]));
+    return new Response(null, { status: 204 });
+  }
   return json({ error: "not here" }, 404);
 };
+const leased = new Set();
 
 const library = await import("./library.js");
 const { closeAbandonedStandIns, closeStandIn, holdStandIn } = await import("./standInGames.js");
@@ -135,4 +144,24 @@ test("a guest with no games of their own runs its shared game: the War Room, the
   assert.equal(library.hasNoGameToRun({ loaded: false, games: [], activeGame: null }), false, "not before the library is read");
   await reset("mine");
   assert.equal(library.hasNoGameToRun(library.getLibraryState()), false);
+});
+
+test("a stand-in another browser or device shows is left to it: its page renews a lease with the server every start reads", async () => {
+  // A lock is one browser's alone, and the desktop's library is its server's: a page started in another browser
+  // saw no lock, deleted the live stand-in and made another game the active one (the review of 2026-11-18, door 9).
+  await reset();
+  leased.clear();
+  const renewals = [];
+  const timers = { setInterval: (fn, ms) => { renewals.push([fn, ms]); return renewals.length; }, clearInterval: () => {} };
+  // The app's window holds it; this start is another browser's, which has no lock of it.
+  const release = holdStandIn("sg-1", { target: { navigator: {} }, timers });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual([...leased], ["sg-1"]);
+  assert.equal(renewals[0][1], 20_000, "renewed well inside the server's minute");
+  assert.equal(await closeAbandonedStandIns({ target: {} }), 0, "another page plays its shared game on it");
+  assert.equal(library.getLibraryState().activeGame.id, "sg-1");
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual([...leased], []);
+  assert.equal(await closeAbandonedStandIns({ target: {} }), 1, "let go, it is closed");
 });
