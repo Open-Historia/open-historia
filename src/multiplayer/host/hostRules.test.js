@@ -12,7 +12,7 @@ import { JUMP_REQUEST_CAP, UNLIMITED_JUMP_REQUEST_CAP } from "../../Game/AI/requ
 // The gap audit of 2026-11-18: the host's device AI settings decided every round's cost and how long it waited, and
 // no guest could see them; difficulty was nowhere in the lobby.
 test("the rules a round is played by are the host's game's difficulty and the host's AI settings, as the time panel reads them", () => {
-  assert.deepEqual(roundRulesOf({}), { difficulty: "medium", requests: 1, most: 1, stallMinutes: 0 });
+  assert.deepEqual(roundRulesOf({}), { difficulty: "medium", requests: 1, most: 1, stallMinutes: 0, quietMinutes: 0 });
   assert.equal(roundRulesOf({ difficulty: "standard" }).difficulty, "medium", "an old game's level");
   assert.equal(roundRulesOf({ difficulty: "impossible" }).difficulty, "impossible");
   // Lookups add requests only with "My key has no request limit" on, as the time panel says.
@@ -25,6 +25,8 @@ test("the rules a round is played by are the host's game's difficulty and the ho
   assert.ok(year.requests > 1 && year.most === year.requests, "one request a segment");
   assert.equal(roundRulesOf({ segmented: false, daysPerRound: 365 }).requests, 1);
   assert.equal(roundRulesOf({ limitGeneration: true }).stallMinutes, 15);
+  // Both of "Limit AI generation"'s windows (idleDeadline.js): an answer not begun, and one stopped part-way.
+  assert.equal(roundRulesOf({ limitGeneration: true }).quietMinutes, 5);
   assert.ok(JUMP_REQUEST_CAP >= 1);
 });
 

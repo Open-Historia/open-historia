@@ -312,3 +312,19 @@ test("a shared game's guest is asked too, in the words of that game's rules", ()
   assert.match(main, /&& \(sharedRole !== "guest" \|\| Boolean\(sharedRules\)\);/);
   assert.match(main, /lead=\{sharedRole === "guest" && sharedRules \? ownAiUsesOf\(sharedRules\) : ""\}/);
 });
+
+// The follow-ups of 2026-11-18, C1: a guest whose list held only its own Agent was counted set up and never asked,
+// though an Agent answers none of what a shared game leaves to the guest's AI but what it starts itself.
+test("a guest is set up by what no Agent answers, and one with an Agent alone is told why it is asked", () => {
+  const main = fs.readFileSync(new URL("./main.jsx", import.meta.url), "utf8");
+  assert.match(main, /const providerReady = sharedRole === "guest" \? aiSetup\.gameCalls : aiSetup\.ready;/);
+  assert.match(main, /gameCalls: fallbackListAnswersGameCalls\(\), agent: fallbackListHasAgent\(\)/);
+  assert.match(main, /note=\{sharedRole === "guest" && sharedRules && aiSetup\.agent \? OWN_AGENT_LINE : ""\}/);
+  // Its own sentence after the lead, each translated whole.
+  const lead = "In this shared game your own AI answers your advisor.";
+  const note = "Your own Agent answers only what you start yourself and answer with /answer.";
+  const html = render({ lead, note });
+  assert.match(html, /<div style="[^"]*">In this shared game your own AI answers your advisor\.<\/div><div data-setup-note=""[^>]*>Your own Agent answers only/);
+  assert.equal(render({ lead }).includes("data-setup-note"), false, "no note, no line");
+  assert.equal(render({ note }).includes("data-setup-note"), false, "and none without a game's lead");
+});

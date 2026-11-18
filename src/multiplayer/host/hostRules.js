@@ -16,12 +16,14 @@
 //   stallMinutes  how long a round waits on a silent AI before it fails and the
 //                 host can run it again ("Limit AI generation"); 0 for as long as
 //                 it takes, until the host cancels it.
+//   quietMinutes  and how long, once its answer has begun, it waits between the
+//                 answer's pieces (idleDeadline.js counts silence in both).
 //
 // Runtime-free: the host's engine reads its device's settings and hands them in.
 
 import { describeJumpCost } from "../../Game/AI/requestBudget.js";
 import { SEGMENTED_JUMP_MIN_DAYS, planJumpSegments } from "../../Game/AI/jumpSegments.js";
-import { AI_FIRST_BYTE_TIMEOUT_MS } from "../../Game/AI/idleDeadline.js";
+import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS } from "../../Game/AI/idleDeadline.js";
 import { normalizeDifficulty } from "../../runtime/difficulty.js";
 
 // `noRequestLimit` and `lookups`: Settings → AI's "My key has no request
@@ -36,6 +38,7 @@ export const roundRulesOf = ({ difficulty = "", daysPerRound = 30, noRequestLimi
     requests: cost.min,
     most: cost.max,
     stallMinutes: limitGeneration ? Math.round(AI_FIRST_BYTE_TIMEOUT_MS / 60_000) : 0,
+    quietMinutes: limitGeneration ? Math.round(AI_IDLE_TIMEOUT_MS / 60_000) : 0,
   };
 };
 

@@ -47,6 +47,11 @@ export const costRulesOf = (settings = {}, { host = false } = {}) => {
     lines.push("Your own AI answers your messages to countries the AI plays, and writes the stat sheets, parties and military figures you are the first to open.");
     // What a device writes stands for everyone (the review of 2026-11-18, security S6).
     lines.push("The figures a player's device writes for a country the AI plays stand for every player. Your own country's figures, and those of a country at war with you, are written by the host's AI.");
+    // A reading is left once, to the first who asks (host/gameHost.js leaveReading,
+    // the review's cost 7); and the host's AI reads nothing by itself
+    // (runtime/sharedReadings.js, cost 6): what the war needs is the round's.
+    lines.push("A sheet, parties or military figures of a country the AI plays are written once, by the device of the first player to open them: a player who opens them meanwhile sees them once they are written.");
+    lines.push("The host's AI reads no figures by itself: what the war needs of a country nobody has opened is written in the round's own request.");
     const most = hostAnswersOf(settings);
     if (host) {
       lines.push("As the host, your messages to every country the AI plays are answered by your own AI.");
@@ -61,6 +66,9 @@ export const costRulesOf = (settings = {}, { host = false } = {}) => {
     lines.push(most > 0
       ? `The host's AI answers up to ${most} of your messages a round to countries the AI plays, Councils and hearings included; past that, the round reads them. It writes the stat sheets, parties and military figures.`
       : "The host's AI answers no messages between rounds: the round reads what you write to countries the AI plays. It writes the stat sheets, parties and military figures.");
+    // As in single player (runtime/sharedReadings.js): after each round, the
+    // figures of countries at war nobody has read, as background requests.
+    lines.push("After each round it also reads, by itself, the figures the war needs of countries at war whose figures nobody has read.");
   }
   lines.push("Your own AI answers your advisor and its report, AI suggestions, Plan it and Improve on your projects, Assess progress on your goal, your generals and Rostra Search.");
   return lines;
@@ -105,10 +113,23 @@ export const roundCostLinesOf = (rules = null, settings = {}) => {
     lines.push(requests === 1 ? "Each round is one request to the host's AI." : `Each round is ${requests} requests to the host's AI.`);
   }
   lines.push("When an institution's members vote, the round makes one request more.");
-  if (rules.stallMinutes) lines.push(`A round whose AI is silent for ${rules.stallMinutes} minutes fails, and the host can run it again.`);
+  // "Limit AI generation" counts silence in two windows (Game/AI/idleDeadline.js):
+  // a long one for an answer not yet begun, a short one between the pieces of
+  // one that has. The line said only the first, so a round that failed after a
+  // few quiet minutes of an answer under way failed sooner than it said (the
+  // follow-ups of 2026-11-18, C6). On the paying player's AI the pieces are its
+  // device's word that its model is writing (client/roundPayer.js payAlive).
+  if (rules.stallMinutes && rules.quietMinutes) {
+    lines.push(`A round fails when its AI has not begun to answer in ${rules.stallMinutes} minutes, or has stopped for ${rules.quietMinutes} minutes once it has begun, and the host can run it again.`);
+  } else if (rules.stallMinutes) lines.push(`A round whose AI is silent for ${rules.stallMinutes} minutes fails, and the host can run it again.`);
   else lines.push(cycle ? "A round waits for the paying player's AI as long as it takes, and the host can cancel it." : "A round waits for the host's AI as long as it takes, and the host can cancel it.");
   return lines;
 };
+
+// For the AI set-up of a guest whose list holds only its own Agent: why it is
+// asked (an Agent answers only what its player starts: providerConfig.js
+// entryServesCall). Its own sentence after ownAiUsesOf's, so each is translated whole.
+export const OWN_AGENT_LINE = "Your own Agent answers only what you start yourself and answer with /answer; for the rest, set up an AI with an API key or a server of your own.";
 
 // The lobby's word on the Game Master (decision 8: behind a visible notice).
 export const gameMasterRuleOf = (settings = {}) => (settings?.cheats === "host"

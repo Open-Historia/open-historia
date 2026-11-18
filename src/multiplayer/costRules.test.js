@@ -11,7 +11,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { ANSWERS_PER_ROUND_CHOICES, HOST_ANSWER_CHOICES, PAYER_SEES_AND_CHANGES, costRulesOf, gameMasterRuleOf, ownAiUsesOf, payerLineOf, payersLinesOf, roundCostLinesOf } from "./costRules.js";
+import { ANSWERS_PER_ROUND_CHOICES, HOST_ANSWER_CHOICES, OWN_AGENT_LINE, PAYER_SEES_AND_CHANGES, costRulesOf, gameMasterRuleOf, ownAiUsesOf, payerLineOf, payersLinesOf, roundCostLinesOf } from "./costRules.js";
 import { HOST_ANSWERS_MAX, normalizeSettings } from "./host/settings.js";
 
 const rules = (input, viewer) => costRulesOf(normalizeSettings(input).settings, viewer);
@@ -21,6 +21,8 @@ test("the lobby says who pays for the round, for the governments the AI plays, a
   assert.deepEqual(rules({}), [
     "The host's AI makes each round's request.",
     "The host's AI answers up to 20 of your messages a round to countries the AI plays, Councils and hearings included; past that, the round reads them. It writes the stat sheets, parties and military figures.",
+    // Its own readings after a round, as in single player (runtime/sharedReadings.js).
+    "After each round it also reads, by itself, the figures the war needs of countries at war whose figures nobody has read.",
     OWN_USES,
   ]);
   // The number is the host's (host/settings.js answersPerRound, the review of 2026-11-18: rule 10).
@@ -37,10 +39,15 @@ test("the lobby says who pays for the round, for the governments the AI plays, a
   assert.match(own[1], /Your own AI answers your messages to countries the AI plays, and writes the stat sheets, parties and military figures you are the first to open/);
   // What a device writes stands for everyone, and what a player has a stake in is the host's AI's (security S6).
   assert.equal(own[2], "The figures a player's device writes for a country the AI plays stand for every player. Your own country's figures, and those of a country at war with you, are written by the host's AI.");
-  assert.equal(own[3], "Countries at war with you, your overlord or puppet, institutions and a conversation with a vote open are not answered between rounds: the round reads what you write to them.");
-  assert.equal(rules({ replies: "own", hostAnswers: 3 })[3], "Countries at war with you, your overlord or puppet, institutions and a conversation with a vote open are answered by the host's AI, up to 3 of your messages a round; past that, the round reads them.");
+  // A reading goes once, to the first who asks (host/gameHost.js leaveReading), and the host's AI makes none by
+  // itself (runtime/sharedReadings.js): the follow-ups of 2026-11-18, C5.
+  assert.equal(own[3], "A sheet, parties or military figures of a country the AI plays are written once, by the device of the first player to open them: a player who opens them meanwhile sees them once they are written.");
+  assert.equal(own[4], "The host's AI reads no figures by itself: what the war needs of a country nobody has opened is written in the round's own request.");
+  assert.doesNotMatch(own.join(" "), /After each round it also reads/);
+  assert.equal(own[5], "Countries at war with you, your overlord or puppet, institutions and a conversation with a vote open are not answered between rounds: the round reads what you write to them.");
+  assert.equal(rules({ replies: "own", hostAnswers: 3 })[5], "Countries at war with you, your overlord or puppet, institutions and a conversation with a vote open are answered by the host's AI, up to 3 of your messages a round; past that, the round reads them.");
   // The host's own messages are never counted: what every guest reads is not what the host does.
-  assert.equal(rules({ replies: "own" }, { host: true })[3], "As the host, your messages to every country the AI plays are answered by your own AI.");
+  assert.equal(rules({ replies: "own" }, { host: true })[5], "As the host, your messages to every country the AI plays are answered by your own AI.");
   assert.ok(HOST_ANSWER_CHOICES.includes(0) && HOST_ANSWER_CHOICES.at(-1) === HOST_ANSWERS_MAX);
 });
 
@@ -87,6 +94,26 @@ test("the round's cost and its wait, by who pays for it", () => {
   assert.equal(paid[2], "A round waits for the paying player's AI as long as it takes, and the host can cancel it.");
   assert.equal(roundCostLinesOf({ requests: 1, most: 1, stallMinutes: 15 }, cycle)[2], "A round whose AI is silent for 15 minutes fails, and the host can run it again.", "the paying device's model at work puts it off, as an answer arriving does");
   assert.deepEqual(roundCostLinesOf(null, host), []);
+});
+
+// "Limit AI generation" counts silence in two windows (idleDeadline.js): the line said only the first, so a round
+// stopped part-way failed ten minutes sooner than it said (the follow-ups of 2026-11-18, C6). The same in either
+// mode: on the paying player's AI the pieces are its device's word that its model writes (roundPayer.js payAlive).
+test("a round's wait on a silent AI says both of its windows, whoever pays", async () => {
+  const { roundRulesOf } = await import("./host/hostRules.js");
+  const limited = roundRulesOf({ limitGeneration: true });
+  const both = "A round fails when its AI has not begun to answer in 15 minutes, or has stopped for 5 minutes once it has begun, and the host can run it again.";
+  for (const settings of [normalizeSettings({}).settings, normalizeSettings({ payment: "cycle" }).settings]) {
+    assert.equal(roundCostLinesOf(limited, settings)[2], both);
+  }
+  const { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS } = await import("../Game/AI/idleDeadline.js");
+  assert.deepEqual([limited.stallMinutes, limited.quietMinutes], [AI_FIRST_BYTE_TIMEOUT_MS / 60_000, AI_IDLE_TIMEOUT_MS / 60_000], "the engine's own windows");
+  assert.match(roundCostLinesOf(roundRulesOf({}), normalizeSettings({}).settings)[2], /as long as it takes/);
+});
+
+test("a guest whose list holds only its own Agent is told why it is asked for an AI", () => {
+  assert.match(OWN_AGENT_LINE, /^Your own Agent answers only what you start yourself and answer with \/answer;/);
+  assert.match(OWN_AGENT_LINE, /set up an AI with an API key or a server of your own\.$/);
 });
 
 test("the Game Master's rule, and whose device pays the round, for the round bar", () => {

@@ -724,6 +724,24 @@ export function isFallbackListConfigured() {
     return getResolvedFallbackList().some(entryIsConfigured);
 }
 
+// Whether the list can answer the calls nobody starts as one of an Agent's
+// kinds: AI suggestions, Plan it, Improve, Assess progress, the generals,
+// Rostra Search, a stat sheet, a shared round. An Agent Connection answers
+// none of them (entryServesCall), so a list of Agents alone is set up for what
+// its player starts and answers with /answer, and nothing else. In single
+// player that is the time skip, and isFallbackListConfigured counts it ready; a
+// shared game's guest is asked for its own AI for everything else (the
+// follow-ups of 2026-11-18, C1: an Agent alone was counted ready, and the
+// guest was never asked).
+export function fallbackListAnswersGameCalls(list = getResolvedFallbackList()) {
+    return (Array.isArray(list) ? list : []).some((entry) => entryIsConfigured(entry) && entryServesCall(entry, {}));
+}
+
+// Whether the list holds the player's own Agent at all.
+export function fallbackListHasAgent(list = getResolvedFallbackList()) {
+    return (Array.isArray(list) ? list : []).some((entry) => entry?.provider === AGENT_PROVIDER);
+}
+
 // What answers a shared game's rounds, which the host's engine window asks
 // (multiplayer/host/engineMain.js): the first entry of the list that serves a
 // round and has what its provider needs, or null. An Agent Connection answers

@@ -3248,7 +3248,7 @@ test("the lobby states the rules every round is played by, and says when the hos
   s.host.join(s.guest);
   await s.clock.flush();
   const lobby = s.to(s.guest, "lobby").at(-1);
-  assert.deepEqual(lobby.rules, { difficulty: "hard", requests: 1, most: 1, stallMinutes: 0 });
+  assert.deepEqual(lobby.rules, { difficulty: "hard", requests: 1, most: 1, stallMinutes: 0, quietMinutes: 0 });
   assert.equal(validate(HOST_MESSAGES.lobby, lobby).ok, true);
   const sent = s.to(s.guest, "lobby").length;
   assert.equal(s.host.control.setRules(roundRulesOf({ difficulty: "hard" })), false, "nothing changed, nothing said");
@@ -3257,6 +3257,8 @@ test("the lobby states the rules every round is played by, and says when the hos
   const told = s.to(s.guest, "lobby").at(-1);
   assert.equal(told.rules.most > 1, true);
   assert.equal(told.rules.stallMinutes, 15);
+  assert.equal(told.rules.quietMinutes, 5);
+  assert.equal(validate(HOST_MESSAGES.lobby, told).ok, true);
 });
 
 // Item 41: a seat's release to the AI runs in the engine on the host's clock (the leaver's grace), as the lobby says.

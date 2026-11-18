@@ -480,7 +480,9 @@ export const HOST_MESSAGES = Object.freeze({
       requests: int(1, 64),
       most: int(1, 64),
       stallMinutes: int(0, 24 * 60),
-    }),
+      // Once its answer has begun, how long a round waits between its pieces.
+      quietMinutes: int(0, 24 * 60),
+    }, ["quietMinutes"]),
     // What the Game Master changed in this game, newest last (decision 8).
     gameMaster: list(GAME_MASTER_ENTRY, GAME_MASTER_LOG_MAX),
   }, ["changes", "features", "rules", "gameMaster"]),

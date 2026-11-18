@@ -754,6 +754,27 @@ test("an Agent entry serves what the player started, of the kinds it ticks, and 
   assert.equal(config.entryServesCall({ provider: "gemini" }, {}), true, "every other Connection serves every call");
 });
 
+// The follow-ups of 2026-11-18, C1: a shared game's guest whose list held only its own Agent was counted set up
+// (isFallbackListConfigured: an Agent needs no key), and never asked, while its suggestions, Plan it, the generals,
+// Search, the sheets it opened and its turn to pay went to no AI at all: an Agent answers only what its player starts.
+test("a list answers the game's own calls only with an entry that is no Agent and has what its provider needs", () => {
+  const agent = { provider: "agent", label: "Your Agent", kinds: ["skip", "advisor", "diplomacy"], paused: false };
+  const gemini = { provider: "gemini", label: "Gemini", apiKey: "AIzaKEY" };
+  const keyless = { provider: "gemini", label: "Spare", apiKey: "" };
+  assert.equal(config.fallbackListAnswersGameCalls([agent]), false);
+  assert.equal(config.fallbackListAnswersGameCalls([agent, keyless]), false);
+  assert.equal(config.fallbackListAnswersGameCalls([agent, gemini]), true);
+  assert.equal(config.fallbackListAnswersGameCalls([]), false);
+  assert.equal(config.fallbackListHasAgent([agent, keyless]), true);
+  assert.equal(config.fallbackListHasAgent([gemini]), false);
+  // Read as the device stores it; single player's own question is unchanged.
+  store.set("ai_connections", JSON.stringify([{ id: "c-agent", provider: "agent", name: "Claude Code" }]));
+  store.set("ai_fallback_list", JSON.stringify([{ id: "e-agent", connectionId: "c-agent" }]));
+  assert.equal(config.isFallbackListConfigured(), true, "single player counts its Agent as set up, as before");
+  assert.equal(config.fallbackListAnswersGameCalls(), false);
+  assert.equal(config.fallbackListHasAgent(), true);
+});
+
 test("the Agent Connection kind is offered only where a local server runs", () => {
   assert.equal(config.providerOptionsFor({ localServer: true }).some((option) => option.value === "agent"), true);
   assert.equal(config.providerOptionsFor({ localServer: false }).some((option) => option.value === "agent"), false);

@@ -40,6 +40,8 @@ import { OPEN_COUNTRY_STATS_EVENT, openCountryPanel } from "../Selection/Country
 import { logDebugEvent, logSettingChange } from "../../runtime/debugLog.js";
 import {
   describeProviderSetupNeed,
+  fallbackListAnswersGameCalls,
+  fallbackListHasAgent,
   getProviderMeta,
   getResolvedFallbackList,
   isFallbackListConfigured,
@@ -52,14 +54,17 @@ import { PromptLimitNotice } from "./promptLimitNotice.jsx";
 import { PLAYER_ACTIVITY_EVENTS, createPlayerActivity } from "../../runtime/playerActivity.js";
 import { MAP_SETTING_KEYS, useMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import { inSharedGame, sharedGameRole, sharedGameSettings, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
-import { ownAiUsesOf } from "../../multiplayer/costRules.js";
+import { OWN_AGENT_LINE, ownAiUsesOf } from "../../multiplayer/costRules.js";
 
 // Whether anything in the Fallback list has what its provider needs, and the
 // top entry's provider for the start-of-game prompt's wording. Re-read whenever
 // the list or a Connection changes (providerConfig.js announces it).
+// `gameCalls`: whether something in it answers what no Agent does (the calls a
+// shared game's guest is asked its own AI for, beyond what it starts and
+// answers with /answer); `agent`: whether the player's own Agent is in it.
 const readAiSetup = () => {
   const [top] = getResolvedFallbackList();
-  return { ready: isFallbackListConfigured(), provider: top?.provider ?? "gemini" };
+  return { ready: isFallbackListConfigured(), gameCalls: fallbackListAnswersGameCalls(), agent: fallbackListHasAgent(), provider: top?.provider ?? "gemini" };
 };
 
 // The advisor drawer is user-resizable — drag its left edge (see advisor.jsx).
@@ -432,7 +437,6 @@ const Main = ({
     scenarioName: runtimeScenario?.name || "",
     inMenu: mainMenuOpen || hasNoGames || !gameEntered,
   }));
-  const providerReady = aiSetup.ready;
   const [apiPromptAnsweredFor, setApiPromptAnsweredFor] = useState(() => {
     try { return sessionStorage.getItem("oh:api-setup-answered") || ""; } catch { return ""; }
   });
@@ -448,6 +452,12 @@ const Main = ({
   // played on the host's key, with nothing to set up.
   const sharedRole = useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole);
   const sharedRules = useSyncExternalStore(subscribeSharedGameRole, sharedGameSettings, sharedGameSettings);
+  // What counts as set up is what this game asks of this device's AI. A guest's
+  // is asked for what no Agent answers (its suggestions, Plan it, the generals,
+  // Search, the sheets it opens, its turn to pay): a list of Agents alone was
+  // counted ready, and the guest was never asked. Single player and the host
+  // are as they were: the host cannot host on Agents alone (engineMain.js).
+  const providerReady = sharedRole === "guest" ? aiSetup.gameCalls : aiSetup.ready;
   const showApiPrompt = loaded && Boolean(activeGame?.id) && !mainMenuOpen && !providerReady
     && apiPromptAnsweredFor !== String(activeGame?.id) && !isSettingsOpen && !showGameLoading
     && (sharedRole !== "guest" || Boolean(sharedRules));
@@ -975,6 +985,7 @@ const Main = ({
           providerLabel={getProviderMeta(aiSetup.provider)?.label || "the selected provider"}
           missing={describeProviderSetupNeed(aiSetup.provider)}
           lead={sharedRole === "guest" && sharedRules ? ownAiUsesOf(sharedRules) : ""}
+          note={sharedRole === "guest" && sharedRules && aiSetup.agent ? OWN_AGENT_LINE : ""}
           onDismiss={answerApiPrompt}
           onConfigure={() => {
             answerApiPrompt();
