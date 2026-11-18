@@ -587,6 +587,7 @@ export const createGameHost = ({
       await store.updateActions((actions) => withSeatMoved({ actions }, move).actions);
       await store.updateWorld((world) => withSeatMoved({ world }, move).world);
       await store.updateChats((chats) => withSeatMoved({ chats }, move).chats);
+      await store.updateIntercepts?.((intercepts) => withSeatMoved({ intercepts }, move).intercepts);
       log("info", move.why === "founded" ? "a seat followed its people to the country they founded" : "a seat followed its country to its new name", { from: move.from, to: move.to });
       // Told to the player whose seat moved; everyone sees the lobby change.
       const device = seats.list().find((seat) => same(seat.country, move.to))?.device;

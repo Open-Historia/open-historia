@@ -7,7 +7,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formerNamesOf, seatFoundings, seatSuccessions, withSeatMoved } from "./foundings.js";
+import fs from "node:fs";
+import { SEAT_KEYED_WORLD_RECORDS, formerNamesOf, seatFoundings, seatSuccessions, withSeatMoved } from "./foundings.js";
 
 const BURGHERS = "The Free Townsmen of Gullhaven";
 const HILL = "Hill folk";
@@ -66,6 +67,40 @@ test("what was the old seat's goes with it: queued orders, its board, its agents
   assert.equal(moved.world.spies[0].owner, "Hill Kingdom");
   assert.deepEqual(Object.keys(moved.world.seatBoards), ["Hill Kingdom"]);
   assert.deepEqual(moved.chats.map((chat) => chat.player), ["Hill Kingdom", BURGHERS]);
+});
+
+// A founder kept its orders, board and agents, and lost everything else kept under its name: its seal and its
+// agents' reports, its standing goal, the advice a round brings it (the gap audit of 2026-11-18). Every record the
+// world keeps for a seat is on one list, and the move takes every one of them.
+test("every record the game keeps for a seat follows it, its agents' traffic too; what is the country's stays", () => {
+  const seal = "a".repeat(64);
+  const moved = withSeatMoved({
+    world: {
+      seatSeals: { [HILL]: seal, [BURGHERS]: "b".repeat(64) },
+      playerGoals: { [HILL]: { text: "Rule the hills" } },
+      seatAdvice: { [HILL]: [{ title: "Raise levies" }] },
+      treatyOffers: [{ id: "t1", from: HILL, to: BURGHERS }],
+    },
+    intercepts: { France: { exchanges: [{ id: "host" }] }, "@seats": { [HILL]: { [BURGHERS]: { exchanges: [{ id: "hill-on-burghers" }] } } } },
+  }, { from: HILL, to: "Hill Kingdom", host: false });
+  assert.equal(moved.world.seatSeals["Hill Kingdom"], seal);
+  assert.equal(moved.world.seatSeals[BURGHERS], "b".repeat(64), "another seat's is its own");
+  assert.equal(moved.world.playerGoals["Hill Kingdom"].text, "Rule the hills");
+  assert.equal(moved.world.seatAdvice["Hill Kingdom"][0].title, "Raise levies");
+  assert.equal(moved.world.treatyOffers[0].from, HILL, "an offer the country made stays the country's");
+  assert.deepEqual(Object.keys(moved.intercepts["@seats"]), ["Hill Kingdom"]);
+  assert.equal(moved.intercepts.France.exchanges[0].id, "host", "the host's table is the game country's");
+  // The host's own table is the file's top, and follows game.country without moving.
+  const host = withSeatMoved({ intercepts: { France: { exchanges: [] } } }, { from: HILL, to: "Hill Kingdom", host: true });
+  assert.deepEqual(host.intercepts, { France: { exchanges: [] } });
+});
+
+test("the list of a seat's records holds every record a view keeps per seat", async () => {
+  const { HOST_ONLY_WORLD_KEYS } = await import("./projection.js");
+  const projection = fs.readFileSync(new URL("./projection.js", import.meta.url), "utf8");
+  const perSeat = [...HOST_ONLY_WORLD_KEYS.filter((key) => /^seat[A-Z]/.test(key)), ...[...projection.matchAll(/^ {2}(seat[A-Z]\w*|playerGoals): \(world, viewer\)/gm)].map((match) => match[1])];
+  assert.ok(perSeat.length >= 4);
+  for (const key of perSeat) assert.ok(SEAT_KEYED_WORLD_RECORDS.includes(key), `${key} is kept per seat and must follow a seat that moves`);
 });
 
 test("a faction founds a state on its area, whose land is still its countries'; a country with no area does not", () => {

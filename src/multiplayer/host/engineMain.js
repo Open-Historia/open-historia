@@ -23,6 +23,7 @@ import {
   mutateCanonicalTurnState,
   mutateChatsState,
   mutateGameData,
+  mutateInterceptsState,
   mutateSharedSessionState,
   mutateWorldState,
   readChatsState,
@@ -124,6 +125,8 @@ const store = {
   updateChats: (fn) => mutateChatsState(fn),
   updateWorld: (fn) => mutateWorldState(fn),
   updateGame: (fn) => mutateGameData(fn),
+  // The agents' traffic, one table per spymaster (runtime/spycraft.js).
+  updateIntercepts: (fn) => mutateInterceptsState(fn),
   // The world and the order queue changed together or not at all (a formation
   // and the order that tells the skip of it): one commit, as a turn's own is.
   // `fn({ world, actions, game })` returns the documents it changed, or null.

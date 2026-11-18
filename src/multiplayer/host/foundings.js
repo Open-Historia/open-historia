@@ -22,6 +22,8 @@
 //
 // Pure.
 
+import { interceptTableOf, withInterceptTable } from "../../runtime/spycraft.js";
+
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const same = (left, right) => Boolean(clean(left)) && clean(left).toLocaleLowerCase() === clean(right).toLocaleLowerCase();
 const list = (value) => (Array.isArray(value) ? value : []);
@@ -56,11 +58,25 @@ export const seatFoundings = ({ events = [], actions = [], seated = [], host = "
   return moves;
 };
 
-// What was the old seat's goes with it: its queued orders, its own Projects
-// board (a guest's, kept by country), its agents and the threads it speaks in.
-// What it already did stays done by it: when the host's seat moves, the host's
-// orders that named no owner are written down as the old name's.
-export const withSeatMoved = ({ actions, world, chats }, { from, to, host = false }) => ({
+// The world's records kept by a seat's country, each an object keyed by the
+// country it plays: a guest's own Projects board, a guest's seal for its
+// agents' traffic (runtime/spySeal.js sealOf), every seat's standing goal, the
+// advice a round brings each seat. A record the game keeps for a seat is kept
+// under this list, and so follows the seat when it moves: one that was not left
+// a founder's goal, seal and agents' reports under a name nobody plays
+// (foundings.test.js lists every one the views keep per seat).
+export const SEAT_KEYED_WORLD_RECORDS = Object.freeze(["seatBoards", "seatSeals", "playerGoals", "seatAdvice"]);
+const rekeyed = (record, from, to) => Object.fromEntries(Object.entries(record).map(([key, value]) => [same(key, from) ? to : key, value]));
+
+// What was the old seat's goes with it: its queued orders, every record the
+// world keeps for it (SEAT_KEYED_WORLD_RECORDS), its agents, the threads it
+// speaks in, and its agents' traffic (a guest's table of the intercepts file,
+// runtime/spycraft.js; the host's table is the game country's, which follows
+// game.country). What concerns the country and not the seat (its treaties,
+// threads others opened with it) stays the country's. What it already did
+// stays done by it: when the host's seat moves, the host's orders that named no
+// owner are written down as the old name's.
+export const withSeatMoved = ({ actions, world, chats, intercepts }, { from, to, host = false }) => ({
   actions: list(actions).map((action) => {
     const planned = clean(action?.status || "planned") === "planned";
     if (planned) return same(action?.ownerCode, from) ? { ...action, ownerCode: to } : action;
@@ -69,13 +85,14 @@ export const withSeatMoved = ({ actions, world, chats }, { from, to, host = fals
   world: world && typeof world === "object"
     ? {
       ...world,
-      ...(world.seatBoards && typeof world.seatBoards === "object"
-        ? { seatBoards: Object.fromEntries(Object.entries(world.seatBoards).map(([key, board]) => [same(key, from) ? to : key, board])) }
-        : {}),
+      ...Object.fromEntries(SEAT_KEYED_WORLD_RECORDS
+        .filter((key) => isRecord(world[key]))
+        .map((key) => [key, rekeyed(world[key], from, to)])),
       ...(Array.isArray(world.spies) ? { spies: world.spies.map((spy) => (same(spy?.owner, from) ? { ...spy, owner: to } : spy)) } : {}),
     }
     : world,
   chats: list(chats).map((chat) => (same(chat?.player, from) ? { ...chat, player: to } : chat)),
+  intercepts: host || !isRecord(intercepts) ? intercepts : withInterceptTable(withInterceptTable(intercepts, from, {}), to, interceptTableOf(intercepts, from)),
 });
 
 // What became of the countries people play, as the world now has them, read
