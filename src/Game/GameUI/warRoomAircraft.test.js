@@ -179,7 +179,8 @@ test("the seam: the host in a shared game, the write queue otherwise, never whil
   // resolved waits behind it and is the next round's (host/worldQueue.js).
   assert.match(host, /airstrike: async \(connection, \{ op \}, seat\) => \{\s*const sent = cleanAirStrikeOp\(op\);/);
   assert.doesNotMatch(host, /const (?:AT_ONCE|THINKING) = new Set\(\[[^\]]*"airstrike"/, "applied in the queue, as every change to the world is");
-  assert.match(host, /queue\.run\(message\.t, apply\)/);
+  // (The queue's entry names the device it came from, so a player's waiting entries are bounded: host/seatBounds.js.)
+  assert.match(host, /queue\.run\(message\.t, apply(?:, \{ owner: connection\.device \})?\)/);
   assert.match(host, /applyAirStrikeOp\(world, sent, \{ player: seat\.country, date: clean\(game\?\.gameDate\), round: game\?\.round, chart, cities, air: activeWars\(\)\.air \}\)/);
 });
 
