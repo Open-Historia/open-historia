@@ -24,6 +24,7 @@ const KEY_ALIASES := {
 	"systemReducedMotion": "reduceMotion",
 }
 const BACKGROUND_KEYS := ["defaultBasemap", "defaultBasemapOn", "scenarioTerrain", "gamePick"]
+const DiplomaticLayers := preload("res://scripts/map/diplomatic_layers.gd")
 
 var engine: EngineLink
 var map_view: MapView
@@ -54,6 +55,7 @@ var flood: OwnershipFlood
 var offers: BasemapOffers
 var navigator: MapNavigator
 var natgeo: NatGeoReference
+var diplomatic: Node
 var _layer: CanvasLayer
 var _ui: Control
 var _slots: Array[Dictionary] = []
@@ -78,6 +80,9 @@ func setup(link: EngineLink, context: Dictionary) -> void:
 	flood = OwnershipFlood.new()
 	add_child(flood)
 	flood.setup(self)
+	diplomatic = DiplomaticLayers.new()
+	add_child(diplomatic)
+	diplomatic.call("setup", self)
 	globe = GlobeView.new()
 	add_child(globe)
 	globe.setup(self, map_view)
@@ -115,6 +120,7 @@ func setup(link: EngineLink, context: Dictionary) -> void:
 		flood.capture()
 		overlays.rebuild()
 		season.rebuild()
+		diplomatic.call("rebuild")
 	if engine:
 		var reply: Dictionary = await engine.request("mapextras.settings")
 		if bool(reply.get("ok", false)) and reply.get("result") is Dictionary:
@@ -282,6 +288,8 @@ func refresh_background() -> void:
 
 
 func fill_opacity_at(level: float) -> float:
+	if diplomatic and bool(diplomatic.get("active")):
+		return float(diplomatic.call("fill_opacity", level))
 	if _relief_stops.size() < 2:
 		return -1.0
 	var first: Array = _relief_stops[0]
@@ -317,6 +325,7 @@ func _on_baked(_info: Dictionary) -> void:
 	overlays.rebuild()
 	season.rebuild()
 	flood.rebuild()
+	diplomatic.call("rebuild")
 	_apply_wrap()
 	refresh()
 
@@ -467,6 +476,7 @@ func after_camera_move(level: float) -> void:
 	overlays.on_zoom(level)
 	season.on_zoom(level)
 	flood.on_zoom(level)
+	diplomatic.call("on_zoom", level)
 
 
 func map_input(event: InputEvent) -> bool:
@@ -499,6 +509,7 @@ func globe_frame_at(point: Vector2) -> Transform2D:
 func state_applied(previous_owners: PackedInt32Array, previous_names: PackedStringArray, palette: Array[Color]) -> void:
 	overlays.on_state()
 	flood.state_applied(previous_owners, previous_names, palette)
+	diplomatic.call("on_state")
 
 
 func set_rotation_paused(paused: bool) -> void:

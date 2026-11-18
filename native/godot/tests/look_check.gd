@@ -644,7 +644,7 @@ func _map_controls() -> void:
 	var toggle := (hud.get("_mode_buttons") as Dictionary)["diplomatic"].get_parent().get_parent() as GlassPanel
 	var advisor_frame: GlassPanel = hud.get("_advisor_frame")
 	var expected := {
-		"default": {"dock": UI.HUD_BG, "edge": UI.HUD_BORDER, "pill": UI.HUD_BUTTON, "diplo": Color(37 / 255.0, 99 / 255.0, 235 / 255.0, 0.3), "diplo_ink": Color("#60a5fa"), "diplo_line": Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.4), "open": Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.16), "rest": Color(1, 1, 1, 0.04)},
+		"default": {"dock": UI.HUD_BG, "edge": UI.HUD_BORDER, "pill": UI.HUD_BUTTON, "diplo": Color(1, 1, 1, 0.14), "diplo_ink": Color(1, 1, 1), "diplo_line": Color(1, 1, 1, 0.28), "open": Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.16), "rest": Color(1, 1, 1, 0.04)},
 	}
 	for preset in ["forest", "oxblood"]:
 		var palette: Dictionary = UiTheme.preset_named(preset)["colors"]

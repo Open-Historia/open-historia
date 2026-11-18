@@ -14,6 +14,7 @@ signal dock_resized
 
 const DOCK_LAUNCHERS := [["chat", "Chat", 18], ["actions", "Actions and Projects", 16], ["social", "Rostra", 18]]
 const PHONE_BUTTON := 3.2 * 16.0
+const LEGEND_ICON := "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='#ffffff' stroke-width='2' stroke-linecap='round'><rect x='3' y='4' width='5' height='4' rx='1'/><rect x='3' y='10' width='5' height='4' rx='1'/><rect x='3' y='16' width='5' height='4' rx='1'/><path d='M11 6h10M11 12h10M11 18h10'/></svg>"
 const PANEL_FILES := ["map_cards", "chat_panel", "actions_panel", "projects_panel", "rostra_panel", "rostra_search", "advisor_panel", "country_panel", "search_box", "diplomatic_legend", "chat_notices"]
 
 var date_widget: DateWidget
@@ -60,6 +61,8 @@ var _menu_frame: GlassPanel
 var _pill_frame: GlassPanel
 var _exit_frame: GlassPanel
 var _mode_frame: GlassPanel
+var _legend_button: Button
+var _mode_frame_width := 0.0
 
 
 func _ready() -> void:
@@ -538,8 +541,34 @@ func _build_bottom_right() -> void:
 		_mode_buttons[mode] = button
 		row.add_child(button)
 		_theme_rim(button, button, 8)
+	_mode_frame_width = toggle_rect.size.x
+	_legend_button = Button.new()
+	_legend_button.focus_mode = Control.FOCUS_NONE
+	_legend_button.tooltip_text = "Show legend"
+	_legend_button.custom_minimum_size = Vector2(31, 28)
+	_legend_button.icon = UI.svg_texture(LEGEND_ICON, 15.0 / 24.0, 0.75)
+	_legend_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_legend_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_legend_button.set_meta("oh_tap_exempt", true)
+	for state in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
+		_legend_button.add_theme_stylebox_override(state, UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 8))
+	_legend_button.pressed.connect(_on_show_legend)
+	_legend_button.visible = false
+	row.add_child(_legend_button)
 	toggle.add_child(row)
 	set_map_mode("political")
+
+
+func _on_show_legend() -> void:
+	_on_legend_toggled(true)
+	_invoke(legend, "show_again")
+
+
+func _on_legend_toggled(open: bool) -> void:
+	if not _legend_button or not _mode_frame:
+		return
+	_legend_button.visible = map_mode == "diplomatic" and not open
+	_mode_frame.offset_left = _mode_frame.offset_right - _mode_frame_width - (35.0 if _legend_button.visible else 0.0)
 
 
 func set_map_mode(mode: String, announce := false) -> void:
@@ -552,9 +581,9 @@ func set_map_mode(mode: String, announce := false) -> void:
 		var fill := Color(0, 0, 0, 0)
 		var edge := Color(0, 0, 0, 0)
 		if on and diplomatic:
-			ink = UiTheme.pick("glass_active_text", Color("#60a5fa"))
-			fill = UiTheme.pick("glass_active", Color(37 / 255.0, 99 / 255.0, 235 / 255.0, 0.3))
-			edge = UiTheme.pick("glass_active_line", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.4))
+			ink = UiTheme.pick("glass_active_text", UI.WHITE)
+			fill = UiTheme.pick("glass_active", Color(1, 1, 1, 0.14))
+			edge = UiTheme.pick("glass_active_line", Color(1, 1, 1, 0.28))
 		elif on:
 			ink = UI.WHITE
 			fill = UiTheme.pick("glass_active", Color(1, 1, 1, 0.14))
@@ -764,8 +793,10 @@ func mount_panels(game: Dictionary) -> void:
 	legend = _make("diplomatic_legend")
 	if legend:
 		_right_layer.add_child(legend)
+		_hook(legend, "legend_toggled", _on_legend_toggled)
+		_hook(legend, "open_stats", show_country)
 		_setup(legend, ctx)
-		legend.visible = map_mode == "diplomatic"
+		legend.visible = false
 	chat_notices = _make("chat_notices")
 	if chat_notices:
 		add_child(chat_notices)
@@ -905,17 +936,11 @@ func refresh_panels() -> void:
 
 
 func _apply_map_mode() -> void:
+	_on_legend_toggled(true)
 	if not legend or not is_instance_valid(legend) or not _map:
 		return
-	if map_mode == "diplomatic":
-		_invoke(legend, "show_legend")
-		var colors: Variant = await legend.call("stance_colors") if legend.has_method("stance_colors") else {}
-		if map_mode == "diplomatic" and typeof(colors) == TYPE_DICTIONARY:
-			var neutral: Variant = legend.get("neutral_land")
-			_map.set_owner_color_override(colors, neutral if neutral is Color else Color(0, 0, 0, 0))
-	else:
-		_invoke(legend, "hide_legend")
-		_map.set_owner_color_override({}, Color(0, 0, 0, 0))
+	if legend.has_method("apply_mode"):
+		await legend.call("apply_mode", map_mode)
 
 
 func close_top() -> bool:
@@ -953,6 +978,7 @@ func _on_region_clicked(index: int, at := Vector2(-1, -1), card := false) -> voi
 	if index < 0:
 		_invoke(map_cards, "dismiss")
 		return
+	_invoke(legend, "on_region_clicked", [_map.region_owner(index)])
 	if open_drawer == "country" and drawers.has("country"):
 		_invoke(drawers["country"], "on_region_selected", [_map.region_owner(index)])
 	if UI.phone() and not card:

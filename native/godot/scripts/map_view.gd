@@ -23,6 +23,7 @@ uniform bool styled = false;
 uniform int columns = 1024;
 uniform int selected = -1;
 uniform float land_alpha = 0.5;
+uniform float dimmed_share = 0.25;
 uniform bool editor = false;
 varying vec4 tint;
 vec3 unpack_rgb(float packed) {
@@ -41,7 +42,7 @@ void vertex() {
 		}
 		alpha = min(1.0, land_alpha * style.g);
 	}
-	tint = editor ? c : vec4(c.rgb, c.a < 0.5 ? 0.0 : alpha);
+	tint = editor ? c : vec4(c.rgb, c.a < 0.5 ? 0.0 : (c.a < 0.9 ? alpha * dimmed_share : alpha));
 }
 void fragment() {
 	COLOR = tint;
@@ -526,7 +527,7 @@ func set_state(state: Dictionary) -> void:
 		var names: Array = state.get("ownerNames", [])
 		for slot in range(palette.size()):
 			var shade: Array = _color_override.get(str(names[slot]) if slot < names.size() else "", [100, 116, 139])
-			palette[slot] = Color8(int(shade[0]), int(shade[1]), int(shade[2]))
+			palette[slot] = Color8(int(shade[0]), int(shade[1]), int(shade[2]), int(shade[3]) if shade.size() > 3 else 255)
 	for index in range(_region_count):
 		var owner := int(owners[index]) if index < owners.size() else -1
 		_owners[index] = owner
