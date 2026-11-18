@@ -63,6 +63,14 @@ func _texts(node: Node, into: PackedStringArray) -> PackedStringArray:
 	return into
 
 
+func _find_all_politics_rows(node: Node) -> PackedStringArray:
+	var out := PackedStringArray()
+	for value in _texts(node, PackedStringArray()):
+		if value.begins_with("Added") or value.begins_with("Updated") or value.contains("Head of") or value.contains("Political parties"):
+			out.append(value)
+	return out
+
+
 func _has_text(node: Node, wanted: String) -> bool:
 	for value in _texts(node, PackedStringArray()):
 		if value.contains(wanted):
@@ -302,6 +310,9 @@ func _suggestions() -> void:
 			{"id": "languages:de", "area": "details", "kind": "languages", "code": "de", "from": null, "to": {"Modern Day": "Gegenwart"}},
 			{"id": "region-owner:test", "area": "map", "kind": "region-owner", "region": "test", "from": "France", "to": "Germany"},
 			{"id": "borders:check-a,check-b,check-c", "area": "map", "kind": "borders", "regions": [{"id": "check-a", "op": "remove", "name": "Check A"}, {"id": "check-b", "op": "remove", "name": "Check B"}, {"id": "check-c", "op": "reshape", "name": "Check C"}]},
+			{"id": "politics:politicalActors:Andorra", "area": "details", "kind": "politics", "field": "politicalActors", "container": "map", "within": "byPolity", "entry": "Andorra", "label": "Andorra", "op": "change",
+				"from": {"government": {"form": "Parliamentary co-principality"}, "parties": [{"id": "dA", "name": "Democrats for Andorra"}], "generationProvenance": {"run": "a"}},
+				"to": {"government": {"form": "Parliamentary co-principality", "legislature": "General Council"}, "parties": [{"id": "dA", "name": "Democrats for Andorra", "seats": 15}, {"id": "ps", "name": "Social Democratic Party"}], "headOfGovernment": "Xavier Espot", "generationProvenance": {"run": "b"}}},
 		],
 	}
 	var handle := FileAccess.open(file, FileAccess.WRITE)
@@ -320,17 +331,21 @@ func _suggestions() -> void:
 	_check(ready and dialog._phase == "ready", "the suggestion file opens for review")
 	await _wait(0.6)
 	_check(_has_text(dialog, "CHANGES OUTSIDE THE MAP") and _has_text(dialog, "CHANGES ON THE MAP") and _has_text(dialog, "Who owns which region"), "review lists both kinds of change")
-	_check(_has_text(dialog, "0 of 5 changes decided"), "review counts the changes")
+	_check(_has_text(dialog, "0 of 6 changes decided"), "review counts the changes")
 	_check(_has_text(dialog, "Borders") and _has_text(dialog, "2 regions merged into others") and _has_text(dialog, "1 region reshaped") and not _has_text(dialog, "new region"), "a border change says how many regions it touches")
 	_check(_has_text(dialog, "Language pack") and _has_text(dialog, "1 new or changed translations"), "a language pack change says how many translations it brings")
+	_check(_has_text(dialog, "Political parties") and _has_text(dialog, "Social Democratic Party") and _has_text(dialog, "Head of government") and _has_text(dialog, "Xavier Espot") and _has_text(dialog, "Government") and _has_text(dialog, "Details updated"), "a politics change is told by what changed, by name")
+	_check(not _has_text(dialog, "generationProvenance") and not _has_text(dialog, "parties[") and not _has_text(dialog, "dA"), "no internal paths, provenance or ids")
+	var shown_rows := _find_all_politics_rows(dialog)
+	_say("politics rows: " + " | ".join(shown_rows))
 	await _shoot("c13-review")
 	await dialog._act("accept", ["meta:accentColor"])
 	await _wait(0.5)
-	_check(_has_text(dialog, "Accepted") and _has_text(dialog, "1 of 5 changes decided"), "accepting applies and records the change")
+	_check(_has_text(dialog, "Accepted") and _has_text(dialog, "1 of 6 changes decided"), "accepting applies and records the change")
 	await _shoot("c14-review-accepted")
 	await dialog._act("undo", ["meta:accentColor"])
 	await _wait(0.3)
-	_check(_has_text(dialog, "0 of 5 changes decided"), "undo puts the change back")
+	_check(_has_text(dialog, "0 of 6 changes decided"), "undo puts the change back")
 	dialog.close()
 	await _wait(0.4)
 	var banner := SuggestionsBanner.new()

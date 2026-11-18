@@ -426,7 +426,18 @@ export const register = (ctx) => {
       };
     }
     if (change.kind === "stats") return { type: "text", text: `${statsSummary(change.from)} → ${statsSummary(change.to)}` };
-    if (change.kind === "politics" || change.kind === "history") {
+    if (change.kind === "politics") {
+      const summary = engine.politicsSuggestionPresentation.summarizePoliticalChanges(change, { max: POLITICS_PATHS_SHOWN });
+      return {
+        type: "politicsSummary",
+        text: change.op === "add" ? "Added" : change.op === "remove" ? "Removed" : "Changed",
+        detailed: change.op === "change" || !change.op,
+        rows: plain(summary.rows),
+        bookkeepingOnly: summary.bookkeepingOnly === true,
+        hiddenCount: Number(summary.hiddenCount) || 0,
+      };
+    }
+    if (change.kind === "history") {
       const text = change.op === "add" ? "Added" : change.op === "remove" ? "Removed" : "Changed";
       const whole = !change.op && (isRecord(change.from) || isRecord(change.to));
       const paths = change.op === "change" || whole

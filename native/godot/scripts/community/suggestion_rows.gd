@@ -123,6 +123,8 @@ static func value_view(value: Dictionary) -> Control:
 			if value.get("more", false):
 				column.add_child(CommunityDialog.quiet("…"))
 			return column
+		"politicsSummary":
+			return politics_summary(value)
 		"languages":
 			var column := CommunityKit.column(3)
 			if int(value.get("changed", 0)) > 0:
@@ -154,6 +156,55 @@ static func value_view(value: Dictionary) -> Control:
 		plain.add_child(_swatch(Color(to_color)))
 	plain.add_child(_inline(escape(str(value.get("to", ""))), Color(ADD_INK)))
 	return plain
+
+
+static func politics_summary(value: Dictionary) -> Control:
+	var column := CommunityKit.column(4)
+	column.add_child(CommunityDialog.quiet(str(value.get("text", ""))))
+	if not bool(value.get("detailed", false)):
+		return column
+	for entry in value.get("rows", []):
+		var row: Dictionary = entry if entry is Dictionary else {}
+		var block := CommunityKit.column(2)
+		var head := HBoxContainer.new()
+		head.add_theme_constant_override("separation", 0)
+		head.add_child(UI.label(str(row.get("label", "")), 12, Color(1, 1, 1, 0.65), 650))
+		head.add_child(UI.label(":", 12, Color(1, 1, 1, 0.5)))
+		block.add_child(head)
+		match str(row.get("type", "")):
+			"collection":
+				for item in row.get("edits", []):
+					var edit: Dictionary = item if item is Dictionary else {}
+					var line := CommunityKit.flow(5, 2)
+					var operation := str(edit.get("operation", ""))
+					var word := "Added" if operation == "added" else ("Removed" if operation == "removed" else ("Updated" if operation == "updated" else "Order changed"))
+					line.add_child(UI.label(word, 12, Color(1, 1, 1, 0.55)))
+					var names: Array = edit.get("names", [])
+					for index in range(names.size()):
+						if index > 0:
+							line.add_child(UI.label(",", 12, Color(1, 1, 1, 0.78)))
+						var name_label := UI.label(str(names[index]), 12, Color(1, 1, 1, 0.78))
+						if str(names[index]) != "Unnamed entry":
+							name_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+						line.add_child(name_label)
+					if int(edit.get("remaining", 0)) > 0:
+						var more := UI.label("(+%d)" % int(edit.get("remaining", 0)), 12, Color(1, 1, 1, 0.78))
+						more.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+						line.add_child(more)
+					block.add_child(line)
+			"details":
+				block.add_child(UI.label("Details updated", 12, Color(1, 1, 1, 0.78)))
+			_:
+				var line := rich(12, Color(1, 1, 1, 0.78))
+				line.text = "%s%s%s" % [struck(str(row.get("before", ""))), dim(" → ", 0.5), added(str(row.get("after", "")))]
+				line.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+				block.add_child(line)
+		column.add_child(block)
+	if bool(value.get("bookkeepingOnly", false)):
+		column.add_child(CommunityDialog.quiet("Only internal record metadata changed."))
+	if int(value.get("hiddenCount", 0)) > 0:
+		column.add_child(CommunityDialog.quiet("More political changes not shown: %d" % int(value.get("hiddenCount", 0))))
+	return column
 
 
 static func _inline(bbcode: String, color: Color) -> RichTextLabel:
