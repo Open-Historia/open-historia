@@ -86,7 +86,14 @@ const DIFFICULTY_IDS = Object.freeze(DIFFICULTY_LEVELS.map((level) => level.id))
 // carries the player's advisor conversation and the Rostra feed as documents
 // of their own; new requests "pay"/"paid"/"payLookup"/"payStop", "advisor",
 // "answer", "ratings"/"ownRatings"; peace offers in a view are their parties'.
-export const SHARED_GAME_VERSION = "16";
+// Version 17 (the review of everything, 2026-11-18): "paid" carries a failure's
+// kind and the skip's whole call contract, "payAlive" and "canPay" are new, and
+// seats say who can pay; the host says a request waits ("held"); the round
+// message carries the round's step, a failure's kind and the host's absence;
+// notices say what they answer and the Game Master's log its counts; the
+// lobby's settings gain `answersPerRound` and its rules `quietMinutes`; and the
+// map's checksum covers every fact of a region the game reads.
+export const SHARED_GAME_VERSION = "17";
 
 // The documents a player's view holds: the game itself first (a screen that
 // asks for one before the first view arrives waits for it), then the three a
