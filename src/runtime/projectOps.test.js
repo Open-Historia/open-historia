@@ -227,18 +227,31 @@ test("the advisor opens and steers the player's work and reports on any; it neit
   assert.equal(rocket.status, "active");
 });
 
-test("the engine's own ops may stall an entry whose intelligence is in doubt; a confirmation takes it up", () => {
+test("a doubt about where intelligence came from never stops the work: an entry a save stalled for it works again", () => {
+  // The doubt is the knower's (projects.js spyIntelDoubtOps): a stall for it
+  // ("blocked") stopped another country's own programme for good.
   const theirs = normalizeProjectEntry({ name: "Rocket Programme", ownerCode: "Germany", plan: PLAN, linkedSpyIds: ["spy-1"] });
   const doubted = applyProjectOpsToWorld({
     actor: "engine",
     world: worldWith([theirs]),
-    ops: [{ op: "update", name: "Rocket Programme", verification: "doubted", status: "stalled", stallReason: "blocked" }],
+    ops: [{ op: "update", name: "Rocket Programme", verification: "doubted" }],
   }).world.projects[0];
-  assert.equal(doubted.status, "stalled");
-  assert.equal(doubted.stallReason, "blocked");
+  assert.deepEqual([doubted.status, doubted.stallReason, doubted.verification], ["active", "", "doubted"]);
+  const saved = normalizeProjectEntry({ ...theirs, status: "stalled", stallReason: "blocked", verification: "doubted" });
+  assert.deepEqual([saved.status, saved.stallReason, saved.verification], ["active", "", "doubted"]);
+  assert.equal(normalizeProjectEntry({ ...theirs, status: "stalled", stallReason: "funds" }).status, "stalled", "a stall for want of money is the owner's own");
   const confirmed = applyProjectOps([doubted], [{ op: "update", name: "Rocket Programme", verification: "confirmed" }])[0];
-  assert.equal(confirmed.status, "active");
-  assert.equal(confirmed.verification, "confirmed");
+  assert.deepEqual([confirmed.status, confirmed.verification], ["active", "confirmed"]);
+});
+
+test("what other governments know of an entry, and where a skip lent it from, are kept, and never a create's to say", () => {
+  const known = normalizeProjectEntry({ name: "Rocket Programme", ownerCode: "Germany", plan: PLAN, knownBy: { France: { spyIds: ["spy-1"], verification: "doubted" }, Italy: { spyIds: [] }, "": { spyIds: ["x"] } }, lentFrom: "Germany" });
+  assert.deepEqual(known.knownBy, { France: { spyIds: ["spy-1"], verification: "doubted" } });
+  assert.equal(known.lentFrom, "Germany");
+  assert.equal("knownBy" in normalizeProjectEntry({ name: "Plain", plan: PLAN }), false);
+  const made = applyProjectOps([], [{ op: "create", name: "Planted", plan: PLAN, knownBy: { France: { spyIds: ["spy-1"] } }, lentFrom: "Spain" }])[0];
+  assert.equal("knownBy" in made, false);
+  assert.equal("lentFrom" in made, false);
 });
 
 // ---- the event path ---------------------------------------------------------------

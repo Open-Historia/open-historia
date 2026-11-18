@@ -67,8 +67,9 @@ export const agentOrderFor = (world, board, seat, { op, target, spy, story } = {
   }
   // The seal the asker's agents' traffic will be sealed with: its own (runtime/spySeal.js sealOf).
   const withSpies = withSealFor({ ...world, spies: next }, me, { gameCountry: host });
-  // The asker's own agents on the asker's own board.
-  const ops = spyOperationOps(next, list(board), { date, playerPolity: me });
+  // The asker's own agents on the asker's own board: one with no owner is the
+  // host seat's, never a guest's to stand on its board.
+  const ops = spyOperationOps(normalizeSpies(next).filter(mine), list(board), { date, playerPolity: me });
   const nextBoard = ops.length
     ? applyProjectOpsToWorld({ actor: "engine", date, ops, playerCountry: me, world: { ...withSpies, projects: list(board) } }).world.projects
     : list(board);

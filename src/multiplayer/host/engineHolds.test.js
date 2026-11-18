@@ -57,11 +57,29 @@ test("a skip that fails in the host's engine leaves no turn held, and the round 
   const jump = resolve.indexOf("await simulateTimelineJump({ days: daysPerRound, signal, cannedTurn: false });");
   const discard = resolve.indexOf("discardHeldTurns();");
   const rethrown = resolve.indexOf("throw error;", discard);
-  const boardsHome = resolve.indexOf("returnBoards(");
   assert.ok(jump > -1 && discard > jump, "a held turn is let go when the skip fails");
   assert.ok(rethrown > discard, "and the round is told it failed, so it is planned again");
-  assert.ok(boardsHome > rethrown, "the players' boards go home either way");
   assert.match(engine, /import \{ discardHeldTurns, endSimulation, enterSimulation \} from "\.\.\/\.\.\/Game\/AI\/simulationStatus\.js";/);
+});
+
+// The review of 2026-11-18, core 2: the round lent every other player's open
+// projects to the game's board by writing them into the stored world, and took
+// them home in a `finally` an engine closed mid-round never ran. The lending is
+// the skip's own copy now (runtime/seatBoards.js), and the round writes none.
+test("a round never writes the players' boards lent: the skip lends them at its one read and takes them home in its one commit", () => {
+  const resolve = engine.slice(engine.indexOf("resolveRound: async"), engine.indexOf("readCountry: async"));
+  assert.doesNotMatch(engine, /lendBoards|returnBoards|seatBoards\.js"/, "the engine writes no lending");
+  assert.doesNotMatch(resolve, /mutateWorldState/);
+  const jump = gameplay.slice(gameplay.indexOf("export const simulateTimelineJump = async"));
+  assert.match(jump, /^[\s\S]{0,2500}?const bundle = withBoardsLent\(await readGameStateBundle\(\{ force: true \}\)\);/, "lent at the skip's read, in its own copy");
+  const apply = gameplay.slice(gameplay.indexOf("const applySimulationResult = async"), gameplay.indexOf("const readSeenGameStateBundle = async"));
+  const home = apply.indexOf("nextWorld = withBoardsHome(nextWorld, { before: baseWorld, game: baseGame });");
+  const snapshot = apply.indexOf("world: withBoardsHome(baseWorld, { before: baseWorld, game: baseGame }),");
+  const commit = apply.indexOf("await writeCanonicalTurnState({");
+  assert.ok(home > -1 && snapshot > home && commit > snapshot, "home before the restore point and the commit are written");
+  // And every service's own board passes, the host's alone no more.
+  assert.match(apply, /syncBoardsWithAgents\(worldWithImpacts, \{\n\s*spymasters: spymastersOf\(baseGame\),/);
+  assert.doesNotMatch(apply, /spyProvenanceOps|spyIntelDoubtOps/);
 });
 
 // The owner, 2026-11-15: "never a canned turn". A shared round the AI could not
@@ -70,10 +88,10 @@ test("a shared round never lands as a canned turn, and takes the game's lock in 
   const resolve = engine.slice(engine.indexOf("resolveRound: async"), engine.indexOf("readCountry: async"));
   assert.match(resolve, /cannedTurn: false/);
   const entered = resolve.indexOf("await enterSimulation({ signal });");
-  const lent = resolve.indexOf("lendBoards(");
+  const jumped = resolve.indexOf("await simulateTimelineJump(");
   const ended = resolve.lastIndexOf("endSimulation();");
-  assert.ok(entered > -1 && lent > entered, "the lock is taken before the world is read");
-  assert.ok(ended > resolve.lastIndexOf("returnBoards("), "and given back after the boards are home");
+  assert.ok(entered > -1 && jumped > entered, "the lock is taken before the world is read");
+  assert.ok(ended > jumped, "and given back after the skip has written its turn");
   // The skip itself: no fallback offered, and the whole-period canned turn refused.
   assert.match(gameplay, /scriptedPoliticalRequirements\.length \|\| context\.cannedTurn === false\n\s*\? \{\}\n\s*: \{ fallback: \(\) => fallbackJumpSimulation/);
   assert.match(gameplay, /if \(state\.structuralScriptedFallbackBlocked \|\| context\.cannedTurn === false\) throw error;/);

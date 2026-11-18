@@ -1,4 +1,4 @@
-import { compareGameDates, formatGameDateReadable } from "./gameDates.js";
+import { compareGameDates } from "./gameDates.js";
 import { sameName } from "../../server/nameKey.js";
 
 /*! Open Historia — portions (projects & operations board: derived status, sorting, filtering) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
@@ -145,7 +145,8 @@ export const isForeignProject = (project, playerCountry) => !isPlayerProject(pro
 // told of it (linkedSpyIds, spyProvenanceOps), when their services have a view
 // on it (verification), or when it was on their board before the engine
 // (known: such an entry was there because their services had learned of it).
-// What the panel's "Known projects abroad" lists.
+// What the panel's "Known projects abroad" lists. (Those three fields are what
+// the board's own government knows; what anyone else knows is knowledgeOf's.)
 export const isKnownToPlayer = (project, playerCountry) => {
   if (isPlayerProject(project, playerCountry)) return true;
   if ((asText(project?.secrecy) || "public") === "public") return true;
@@ -319,16 +320,26 @@ export const spyOperationOps = (spies, projects, { date = "", playerPolity = "" 
 // The engine owns "doubted" and nothing else here. "confirmed" and "refuted" are
 // judgements about the world, which only the model can make, so they arrive as
 // ordinary project ops (see the schema's verification field).
+//
+// WHAT A SERVICE KNOWS IS ITS OWN, NEVER THE PROJECT'S. Since the projects
+// engine, another country's entry is that country's own work, which the engine
+// runs: a doubt that stalled it stopped a real programme for good, and in a
+// shared game a guest's own work lent to the game's board for the skip
+// (seatBoards.js) was taken for the host's intelligence file, stamped with the
+// host's agent, stalled when that agent fell under suspicion, and sent home to
+// its owner saying so (the review of 2026-11-18). So these passes never move a
+// project: they write only what the knower knows of it, and they read nothing
+// lent as the board's own.
 const spyIdsOf = (project) => asArray(project?.linkedSpyIds).map(asText).filter(Boolean);
 
-// A foreign entry the board learned while an agent was inside that polity is, by
-// the prompt's own rules, sourced from that agent — it is the only channel that
-// puts another power's programme on the board. Stamping the link is what lets the
-// doubt find the right entries later, and it is retroactive on purpose: an entry
-// opened before this existed still gets tied to the agent that must have produced
-// it.
-export const spyProvenanceOps = (spies, projects, { playerPolity = "" } = {}) => {
-  const player = asText(playerPolity).toLowerCase();
+// An entry another government lent to the game's board for a time skip
+// (seatBoards.js lendBoards): that government's own work, never a file of the
+// board's own government.
+const isLent = (project) => Boolean(asText(project?.lentFrom));
+
+// The knower's live agents, by the polity each is in: the first of each.
+const liveAgentsByTarget = (spies, knower) => {
+  const player = asText(knower).toLowerCase();
   const liveByTarget = new Map();
   for (const spy of asArray(spies)) {
     const owner = asText(spy?.owner).toLowerCase();
@@ -337,11 +348,42 @@ export const spyProvenanceOps = (spies, projects, { playerPolity = "" } = {}) =>
     const target = asText(spy?.target);
     if (target && !liveByTarget.has(target.toLowerCase())) liveByTarget.set(target.toLowerCase(), spy);
   }
+  return liveByTarget;
+};
+
+// The knower's agents whose reports may have been written by the other side.
+// The trigger is `suspected` — the analysts' own warning, the same flag the Spy
+// tab shows — not proof.
+const compromisedAgents = (spies, knower) => {
+  const player = asText(knower).toLowerCase();
+  const compromised = new Set();
+  for (const spy of asArray(spies)) {
+    const owner = asText(spy?.owner).toLowerCase();
+    if (owner && player && owner !== player) continue;
+    // Suspected while still running, or exposed after having been turned: both
+    // mean what this agent sent may have been written by the other side. A
+    // turned agent nobody suspects yet is NOT here: doubting its reports would
+    // tell the player what their own service has not worked out.
+    const exposedAfterTurning = asText(spy?.status) === "exposed" && Boolean(asText(spy?.turnedAt));
+    if (spy?.suspected === true || exposedAfterTurning) compromised.add(asText(spy?.id));
+  }
+  return compromised;
+};
+
+// A foreign entry the board learned while an agent was inside that polity is, by
+// the prompt's own rules, sourced from that agent — it is the only channel that
+// puts another power's programme on the board. Stamping the link is what lets the
+// doubt find the right entries later, and it is retroactive on purpose: an entry
+// opened before this existed still gets tied to the agent that must have produced
+// it. For the board's own government, on its own board: what anyone else's agents
+// tell them is agentKnowledgeChanges below.
+export const spyProvenanceOps = (spies, projects, { playerPolity = "" } = {}) => {
+  const liveByTarget = liveAgentsByTarget(spies, playerPolity);
   if (!liveByTarget.size) return [];
 
   const ops = [];
   for (const project of asArray(projects)) {
-    if (!isProjectOpen(project)) continue;
+    if (!isProjectOpen(project) || isLent(project)) continue;
     // Only a FOREIGN entry: a blank ownerCode is the player's own work, which no
     // spy told them about.
     const owner = asText(project?.ownerCode);
@@ -362,31 +404,21 @@ export const spyProvenanceOps = (spies, projects, { playerPolity = "" } = {}) =>
 // Cast doubt on everything a compromised agent sourced, and hand the question to
 // whoever is sent next.
 //
-// The trigger is `suspected` — the analysts' own warning, the same flag the Spy
-// tab shows — not proof. The player is never told their agent was turned, so the
-// board must not say so either: the entry reads as unconfirmed, not as a lie.
+// The player is never told their agent was turned, so the board must not say so
+// either: the entry reads as unconfirmed (the panel's Doubtful badge), not as a
+// lie. The doubt is the service's, so it is all that is written: the programme
+// itself runs on as its owner runs it.
 //
 // Doubt is only cast once per entry (an entry already carrying a verification is
 // left alone), so the model's later confirmed/refuted verdict is never overwritten
 // by the engine on the next turn.
-export const spyIntelDoubtOps = (spies, projects, { playerPolity = "", date = "" } = {}) => {
-  const player = asText(playerPolity).toLowerCase();
-  const compromised = new Set();
-  for (const spy of asArray(spies)) {
-    const owner = asText(spy?.owner).toLowerCase();
-    if (owner && player && owner !== player) continue;
-    // Suspected while still running, or exposed after having been turned: both
-    // mean what this agent sent may have been written by the other side. A
-    // turned agent nobody suspects yet is NOT here: doubting its reports would
-    // tell the player what their own service has not worked out.
-    const exposedAfterTurning = asText(spy?.status) === "exposed" && Boolean(asText(spy?.turnedAt));
-    if (spy?.suspected === true || exposedAfterTurning) compromised.add(asText(spy?.id));
-  }
+export const spyIntelDoubtOps = (spies, projects, { playerPolity = "" } = {}) => {
+  const compromised = compromisedAgents(spies, playerPolity);
   if (!compromised.size) return [];
 
   const ops = [];
   for (const project of asArray(projects)) {
-    if (!isProjectOpen(project)) continue;
+    if (!isProjectOpen(project) || isLent(project)) continue;
     // FOREIGN entries only. A blank ownerCode is the player's own work — including
     // the covert operation the agent itself IS (spyOperationOps), which is linked
     // to the same spy and would otherwise be doubted alongside what it reported.
@@ -395,18 +427,58 @@ export const spyIntelDoubtOps = (spies, projects, { playerPolity = "", date = ""
     if (!asText(project?.ownerCode)) continue;
     if (asText(project?.verification)) continue;
     if (!spyIdsOf(project).some((id) => compromised.has(id))) continue;
-    ops.push({
-      op: "update",
-      id: asText(project.id),
-      name: asText(project.name),
-      verification: "doubted",
-      status: "stalled",
-      stallReason: "blocked",
-      lastUpdate: `Our analysts no longer trust how we came by this${date ? ` (as of ${formatGameDateReadable(date) || date})` : ""}.`
-        + " It stands unconfirmed until someone else can look.",
-    });
+    ops.push({ op: "update", id: asText(project.id), name: asText(project.name), verification: "doubted" });
   }
   return ops;
+};
+
+// ---- what other governments know of a project ---------------------------------
+// The board's own government keeps what it knows on its own board's entries, as
+// single player always has (linkedSpyIds, verification, known above). Anyone
+// else's knowledge of an entry is kept on it by knower, `knownBy: { [country]:
+// { spyIds, verification } }`, which no view but that knower's ever carries
+// (seatBoards.js boardSeenBy): in a shared game every player's agents learn of
+// the work of the countries they are in, wherever that work is kept, and only
+// the host's could before.
+
+// What `knower` knows of an entry not on its own board: { spyIds, verification },
+// or null when it knows nothing of it.
+export const knowledgeOf = (project, knower) => {
+  const by = project?.knownBy && typeof project.knownBy === "object" && !Array.isArray(project.knownBy) ? project.knownBy : null;
+  const key = by ? Object.keys(by).find((name) => sameName(name, knower)) : "";
+  if (!key) return null;
+  return { spyIds: asArray(by[key]?.spyIds).map(asText).filter(Boolean), verification: asText(by[key]?.verification) };
+};
+
+// The entry with `knower`'s knowledge of it set to `known`.
+const withKnowledge = (project, knower, known) => {
+  const by = project?.knownBy && typeof project.knownBy === "object" && !Array.isArray(project.knownBy) ? project.knownBy : {};
+  const rest = Object.fromEntries(Object.entries(by).filter(([name]) => !sameName(name, knower)));
+  return { ...project, knownBy: { ...rest, [asText(knower)]: { spyIds: known.spyIds, ...(known.verification ? { verification: known.verification } : {}) } } };
+};
+
+// What `knower`'s agents tell it this turn of other countries' work: the same
+// two steps as on its own board, provenance and then doubt, written only into
+// its knowledge of each entry. `entries` are [{ project, owner }], every one of
+// them another country's work (`owner`) kept where the knower's own board is
+// not. Returns the entries whose knowledge changed, as
+// [{ index, project, doubted }], `index` into `entries`.
+export const agentKnowledgeChanges = (spies, entries, { knower = "" } = {}) => {
+  const liveByTarget = liveAgentsByTarget(spies, knower);
+  const compromised = compromisedAgents(spies, knower);
+  if (!liveByTarget.size && !compromised.size) return [];
+  const changes = [];
+  asArray(entries).forEach(({ project, owner } = {}, index) => {
+    if (!project || !isProjectOpen(project) || !asText(owner) || sameName(owner, knower)) return;
+    const known = knowledgeOf(project, knower) ?? { spyIds: [], verification: "" };
+    let next = known;
+    const spy = known.spyIds.length ? null : liveByTarget.get(asText(owner).toLowerCase());
+    if (spy) next = { ...next, spyIds: [asText(spy.id)] };
+    const doubted = !next.verification && next.spyIds.some((id) => compromised.has(id));
+    if (doubted) next = { ...next, verification: "doubted" };
+    if (next !== known) changes.push({ index, project: withKnowledge(project, knower, next), doubted });
+  });
+  return changes;
 };
 
 // Which doubted entries the player now has a CLEAN pair of eyes on. Two things

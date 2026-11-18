@@ -1938,6 +1938,21 @@ const PROJECT_VERIFICATION_SET = new Set(PROJECT_VERIFICATIONS);
 
 const PROJECT_SECRECY_SET = new Set(["public", "restricted", "covert"]);
 
+// Another government's knowledge of an entry, by knower: its agents' ids and
+// its analysts' view (projects.js agentKnowledgeChanges). { knownBy } or none.
+const normalizeProjectKnowledge = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const knownBy = {};
+  for (const [name, known] of Object.entries(value).slice(0, 32)) {
+    const knower = normalizeOptionalString(name);
+    if (!knower || !known || typeof known !== "object") continue;
+    const spyIds = normalizeIdList(known.spyIds, 12);
+    const verification = PROJECT_VERIFICATION_SET.has(normalizeOptionalString(known.verification)) ? normalizeOptionalString(known.verification) : "";
+    if (spyIds.length || verification) knownBy[knower] = { spyIds, ...(verification ? { verification } : {}) };
+  }
+  return Object.keys(knownBy).length ? { knownBy } : {};
+};
+
 // The board's closed values are read exactly, case and spacing aside, and a word
 // that is none of them is LEFT OUT: the value it would have set stays as it was,
 // and a new entry takes its default. Never guessed (the owner, 2026-11-13: "there
@@ -2054,13 +2069,12 @@ export const normalizeProjectEntry = (entry, index = 0) => {
   if (status === "paused" && funding !== "none") funding = "none";
 
   // Why it stands still. A stall the old board's model declared was words, and
-  // the engine now owns the clock: such an entry works again, except where the
-  // intelligence it rests on is in doubt.
+  // the engine now owns the clock: such an entry works again. So does one
+  // stalled because another government's analysts doubted their source
+  // ("blocked"): the doubt was theirs, and it stopped the owner's own work for
+  // good (projects.js spyIntelDoubtOps no longer writes it).
   let stallReason = STALL_REASONS.includes(normalizeOptionalString(entry.stallReason)) ? normalizeOptionalString(entry.stallReason) : "";
-  if (status === "stalled" && !stallReason) {
-    if (verification === "doubted") stallReason = "blocked";
-    else status = "active";
-  }
+  if (status === "stalled" && (!stallReason || stallReason === "blocked")) status = "active";
   if (status !== "stalled") stallReason = "";
 
   const ongoing = plan ? plan.ongoing === true : entry.ongoing === true || entry.ongoing === "true";
@@ -2132,6 +2146,11 @@ export const normalizeProjectEntry = (entry, index = 0) => {
     // (an agent told of it, or the board had it before the engine): the
     // panel's "Known projects abroad" (projects.js isKnownToPlayer).
     known: entry.known === true || (fromBefore && Boolean(normalizeOptionalString(entry.ownerCode || entry.owner || entry.code))),
+    // What other governments' services know of it, each its own (projects.js
+    // knowledgeOf), and, only in a time skip's own copy of the world, whose
+    // board it was lent from (multiplayer/host/seatBoards.js lendBoards).
+    ...normalizeProjectKnowledge(entry.knownBy),
+    ...(normalizeOptionalString(entry.lentFrom) ? { lentFrom: normalizeOptionalString(entry.lentFrom) } : {}),
     focus: normalizeProjectCoords(entry.focus),
     // kw5-units: how an operation's troops attack its focus (runtime/fronts/plans.js
     // operationsOn), one of OPERATION_APPROACHES; absent on every other entry, and
@@ -2238,7 +2257,9 @@ const normalizeProjectOp = (entry) => {
 
   if (op === "create") {
     // The payload may be nested under `project` or inlined on the op itself.
-    const source = entry.project && typeof entry.project === "object" ? entry.project : entry;
+    // What other governments know of an entry, and where a skip lent it from,
+    // are never a create's to say (the engine keeps both).
+    const { knownBy: _knownBy, lentFrom: _lentFrom, ...source } = entry.project && typeof entry.project === "object" ? entry.project : entry;
     // A create opens an entry with no progress of its own and no plan it has not
     // been given: "planning" when it carries none.
     const planned = normalizeProjectPlan(source.plan);
@@ -2294,8 +2315,9 @@ const PROJECT_PATCHABLE_FIELDS = [
   "kind", "summary", "secrecy", "lastUpdate", "note", "focus", "approach",
   "linkedUnitIds", "linkedMarkerIds", "verification", "linkedSpyIds",
 ];
-// And what only the engine's own ops may set (spyIntelDoubtOps stalls an
-// entry whose intelligence is in doubt): applyProjectOps ctx.engine.
+// And what only the engine's own ops may set: applyProjectOps ctx.engine. (A
+// doubt about where intelligence came from is never a stall: it is the
+// knower's, projects.js spyIntelDoubtOps.)
 const ENGINE_PATCHABLE_FIELDS = ["status", "stallReason", "known"];
 
 const patchedAlias = (patch, field) => {
@@ -2445,13 +2467,6 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
       if (current.status === "planning" && patch.plan && typeof patch.plan === "object") {
         const planned = normalizeProjectPlan(patch.plan);
         if (planned) Object.assign(merged, withPlan({ ...merged, plan: planned }), { status: "active", startedAt: current.startedAt || date });
-      }
-      // A confirmed doubt takes the blocked entry up again; a refuted one is
-      // for the model to fail with it.
-      if (engine && merged.status === "stalled" && !STALL_REASONS.includes(normalizeOptionalString(merged.stallReason))) merged.stallReason = "blocked";
-      if (normalizeOptionalString(patch.verification) === "confirmed" && current.status === "stalled" && current.stallReason === "blocked") {
-        merged.status = "active";
-        merged.stallReason = "";
       }
       const normalized = renormalize(merged, index);
       if (!normalized) continue;

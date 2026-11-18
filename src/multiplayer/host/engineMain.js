@@ -42,7 +42,6 @@ import { GENERATION_COMPLETE_EVENT } from "../../Game/AI/telemetry.js";
 import { applyGameMasterPreview, assessPoliticalLandscape, checkDemandReply, declineInteractiveOffer, ensureMilitaryFigures, hasCompiledParties, hasCountryStatSheet, maybeGeneratePregameHistory, maybeOpenScenarioFronts, previewGameMasterCommand, readCountryForPlayer, runChatActionBatch, setAsideActiveInteractive, simulateTimelineJump, takeCountryStatSheet, takeMilitaryRatings, takePoliticalLandscape, warRoomChart } from "../../Game/AI/gameplay.js";
 import { finishGameStart } from "./gameStart.js";
 import { installRoundCarrier } from "../../Game/AI/roundCarrier.js";
-import { lendBoards, returnBoards } from "./seatBoards.js";
 import { createLoopbackEngineSide } from "../transport/loopback.js";
 import { createHostSession } from "../session/host.js";
 import { probeNetwork } from "../transport/peer.js";
@@ -487,7 +486,7 @@ const boot = async () => {
       restored,
       campaignRound: Number(started.game?.round) || 0,
       store,
-      resolveRound: async ({ daysPerRound, humanCountries, signal, carry = null, payer = null }) => {
+      resolveRound: async ({ daysPerRound, signal, carry = null, payer = null }) => {
         // Fronts the game began with that could not be built when it opened.
         await openPendingFronts();
         // The game's own lock, waited for and taken in one step: a stat sheet
@@ -495,19 +494,11 @@ const boot = async () => {
         // landed (it is an entry in the queue already, so nothing else is).
         await enterSimulation({ signal });
         try {
-          // Every other player's own open projects stand on the game's board for
-          // the skip, so the world moves them forward as it moves the host's,
-          // and go home afterwards as it left them (host/seatBoards.js).
-          const people = { host, humans: list(humanCountries) };
-          let hostHad = new Set();
-          await mutateWorldState((world) => {
-            hostHad = new Set(list(world?.projects).map((row) => clean(row?.id)).filter(Boolean));
-            const lent = lendBoards(world, people);
-            // What a player's own board holds is not the host's, even if an
-            // earlier skip left it out here.
-            for (const board of Object.values(lent?.seatBoards ?? {})) for (const row of list(board)) hostHad.delete(clean(row?.id));
-            return lent === world ? null : lent;
-          });
+          // Every other player's own open projects are moved by the skip as the
+          // host's are: lent to the game's board in the skip's own copy of the
+          // world, and home in its one commit (runtime/seatBoards.js). Nothing
+          // is written for it here, so an engine closed during the round leaves
+          // no player's work on the host's board.
           // A round another player's device pays (settings.payment "cycle"):
           // its skip's requests go, as built, to that device and its answer
           // comes back to be applied here as ever (Game/AI/roundCarrier.js);
@@ -527,10 +518,6 @@ const boot = async () => {
             throw error;
           } finally {
             uncarry();
-            await mutateWorldState((world) => {
-              const home = returnBoards(world, { ...people, hostHad });
-              return home === world ? null : home;
-            });
           }
         } finally {
           endSimulation();

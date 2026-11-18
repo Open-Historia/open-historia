@@ -55,14 +55,18 @@ const state = () => ({
     // The host's own board, as single player keeps it: its own work, and what
     // its services have learned of Russia's.
     projects: [
-      { id: "proj-lv", name: "CANARY-LV-PROJECT", kind: "operation", ownerCode: "", summary: "x", status: "active" },
-      { id: "proj-lv-on-ru", name: "CANARY-LV-FILE-ON-RU", kind: "operation", ownerCode: RUSSIA, summary: "x", status: "active" },
+      { id: "proj-lv", name: "CANARY-LV-PROJECT", kind: "operation", ownerCode: "", summary: "x", status: "active", secrecy: "covert" },
+      { id: "proj-lv-on-ru", name: "CANARY-LV-FILE-ON-RU", kind: "operation", ownerCode: RUSSIA, summary: "x", status: "active", secrecy: "covert" },
+      // Estonia's own covert work, which Russia's agent there has learned of.
+      { id: "proj-est", name: "Estonian Shield", kind: "project", ownerCode: ESTONIA, summary: "x", status: "active", secrecy: "covert", knownBy: { [RUSSIA]: { spyIds: ["spy-ru-in-est"], verification: "doubted" } } },
     ],
     // The second person's board.
     seatBoards: {
       [RUSSIA]: [
-        { id: "proj-ru", name: "CANARY-RU-PROJECT", kind: "operation", ownerCode: "", summary: "x", status: "active" },
+        { id: "proj-ru", name: "CANARY-RU-PROJECT", kind: "operation", ownerCode: "", summary: "x", status: "active", secrecy: "covert" },
         { id: "proj-ru-on-lv", name: "CANARY-RU-FILE-ON-LV", kind: "operation", ownerCode: LATVIA, summary: "x", status: "active" },
+        // What nobody hides, everybody sees.
+        { id: "proj-ru-public", name: "Moscow Metro Extension", kind: "project", ownerCode: "", summary: "x", status: "active", secrecy: "public" },
       ],
     },
     actionSuggestions: [{ id: "topic-1", title: "CANARY-LV-SUGGESTION", actions: [] }],
@@ -227,7 +231,7 @@ test("each player sees all of its own, as single player shows it", () => {
   assert.deepEqual(ru.actions.map((action) => action.id), ["order-ru-1"]);
   assert.deepEqual(ru.world.pendingUnitOrders.map((order) => order.id), ["order-ru-march"]);
   assert.equal(ru.world.units.find((entry) => entry.id === "ru-1").orderId, "order-ru-march");
-  assert.deepEqual(ru.world.projects.map((project) => project.id), ["proj-ru", "proj-ru-on-lv"], "its own board, whole");
+  assert.deepEqual(ru.world.projects.map((project) => project.id), ["proj-ru", "proj-ru-on-lv", "proj-ru-public", "proj-est"], "its own board, whole, and what it knows of abroad");
   // The newest turn, for its Events panel: when it ran, what it wrote, its own orders.
   assert.deepEqual(ru.world.simulationHistory, [{
     date: "2014-03-30", fromDate: "2014-03-01", toDate: "2014-03-30", round: 3, mode: "jump", source: "fallback",
@@ -247,7 +251,7 @@ test("each player sees all of its own, as single player shows it", () => {
   assert.equal(ru.events[0].playerRelated, true);
 
   const lv = projectForViewer(state(), LATVIA);
-  assert.deepEqual(lv.world.projects.map((project) => project.id), ["proj-lv", "proj-lv-on-ru"], "the game's own board, as single player keeps it");
+  assert.deepEqual(lv.world.projects.map((project) => project.id), ["proj-lv", "proj-lv-on-ru", "proj-est", "proj-ru-public"], "the game's own board, as single player keeps it, and the work nobody hides");
   assert.deepEqual(lv.world.simulationHistory[0].plannedActions.map((action) => action.id), ["order-lv-0"]);
   assert.equal(lv.world.simulationHistory[0].fallbackReason, "CANARY-HOST-PROVIDER-ERROR", "the host's own model failed: the host is told why");
   assert.equal(lv.world.spySeal, SEAL);
@@ -279,6 +283,21 @@ test("the game's own rules hold inside a view: turned agents, caught agents, sto
   assert.equal(text(est).includes("CANARY-COVER-STORY"), false);
   assert.equal(est.world.puppets.length, 1, "the puppet knows its overlord");
   assert.equal("loyalty" in est.world.puppets[0], false, "but not its own loyalty score");
+});
+
+// The review of 2026-11-18, views 2: a guest's board showed nothing abroad, and
+// nobody saw a guest's public work. Each board now shows another country's work
+// as single player shows it, with what the viewer's own service knows of it.
+test("every board shows the work abroad nobody hides, and what the viewer's own service knows, nothing anyone else's does", () => {
+  const ru = projectForViewer(state(), RUSSIA).world.projects;
+  const shield = ru.find((project) => project.id === "proj-est");
+  assert.deepEqual([shield.ownerCode, shield.linkedSpyIds, shield.verification, shield.known, "knownBy" in shield], [ESTONIA, ["spy-ru-in-est"], "doubted", true, false]);
+  const lv = projectForViewer(state(), LATVIA).world.projects;
+  const metro = lv.find((project) => project.id === "proj-ru-public");
+  assert.deepEqual([metro.ownerCode, metro.known, metro.linkedSpyIds], [RUSSIA, false, []]);
+  assert.equal("knownBy" in lv.find((project) => project.id === "proj-est"), false, "the host's board never says what Russia knows");
+  const est = projectForViewer(state(), ESTONIA).world.projects;
+  assert.deepEqual(est.map((project) => project.id), ["proj-ru-public"], "a country nobody plays here sees only what nobody hides");
 });
 
 test("threads read from each side: the viewer is the implicit player, and its own words are its own", () => {

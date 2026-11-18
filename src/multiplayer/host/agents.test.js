@@ -82,3 +82,11 @@ test("a player tasks its own agent: what it collects on, and an operation for th
   const cancelled = order(ordered.world, ordered.board, RUSSIA, { op: "mission", spy: "s-ru", target: "" });
   assert.equal(cancelled.world.spies[0].mission ?? null, null);
 });
+
+test("an agent from before owners were kept never stands on a guest's board", () => {
+  // It is the host seat's: a guest's order put it on the guest's board as the
+  // guest's own operation, and so told the guest of the host's agent.
+  const world = { spies: [spy("spy-old", "", RUSSIA)] };
+  const result = order(world, [], RUSSIA, { op: "deploy", target: ESTONIA });
+  assert.deepEqual(result.board.map((project) => project.name), [`Agent in ${ESTONIA}`]);
+});

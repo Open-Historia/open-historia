@@ -46,7 +46,7 @@ import { battlefieldsForViewer } from "../../runtime/fronts/view.js";
 import { polityMatches, spyAsSeenBy, viewerAudience } from "../../Game/AI/audience.js";
 import { eventNamesPolity } from "../../runtime/eventConcerns.js";
 import { formerNamesOf } from "./foundings.js";
-import { settleBoards } from "./seatBoards.js";
+import { boardSeenBy } from "../../runtime/seatBoards.js";
 import { interceptTableOf } from "../../runtime/spycraft.js";
 import { sealOf } from "../../runtime/spySeal.js";
 import { advisorOfSeat } from "../../runtime/seatAdvisors.js";
@@ -255,19 +255,14 @@ const FILTERED_WORLD_KEYS = Object.freeze({
     return list(world.spies).map((spy) => spyAsSeenBy(audience, spy)).filter(Boolean);
   },
 
-  // A government's Projects board is its own business: what it is working on,
-  // and what its services have learned of anyone else's work. The host's seat
-  // has the game's own board, as single player does; every other person's is
-  // kept beside it (world.seatBoards, gameHost.js "projectOps"). While a round
-  // runs, the other players' open entries are lent to the game's board
-  // (seatBoards.js lendBoards): the host's view is that board without them, or
-  // a view sent mid-round gave the host every player's work, secret too.
-  projects: (world, viewer, { host }) => {
-    if (same(host, viewer)) return list(settleBoards(world).projects);
-    const boards = isRecord(world.seatBoards) ? world.seatBoards : {};
-    const mine = Object.keys(boards).find((country) => same(country, viewer));
-    return mine ? list(boards[mine]) : [];
-  },
+  // A government's Projects board: its own work, and every other country's it
+  // may know of, as single player shows another country's (one whose owner
+  // does not hide it, or one its own services know of), with what it knows of
+  // each and nothing anyone else knows (runtime/seatBoards.js boardSeenBy). The
+  // host's seat has the game's own board, as single player does; every other
+  // person's is kept beside it (world.seatBoards, gameHost.js "projectOps").
+  // A guest's board showed nothing abroad, and nobody saw a guest's public work.
+  projects: (world, viewer, { host, hiddenEventIds }) => boardSeenBy(world, viewer, { host, hiddenEventIds }),
 
   // The turns as every player's Events panel reads them (GameUI/time.jsx): when
   // each ran and which events it wrote, in the order they are shown, with the

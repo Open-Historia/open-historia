@@ -511,21 +511,21 @@ test("each player keeps a Projects board of its own, changed only by the game's 
   const plan = { durationDays: 200, monthlyCost: 1e8, milestones: [{ title: "Docks", atProgress: 50 }], effects: [{ type: "stat", stat: "military.sea", change: 5 }] };
 
   // The guest opens a project of its own; what it says of its progress is not taken.
-  await s.request(s.guest, { t: "projectOps", id: id(2), ops: [{ op: "create", name: "Northern Fleet refit", summary: "Dry docks at Severodvinsk.", plan, progress: 99.99, status: "complete" }] });
+  await s.request(s.guest, { t: "projectOps", id: id(2), ops: [{ op: "create", name: "Northern Fleet refit", summary: "Dry docks at Severodvinsk.", secrecy: "covert", plan, progress: 99.99, status: "complete" }] });
   assert.equal(s.ack(s.guest, id(2)).ok, true);
   const refit = () => s.store.docs.world.seatBoards[RUSSIA].find((project) => project.name === "Northern Fleet refit");
   assert.equal(refit().progress, 0, "the host keeps every entry's progress");
   assert.notEqual(refit().status, "complete");
   assert.deepEqual(names(s.store.docs.world.projects), [], "the game's own board is the host's, untouched");
   assert.deepEqual(names(s.shown(s.guest).world.projects), ["Northern Fleet refit"]);
-  assert.equal(JSON.stringify(s.shown(s.hostPlayer)).includes("Northern Fleet"), false, "nothing of it reaches the host's view");
+  assert.equal(JSON.stringify(s.shown(s.hostPlayer)).includes("Northern Fleet"), false, "nothing of its covert work reaches the host's view");
   // Its funding is its own to set.
   await s.request(s.guest, { t: "projectOps", id: id(3), ops: [{ op: "update", name: "Northern Fleet refit", funding: "high" }] });
   assert.equal(s.ack(s.guest, id(3)).ok, true);
   assert.equal(refit().funding, "high");
 
   // The host's own board is the game's, as in single player.
-  await s.request(s.hostPlayer, { t: "projectOps", id: id(4), ops: [{ op: "create", name: "Riga port expansion", plan }] });
+  await s.request(s.hostPlayer, { t: "projectOps", id: id(4), ops: [{ op: "create", name: "Riga port expansion", secrecy: "covert", plan }] });
   assert.deepEqual(names(s.store.docs.world.projects), ["Riga port expansion"]);
   assert.deepEqual(names(s.shown(s.guest).world.projects), ["Northern Fleet refit"]);
   assert.equal(JSON.stringify(s.shown(s.guest)).includes("Riga port"), false);
@@ -536,7 +536,7 @@ test("each player keeps a Projects board of its own, changed only by the game's 
   assert.match(s.ack(s.guest, id(6)).error, /not one of your own programmes/);
   assert.equal(JSON.stringify(s.store.docs.world).includes("Latvian collapse"), false);
 
-  // While a round runs the guest's entries are lent to the game's board (seatBoards.js): the host's view leaves them out.
+  // What an older version's lending left on the game's board (runtime/seatBoards.js settleBoards): the host's view leaves it out.
   s.store.docs.world.projects = [...s.store.docs.world.projects, { ...refit(), ownerCode: RUSSIA }];
   assert.deepEqual(names(projectForViewer({ ...s.store.docs, game: { ...s.store.docs.game, country: LATVIA } }, LATVIA).world.projects), ["Riga port expansion"]);
   // And no board travels whole any more.

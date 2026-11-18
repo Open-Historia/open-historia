@@ -325,14 +325,13 @@ import { acknowledgeFailures, buildPlayerEventRetryDirective, collectPlayerTurnF
 import {
   describeDoubtedForPrompt,
   doubtedAwaitingFreshSource,
-  spyIntelDoubtOps,
-  spyOperationOps,
   boardPassCarriers,
   boardPassReasons,
   isProjectOpen,
-  spyProvenanceOps,
 } from "../../runtime/projects.js";
-import { activeSpies, applySpyOps, spyServicesOf, espionageBrief, intelligenceOf, interceptTableOf, isIntelligenceRated, mapInterceptTables, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, planCovertOperations, publicExpulsionLines, redactText, resolveEspionage, signalClarity, spymastersOf, withInterceptTable } from "../../runtime/spycraft.js";
+import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, interceptTableOf, isIntelligenceRated, mapInterceptTables, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, planCovertOperations, publicExpulsionLines, redactText, resolveEspionage, signalClarity, spymastersOf, spyServicesOf, withInterceptTable } from "../../runtime/spycraft.js";
+import { syncBoardsWithAgents } from "../../runtime/agentBoards.js";
+import { boardSeenBy, withBoardsHome, withBoardsLent } from "../../runtime/seatBoards.js";
 import { assertPoliticalLandscapeConsistency, describeElectionsDue, normalizePoliticalLandscape } from "../../runtime/politics.js";
 import { foldLandscapeIntoActor, partiesCompiled } from "../../runtime/politicalLandscapeFold.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
@@ -412,7 +411,6 @@ import {
   standingOrdersAskWater,
   applyEventImpactsToWorld,
   advanceProjectsInWorld,
-  applyProjectOpsToWorld,
   applyProjectOutcomesToWorld,
   findProjectIndexForOp,
   confirmResolvedDeployments,
@@ -9902,43 +9900,20 @@ const applySimulationResult = async ({
       }
     }
   }
-  const spySync = [
-    // Order matters: provenance first, so an entry stamped this turn can be
-    // doubted in the same pass rather than a turn later.
-    ...spyOperationOps(normalizeSpies(worldWithImpacts.spies), worldWithImpacts.projects, {
-      date: nextGame.gameDate,
-      playerPolity,
-    }),
-    ...spyProvenanceOps(normalizeSpies(worldWithImpacts.spies), worldWithImpacts.projects, { playerPolity }),
-  ];
-  if (spySync.length) {
-    worldWithImpacts = applyProjectOpsToWorld({
-      actor: "engine",
-      date: nextGame.gameDate,
-      ops: spySync,
-      playerCountry: playerPolity,
-      round: nextGame.round,
-      world: worldWithImpacts,
-    }).world;
-  }
-  // Doubt runs on the world the two passes above just produced, so a foreign entry
-  // linked a moment ago is covered by the same turn's suspicion.
-  const doubtOps = spyIntelDoubtOps(normalizeSpies(worldWithImpacts.spies), worldWithImpacts.projects, {
-    playerPolity,
+  // Every player's service, each on its own board, and what its agents told it
+  // of other countries' work kept as its own knowledge, never on the work
+  // (runtime/agentBoards.js). It ran for the host's service alone, over the
+  // game's board with every guest's own work lent to it, which it took for the
+  // host's files and stalled (the review of 2026-11-18).
+  const agentBoards = syncBoardsWithAgents(worldWithImpacts, {
+    spymasters: spymastersOf(baseGame),
+    host: playerPolity,
     date: nextGame.gameDate,
+    round: nextGame.round,
   });
-  if (doubtOps.length) {
-    worldWithImpacts = applyProjectOpsToWorld({
-      actor: "engine",
-      date: nextGame.gameDate,
-      ops: doubtOps,
-      playerCountry: playerPolity,
-      round: nextGame.round,
-      world: worldWithImpacts,
-    }).world;
-  }
-  if (spySync.length || doubtOps.length) {
-    logDebugEvent("turn", `Covert operations synced to the board: ${spySync.length} op(s), ${doubtOps.length} doubted.`, undefined, { verbose: true });
+  worldWithImpacts = agentBoards.world;
+  if (agentBoards.ops || agentBoards.doubted) {
+    logDebugEvent("turn", `Covert operations synced to the board: ${agentBoards.ops} op(s), ${agentBoards.doubted} doubted.`, undefined, { verbose: true });
   }
 
   // A check that failed holds the turn before the board is asked. Asked first,
@@ -10439,6 +10414,11 @@ const applySimulationResult = async ({
     logDebugEvent("turn", "Power tier refresh failed; the tiers stay as they were.", error, { problem: true });
   }
 
+  // The other players' own work the skip was lent (simulateTimelineJump) goes
+  // home as the skip left it, in this one commit, so the stored world never
+  // holds a lent entry (runtime/seatBoards.js). Single player has none.
+  nextWorld = withBoardsHome(nextWorld, { before: baseWorld, game: baseGame });
+
   // Re-read the chat list instead of writing the pre-turn snapshot back over it.
   // Turns take a while, and anything the player did to the list while one ran —
   // deleting a thread, archiving one — exists only in storage. Writing baseChats
@@ -10520,7 +10500,8 @@ const applySimulationResult = async ({
     fromDate: baseGame.gameDate || baseGame.startDate || "",
     toDate: nextGame.gameDate || "",
     game: baseGame,
-    world: baseWorld,
+    // As it is stored: with nothing lent (runtime/seatBoards.js).
+    world: withBoardsHome(baseWorld, { before: baseWorld, game: baseGame }),
     events: baseEvents,
     actions: baseActions,
     chat: baseChats,
@@ -13452,14 +13433,10 @@ const buildCollectedPoliticalSignals = (world, polity, { clarity = 0, seed = "" 
 //
 // `sharedVariables` lets several agents share one build of the template
 // variables; only the target and the disinformation line differ between them.
-// A spymaster's own Projects board: the game country's is the world's, each
-// other player's is kept by its seat (multiplayer/host/gameHost.js withSeatBoard).
-const spymasterBoard = (world, owner, gameCountry) => {
-  if (!normalizeString(owner) || regionKey(owner) === regionKey(gameCountry)) return normalizeArray(world?.projects);
-  const boards = world?.seatBoards && typeof world.seatBoards === "object" && !Array.isArray(world.seatBoards) ? world.seatBoards : {};
-  const key = Object.keys(boards).find((name) => regionKey(name) === regionKey(owner));
-  return key ? normalizeArray(boards[key]) : [];
-};
+// A spymaster's Projects board as its own screen shows it: the game country's
+// is the world's, each other player's is kept by its seat, with what each one's
+// services know of other countries' work (runtime/seatBoards.js boardSeenBy).
+const spymasterBoard = (world, owner, gameCountry) => boardSeenBy(world, normalizeString(owner) || normalizeString(gameCountry), { host: normalizeString(gameCountry) });
 
 // The brief is written from the agent's own government's side: in a shared
 // game every player's agents report, and each is its owner's (spy.owner).
@@ -18638,7 +18615,10 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   const phases = createSkipPhases({ requestsUsed: () => budgetForPhases?.used ?? 0, onChange: onProgress });
   phases.enter("reading");
   try {
-  const bundle = await readGameStateBundle({ force: true });
+  // With every other player's own open work lent to the game's board, in this
+  // copy only, for the skip to move it as it moves the host's; it goes home in
+  // the turn's commit (runtime/seatBoards.js).
+  const bundle = withBoardsLent(await readGameStateBundle({ force: true }));
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   // Fractional days are allowed so sub-day skips (e.g. 6h = 0.25) work; the game
   // date only advances in whole days, so a sub-day skip keeps the same date.
