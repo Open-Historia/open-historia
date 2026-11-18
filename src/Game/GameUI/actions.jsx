@@ -26,7 +26,7 @@ import { orderRequestFor } from "../../multiplayer/client/sharedOrders.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { uiString } from "../../runtime/translator.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
-import { queuedActionIds, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
+import { queuedActionIds, seatAdviceKey, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
 import { refusedOrdersKey } from "./overdueOrders.js";
 import { filedFateLabel } from "../../runtime/filedEvents.js";
 import { ProjectsBoard, ProjectsTabIcon } from "./projects.jsx";
@@ -338,6 +338,9 @@ const SuggestionCard = ({ topic, onQueue, queuedIds }) => (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
     {topic.actions.map((action) => {
         const isQueued = queuedIds?.has(action.id);
+        // An order that is one sentence (an advisor's, actionSuggestions.js
+        // seatAdviceTopic) is its own title: said once.
+        const title = action.title && action.title !== action.text ? action.title : "";
         return (
             <button
             key={action.id}
@@ -356,9 +359,11 @@ const SuggestionCard = ({ topic, onQueue, queuedIds }) => (
                 textAlign: "left",
             }}
             >
-            <div style={{ fontSize: "0.76rem", fontWeight: 700 }}>
-            {isQueued ? `✓ Queued — ${action.title}` : action.title}
-            </div>
+            {(title || isQueued) && (
+                <div style={{ fontSize: "0.76rem", fontWeight: 700 }}>
+                {isQueued ? (title ? `✓ Queued — ${title}` : "✓ Queued") : title}
+                </div>
+            )}
             <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.74rem", lineHeight: "1.45", marginTop: "0.18rem" }}>
             {action.text}
             </div>
@@ -842,6 +847,17 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     // The suggestions the game saved on the world (a time skip clears them), so
     // reopening the panel shows them again without spending a request.
     const suggestions = useRuntimeState("world", selectSavedSuggestions);
+    // And in a shared game, the orders the round's own time skip brought from
+    // this player's advisor, which cost nothing (actionSuggestions.js
+    // seatAdviceTopic): first, as one more card.
+    const sharedGame = inSharedGame();
+    const adviceKey = useRuntimeState(
+        "world",
+        (world) => (sharedGame ? seatAdviceKey(world, game.country, game.round) : "null"),
+        `${sharedGame}|${game.country}|${game.round}`,
+    );
+    const advice = React.useMemo(() => JSON.parse(adviceKey || "null"), [adviceKey]);
+    const shownSuggestions = React.useMemo(() => (advice ? [advice, ...suggestions] : suggestions), [advice, suggestions]);
     const [hasRequestedSuggestions, setHasRequestedSuggestions] = React.useState(false);
     // Why the last press of the suggestions button got no list at all, and, when
     // it got the canned one instead, what the AI did (for the report button).
@@ -865,7 +881,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     React.useEffect(() => {
         writeGoalOpen(browserStorage(), layout.goalOpen);
     }, [layout.goalOpen]);
-    const showSuggested = hasRequestedSuggestions || isSuggesting || suggestions.length > 0;
+    const showSuggested = hasRequestedSuggestions || isSuggesting || shownSuggestions.length > 0;
     // The height the player dragged the panel to (null: the default), kept too.
     const panelRef = React.useRef(null);
     const [panelHeight, setPanelHeight] = React.useState(() => readPanelHeight(browserStorage()));
@@ -1326,7 +1342,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
                 <>
                 {showSuggested && (
                     <div style={sectionStyle(suggestedOpen)}>
-                    <SectionHeader title="Suggested Actions" count={suggestions.length} open={suggestedOpen} onToggle={() => dispatchLayout({ type: "toggle", showSuggested })} />
+                    <SectionHeader title="Suggested Actions" count={shownSuggestions.length} open={suggestedOpen} onToggle={() => dispatchLayout({ type: "toggle", showSuggested })} />
                     {suggestedOpen && (
                         <div style={{ ...listStyle, gap: "0.5rem" }}>
                         {suggestionError && !isSuggesting && (
@@ -1344,7 +1360,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
                             The AI gave no usable suggestions, so these are generic ones.
                             </AiFailureNote>
                         )}
-                        {suggestions.map((topic) => (
+                        {shownSuggestions.map((topic) => (
                             <SuggestionCard key={topic.id} topic={topic} onQueue={handleQueueSuggestion} queuedIds={queuedSuggestionIds} />
                         ))}
                         </div>
