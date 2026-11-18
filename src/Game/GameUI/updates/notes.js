@@ -311,6 +311,8 @@ const NEW_UPDATES = [
           "The host chooses the language a shared game's world is written in when opening the lobby, and every player's AI writes in it. If you read another language, the game translates it on your own device.",
           "Players on the website and the Android app can join a shared game hosted on the desktop app again.",
           "In a shared game your Projects board changes only through your own panel and advisor, and a project can no longer take land from a country another player plays.",
+          "The round bar shows the same round as the Events panel, and the reveal ends as soon as everyone has read the round. The host can cancel a round that hangs, and a round that fails waits for the host instead of running again on its own.",
+          "A shared game keeps its settings: when the host shares it again another day, they start from where they were.",
         ],
       },
       {
