@@ -1185,7 +1185,12 @@ test("a player changes their own country's flag, and the host also those of the 
 // round (the gap audit of 2026-11-18).
 test("countries' military figures are rated for a player's Stats pane, by the host's AI, only where a country of this game has none", async () => {
   const rated = [];
-  const s = setup({ rateMilitary: async (info) => { rated.push(info); } });
+  const figures = { quality: 50, technology: 50, land: 50, sea: 50, air: 50, spending: 50, manpowerShare: 10, cavalryShare: 0.1, siegeShare: 0.1 };
+  // The host's AI rates what it is asked, written into the game as the engine's commit does.
+  const s = setup({ rateMilitary: async (info) => {
+    rated.push(info);
+    for (const country of info.countries) s.store.docs.world.countryStats[country] = { population: { total: 2e6 }, military: figures };
+  } });
   s.store.docs.world.countryStats = { [ESTONIA]: { population: { total: 1.3e6 }, military: { quality: 60, technology: 60, land: 40, sea: 30, air: 30, spending: 55, manpowerShare: 8, cavalryShare: 0.1, siegeShare: 0.1 } } };
   s.host.join(s.hostPlayer);
   s.host.join(s.guest);
@@ -1198,6 +1203,59 @@ test("countries' military figures are rated for a player's Stats pane, by the ho
   await s.request(s.guest, { t: "ratings", id: id(3), countries: [ESTONIA] });
   assert.equal(rated.length, 1);
   assert.equal(validate(PLAYER_REQUESTS.ratings, { t: "ratings", id: id(4), countries: Array.from({ length: 301 }, (_, n) => `C${n}`) }).ok, false, "a list held to its size");
+});
+
+// A rating the host's AI did not make was answered as made, and the ranking stayed part empty with nothing to say
+// for it (the review of 2026-11-18, wars 9): the player is told, with the host's reason.
+test("a rating the host's AI does not make is said, with why", async () => {
+  let answer = null;
+  const s = setup({ rateMilitary: async () => answer });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "ratings", id: id(2), countries: [ESTONIA] });
+  assert.equal(s.ack(s.guest, id(2)).error, `The host's AI gave no military figures for ${ESTONIA}.`);
+  answer = { refused: "The host's AI has made all the background readings it makes in a day: the rest of these figures wait until tomorrow." };
+  await s.request(s.guest, { t: "ratings", id: id(3), countries: [ESTONIA, LATVIA] });
+  assert.match(s.ack(s.guest, id(3)).error, /all the background readings it makes in a day/);
+  // What it did rate is no refusal.
+  s.store.docs.world.countryStats = { [ESTONIA]: { population: { total: 1.3e6 }, military: { quality: 60, technology: 60, land: 40, sea: 30, air: 30, spending: 55, manpowerShare: 8, cavalryShare: 0.1, siegeShare: 0.1 } } };
+  await s.request(s.guest, { t: "ratings", id: id(4), countries: [ESTONIA] });
+  assert.equal(s.ack(s.guest, id(4)).ok, true);
+});
+
+// With each player's own AI, a reading was left to whoever asked last: two players opening one country both paid,
+// and the first was told its figures were refused (the review of 2026-11-18, cost 7).
+test("with each player's own AI, a reading is left once, to the first to ask, until it comes back or its time is up", async () => {
+  const s = setup({ settings: { replies: "own" }, takeRatings: async () => [] });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "sheet", id: id(2), country: ESTONIA });
+  assert.deepEqual(s.ack(s.guest, id(2)).result, { answer: "own" });
+  // The host opens it a moment later: told it is being written, and nothing is left to its device.
+  await s.request(s.hostPlayer, { t: "sheet", id: id(3), country: ESTONIA });
+  assert.equal(s.ack(s.hostPlayer, id(3)).error, "Its figures are being written on another player's device: they show here when they are done.");
+  // The first's figures are taken, as ever.
+  await s.request(s.guest, { t: "ownSheet", id: id(4), country: ESTONIA, sheet: { capital: "Tallinn", stability: 60 } });
+  assert.equal(s.ack(s.guest, id(4)).ok, true);
+  // Parties and ratings the same way.
+  await s.request(s.guest, { t: "parties", id: id(5), country: ESTONIA });
+  assert.deepEqual(s.ack(s.guest, id(5)).result, { answer: "own" });
+  await s.request(s.hostPlayer, { t: "parties", id: id(6), country: ESTONIA });
+  assert.match(s.ack(s.hostPlayer, id(6)).error, /being filled in on another player's device/);
+  await s.request(s.guest, { t: "ratings", id: id(7), countries: [ESTONIA] });
+  assert.deepEqual(s.ack(s.guest, id(7)).result, { answer: "own", countries: [ESTONIA] });
+  await s.request(s.hostPlayer, { t: "ratings", id: id(8), countries: [ESTONIA] });
+  assert.deepEqual([s.ack(s.hostPlayer, id(8)).ok, s.ack(s.hostPlayer, id(8)).result], [true, undefined], "nothing left to the second: the figures come with the view");
+  // A device that never sends its reading back holds it only for a while: then the next to ask has it.
+  await s.clock.advance(5 * 60 * 1000 + 1);
+  await s.request(s.hostPlayer, { t: "ratings", id: id(9), countries: [ESTONIA] });
+  assert.deepEqual(s.ack(s.hostPlayer, id(9)).result, { answer: "own", countries: [ESTONIA] });
+  await s.request(s.guest, { t: "ownRatings", id: id(10), ratings: [{ country: ESTONIA, military: { quality: 50 } }] });
+  assert.match(s.ack(s.guest, id(10)).error, /not left to your device/, "the reading is the second's now");
 });
 
 test("with each player's own AI, countries' figures are left to the asking device, and taken from it once, only for what it was left", async () => {

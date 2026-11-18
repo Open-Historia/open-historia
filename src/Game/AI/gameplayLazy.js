@@ -140,12 +140,15 @@ export const ensureIntelligenceRated = hostQuietly(async (...args) => (await gam
 // them on its own AI or, by its setting (the owner's decision 3), leaves them to this device's own key; then this
 // device rates those left to it as single player does, twenty to a request, and hands the figures to the host
 // ("ownRatings") instead of writing them. It was not done at all on a page, so the ranking of a shared game stayed
-// empty (the gap audit of 2026-11-18). Nobody waits on it: what fails settles with nothing.
+// empty (the gap audit of 2026-11-18). Nobody waits on it: what fails settles with nothing, but what the host says
+// it did not rate settles with its words ({ refused }), for the pane to show (the review of 2026-11-18, wars 9).
+
 const ratingsFromHost = async (targets, options = {}) => {
   const countries = [...new Set((Array.isArray(targets) ? targets : []).map((name) => String(name ?? "").trim()).filter(Boolean))].slice(0, RATINGS_ASKED_MOST);
   if (!countries.length) return null;
   try {
     const answer = await requestFromHost("ratings", { countries });
+    if (!answer.ok) return answer.error ? { refused: String(answer.error) } : null;
     const left = answer.ok && answer.result?.answer === "own" && Array.isArray(answer.result.countries) ? answer.result.countries : [];
     if (!left.length) return null;
     return await (await gameplay()).ensureMilitaryFigures(left, {
@@ -305,8 +308,20 @@ export const generatePlaceFeed = async (...args) => (await gameplay()).generateP
 // is where a shared game's rules apply.
 export const generateWarRoomReply = async (...args) => (await gameplay()).generateWarRoomReply(...args);
 // The war room: which routes drawn on a battlefield go into a country outside
-// its war. Read from the map, with no request made and nothing written.
-export const warRoomRouteAttacks = async (...args) => (await gameplay()).warRoomRouteAttacks(...args);
+// its war. Read from the map, with no request made and nothing written. The
+// figures of a country found there are wanted for the war: single player reads
+// them; in a shared game they are the host's to keep, as the Stats pane's are,
+// asked of the host by its setting ("ratings"), never read into this page's
+// copy, where they were written on this device's key and never sent (the
+// review of 2026-11-18, wars 9).
+export const warRoomRouteAttacks = async (...args) => {
+  const run = (await gameplay()).warRoomRouteAttacks;
+  if (!inSharedGame()) return run(...args);
+  const found = await run({ ...(args[0] ?? {}), ask: false });
+  const attacked = [...found.values()].flat();
+  if (attacked.length > 0) void ratingsFromHost(attacked, { reason: "a route drawn into its country" });
+  return found;
+};
 // The war room: the way each transporter deployed there would take. Read from
 // the map, with no request made and nothing written.
 export const warRoomTransportWays = async (...args) => (await gameplay()).warRoomTransportWays(...args);

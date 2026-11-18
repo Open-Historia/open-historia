@@ -96,6 +96,10 @@ const THINKING = new Set(["sheet", "parties", "institution", "ratings"]);
 // the rest when the figures come in, so the readings left to devices are not
 // filled by one long list.
 const RATINGS_LEFT_MOST = 60;
+// With settings.replies "own": how long a reading left to one device is that
+// device's alone (the page waits as long for a sheet or parties it writes:
+// gameplayLazy.js SHEET_ANSWER_MS).
+const READING_LEFT_MS = 5 * 60 * 1000;
 // Lines whose answer a player's own device is writing (settings.replies "own"):
 // the newest this many are remembered.
 const OWN_LINES_KEPT = 200;
@@ -359,15 +363,28 @@ export const createGameHost = ({
   // reply is only from the device that line was left to (ownLines): any seat
   // could send any country's figures and parties, unasked, and the first stood
   // for the whole game (the gap audit of 2026-11-18).
+  // A reading is left ONCE, to the first to ask, for READING_LEFT_MS: it was
+  // left to whoever asked last, so two players opening one country both paid
+  // for its sheet, and the first was told its figures were refused (the review
+  // of 2026-11-18, cost 7). Another who asks meanwhile is told it is being
+  // read elsewhere, and its screen shows it when the view brings it. One
+  // whose device never sends it back (it failed, or closed) is let go when
+  // its time is up, for the next to ask; until then it is still taken from
+  // the seat it was left to.
   const ownReadings = new Map();
   const OWN_READINGS_KEPT = 256;
   const readingKey = (kind, country) => `${kind}|${fold(country)}`;
+  // Whether the reading is now `seat`'s to make: false while another's.
   const leaveReading = (kind, country, seat) => {
-    ownReadings.delete(readingKey(kind, country));
-    ownReadings.set(readingKey(kind, country), seat.id);
+    const key = readingKey(kind, country);
+    const held = ownReadings.get(key);
+    if (held && held.seat !== seat.id && held.until > now()) return false;
+    ownReadings.delete(key);
+    ownReadings.set(key, { seat: seat.id, until: now() + READING_LEFT_MS });
     while (ownReadings.size > OWN_READINGS_KEPT) ownReadings.delete(ownReadings.keys().next().value);
+    return true;
   };
-  const readingLeftTo = (kind, country, seat) => Boolean(seat.id) && ownReadings.get(readingKey(kind, country)) === seat.id;
+  const readingLeftTo = (kind, country, seat) => Boolean(seat.id) && ownReadings.get(readingKey(kind, country))?.seat === seat.id;
   // A country a person plays is read by that person's own device (or the
   // host's AI), never by another player's: a rival's figures are not another
   // player's to write first.
@@ -1435,7 +1452,7 @@ export const createGameHost = ({
       try {
         if (replies === "own" && !(await hasSheet(name))) {
           if (playedByAnother(name, seat)) return "Its figures are written when the player of that country opens them.";
-          leaveReading("sheet", name, seat);
+          if (!leaveReading("sheet", name, seat)) return "Its figures are being written on another player's device: they show here when they are done.";
           return { error: "", result: { answer: "own" } };
         }
         await readCountry({ country: name, seat: seat.country });
@@ -1476,17 +1493,31 @@ export const createGameHost = ({
       const wanted = known.length ? unratedOf((await store.read())?.world ?? {}, known) : [];
       if (!wanted.length) return "";
       if (replies === "own") {
-        const left = wanted.filter((name) => !playedByAnother(name, seat)).slice(0, RATINGS_LEFT_MOST);
-        for (const name of left) leaveReading("military", name, seat);
+        // (Those another device is rating come with the view when it is done.)
+        const left = [];
+        for (const name of wanted) {
+          if (left.length >= RATINGS_LEFT_MOST) break;
+          if (!playedByAnother(name, seat) && leaveReading("military", name, seat)) left.push(name);
+        }
         return left.length ? { error: "", result: { answer: "own", countries: left } } : "";
       }
+      let refused = "";
       try {
-        await rateMilitary({ countries: wanted });
+        refused = clean((await rateMilitary({ countries: wanted }))?.refused);
       } catch (failure) {
         return clean(failure?.message || failure).slice(0, 280) || "The host could not rate those figures.";
       }
       round.touch(seat.country);
-      return "";
+      // A rating not made is said, with why (rule 10): the ranking stayed part
+      // empty with nothing to say for it (the review of 2026-11-18, wars 9). The
+      // host's AI may decline (its day's background readings spent), or leave a
+      // country out, which it is not asked of again this sitting.
+      const missed = unratedOf((await store.read())?.world ?? {}, wanted);
+      if (!missed.length) return "";
+      if (refused) return refused;
+      const count = missed.length;
+      const named = missed.join(", ");
+      return count > 6 ? `The host's AI gave no military figures for ${count} of those countries.` : `The host's AI gave no military figures for ${named}.`;
     },
     // With settings.replies "own": the figures a player's device rated for
     // the countries left to it, each taken once, and only where the country
@@ -1776,7 +1807,7 @@ export const createGameHost = ({
         if (await hasParties(name)) return "";
         if (replies === "own") {
           if (playedByAnother(name, seat)) return "Its parties are filled in when the player of that country opens them.";
-          leaveReading("parties", name, seat);
+          if (!leaveReading("parties", name, seat)) return "Its parties are being filled in on another player's device: they show here when they are done.";
           return { error: "", result: { answer: "own" } };
         }
         await compileParties({ country: name });

@@ -70,7 +70,8 @@ import { sessionFromRecord } from "./sessionRecord.js";
 import { roundRulesOf } from "./hostRules.js";
 import { STAND_IN_NOT_SHARED, standInOf } from "../../runtime/standInGames.js";
 import { getResolvedFallbackList, sharedRoundRefusal } from "../../Game/AI/providerConfig.js";
-import { requestSettings } from "../../Game/AI/requestBudget.js";
+import { backgroundAiAllowance, requestSettings } from "../../Game/AI/requestBudget.js";
+import { setHostReadsFigures } from "../../runtime/sharedReadings.js";
 import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 
 const SCREEN = "host-screen";
@@ -425,7 +426,9 @@ const boot = async () => {
     // its backstory and the fronts its scenario begins with, the calls single
     // player makes when its player first enters the game, which no page of a
     // shared game may make. In the world's language, set above. Nothing to do
-    // for a game already under way.
+    // for a game already under way. The readings the game makes by itself
+    // follow who answers from here, its fronts' too (runtime/sharedReadings.js).
+    setHostReadsFigures(settings.replies !== "own");
     preparing = true;
     report();
     const startProblems = await finishGameStart({
@@ -537,10 +540,18 @@ const boot = async () => {
       // host's AI: each request's figures written in the host's one order, so
       // every view follows as they come. And those a player's own device
       // rated, taken inside the request's own entry.
-      rateMilitary: ({ countries }) => ensureMilitaryFigures(countries, {
-        reason: "a player's Stats pane",
-        commit: (read) => writeInOrder("ratings", () => takeMilitaryRatings(read)),
-      }),
+      // A rating is background work on this device's AI, under its day's cap
+      // (requestBudget.js backgroundAllowance): one it declines is said, with
+      // why, to the player who asked (host/gameHost.js "ratings").
+      rateMilitary: async ({ countries }) => {
+        const declined = () => (backgroundAiAllowance().allowed ? null : { refused: "The host's AI has made all the background readings it makes in a day: the rest of these figures wait until tomorrow." });
+        if (declined()) return declined();
+        await ensureMilitaryFigures(countries, {
+          reason: "a player's Stats pane",
+          commit: (read) => writeInOrder("ratings", () => takeMilitaryRatings(read)),
+        });
+        return declined();
+      },
       takeRatings: (ratings) => takeMilitaryRatings(ratings),
       // The map as this game's own engine reads it, for the war room's lines and fleets.
       readChart: () => warRoomChart(),
@@ -586,6 +597,8 @@ const boot = async () => {
       }),
       onStatus: (status) => {
         hostStatus = status;
+        // The readings the game makes by itself follow who answers (runtime/sharedReadings.js).
+        setHostReadsFigures(status?.lobby?.settings?.replies !== "own");
         report();
       },
       // The host's people founded a country: the engine plays it as the host's.
@@ -710,6 +723,7 @@ const boot = async () => {
         await stopping.stop();
         writeInOrder = (label, write) => write();
         setHostingSharedGame(false);
+        setHostReadsFigures(true);
         setWorldLanguage("");
         report();
         loopback.close();

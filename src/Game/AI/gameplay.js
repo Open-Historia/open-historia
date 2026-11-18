@@ -22,6 +22,7 @@ import { describeBasisAction, describeUnknownBasis, sameRegionChange, screenTerr
 import { GROUP_OP_KINDS, PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, findGroupKey, groupOpKind, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import { hostingSharedGame, humanCountriesOf, humanCountriesWith, orderOwner } from "../../runtime/humanPolities.js";
+import { hostReadsFigures } from "../../runtime/sharedReadings.js";
 import { uiString } from "../../runtime/translator.js";
 import { withTurnSeaBattles } from "../../runtime/naval/record.js";
 import { withFrontFortifications } from "../../runtime/warGeography.js";
@@ -32,7 +33,7 @@ import { MILITARY_CHANGE_RULE, describeMilitaryStanding } from "../../runtime/mi
 import { warSettingsOf } from "../../runtime/warSettings.js";
 import { STATS_BACKEND_FIELD, conflictSheetTargets, hasStatsBackend, readableFigure, statsBackendInstruction, statsBackendOf, statsBackendPatch, statsBackendTurnRule } from "../../runtime/statsBackend.js";
 import { CONFLICT_BACKENDS_MOST, conflictBackendsRequest, readConflictBackends } from "./conflictBackends.js";
-import { MILITARY_BATCH_MOST, militaryRatingRequest, militaryTargets, ratedFigures, ratedScaleOf, readMilitaryRatings, wantsRating } from "./militaryRating.js";
+import { MILITARY_BATCH_MOST, militaryRatingRequest, militaryTargets, nextRatingBatch, ratedFigures, ratedScaleOf, readMilitaryRatings, waitForRating, wantsRating } from "./militaryRating.js";
 import { peopleFor } from "../../runtime/militaryPower.js";
 import {
   createApplicationReceipt,
@@ -9895,8 +9896,9 @@ const applySimulationResult = async ({
       // An agent ordered into a polity nobody has rated: get that service its
       // first reading now (it waits for this turn's write), so the espionage
       // maths it meets next turn run on a judgement rather than the default.
+      // (In a shared game, on the host's AI only as its settings say: runtime/sharedReadings.js.)
       for (const entry of outcome.applied) {
-        if (entry.op === "deploy") void ensureCountryAssessed(entry.target, { reason: "agent deployed by order" });
+        if (entry.op === "deploy" && hostReadsFigures()) void ensureCountryAssessed(entry.target, { reason: "agent deployed by order" });
       }
     }
   }
@@ -12597,8 +12599,10 @@ const buildTargetEconomicEvidence = ({ bundle, statCode, previous, normalizedWor
 // request (ensureConflictBackends), which wants only the four figures the war
 // reads and not a whole sheet a country: up to CONFLICT_BACKENDS_MOST of them
 // at once, the rest on the turns after.
+// In a shared game, on the host's AI only as its settings say (runtime/sharedReadings.js): with each player's own AI
+// answering, the round's own answer writes what the war needs, and each device reads what its player opens.
 const requestConflictSheets = (world, game, extra = []) => {
-  if (!frontsOn()) return;
+  if (!frontsOn() || !hostReadsFigures()) return;
   const players = humanCountriesOf(game);
   const names = conflictSheetTargets(world, players, { extra }).slice(0, CONFLICT_BACKENDS_MOST);
   if (names.length > 0) void ensureConflictBackends(names, { reason: "in conflict with the player" });
@@ -13208,10 +13212,12 @@ export const maybeOpenScenarioFronts = async () => {
 // passes. It reads the map and asks nobody. A country such a route goes into
 // is one the player is about to be at war with: it is asked for its sheet, if
 // it has nothing the war can read (requestConflictSheets).
-export const warRoomRouteAttacks = ({ world, game, record } = {}) =>
+// `ask` false: the countries are only found (a page of a shared game asks its
+// host for their figures instead: gameplayLazy.js).
+export const warRoomRouteAttacks = ({ world, game, record, ask = true } = {}) =>
   routesIntoOthers({ world, game, record, campaignId: activeCampaignId(), loadRegions: createRenderedRegionsReader() }).then((found) => {
     const attacked = [...found.values()].flat();
-    if (attacked.length > 0) requestConflictSheets(world, game, attacked);
+    if (ask && attacked.length > 0) requestConflictSheets(world, game, attacked);
     return found;
   });
 
@@ -14017,6 +14023,8 @@ export const ensureConflictBackends = (targets, { reason = "" } = {}) => {
 // `commit(read)`, where given, is handed each request's figures ([{ name, military?, population? }]) instead of
 // their being written here: the host of a shared game writes them in its one order, and a player's device whose
 // host left them to it sends them to the host (multiplayer/host/gameHost.js "ratings", Game/AI/gameplayLazy.js).
+// Each country waiting carries how it is to be written, and each request is of countries written the same way
+// (militaryRating.js waitForRating, nextRatingBatch).
 const militaryWanted = new Map();
 const militaryTried = new Set();
 const triedKey = (name) => `${activeCampaignId()}|${name.toLowerCase()}`;
@@ -14056,7 +14064,7 @@ export const takeMilitaryRatings = async (read, { campaign = activeCampaignId() 
 export const ensureMilitaryFigures = (targets, { reason = "", commit = null } = {}) => {
   for (const target of normalizeArray(targets)) {
     const name = normalizeString(target);
-    if (name && !militaryWanted.has(name.toLowerCase()) && !militaryTried.has(triedKey(name))) militaryWanted.set(name.toLowerCase(), name);
+    if (name && !militaryTried.has(triedKey(name))) waitForRating(militaryWanted, name, commit);
   }
   if (militaryWanted.size === 0) return Promise.resolve(null);
   return firstReading("military figures", "the countries' military figures", reason, async () => {
@@ -14071,11 +14079,13 @@ export const ensureMilitaryFigures = (targets, { reason = "", commit = null } = 
       // (A group's are its scenario designer's: a group is no country with a sheet.)
       const groupNames = new Set(Object.keys(world.groups || {}).map((key) => key.toLowerCase()));
       const needs = (name) => !groupNames.has(name.toLowerCase()) && (wantsRating(lookup(name)) || !(peopleFor(world, name) > 0));
-      const wanted = [...militaryWanted.values()].filter((name) => !asked.has(name.toLowerCase()) && needs(name));
-      if (wanted.length === 0) {
+      const waiting = [...militaryWanted.values()].filter(({ name }) => !asked.has(name.toLowerCase()) && needs(name));
+      if (waiting.length === 0) {
         militaryWanted.clear();
         break;
       }
+      // This request's countries: the first waiting one's, and those written the same way.
+      const { write, names: wanted } = nextRatingBatch(waiting);
       // Every country with figures already: the scale. Where there is none, the strongest of those wanted first.
       const everyone = new Map();
       for (const source of [world.countryStats, world.polityOverrides, world.groups]) for (const key of Object.keys(source || {})) everyone.set(key.toLowerCase(), key);
@@ -14109,8 +14119,8 @@ export const ensureMilitaryFigures = (targets, { reason = "", commit = null } = 
         if (read.length === 0) break;
       }
       if (read.length === 0) continue;
-      if (typeof commit === "function") {
-        await commit(read);
+      if (write) {
+        await write(read);
         kept.push(...read.map((entry) => entry.name));
         continue;
       }

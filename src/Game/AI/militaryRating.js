@@ -203,6 +203,28 @@ export const ratedScaleOf = (entries, asking = []) => {
   return [...shown.filter((entry) => !wantsRating(entry.military)), ...shown.filter((entry) => wantsRating(entry.military))];
 };
 
+// The countries waiting to be rated (gameplay.js ensureMilitaryFigures), each with how its figures are to be
+// written: `commit`, a caller's own way (the host's one order, a device's request to its host), or null to be kept
+// here. Every reading shares one in-flight promise, and a caller that joined one already running had its countries
+// written by that one's path: a player's device rated the countries its host left to it into its own copy and never
+// sent them, and the host wrote a player's outside its one order (the review of 2026-11-18, wars 9). A country wanted
+// again with a way of its own takes that way; one wanted with none keeps the way it had.
+//   waiting   Map(name in lower case → { name, commit }), as gameplay.js keys it
+export const waitForRating = (waiting, name, commit = null) => {
+  const named = String(name ?? "").trim();
+  const key = named.toLowerCase();
+  if (!key) return;
+  const had = waiting.get(key);
+  const writer = typeof commit === "function" ? commit : null;
+  if (!had || (writer && !had.commit)) waiting.set(key, { name: named, commit: writer });
+};
+// One request's countries: the first waiting one's, and the others written the same way.
+//   entries   [{ name, commit }], those that still need it
+export const nextRatingBatch = (entries) => {
+  const write = list(entries)[0]?.commit ?? null;
+  return { write, names: list(entries).filter((entry) => (entry?.commit ?? null) === write).map((entry) => entry.name) };
+};
+
 // Of `names`, those the game has no figures for yet: a polity whose figures were never rated, or whose people nobody
 // knows (gameplay.js ensureMilitaryFigures asks for these). Groups are left out: a group's figures are its scenario
 // designer's, and a group is no country with a sheet. Exact names, each once, in the order given.

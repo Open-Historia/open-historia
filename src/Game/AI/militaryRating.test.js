@@ -22,6 +22,7 @@ import {
   describeMilitary,
   militaryRatingRequest,
   militaryTargets,
+  nextRatingBatch,
   rateMilitaryBatch,
   rateMilitaryFigures,
   ratedFigures,
@@ -29,6 +30,7 @@ import {
   readMilitaryRating,
   readMilitaryRatings,
   unratedOf,
+  waitForRating,
   wantsRating,
 } from "./militaryRating.js";
 
@@ -182,7 +184,10 @@ test("a rating's figures are written only where a country had none, or handed to
   assert.match(take, /const missing = Object\.fromEntries\(Object\.entries\(military \?\? \{\}\)\.filter\(\(\[field\]\) => had\[field\] === undefined \|\| had\[field\] === null\)\);/);
   assert.match(take, /military: ratedFigures\(entry\?\.military\)/, "a device's figures are held to what the game keeps");
   const ensure = gameplay.slice(gameplay.indexOf("export const ensureMilitaryFigures = "), gameplay.indexOf("// `rateIntelligence`"));
-  assert.match(ensure, /if \(typeof commit === "function"\) \{\n\s*await commit\(read\);/);
+  // Each request's figures are written the way its countries' caller said (waitForRating, nextRatingBatch).
+  assert.match(ensure, /waitForRating\(militaryWanted, name, commit\)/);
+  assert.match(ensure, /const \{ write, names: wanted \} = nextRatingBatch\(waiting\);/);
+  assert.match(ensure, /if \(write\) \{\n\s*await write\(read\);/);
   assert.match(ensure, /kept\.push\(\.\.\.await takeMilitaryRatings\(read, \{ campaign \}\)\);/);
 });
 
@@ -197,4 +202,25 @@ test("in the Workshop, the AI fills only the fields the designer left empty, rat
     assert.ok(source.includes("onRate={() => rateMilitaryFigures({"), panel);
     assert.ok(source.includes("rated: militaryScaleOf("), `${panel}: against the others`);
   }
+});
+
+// Every military reading shares one in-flight promise, and a caller that joined one already running had its countries
+// written by that one's path: a player's device rated what its host left to it into its own copy and never sent it, and
+// the host wrote a player's outside its one order (the review of 2026-11-18, wars 9). Each country carries its writer.
+test("each country waiting for its figures is written the way its caller said, and one request is of one writer's", () => {
+  const waiting = new Map();
+  const toHost = async () => {};
+  waitForRating(waiting, "Aland");
+  waitForRating(waiting, " Borduria ", toHost);
+  waitForRating(waiting, "Aland", toHost);
+  waitForRating(waiting, "Borduria");
+  waitForRating(waiting, "");
+  assert.deepEqual([...waiting.entries()].map(([key, entry]) => [key, entry.name, entry.commit === toHost]), [["aland", "Aland", true], ["borduria", "Borduria", true]],
+    "a country wanted again with a way of its own takes it; one wanted with none keeps the way it had");
+  waitForRating(waiting, "Cisland");
+  const first = nextRatingBatch([...waiting.values()]);
+  assert.deepEqual([first.write === toHost, first.names], [true, ["Aland", "Borduria"]]);
+  const rest = nextRatingBatch([...waiting.values()].filter((entry) => entry.name === "Cisland"));
+  assert.deepEqual([rest.write, rest.names], [null, ["Cisland"]]);
+  assert.deepEqual(nextRatingBatch([]), { write: null, names: [] });
 });

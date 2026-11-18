@@ -37,8 +37,9 @@ test("in a shared game the figures a pane wants are asked of the host, each coun
   assert.equal(settled, null, "the host's AI rates them; they come with the next view");
   assert.deepEqual(asked, [{ t: "ratings", countries: ["Aland", "Borduria"] }]);
   assert.equal(validate(PLAYER_REQUESTS.ratings, { ...asked[0], id: "0".repeat(16) }).ok, true, "a request the host reads");
-  // A host that refuses, or cannot be reached, leaves the pane as it was, quietly.
-  assert.equal(await inSharedGame(async () => ({ ok: false, error: "Take a country first." }), () => ensureMilitaryFigures(["Aland"])), null);
+  // A host that refuses says why, for the pane to show (the review of 2026-11-18, wars 9); one that cannot be
+  // reached leaves the pane as it was, quietly.
+  assert.deepEqual(await inSharedGame(async () => ({ ok: false, error: "The host's AI gave no military figures for Aland." }), () => ensureMilitaryFigures(["Aland"])), { refused: "The host's AI gave no military figures for Aland." });
   assert.equal(await inSharedGame(async () => { throw new Error("gone"); }, () => ensureMilitaryFigures(["Aland"])), null);
   let more = 0;
   assert.equal(await inSharedGame(async () => { more += 1; return { ok: true }; }, () => ensureMilitaryFigures([])), null);
@@ -55,4 +56,17 @@ test("figures left to this device are rated as single player rates them and hand
   assert.match(own, /await requestFromHost\("ownRatings", \{ ratings \}\);/);
   const sent = { t: "ownRatings", id: "0".repeat(16), ratings: [{ country: "Aland", military: { quality: 55 }, population: 4.2e6 }, { country: "Borduria" }] };
   assert.equal(validate(PLAYER_REQUESTS.ownRatings, sent).ok, true);
+});
+
+// The War Room's reading of the countries a route goes into wrote their figures into a guest's own copy, on its own
+// key, and never sent them (the review of 2026-11-18, wars 9): in a shared game the page only finds them, and asks
+// the host for their figures as the Stats pane does. Pinned from the source (gameplay.js does not load in node).
+test("in a shared game the countries a drawn route goes into are rated by the host's setting, never into the page's copy", () => {
+  const lazy = fs.readFileSync(new URL("./gameplayLazy.js", import.meta.url), "utf8").split("\r\n").join("\n");
+  const route = lazy.slice(lazy.indexOf("export const warRoomRouteAttacks = async"), lazy.indexOf("export const warRoomTransportWays"));
+  assert.match(route, /if \(!inSharedGame\(\)\) return run\(\.\.\.args\);/);
+  assert.match(route, /run\(\{ \.\.\.\(args\[0\] \?\? \{\}\), ask: false \}\)/);
+  assert.match(route, /void ratingsFromHost\(attacked,/);
+  const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").split("\r\n").join("\n");
+  assert.match(gameplay, /if \(ask && attacked\.length > 0\) requestConflictSheets\(world, game, attacked\);/);
 });

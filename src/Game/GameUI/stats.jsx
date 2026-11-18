@@ -1551,8 +1551,14 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
         return countries.map((country) => country.key).filter((key) => !ranked.has(key) || (lookup !== null && wantsRating(lookup(key))));
     }, [metric?.key, ranking, countries, world]);
     const unratedKey = unrated.join("|");
+    // What a shared game's host said it did not rate, and why (gameplayLazy.js ratingsFromHost): the ranking stayed
+    // part empty with nothing to say for it (the review of 2026-11-18, wars 9).
+    const [ratingRefused, setRatingRefused] = useState("");
     useEffect(() => {
-        if (unrated.length > 0) void ensureMilitaryFigures(unrated, { reason: "the military ranking" });
+        if (unrated.length > 0) {
+            void ensureMilitaryFigures(unrated, { reason: "the military ranking" })
+                .then((outcome) => setRatingRefused(String(outcome?.refused ?? "")), () => {});
+        }
         // (Asked again only when the list changes.)
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [unratedKey]);
@@ -1634,6 +1640,9 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
                             : "Countries the game has no figure for are left out."}
                     {" "}<span data-no-translate>({ranking.rows.length}/{ranking.total})</span>
                 </p>
+            )}
+            {metric.key === "military" && ratingRefused && unrated.length > 0 && (
+                <p role="status" style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.7rem", lineHeight: 1.45, marginTop: "0.5rem" }}>{ratingRefused}</p>
             )}
         </div>
     );
