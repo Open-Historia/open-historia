@@ -503,6 +503,7 @@
  "A reply written on a player's device is words only: a country cannot make peace, sign a treaty or call a vote in it. So a country at war with you, and an institution's council, are still answered by the host's AI, which can. Everything said is read when the round is played, like any conversation.",
  "A report was not written: it carried no document.",
  "A right-button drag still turns and tilts the map, Shift with the arrow keys still does too, and Shift with a mouse wheel zooms in finer steps.",
+ "A round began while the Game Master was at work, so nothing was changed: ask again once the round has landed.",
  "A round ends when the players are ready, after a countdown once enough of them are.",
  "A round fails when its AI has not begun to answer in {{stallMinutes}} minutes, or has stopped for {{quietMinutes}} minutes once it has begun, and the host can run it again.",
  "A round of a shared game belongs to every player: the host can no longer undo it alone, even after the game stops being shared.",
