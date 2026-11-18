@@ -265,6 +265,25 @@ export const createGameHost = ({
   // nothing else. In memory: one still waiting when the host closes is written
   // to again.
   const ownLines = new Map((restored?.ownLines ?? []).map((entry) => [entry.line, { thread: entry.thread, seat: entry.seat }]));
+  // With settings.replies "own": the readings the host has left to a seat's own
+  // device, by what and of which country ("sheet|France"), each to the seat it
+  // was left to. A reading is taken only from that seat, once, as a reply is
+  // only from the device that line was left to (ownLines): any seat could send
+  // any country's figures and parties, unasked, and the first stood for the
+  // whole game (the gap audit of 2026-11-18).
+  const ownReadings = new Map();
+  const OWN_READINGS_KEPT = 256;
+  const readingKey = (kind, country) => `${kind}|${fold(country)}`;
+  const leaveReading = (kind, country, seat) => {
+    ownReadings.delete(readingKey(kind, country));
+    ownReadings.set(readingKey(kind, country), seat.country);
+    while (ownReadings.size > OWN_READINGS_KEPT) ownReadings.delete(ownReadings.keys().next().value);
+  };
+  const readingLeftTo = (kind, country, seat) => same(ownReadings.get(readingKey(kind, country)), seat.country);
+  // A country a person plays is read by that person's own device (or the
+  // host's AI), never by another player's: a rival's figures are not another
+  // player's to write first.
+  const playedByAnother = (country, seat) => seats.humanCountries().some((human) => same(human, country) && !same(human, seat.country));
   // "host": the tables the host's AI is answering: thread id → { tail, waiting }.
   const tables = new Map();
   let expiryTimer = null;
@@ -982,7 +1001,11 @@ export const createGameHost = ({
     sheet: async (connection, { country }, seat) => {
       const name = clean(country);
       try {
-        if (replies === "own" && !(await hasSheet(name))) return { error: "", result: { answer: "own" } };
+        if (replies === "own" && !(await hasSheet(name))) {
+          if (playedByAnother(name, seat)) return "Its figures are written when the player of that country opens them.";
+          leaveReading("sheet", name, seat);
+          return { error: "", result: { answer: "own" } };
+        }
         await readCountry({ country: name, seat: seat.country });
       } catch (failure) {
         return clean(failure?.message || failure).slice(0, 280) || "The host could not write that country's figures.";
@@ -996,6 +1019,8 @@ export const createGameHost = ({
     // its view holds.
     ownSheet: async (connection, { country, sheet, continuity, rating }, seat) => {
       if (replies !== "own") return "The host's AI writes the figures in this game.";
+      if (!readingLeftTo("sheet", country, seat)) return "Those figures were not left to your device.";
+      ownReadings.delete(readingKey("sheet", country));
       try {
         await takeSheet({ country: clean(country), sheet, continuity: continuity ?? null, rating: rating ?? null });
       } catch (failure) {
@@ -1216,7 +1241,11 @@ export const createGameHost = ({
       if (!name) return "Unknown country.";
       try {
         if (await hasParties(name)) return "";
-        if (replies === "own") return { error: "", result: { answer: "own" } };
+        if (replies === "own") {
+          if (playedByAnother(name, seat)) return "Its parties are filled in when the player of that country opens them.";
+          leaveReading("parties", name, seat);
+          return { error: "", result: { answer: "own" } };
+        }
         await compileParties({ country: name });
       } catch (failure) {
         return clean(failure?.message || failure).slice(0, 280) || "The host could not fill in those parties.";
@@ -1228,6 +1257,8 @@ export const createGameHost = ({
       if (replies !== "own") return "The host's AI fills in the parties in this game.";
       const name = countriesNow.find((known) => same(known, country));
       if (!name) return "Unknown country.";
+      if (!readingLeftTo("parties", name, seat)) return "Those parties were not left to your device.";
+      ownReadings.delete(readingKey("parties", name));
       try {
         await takeParties({ country: name, landscape });
       } catch (failure) {

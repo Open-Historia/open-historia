@@ -599,30 +599,38 @@ test("with each player's own AI, a missing sheet is written on the asking device
   await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
   await s.host.control.start();
   // No sheet: the host leaves it to the device that asked, and its own AI writes nothing.
-  await s.request(s.guest, { t: "sheet", id: id(2), country: LATVIA });
+  await s.request(s.guest, { t: "sheet", id: id(2), country: ESTONIA });
   assert.deepEqual([s.ack(s.guest, id(2)).ok, s.ack(s.guest, id(2)).result], [true, { answer: "own" }]);
   assert.deepEqual(s.sheets, []);
   // The device sends the figures it wrote: no key, figures alone. They reach everyone.
-  const figures = { country: LATVIA, sheet: { capital: "Riga", stability: 62 }, continuity: { stateFingerprint: "stats-1" }, rating: 55 };
+  const figures = { country: ESTONIA, sheet: { capital: "Tallinn", stability: 62 }, continuity: { stateFingerprint: "stats-1" }, rating: 55 };
   await s.request(s.guest, { t: "ownSheet", id: id(3), ...figures });
   assert.equal(s.ack(s.guest, id(3)).ok, true);
-  assert.deepEqual(s.taken, [{ country: LATVIA, sheet: figures.sheet, continuity: figures.continuity, rating: 55 }]);
-  assert.equal(s.shown(s.hostPlayer).world.countryStats[LATVIA].capital, "Riga");
-  // The first is the sheet: one sent after it changes nothing, and asking again asks nobody's AI.
-  await s.request(s.hostPlayer, { t: "ownSheet", id: id(4), country: LATVIA, sheet: { capital: "Elsewhere", stability: 1 } });
-  assert.equal(s.ack(s.hostPlayer, id(4)).ok, true);
-  await s.request(s.guest, { t: "sheet", id: id(5), country: LATVIA });
+  assert.deepEqual(s.taken, [{ country: ESTONIA, sheet: figures.sheet, continuity: figures.continuity, rating: 55 }]);
+  assert.equal(s.shown(s.hostPlayer).world.countryStats[ESTONIA].capital, "Tallinn");
+  // Figures nobody left to that device are not taken: any seat could send any country's, unasked, and the first
+  // stood for the game (the gap audit of 2026-11-18). Nor is the same reading taken twice.
+  await s.request(s.hostPlayer, { t: "ownSheet", id: id(4), country: ESTONIA, sheet: { capital: "Elsewhere", stability: 1 } });
+  assert.match(s.ack(s.hostPlayer, id(4)).error, /not left to your device/);
+  await s.request(s.guest, { t: "ownSheet", id: id(9), ...figures });
+  assert.match(s.ack(s.guest, id(9)).error, /not left to your device/);
+  await s.request(s.guest, { t: "sheet", id: id(5), country: ESTONIA });
   assert.equal(s.ack(s.guest, id(5)).result, undefined);
-  assert.equal(s.store.docs.world.countryStats[LATVIA].capital, "Riga");
+  assert.equal(s.store.docs.world.countryStats[ESTONIA].capital, "Tallinn");
+  // A country another person plays is that player's own to read: a rival's figures are nobody else's to write first.
+  await s.request(s.guest, { t: "sheet", id: id(10), country: LATVIA });
+  assert.match(s.ack(s.guest, id(10)).error, /player of that country opens them/);
   // What is no whole sheet is refused with the reason.
-  await s.request(s.guest, { t: "ownSheet", id: id(6), country: ESTONIA, sheet: { stability: 3 } });
+  await s.request(s.guest, { t: "sheet", id: id(11), country: RUSSIA });
+  assert.deepEqual(s.ack(s.guest, id(11)).result, { answer: "own" }, "the player's own country is its own to read");
+  await s.request(s.guest, { t: "ownSheet", id: id(6), country: RUSSIA, sheet: { stability: 3 } });
   assert.match(s.ack(s.guest, id(6)).error, /not a whole stat sheet/);
   // Once the host's AI writes the figures again, a device's are not taken.
   s.host.control.setReplies("host");
-  await s.request(s.guest, { t: "ownSheet", id: id(7), country: ESTONIA, sheet: { capital: "Tallinn" } });
+  await s.request(s.guest, { t: "ownSheet", id: id(7), country: RUSSIA, sheet: { capital: "Moscow" } });
   assert.match(s.ack(s.guest, id(7)).error, /host's AI writes the figures/);
-  await s.request(s.guest, { t: "sheet", id: id(8), country: ESTONIA });
-  assert.deepEqual([s.ack(s.guest, id(8)).result, s.store.docs.world.countryStats[ESTONIA].capital], [undefined, "A capital"]);
+  await s.request(s.guest, { t: "sheet", id: id(8), country: RUSSIA });
+  assert.deepEqual([s.ack(s.guest, id(8)).result, s.store.docs.world.countryStats[RUSSIA].capital], [undefined, "A capital"]);
 });
 
 test("a structure the map placed approximately is settled by the player it belongs to, and by nobody else", async () => {
