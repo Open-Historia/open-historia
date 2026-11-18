@@ -223,7 +223,6 @@ test("with each player's own AI, a device never writes the figures of its own co
   const read = [];
   const s = setup({
     settings: { replies: "own" },
-    world: { wars: [{ id: "war-1", status: "active", sides: [[RUSSIA], [ESTONIA]], attackers: [RUSSIA], defenders: [ESTONIA] }] },
     host: {
       readCountry: async ({ country }) => { read.push(country); },
       hasSheet: async () => false,
@@ -236,6 +235,14 @@ test("with each player's own AI, a device never writes the figures of its own co
   await s.request(s.guest, { t: "ownSheet", id: id(3), country: RUSSIA, sheet: { capital: "Moscow", stability: 100 } });
   assert.match(s.ack(s.guest, 3).error, /not left to your device/);
   assert.deepEqual(read, [RUSSIA], "its own country's is the host's AI's");
+  // And a country at war with it: before, a guest at war sent its enemy's army at nothing.
+  s.docs.world.wars = [{ id: "war-1", status: "active", sideA: [RUSSIA], sideB: [ESTONIA] }];
+  await s.request(s.guest, { t: "sheet", id: id(4), country: ESTONIA });
+  assert.deepEqual([s.ack(s.guest, 4).ok, s.ack(s.guest, 4).result, read], [true, undefined, [RUSSIA, ESTONIA]]);
+  // At peace, an AI country's is left to the device that opens it first, as the lobby says.
+  s.docs.world.wars = [];
+  await s.request(s.guest, { t: "sheet", id: id(5), country: ESTONIA });
+  assert.deepEqual(s.ack(s.guest, 5).result, { answer: "own" });
 });
 
 // --- S8, S13: what one player writes ------------------------------------------------------------
