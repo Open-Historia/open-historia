@@ -199,6 +199,7 @@ import { abandonWorkerJob, createWorkerFailureStreak } from "./statsWorkerJobs.j
 import { chatParticipantKey, foldGeneratedChatsIntoStorage, isLifecycleNegotiationChat, logGeneratedChat } from "./chatFold.js";
 import { openingSpeaker } from "./chatSpeaker.js";
 import { sharedLetterOf } from "./sharedLetters.js";
+import { tableSeats } from "./tableSeats.js";
 import { extractJsonPayload, parseWithoutTrailingFields, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { OUTPUT_LIMIT_MESSAGE, REASONING_ONLY_MESSAGE, REASONING_ONLY_NOTE, UNPARSEABLE_STRUCTURED_TEXT_MESSAGE, isUnreachableError } from "./providerErrors.js";
 import { isCancelAllAbort } from "./aiRequestControl.js";
@@ -15429,8 +15430,8 @@ export const runChatActionBatch = async ({
   const projected = projectChatThread(events);
   const lifecycleResponseActors = new Set((lifecycleDecisionContext?.cases || []).map((entry) => regionKey(entry?.polity)).filter(Boolean));
   // In a shared game (runtime/humanPolities.js) other people sit at this table
-  // too: every member a person plays, and the thread's owner when the one
-  // writing now is one of its members. A stored thread is written around its
+  // too: every member a person plays, and the thread's owner, while a person
+  // plays it, when the one writing now is one of its members. A stored thread is written around its
   // owner (chat.player, or the host's seat), who is in no member list. Each
   // person writes their own lines: the model never answers for one, and a
   // thread between people alone asks it nothing.
@@ -15445,17 +15446,19 @@ export const runChatActionBatch = async ({
   const threadOwner = !statedGovernments && peopleKeys.size > 1
     ? normalizeString(stored.player) || normalizeString(savedGame?.country)
     : "";
-  const memberNames = projected.countries
-    .map((country) => normalizeString(country?.name))
-    .filter((name) => name && regionKey(name) !== regionKey(player));
-  const otherPeople = (statedGovernments
-    ? memberNames.filter((name) => !statedGovernments.has(regionKey(name)))
-    : [
-      ...(threadOwner && regionKey(threadOwner) !== regionKey(player) ? [threadOwner] : []),
-      ...memberNames.filter((name) => peopleKeys.has(regionKey(name))),
-    ]).filter((name, index, rows) => rows.findIndex((other) => regionKey(other) === regionKey(name)) === index);
-  const answering = memberNames
-    .filter((name) => !otherPeople.some((person) => regionKey(person) === regionKey(name)))
+  // Who else is a person here, and whom the AI answers for (tableSeats.js):
+  // the owner is a person only while a person plays it, so a guest who left
+  // the game has their government answer in the threads they opened.
+  const seating = tableSeats({
+    player,
+    owner: threadOwner,
+    members: projected.countries.map((country) => normalizeString(country?.name)),
+    people: humanCountriesOf(savedGame),
+    governments: statedGovernments ? governments : null,
+    keyOf: regionKey,
+  });
+  const otherPeople = seating.otherPeople;
+  const answering = seating.governments
     .filter((name) => !(lifecycleResponseRequested && institutionLifecyclePrompt) || lifecycleResponseActors.has(regionKey(name)))
     .filter((name) => !formalBusinessRequested || autonomousBallotActors.has(regionKey(name)));
   // A player's message that tags members (@Country, chat.jsx) is answered by

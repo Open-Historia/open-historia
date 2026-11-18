@@ -335,6 +335,10 @@ export const PLAYER_REQUESTS = Object.freeze({
     // createPlayerPollEvent): its question and its choices.
     poll: obj({ question: str(POLL_QUESTION_MAX_CHARS, { min: 1 }), options: list(str(POLL_LABEL_MAX_CHARS, { min: 1 }), POLL_OPTION_LIMIT) }),
   }, ["fromDraft", "demand", "poll"]),
+  // A Retry from an error bubble: the governments at a thread answer the
+  // asker's own last line there again, which is still unanswered. No line is
+  // sent; the ack says who writes the answer, as "say"'s does.
+  answer: obj({ t: literal("answer"), id: REQUEST_ID, thread: str(120, { min: 1 }) }),
   // A player's vote in a conversation's poll, by the poll's and the choice's
   // ids: one each, never cast for them.
   vote: obj({ t: literal("vote"), id: REQUEST_ID, thread: str(120, { min: 1 }), poll: str(160, { min: 1 }), option: str(160, { min: 1 }) }),

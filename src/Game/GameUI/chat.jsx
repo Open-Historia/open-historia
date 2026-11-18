@@ -1745,6 +1745,12 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (isPlayerCountry(country)) {
                 return;
             }
+            // In a shared game the host says who answers a line (sayToHost,
+            // answerAgainOnHost): a reply written here is the host's never.
+            if (inSharedGame()) {
+                await answerAgainOnHost(playerMessage);
+                return;
+            }
             setIsLoading(true);
             setSpeakingCountry(country);
             // The player's message as stored: the catch-up it was sent with
@@ -1858,11 +1864,35 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             }
         };
 
+        // A Retry in a shared game: the host has the governments answer this
+        // player's last line again, on its own AI or, by its setting, on this
+        // device's, which then writes it as it writes any (ownTableReplies.js).
+        // `text`: that line, for this device's model.
+        const answerAgainOnHost = async (text) => {
+            setIsLoading(true);
+            try {
+                let answer;
+                try {
+                    answer = await requestFromHost("answer", { thread: String(chat.id ?? "") });
+                } catch (error) {
+                    answer = { ok: false, error: error?.message || "" };
+                }
+                if (!answer?.ok) {
+                    pushMessages([...messagesRef.current, { role: "error", speaker: "System", text: answer?.error || "The host did not take that.", time: gameDate }]);
+                    return;
+                }
+                const own = ownReplyAsked(chat, answer);
+                if (own) void answerOnThisDevice({ ...own, text: String(text ?? ""), playerCountry });
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
         const runGroupTurn = async (text, nextMessages, { lifecycleResponseRequested = false, formalBusinessRequested = false, formalBusinessInteractive = false, institutionDebateRequested = false, institutionProposalId = "", chatOverride = null } = {}) => {
             // In a shared game the host's computer runs every table: a line is
             // sent to it, as a typed one is (submitPlayerText), and anything
             // else is the host's to start. A Retry from an older error bubble
-            // comes here too, and it ran the table on this screen again.
+            // asks the host instead (handleRetry, answerAgainOnHost).
             if (inSharedGame()) {
                 // A hearing's governments answering it: the host's to run, on its AI key.
                 if (lifecycleResponseRequested && !text) {
@@ -2341,6 +2371,16 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (isLoading) return;
             const retry = messagesRef.current[index]?.retry;
             if (!retry) return;
+            // In a shared game the host keeps the thread and says who answers:
+            // it is asked to have the governments answer the player's last line
+            // again, and no line is sent (host/gameHost.js "answer"). Here a
+            // group Retry sent the line a second time, and a one-on-one one
+            // asked this player's own key for a reply the host never took.
+            if (inSharedGame()) {
+                pushMessages(messagesRef.current.filter((_, i) => i !== index));
+                await answerAgainOnHost(retry.group ? retry.text : retry.playerMessage);
+                return;
+            }
             if (retry.group) {
                 // The table's turn again, answering the player's line as it
                 // stands in the thread: no second copy of it is added.

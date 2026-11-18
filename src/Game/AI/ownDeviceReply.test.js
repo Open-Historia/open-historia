@@ -71,10 +71,13 @@ test("a turn of words alone answers no peace, touches no institution, keeps no m
 
 test("on a player's device the people at the table are everyone the host did not name, whatever that device's own game says", () => {
   assert.match(batch, /const statedGovernments = Array\.isArray\(governments\)\s*\? new Set\(governments\.map\(regionKey\)\.filter\(Boolean\)\)\s*: null;/);
-  assert.match(batch, /const otherPeople = \(statedGovernments\s*\? memberNames\.filter\(\(name\) => !statedGovernments\.has\(regionKey\(name\)\)\)/);
+  // The seating itself is tableSeats.js's, tested there: with the host's
+  // governments stated, everyone else at the table is a person.
+  assert.match(batch, /governments: statedGovernments \? governments : null,/);
+  assert.match(batch, /const otherPeople = seating\.otherPeople;/);
   assert.match(batch, /const threadOwner = !statedGovernments && peopleKeys\.size > 1/, "the thread there is already the player's own view of it");
   // Who answers is who is left: the members that are not people.
-  assert.match(batch, /const answering = memberNames\s*\.filter\(\(name\) => !otherPeople\.some\(\(person\) => regionKey\(person\) === regionKey\(name\)\)\)/);
+  assert.match(batch, /const answering = seating\.governments\s*\.filter/);
   assert.match(batch, /humanParticipants: \[player, \.\.\.otherPeople\]/, "and an action for a person is refused");
 });
 

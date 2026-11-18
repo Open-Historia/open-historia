@@ -61,6 +61,7 @@ import { answerTreaty, proposeTreaty } from "../../runtime/treatyOffers.js";
 import { featureRefusal } from "./featureGates.js";
 import { regionOwnerNow } from "../../runtime/gmAnnex.js";
 import { landingNotice, tellLandings } from "./landings.js";
+import { votesAwaited } from "./tableTurn.js";
 
 export const MAX_ORDERS_PER_ROUND = 12;
 // The answers a device's requests were given, kept so that one sent again (the
@@ -870,6 +871,49 @@ export const createGameHost = ({
     while (ownLines.size > OWN_LINES_KEPT) ownLines.delete(ownLines.keys().next().value);
   };
 
+  // The AI governments at a table answer a seat's line (the game's own
+  // diplomacy), each once. A country a person plays answers for itself: a
+  // thread between people asks the model nothing. Who writes their answer is
+  // the host's setting (settings.replies): the host's own AI (answerOnHost),
+  // or the writer's own device on its own key, which the ack then says, with
+  // the line it is to answer and the governments that do (client/ownReplies.js;
+  // the words come back as a "reply"). Some answers do more than speak, and
+  // only the host's own game can carry them out: an institution's table votes
+  // and decides in its answer; a government at war with the writer may make
+  // peace in its own, or accept the writer's terms (AI/warStatsPrompt.js
+  // describePeaceTalk, which asks the same of the same wars); the writer's own
+  // Overlord or Puppet may make, answer or settle a demand, which the host's
+  // engine checks after it (engineMain.js replyTo, gameplay.js
+  // checkDemandReply); and a vote open at the table that a government at it
+  // has not voted in, one the line calls among them, is voted in only in the
+  // host's own turn (host/tableTurn.js votesAwaited). Those are answered here,
+  // whatever the setting. `parties`: everyone at the table; `written`: the
+  // thread with the line in it; `line`: the line's id. Returns what the ack
+  // carries (nothing when the host answers), or null when nobody answers.
+  const answerLine = ({ connection, chatId, seat, parties, institutional, written, world, line }) => {
+    const people = seats.humanCountries();
+    const governments = list(parties)
+      .filter((name) => clean(name) && !same(name, seat) && !people.some((human) => same(human, name)))
+      .filter((name, index, all) => all.findIndex((other) => same(other, name)) === index);
+    if (!governments.length) return null;
+    const tied = new Set(livePuppetsFor(world ?? {}, seat).flatMap((row) => [row.overlord, row.puppet]).map((name) => clean(name).toLowerCase()));
+    const decides = institutional || votesAwaited(written, governments)
+      || governments.some((name) => Boolean(warBetween(world?.wars, name, seat)) || tied.has(clean(name).toLowerCase()));
+    if (replies === "own" && !decides) {
+      awaitOwnReply(line, { thread: chatId, seat });
+      return { answer: "own", line, governments: governments.slice(0, 16) };
+    }
+    // Past what the host's AI gives each player a round with each player's own
+    // AI (settings.hostAnswers, host/hostAnswers.js): the line stands, and the
+    // round reads it. A Retry (the "answer" request) counts as the line did.
+    if (replies === "own" && !hostAnswerFor(connection, { country: seat }, chatId)) {
+      tell(seat, "info", hostAnswersSpent(hostAnswers.limit));
+      return { answer: "round" };
+    }
+    answerOnHost(chatId, seat, governments);
+    return {};
+  };
+
   const handlers = {
     // A country taken. Once the game is under way a seated player's change of
     // country is asked of the host (the owner's decision 12): it waits in the
@@ -1606,8 +1650,6 @@ export const createGameHost = ({
       if (recipients.some((country) => !countriesNow.some((known) => same(known, country)))) return "Unknown country.";
       // A letter written while a round is being resolved waits in the queue
       // behind it, and is the next round's.
-      const people = seats.humanCountries();
-      const playedByAi = (name) => name && !same(name, seat.country) && !people.some((human) => same(human, name));
       // Dated by the game, as a government's own reply is (chat.jsx `time`):
       // a letter between people was shown with no date at all.
       const docs = await store.read();
@@ -1618,6 +1660,8 @@ export const createGameHost = ({
       let institutional = false;
       // Everyone at the table: the thread's owner and its members.
       let parties = [];
+      // The thread as this line leaves it (its votes among it).
+      let written = null;
       // A person's line is theirs by name (speaker); "user" is the role every
       // line a person writes is stored with, whoever owns the thread. Each
       // player's view then reads its own lines as its own (host/projection.js).
@@ -1681,49 +1725,23 @@ export const createGameHost = ({
           const events = [...(list(chat.events).length ? list(chat.events) : eventsFromLegacyChat(chat)), line, demanded ?? called];
           const projected = projectChatThread(events);
           next[index] = { ...chat, events, demands: projected.demands, polls: projected.polls, messages: [...list(chat.messages), message] };
+          written = next[index];
           return next;
         }
         next[index] = { ...chat, messages: [...list(chat.messages), message] };
+        written = next[index];
         return next;
       });
       if (refusal) return refusal;
       round.touch(seat.country);
       // The AI governments in the thread answer (the game's own diplomacy),
-      // after the player's view shows what they wrote. A country a person plays
-      // answers for itself: a thread between people asks the model nothing.
-      const governments = parties.filter(playedByAi)
-        .filter((name, index, all) => all.findIndex((other) => same(other, name)) === index);
-      // A thread opened by this line goes back with the ack, so the screen
-      // that began it can open it as soon as its view holds it
-      // (client/sharedThreads.js).
-      const result = opens ? { chatId } : {};
-      if (governments.length) {
-        // Some answers do more than speak, and only the host's own game can
-        // carry them out: an institution's table votes and decides in its
-        // answer, and a government at war with the writer may make peace in
-        // its own, or accept the writer's terms (AI/warStatsPrompt.js
-        // describePeaceTalk, which asks the same of the same wars). Those are
-        // answered here, whatever the setting: with each player's own AI, up
-        // to the host's number a round (settings.hostAnswers), which the
-        // lobby states.
-        // So does a government that is the writer's own Overlord or Puppet: its
-        // answer may make, answer or settle a demand, which the host's engine
-        // checks after it (engineMain.js replyTo, gameplay.js checkDemandReply).
-        const tied = new Set(livePuppetsFor(docs?.world ?? {}, seat.country).flatMap((row) => [row.overlord, row.puppet]).map((name) => clean(name).toLowerCase()));
-        const decides = institutional || governments.some((name) => Boolean(warBetween(docs?.world?.wars, name, seat.country)) || tied.has(clean(name).toLowerCase()));
-        if (replies === "own" && !decides) {
-          // The writer's own device answers, on its own AI key: the ack says
-          // so, with the line it is to answer and the governments that do
-          // (client/ownReplies.js). The words come back as a "reply".
-          awaitOwnReply(message.id, { thread: chatId, seat: seat.country });
-          Object.assign(result, { answer: "own", line: message.id, governments: governments.slice(0, 16) });
-        } else if (replies === "own" && !hostAnswerFor(connection, seat, chatId)) {
-          // Past what the host gives each player a round (settings.hostAnswers):
-          // the line stands, and the round reads it.
-          tell(seat.country, "info", hostAnswersSpent(hostAnswers.limit));
-          Object.assign(result, { answer: "round" });
-        } else answerOnHost(chatId, seat.country, governments);
-      }
+      // after the player's view shows what they wrote (answerLine). A thread
+      // opened by this line goes back with the ack, so the screen that began
+      // it can open it as soon as its view holds it (client/sharedThreads.js).
+      const result = {
+        ...(opens ? { chatId } : {}),
+        ...(answerLine({ connection, chatId, seat: seat.country, parties, institutional, written, world: docs?.world, line: message.id }) ?? {}),
+      };
       return Object.keys(result).length ? { error: "", result } : "";
     },
     // With settings.payment "cycle": the answer the paying device's own AI gave
@@ -1733,6 +1751,27 @@ export const createGameHost = ({
     // the request was sent to, and only while it waits.
     paid: async (connection, { job, answer, error, statuses }) => payers.answered(connection.device, { job, answer: answer ?? null, error: error ?? "", statuses: statuses ?? [] }),
     payLookup: async (connection, { job, name, args }) => payers.lookup(connection.device, { job, name, args }),
+    // A Retry from an error bubble (chat.jsx handleRetry): the governments at a
+    // thread answer the seat's own last line again, as they would have when it
+    // was written, by the same rule ("say" answerLine). No line is sent: the
+    // page's Retry used to send its line a second time at a group table, and at
+    // a one-on-one table it asked the player's own key and threw the reply
+    // away. Only while that line is still the thread's last, unanswered.
+    answer: async (connection, { thread }, seat) => {
+      const docs = await store.read();
+      const chat = list(docs?.chat).find((entry) => clean(entry?.id) === clean(thread));
+      const owner = chat ? clean(chat.player) || hostCountry : "";
+      const members = membersOf(chat);
+      if (!chat || !(same(owner, seat.country) || members.some((name) => same(name, seat.country)))) return "You are not in that conversation.";
+      const last = list(chat.messages).filter((line) => isRecord(line) && clean(line.text)).at(-1);
+      if (!last || !same(clean(last.speaker || last.code) || (clean(last.role) === "user" ? owner : ""), seat.country) || !clean(last.id)) {
+        return "Your last message there has been answered already.";
+      }
+      const answered = answerLine({ connection, chatId: clean(chat.id), seat: seat.country, parties: [owner, ...members], institutional: isInstitutionThread(chat), written: chat, world: docs?.world, line: clean(last.id) });
+      if (!answered) return "Nobody at that table is the AI's to answer.";
+      round.touch(seat.country);
+      return Object.keys(answered).length ? { error: "", result: answered } : "";
+    },
     // With settings.replies "own": what the governments the AI plays answered
     // a line of this seat's, written on the seat's own device and AI key. Words
     // alone, taken for a line the host itself left to that device ("say"),
@@ -1853,7 +1892,7 @@ export const createGameHost = ({
       answerDevice(connection.device, ack);
     }
     // What changed of the session (a line left to a device, one answered).
-    if (!error && ["say", "reply"].includes(message.t)) sessionChanged();
+    if (!error && ["say", "reply", "answer"].includes(message.t)) sessionChanged();
     if (!error && !AT_ONCE.has(message.t)) await schedulePush();
   };
 
