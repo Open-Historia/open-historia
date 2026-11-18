@@ -1,16 +1,18 @@
 /*! Open Historia — a shared game's rules, as every player reads them, and the host's hand on them © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // In the lobby, and under Players in the round bar (ui/SharedGameOverlay.jsx):
-//   - who pays for what (multiplayer/costRules.js): the round's request, the
-//     governments the AI plays, and what is always each player's own AI's;
-//   - the Game Master (decision 8, "behind a visible notice"): whether the host
-//     may use it, and everything it has changed in this game (host/gameMaster.js);
+//   - everything the Game Master has changed in this game (host/gameMaster.js),
+//     where the host may use it (decision 8, "behind a visible notice": the
+//     round bar's mark);
 //   - for the host: how many answers of its AI each player has a round, with
 //     each player's own AI answering (host/settings.js hostAnswers), and the
 //     Game Master's command itself.
+// The lines that told the round's rules and who pays were taken out of the
+// lobby and the Players panel at the owner's word ("get rid of all this text
+// that appears", 2026-11-18); the host's choices stay as controls.
 
 import React, { useState } from "react";
 import { hostControl } from "../client/sharedGame.js";
-import { HOST_ANSWER_CHOICES, costRulesOf, gameMasterRuleOf, payerLineOf, payersLinesOf } from "../costRules.js";
+import { HOST_ANSWER_CHOICES, payerLineOf } from "../costRules.js";
 import { gameMasterAllowed } from "../host/settings.js";
 import { GAME_MASTER_COMMAND_MAX, gameMasterChangeLines } from "../host/gameMaster.js";
 import { latestNoticeAbout } from "../client/threadNotes.js";
@@ -31,7 +33,7 @@ const HostAnswersSetting = ({ settings }) => {
   const choices = HOST_ANSWER_CHOICES.includes(value) ? HOST_ANSWER_CHOICES : [...HOST_ANSWER_CHOICES, value].sort((a, b) => a - b);
   return (
     <label style={{ ...small, alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.4rem" }}>
-      Messages a round your AI answers for each player, from a government that can act on them
+      Your AI's answers per player a round
       <select value={String(value)} onChange={(event) => hostControl("hostAnswers", { count: Number(event.target.value) })} style={{ ...button, justifyContent: "flex-start" }}>
         {choices.map((count) => <option key={count} value={String(count)}>{count === 0 ? "None" : String(count)}</option>)}
       </select>
@@ -54,15 +56,13 @@ export const GameRules = ({ shared }) => {
   const settings = shared.lobby?.settings;
   if (!settings) return null;
   const host = shared.role === "host";
+  const changes = shared.lobby?.gameMaster ?? [];
+  if (!(host && settings.replies === "own") && !changes.length) return null;
   return (
     <div style={{ marginTop: "0.4rem" }}>
-      <div style={heading}>Who pays</div>
-      {costRulesOf(settings, { host }).map((line) => <div key={line} style={{ ...small, marginTop: "0.2rem" }}>{line}</div>)}
-      {payersLinesOf(settings, shared.lobby?.seats).map((line) => <div key={line} style={{ ...small, ...isolate, marginTop: "0.2rem" }}>{line}</div>)}
       {host && settings.replies === "own" ? <HostAnswersSetting settings={settings} /> : null}
-      <div style={heading}>Game Master</div>
-      <div style={small}>{gameMasterRuleOf(settings)}</div>
-      <GameMasterLog entries={shared.lobby?.gameMaster} />
+      {changes.length ? <div style={heading}>Game Master changes</div> : null}
+      <GameMasterLog entries={changes} />
     </div>
   );
 };
@@ -115,7 +115,7 @@ export const GameMasterMark = ({ shared }) => {
   if (!gameMasterAllowed(shared.lobby?.settings)) return null;
   const changes = shared.lobby?.gameMaster?.length ?? 0;
   return (
-    <span style={{ ...small, border: "1px solid rgba(255,255,255,0.18)", borderRadius: "999px", padding: "0.1rem 0.5rem" }} title="The host may change the world with the Game Master. Every change is told to every player and listed under Players.">
+    <span style={{ ...small, border: "1px solid rgba(255,255,255,0.18)", borderRadius: "999px", padding: "0.1rem 0.5rem" }}>
       {!changes ? "Game Master on" : changes === 1 ? "Game Master on: 1 change" : `Game Master on: ${changes} changes`}
     </span>
   );

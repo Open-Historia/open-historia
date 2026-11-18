@@ -77,7 +77,7 @@ const NEW_UPDATES = [
             icon: "people",
             items: [
               "A shared game remembers who plays which country: share it again days later and every player gets their own country back.",
-              "Your country stays yours while you are away: after the minutes the lobby states, the AI plays it until you return.",
+              "Your country stays yours while you are away: after the minutes the host sets, the AI plays it until you return.",
               "Once the game has started, changing country needs the host's say. A player whose country is gone takes a free one or watches.",
               "A player the host releases cannot take that country back, and their queued orders, goal, advice, letters and open offers go with them.",
             ],
@@ -97,7 +97,7 @@ const NEW_UPDATES = [
             icon: "map",
             items: [
               "Every screen draws the host's map, its seas and projection included, and a copy of the scenario that differs is caught when you join.",
-              "The host's settings, difficulty and the language the world is written in apply to every player, and the lobby says what decides each round.",
+              "The host's settings, difficulty and the language the world is written in apply to every player.",
               "Joining no longer adds a copy of the game to your library, and your library stays as it was while the game is open.",
               "Players on the website and the Android app can join a game hosted on the desktop app again.",
             ],
@@ -109,7 +109,7 @@ const NEW_UPDATES = [
         scene: "ledger",
         title: "Who Pays",
         subtitle: "No key ever leaves your device",
-        lead: "The host decides whose AI does what, and the lobby says plainly what each choice means for every player.",
+        lead: "The host decides whose AI does what, and is told plainly what each choice means for every player.",
         sections: [
           {
             heading: "Answers",
@@ -126,7 +126,7 @@ const NEW_UPDATES = [
             icon: "gear",
             items: [
               "The host can let players take turns to pay for each round's AI request, each on their own AI.",
-              "The lobby warns that the paying player's device sees that round's whole request, every player's orders and secrets included, and could change what happens in it.",
+              "The host is warned, when choosing it, that the paying player's device sees that round's whole request, every player's orders and secrets included, and could change what happens in it.",
               "If the paying player's AI fails or they leave, the round waits: the host can try again or pay for it.",
               "A player whose device has no AI that can pay is passed over, and each player's own AI settings decide what their turn spends.",
             ],
