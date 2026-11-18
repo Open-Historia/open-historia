@@ -496,7 +496,7 @@ export const register = (ctx) => {
       return {
         args: {
           posts: [
-            { author: "Olaf Scholz", role: "Chancellor of Germany", country: "Germany", date: day, text: "Spoke with our partners in France tonight. Europe's answer to the energy crisis has to be a common one.", quote: "" },
+            { author: "Olaf Scholz", role: "Chancellor of Germany", country: "Germany", date: day, text: "Spoke with our partners in France tonight. Europe's answer to the energy crisis has to be a common one.", mentions: ["France"], quote: "" },
             { author: "Rishi Sunak", role: "Prime Minister", country: "United Kingdom", date: day, text: "Britain will keep standing with its allies. Our support is not up for negotiation.", quote: "" },
             { author: "Anne Hidalgo", role: "Mayor of Paris", country: "France", date: day, text: "Paris is ready for the summit. The city will be open, safe and proud.", quote: "" },
             { author: "Christine Lagarde", role: "President of the European Central Bank", country: "", date: day, text: "Price stability comes first. We will do what is needed, and no more.", quote: "#1" },

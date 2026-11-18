@@ -280,6 +280,12 @@ func _run() -> void:
 	var louder_volume := float(_channel(louder, "game").get("volume", 0.0))
 	_check("the volume setting scales the music", quiet_volume > 0.0 and absf(louder_volume / quiet_volume - 2.0) < 0.15, "%.4f -> %.4f" % [quiet_volume, louder_volume])
 	_agree(louder, "louder")
+	await sound.set_war_room(true)
+	await _wait(1.0)
+	var room_at_peace: Dictionary = await _snapshot("war room at peace")
+	_check("a War Room opened without a war keeps the game's music", str(room_at_peace.get("scene", "")) == "game" and not bool(_channel(room_at_peace, "war").get("playing", true)), str(room_at_peace.get("scene", "")))
+	await sound.set_war_room(false)
+	await _wait(0.6)
 
 	await sound.apply_settings({"music": false})
 	await _wait(0.4)
