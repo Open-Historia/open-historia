@@ -60,3 +60,21 @@ test("an unchanged entry does not wake the library's listeners", async () => {
   stop();
   library.setSharedGameEntry(null);
 });
+
+// A guest's page could switch to another game, make one, change one or delete the stand-in the shared game is drawn
+// on, mid-game; the host's server refused it only on the host's computer (the gap audit of 2026-11-18).
+test("while a shared game is open, the library switches to no other game, makes none, changes none and deletes none", async () => {
+  library.setSharedGameEntry({ gameId: "game-1", country: "France" });
+  try {
+    await assert.rejects(library.activateGame("game-2"), new RegExp(library.SHARED_GAME_OPEN.slice(0, 30)));
+    await assert.rejects(library.createGame({ name: "Another" }), /Leave the shared game first/);
+    await assert.rejects(library.saveGame("game-1", { features: {} }), /Leave the shared game first/);
+    await assert.rejects(library.removeGame("game-1"), /Leave the shared game first/);
+    // The shared game's own stand-in is made and opened through the same doors.
+    await assert.doesNotReject(library.activateGame("game-1", { forSharedGame: true }).catch((error) => {
+      if (/Leave the shared game first/.test(String(error?.message))) throw error;
+    }));
+  } finally {
+    library.setSharedGameEntry(null);
+  }
+});

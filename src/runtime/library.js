@@ -556,7 +556,19 @@ export const removeGameParkedTurn = async (gameId) =>
 export const loadGameDetails = async (gameId) =>
   requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`);
 
-export const createGame = async (payload) => {
+// While a shared game is open its game is the host's (setSharedGameEntry):
+// nothing here switches the page to another game, makes one, changes one or
+// deletes one under it. A guest's page had no such hold, and could switch away
+// or delete the stand-in the shared game is drawn on mid-game (the gap audit of
+// 2026-11-18); the host's server already refused it on the host's computer.
+// The shared game's own stand-in (client/sharedGame.js) says `forSharedGame`.
+export const SHARED_GAME_OPEN = "Leave the shared game first: while it is open, its game is the host's.";
+const assertNoSharedGame = ({ forSharedGame = false } = {}) => {
+  if (sharedGameEntry && !forSharedGame) throw new Error(SHARED_GAME_OPEN);
+};
+
+export const createGame = async (payload, { forSharedGame = false } = {}) => {
+  assertNoSharedGame({ forSharedGame });
   announceGameOpening(payload?.scenarioId ?? payload?.id ?? "");
   const details = await requestJson(GAMES_API_ROOT, {
     body: payload,
@@ -579,7 +591,8 @@ export const createGame = async (payload) => {
   return details;
 };
 
-export const saveGame = async (gameId, payload, { refresh = true } = {}) => {
+export const saveGame = async (gameId, payload, { refresh = true, forSharedGame = false } = {}) => {
+  assertNoSharedGame({ forSharedGame });
   const details = await requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`, {
     body: payload,
     method: "PUT",
@@ -589,7 +602,8 @@ export const saveGame = async (gameId, payload, { refresh = true } = {}) => {
   return details;
 };
 
-export const activateGame = async (gameId) => {
+export const activateGame = async (gameId, { forSharedGame = false } = {}) => {
+  assertNoSharedGame({ forSharedGame });
   // The loading screen comes up now, not when the new UI mounts a round trip
   // later (GameUI/gameLoadingScreen.jsx).
   announceGameOpening(gameId);
@@ -608,6 +622,7 @@ export const activateGame = async (gameId) => {
 };
 
 export const removeGame = async (gameId) => {
+  assertNoSharedGame();
   // Logged before the request, not after: "they deleted a save and then it
   // broke" is the report this line exists for, and a delete that throws
   // half-way is exactly the case where the after-the-fact line never runs.

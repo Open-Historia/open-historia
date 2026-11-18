@@ -122,6 +122,7 @@ import { MUSIC_CREDIT, MUSIC_TRACKS, getNowPlaying, musicVolumeOf, subscribeNowP
 import { creditSiteOf } from "../../runtime/scenarioMusic.js";
 import { clearKeptMusic, keptMusicUsage } from "../../runtime/keptMusic.js";
 import { setVisitConsent, useVisitConsent } from "../../runtime/visitConsent.js";
+import { inSharedGame } from "../../multiplayer/client/sharedGameBridge.js";
 import {
     APP_UPDATE_MANUAL_CHECK_RESULT_EVENT,
     appUpdateCheckDescription,
@@ -2921,7 +2922,9 @@ const EconomicDisplayCurrencySetting = () => {
         setSaving(true);
         setError("");
         try {
-            await saveGame(activeGameId, { gamePatch: { economicDisplayCurrency: next } });
+            // A display preference: in a shared game this screen's own, for the
+            // session, never written into the game the host keeps.
+            if (!inSharedGame()) await saveGame(activeGameId, { gamePatch: { economicDisplayCurrency: next } });
             setActiveEconomicDisplayCurrency(next);
             logSettingChange("GDP display currency", next);
         } catch (reason) {

@@ -440,7 +440,7 @@ const prepareStandIn = async (owner, lobby, roomId) => {
       // it "Shared game: …" already: said once.
       name: `Shared game: ${String(lobby?.settings?.name || "with friends").replace(/^(?:shared game:\s*)+/i, "").slice(0, 60) || "with friends"}`,
       gamePatch: { country: String(lobby?.countries?.[0] || "") },
-    });
+    }, { forSharedGame: true });
     gameId = String(created?.id || created?.game?.id || "");
     try {
       if (gameId) localStorage.setItem(key, gameId);
@@ -455,7 +455,7 @@ const prepareStandIn = async (owner, lobby, roomId) => {
   // and it must not be what the loading screen names.
   owner.gameId = gameId;
   setSharedGameEntry({ gameId, country: "" });
-  await activateGame(gameId);
+  await activateGame(gameId, { forSharedGame: true });
   return current === owner;
 };
 
