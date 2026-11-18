@@ -153,6 +153,33 @@ export const groundHeldBy = (chart, country) => (key, row) => {
   return land > 0;
 };
 
+// What the seat's government knows of other countries' work goes with it: its
+// knowledge of an entry is kept on that entry, by the knower's name
+// (runtime/projects.js knownBy), on the game's board and on every seat's. Kept
+// under the old name, a founder's or a renamed country's services knew nothing
+// of what its agents had found, and the next skip's spy pass began again from
+// nothing (FOLLOWUPS A7). Where the new name already knows of an entry, the
+// two are one knowledge: their agents together, and the doubt either had.
+const knowledgeMoved = (project, from, to) => {
+  const by = isRecord(project?.knownBy) ? project.knownBy : null;
+  const key = by ? Object.keys(by).find((name) => same(name, from)) : "";
+  if (!key) return project;
+  const there = Object.keys(by).find((name) => same(name, to));
+  const rest = Object.fromEntries(Object.entries(by).filter(([name]) => name !== key && name !== there));
+  const old = by[key] ?? {};
+  const now = there ? by[there] ?? {} : {};
+  const spyIds = [...new Set([...list(now.spyIds), ...list(old.spyIds)].map(clean).filter(Boolean))];
+  const verification = clean(now.verification) || clean(old.verification);
+  return { ...project, knownBy: { ...rest, [clean(to)]: { spyIds, ...(verification ? { verification } : {}) } } };
+};
+const boardsKnowledgeMoved = (world, from, to) => {
+  const moved = (rows) => (Array.isArray(rows) ? rows.map((row) => (isRecord(row) ? knowledgeMoved(row, from, to) : row)) : rows);
+  return {
+    ...(Array.isArray(world.projects) ? { projects: moved(world.projects) } : {}),
+    ...(isRecord(world.seatBoards) ? { seatBoards: Object.fromEntries(Object.entries(world.seatBoards).map(([key, rows]) => [key, moved(rows)])) } : {}),
+  };
+};
+
 // An order of the seat's that carries a formation as it was (host/forces.js
 // disbandFor), moved with the seat: the formation it brings back is the new
 // country's, as the order is.
@@ -163,7 +190,8 @@ const revertMoved = (action, from, to) => (isRecord(action?.unitRevert?.restore)
 // What was the old seat's goes with it: its queued orders, every record the
 // world keeps for it (SEAT_KEYED_WORLD_RECORDS), what its government commands
 // (SEAT_COMMANDED_ROWS) and what it built on ground now the new country's
-// (SEAT_GROUND_ROWS, `onNewGround`), the threads it speaks in, its agents'
+// (SEAT_GROUND_ROWS, `onNewGround`), what it knows of others' work
+// (knowledgeMoved), the threads it speaks in, its agents'
 // traffic (a guest's table of the intercepts file, runtime/spycraft.js; the
 // host's table is the game country's, which follows game.country), and its
 // advisor's conversation (a guest's of the advisor file, runtime/seatAdvisors.js;
@@ -178,7 +206,7 @@ export const withSeatMoved = ({ actions, world, chats, intercepts, advisor }, { 
     return host && !clean(action?.ownerCode) ? { ...action, ownerCode: from } : action;
   }),
   world: world && typeof world === "object"
-    ? {
+    ? ((next) => ({ ...next, ...boardsKnowledgeMoved(next, from, to) }))({
       ...world,
       ...Object.fromEntries(SEAT_KEYED_WORLD_RECORDS
         .filter((key) => isRecord(world[key]))
@@ -189,7 +217,7 @@ export const withSeatMoved = ({ actions, world, chats, intercepts, advisor }, { 
       ...Object.fromEntries(Object.entries(SEAT_GROUND_ROWS)
         .filter(([key]) => Array.isArray(world[key]))
         .map(([key, field]) => [key, rowsMoved(world, key, field, from, to, onNewGround)])),
-    }
+    })
     : world,
   chats: list(chats).map((chat) => (same(chat?.player, from) ? { ...chat, player: to } : chat)),
   intercepts: host || !isRecord(intercepts) ? intercepts : withInterceptTable(withInterceptTable(intercepts, from, {}), to, interceptTableOf(intercepts, from)),

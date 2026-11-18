@@ -206,6 +206,32 @@ test("a founder's forces go with its seat; what it built goes where it stands on
   assert.equal(groundHeldBy(null, "Saltport")("markers", world.markers[0]), false);
 });
 
+// What a guest's services know of other countries' work is kept on each entry by the knower's name (knownBy), on
+// the game's board and on every seat's; a founder's or a renamed country's knowledge stayed under the old name, and
+// its services knew nothing of what its agents had found (FOLLOWUPS A7).
+test("what the seat's government knows of others' work goes with it, wherever that work is kept", async () => {
+  const { knowledgeOf } = await import("../../runtime/projects.js");
+  const world = {
+    projects: [
+      { id: "p-host", name: "Coastal forts", ownerCode: "", knownBy: { [BURGHERS]: { spyIds: ["spy-1"], verification: "doubted" }, Kestrelmark: { spyIds: ["spy-9"] } } },
+      { id: "p-ai", name: "Grain levy", ownerCode: "Kestrelmark" },
+    ],
+    seatBoards: {
+      [HILL]: [{ id: "p-hill", name: "Hill roads", knownBy: { [BURGHERS]: { spyIds: ["spy-2"] }, Saltport: { spyIds: ["spy-3"] } } }],
+      [BURGHERS]: [{ id: "p-own", name: "Harbour", knownBy: { [HILL]: { spyIds: ["spy-4"] } } }],
+    },
+  };
+  const moved = withSeatMoved({ world }, { from: BURGHERS, to: "Saltport" }).world;
+  const entry = (id) => [...moved.projects, ...Object.values(moved.seatBoards).flat()].find((row) => row.id === id);
+  assert.deepEqual(knowledgeOf(entry("p-host"), "Saltport"), { spyIds: ["spy-1"], verification: "doubted" }, "on the game's board");
+  assert.equal(knowledgeOf(entry("p-host"), BURGHERS), null, "nothing is left under the old name");
+  assert.deepEqual(knowledgeOf(entry("p-host"), "Kestrelmark"), { spyIds: ["spy-9"], verification: "" }, "another's knowledge stays its own");
+  assert.deepEqual(knowledgeOf(entry("p-hill"), "Saltport"), { spyIds: ["spy-3", "spy-2"], verification: "" }, "what the new name knew already is one knowledge with it");
+  assert.deepEqual(Object.keys(moved.seatBoards), [HILL, "Saltport"], "its own board followed it");
+  assert.deepEqual(knowledgeOf(entry("p-own"), HILL), { spyIds: ["spy-4"], verification: "" }, "what others know of its own work stays theirs");
+  assert.equal(entry("p-ai"), world.projects[1], "an entry nobody knew of is the same entry");
+});
+
 test("the list of a seat's records holds every record a view keeps per seat", async () => {
   const { HOST_ONLY_WORLD_KEYS } = await import("./projection.js");
   const projection = fs.readFileSync(new URL("./projection.js", import.meta.url), "utf8");
