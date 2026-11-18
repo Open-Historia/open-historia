@@ -468,7 +468,7 @@ const Milestones = ({ plan }) => {
 
 // ---- one card --------------------------------------------------------------
 
-const ProjectCard = memo(({ project, eventTitles, expanded, busy, playerCountry, playerLandless, ownerFlags, ownerNames, finish, planning, onToggleExpand, onAskAdvisor, onShowOnMap, onSetFunding, onAbandon, onPlan }) => {
+const ProjectCard = memo(({ project, eventTitles, expanded, busy, error = "", playerCountry, playerLandless, ownerFlags, ownerNames, finish, planning, onToggleExpand, onAskAdvisor, onShowOnMap, onSetFunding, onAbandon, onPlan }) => {
   const flags = deriveProjectFlags(project);
   const open = isProjectOpen(project);
   const mine = isPlayerProject(project, playerCountry);
@@ -665,6 +665,9 @@ const ProjectCard = memo(({ project, eventTitles, expanded, busy, playerCountry,
           >
             {confirmingAbandon ? "Confirm abandon?" : "Abandon"}
           </button>
+          {/* Why a change of funding, or an abandon, did not happen: the host's
+              reason in a shared game, a failed save alone. */}
+          {error && <div role="alert" style={{ color: "#fca5a5", flexBasis: "100%", fontSize: "0.68rem" }}>{error}</div>}
         </div>
       )}
 
@@ -1246,6 +1249,13 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const [pendingId, setPendingId] = useState("");
   const [planningId, setPlanningId] = useState("");
   const [planError, setPlanError] = useState("");
+  // A change of funding or an abandon that did not happen, on its own card:
+  // { id, text }. It was swallowed, and the card simply stayed as it was, the
+  // host's reason unsaid (the review of 2026-11-18, door 7).
+  const [cardError, setCardError] = useState({ id: "", text: "" });
+  const failedOn = useCallback((project, failure) => {
+    setCardError({ id: project.id, text: String(failure?.message || failure || "").trim() || uiString("The host did not take that.") });
+  }, []);
 
   const isMobile = useIsMobile();
   const isTouch = useTouchPrimary();
@@ -1372,26 +1382,30 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const setFunding = useCallback(async (project, funding) => {
     if (project.funding === funding) return;
     setPendingId(project.id);
+    setCardError({ id: "", text: "" });
     try {
       await writeOps([{ op: "update", name: project.name, funding }]);
-    } catch {
-      // A failed write leaves the board as it was; the poll re-reads it.
+    } catch (failure) {
+      // A failed write leaves the board as it was; the poll re-reads it. Why is said on the card.
+      failedOn(project, failure);
     } finally {
       setPendingId("");
     }
-  }, [writeOps]);
+  }, [writeOps, failedOn]);
 
   // op cancel, never remove: the entry stays under Closed with the progress it reached.
   const abandonProject = useCallback(async (project) => {
     setPendingId(project.id);
+    setCardError({ id: "", text: "" });
     try {
       await writeOps([{ op: "cancel", name: project.name, note: uiString("Abandoned by the player.") }]);
-    } catch {
+    } catch (failure) {
       // As above.
+      failedOn(project, failure);
     } finally {
       setPendingId("");
     }
-  }, [writeOps]);
+  }, [writeOps, failedOn]);
 
   // A project the advisor opened without a plan: one request plans it, and it starts.
   const planEntry = useCallback(async (project) => {
@@ -1435,6 +1449,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
       expanded={expandedId === project.id}
       onToggleExpand={toggleExpand}
       busy={pendingId === project.id}
+      error={cardError.id === project.id ? cardError.text : ""}
       planning={planningId === project.id}
       playerCountry={playerCountry}
       playerLandless={playerLandless}

@@ -66,6 +66,7 @@ export const prepareAdvisorGroupMemberReply = async ({
 
   let projectsSummary = null;
   let projectsFailure = "";
+  let refusedByHost = false;
   if (projectsProposal) {
     try {
       projectsSummary = await applyAdvisorProjectProposal({
@@ -73,9 +74,11 @@ export const prepareAdvisorGroupMemberReply = async ({
       });
     } catch (error) {
       projectsFailure = error?.message || String(error);
+      refusedByHost = Boolean(error?.refusedByHost);
     }
   }
-  const projectsProblem = projectsSummary
+  // A shared game's host that refused the changes is said as that (advisorProjectRouting.js hostRefusal).
+  const projectsProblem = refusedByHost ? "refused" : projectsSummary
     ? truncated ? "truncated" : dropped > 0 ? "partial" : ""
     : looksLikeProjectOps(text) ? truncated ? "truncated-empty" : "unusable" : "";
   const projectsDetail = projectsFailure || (projectsProblem === "partial"

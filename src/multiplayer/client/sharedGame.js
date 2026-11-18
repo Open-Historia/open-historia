@@ -27,7 +27,7 @@ import { GENERATION_COMPLETE_EVENT, adoptStoredAiRecord } from "../../Game/AI/te
 import { UNROUTED_NOTICE, planGameWrite, planWorldWrite, revealedTurnOf, suggestionsOutlived, unroutedChanges, unroutedRefusal } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
-import { setSharedGamePeople, setSharedGameRole, setSharedGameSettings, setSharedRequester, setSharedRequestsHeld, setSharedRoundBase, setSharedRoundDays, SHARED_ROUND_LANDED } from "./sharedGameBridge.js";
+import { setSharedAdvisorRefusal, setSharedGamePeople, setSharedGameRole, setSharedGameSettings, setSharedRequester, setSharedRequestsHeld, setSharedRoundBase, setSharedRoundDays, SHARED_ROUND_LANDED } from "./sharedGameBridge.js";
 import { roundBaseOf } from "./roundBase.js";
 import { createRoundPayer } from "./roundPayer.js";
 import { createLoopbackScreenSide } from "../transport/loopback.js";
@@ -177,10 +177,16 @@ const ownWrite = ({ key, wanted, held }) => {
     if (!changes) return before;
     owner.runtime.overlay("advisor", after);
     void sharedRequest("advisor", changes).then((answer) => {
-      if (answer?.ok || current !== owner) return;
+      if (current !== owner) return;
+      // Said in the advisor, where the player wrote (sharedGameBridge.js
+      // sharedAdvisorRefusal), until a change of it is kept again.
+      if (answer?.ok) {
+        setSharedAdvisorRefusal("");
+        return;
+      }
       owner.runtime.dropOverlay("advisor");
       logDebugEvent("shared game", `the host did not keep a change to the advisor's conversation: ${answer?.error || "no answer"}`, undefined, { problem: true });
-      notify(`Your advisor's conversation was not saved: ${answer?.error || "the host did not answer."}`);
+      setSharedAdvisorRefusal(answer?.error || "The host did not answer.");
     });
     return after;
   }
@@ -700,6 +706,7 @@ export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
   setSharedRoundDays(0);
   setSharedGameSettings(null);
   setSharedRequestsHeld([]);
+  setSharedAdvisorRefusal("");
   // This device's own features again, and its own language.
   setSharedGameFeatures(null);
   setWorldLanguage("");

@@ -101,6 +101,21 @@ export const setSharedRequestsHeld = (kinds) => {
   for (const listener of [...roleListeners]) listener();
 };
 
+// Why the host did not keep this page's latest change to the advisor's
+// conversation (client/sharedGame.js): said in the advisor, where the player
+// wrote, until a change is kept again. It was said on the round bar alone,
+// while the advisor showed the conversation put back without a word (the
+// review of 2026-11-18, door 10). "" for none. For useSyncExternalStore, with
+// the role's subscription.
+let advisorRefusal = "";
+export const sharedAdvisorRefusal = () => advisorRefusal;
+export const setSharedAdvisorRefusal = (text) => {
+  const next = String(text ?? "").trim();
+  if (next === advisorRefusal) return;
+  advisorRefusal = next;
+  for (const listener of [...roleListeners]) listener();
+};
+
 export const setSharedRequester = (request) => {
   requester = typeof request === "function" ? request : null;
 };

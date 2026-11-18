@@ -70,9 +70,40 @@ test("a refusal from the host is the advisor's failure, as a failed write is", a
   }
 });
 
+test("the host's refusal is told as the host's: one-to-one it is marked so, and a group keeps every reply", async () => {
+  // One-to-one, the reply was marked "every entry referred to a project that is not on the board"; in a group the
+  // throw failed the whole batch, and every minister's reply, paid on the player's key, was not saved (the review of
+  // 2026-11-18, door 6).
+  setSharedRequester(async () => ({ ok: false, error: "That is not one of your own programmes." }));
+  startRemoteRuntime({ publish: () => {}, urlFor: () => "" });
+  try {
+    const mutateWorldState = async (change) => change({ projects: [] });
+    const thrown = await applyAdvisorProjectProposal({ proposal: [{ op: "create", name: "Elsewhere", plan }], gameDate: "", round: 0, mutateWorldState, applyProjectOpsToWorld })
+      .then(() => null, (error) => error);
+    assert.equal(thrown?.refusedByHost, true);
+    const refused = [];
+    const items = await applyAdvisorGroupProjectBatch({
+      entries: [{ speakerId: "a", proposal: [{ op: "create", name: "One", plan }] }, { speakerId: "b", proposal: [{ op: "create", name: "Two", plan }] }],
+      gameDate: "2014-03-01", round: 3, mutateWorldState, applyProjectOpsToWorld,
+      onRefused: (speakerId, reason) => refused.push([speakerId, reason]),
+    });
+    assert.deepEqual(refused, [["a", "That is not one of your own programmes."], ["b", "That is not one of your own programmes."]]);
+    assert.deepEqual([items.get("a"), items.get("b")], [[], []], "nothing of theirs reported as applied");
+  } finally {
+    stopRemoteRuntime();
+    setSharedRequester(null);
+  }
+});
+
 test("the Projects panel asks the host for its operations in a shared game", () => {
   const panel = readFileSync(new URL("./projects.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.match(panel, /const writeOps = useCallback\(async \(ops\) => \{\n\s*if \(inSharedGame\(\)\) \{\n\s*const answer = await requestFromHost\("projectOps", \{ ops, by: "panel" \}\);/);
+  // A change of funding or an abandon the host refused was swallowed: its reason is said on its card (door 7).
+  for (const name of ["setFunding", "abandonProject"]) {
+    const body = panel.slice(panel.indexOf(`const ${name} = useCallback(`), panel.indexOf("}, [writeOps, failedOn]);", panel.indexOf(`const ${name} = useCallback(`)));
+    assert.match(body, /catch \(failure\) \{[\s\S]*failedOn\(project, failure\);/, name);
+  }
+  assert.match(panel, /error=\{cardError\.id === project\.id \? cardError\.text : ""\}/);
 });
 
 test("a completed project cedes no region a person holds, unless the project is that person's own", () => {
