@@ -257,7 +257,8 @@ const NEW_UPDATES = [
   {
     // "readd the background ai for refreshing the stats where you could set how often it runs" and "there should be
     // an off choise in the thing where you pick how often it refreshes" (the owner, 2026-11-18): removed on
-    // 2026-11-09 with the Background AI switch (bb37bd1e6); back as one picker, Off by default.
+    // 2026-11-09 with the Background AI switch (bb37bd1e6); back with no setting of its own: "JUST IN THE ADVANCED
+    // STATS MENU YOU CAN CHOOSE WHAT INTERVAL IT CHECKS AT AND YOU CAN SET THE INTERVAL TO OFF. BY DEFAULT ITS 6 MONTHS".
     id: "2026-11-stats-refresh",
     kind: "minor",
     date: "2026-11-18",
@@ -266,9 +267,9 @@ const NEW_UPDATES = [
       {
         title: "Stat sheets that keep up",
         items: [
-          "Settings, AI requests, can keep countries' stat sheets up to date for you: pick Off, after every time skip, or every 2, 3, 5 or 10.",
-          "After a time skip has finished, one background request brings up to date the sheets its news has changed, your own country's first, for up to 6 countries.",
-          "It costs about one request every so many time skips, and stops at the day's cap of requests nobody pressed a button for. Off is the default.",
+          "Countries' stat sheets keep up with the world again: every 6 months of game time, one background request brings up to date the sheets the news has changed.",
+          "It refreshes up to 6 countries at a time, your own first, and a long time skip still makes at most one such request.",
+          "Choose how often in a country's Advanced statistics: every 3, 6, 12 or 24 months, or Off.",
           "In a shared game it runs only on the host, while the host's AI answers for every player.",
         ],
       },
