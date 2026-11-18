@@ -172,6 +172,7 @@ import { describeWarsForAdvisor } from "./advisorWars.js";
 import { describeLeaderStanding, describeOurFigures, describeTerritoryForConversation } from "./standingContext.js";
 import { OWN_WARS_HEADING, buildWarStatsBlock, describePeaceTalk } from "./warStatsPrompt.js";
 import { beginAiRequestScope } from "./aiRequestControl.js";
+import { answerOf, carriedCall, payerCallOf } from "./roundCarrier.js";
 
 // A time skip the player's Agent was answering is over once the game stops
 // simulating, so the Agent's `/skip` stops too (ADR 0008).
@@ -2971,6 +2972,16 @@ export async function callAI(systemPrompt, history, opts = {}) {
     if (directive) {
         systemPrompt = `${systemPrompt}\n\n${directive}`;
     }
+    // A shared round another player's device pays for (multiplayer/host/
+    // settings.js payment "cycle"): each request of the round's skip goes, as
+    // it was built here, to that device, which carries it to its own AI; its
+    // answer comes back in a provider's shape (roundCarrier.js). No key leaves
+    // any device, and none of this one's providers is asked.
+    const carried = carriedCall({ systemPrompt, history, opts: providerOpts, lookups, spender, onRequest: observeRequest });
+    if (carried) {
+        logDebugEvent("ai-call", `${logLabel || "AI call"}: carried to the device of the player who pays this round.`, { promptChars: systemPrompt.length }, { verbose: true });
+        return carried;
+    }
 
     const { entries, preferredEntryId } = resolveTaskFallbackEntries(providerOpts.taskKey);
     // Named for where the call STARTS; the answer names who actually answered.
@@ -3260,6 +3271,18 @@ export async function callAI(systemPrompt, history, opts = {}) {
     } finally {
         requestScope.finish();
     }
+}
+
+// A shared round's request the host sent this device to pay for, on its own AI
+// (multiplayer/host/roundPayers.js, the owner's decision 14): carried as the
+// host built it, and its answer handed back as it came (roundCarrier.js). A
+// lookup the model asks for is answered by the host (`execute`). Nothing of it
+// is written on this device; the host applies the answer.
+// `onRequest` hears the status of every provider response it causes, which the
+// host's skip reads as it reads its own (a contract the provider refused).
+export async function carryRoundRequest(call, { execute = null, signal = null, onRequest = null } = {}) {
+    const { systemPrompt, history, opts } = payerCallOf(call, { execute, signal, onRequest });
+    return answerOf(await callAI(systemPrompt, history, opts));
 }
 
 let promptPack = normalizePromptPack({});

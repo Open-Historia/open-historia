@@ -38,9 +38,12 @@ const DEFAULT_LIMITS = Object.freeze({
   unreachableMemoryMs: 5 * 60_000,
   messagesPerSecond: 30,
   messageBurst: 60,
-  // The largest thing a player sends is its own Projects board (a few hundred
-  // KB at the board's limit); nothing a player sends is ever larger.
-  maxMessageChars: 512 * 1024,
+  // The largest thing a player sends is the answer its own AI gave to a round
+  // it pays for (host/settings.js payment "cycle"; game/messages.js "paid", at
+  // most PAID_ANSWER_MAX characters of text and as many of a function call's
+  // input, escaped once more inside the message). Before that it was its own
+  // Projects board, a few hundred KB at the board's limit.
+  maxMessageChars: 3 * 1024 * 1024,
   strikesToRemove: 5,
   pendingTimeoutMs: 30_000,
   helloTimeoutMs: 10_000,

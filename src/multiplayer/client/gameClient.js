@@ -28,6 +28,10 @@ export const createGameClient = ({
   send,
   applyView = () => false,
   onChange = () => {},
+  // With settings.payment "cycle": a request of the round the host sent this
+  // device to pay for ({ t: "pay", job, round, call }), or the host's word that
+  // it no longer waits for one ({ t: "payStop", job }) (client/roundPayer.js).
+  onPay = () => {},
   now = () => Date.now(),
   timers = globalThis,
   requestTimeoutMs = REQUEST_WAIT_MS,
@@ -71,6 +75,10 @@ export const createGameClient = ({
           break;
         case "view":
           applyView({ epoch: message.epoch, rev: message.rev, base: message.base, docs: message.docs, sums: message.sums });
+          break;
+        case "pay":
+        case "payStop":
+          onPay(message);
           break;
         default:
           break;

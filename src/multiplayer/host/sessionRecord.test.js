@@ -24,3 +24,29 @@ test("the record keeps the game's settings, changes made during the game include
   const lobby = (await import("node:fs")).readFileSync(new URL("../ui/LobbiesTab.jsx", import.meta.url), "utf8");
   assert.match(lobby, /keptSettingsOf\(record, \{ campaign \}\)/);
 });
+
+// Taking turns to pay goes on where it was, and what the Game Master changed stays listed; and a record kept before
+// the host's answers a round were a setting still reads, seats and all (a record whose settings did not read was
+// dropped whole).
+test("the record keeps who paid last and what the Game Master changed; one from before the newer settings still reads", async () => {
+  const { normalizeSettings } = await import("./settings.js");
+  const settings = normalizeSettings({ payment: "cycle", replies: "own", hostAnswers: 3, cheats: "host" }).settings;
+  const record = sessionRecordOf({
+    campaign: "game-baltic", started: true, round: 4, hostDevice: "device-host", seats: [], settings,
+    lastPayer: "device-russia",
+    gameMaster: [{ round: 3, date: "2014-06-01", summary: "The Narva treaty is signed." }, { round: 3, summary: "" }],
+  });
+  assert.equal(record.lastPayer, "device-russia");
+  assert.deepEqual(record.gameMaster, [{ round: 3, date: "2014-06-01", summary: "The Narva treaty is signed." }]);
+  const taken = sessionFromRecord(record, { campaign: "game-baltic", hostDevice: "device-host" });
+  assert.equal(taken.lastPayer, "device-russia");
+  assert.deepEqual(taken.gameMaster, record.gameMaster);
+  assert.deepEqual(taken.settings, settings);
+  const { hostAnswers: _none, ...olderSettings } = settings;
+  const { lastPayer: _gone, gameMaster: _log, ...older } = { ...record, settings: olderSettings };
+  const olderTaken = sessionFromRecord(older, { campaign: "game-baltic", hostDevice: "device-host" });
+  assert.ok(olderTaken, "an older record is taken up");
+  assert.equal(olderTaken.lastPayer, "");
+  assert.deepEqual(olderTaken.gameMaster, []);
+  assert.equal(normalizeSettings(olderTaken.settings).settings.hostAnswers, 0);
+});

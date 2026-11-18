@@ -297,3 +297,18 @@ test("a setup that could not be saved sets no switch", () => {
   assert.throws(() => saveSetupChoice("commandcode", { apiKey: "  " }), /Paste an API key first/);
   assert.equal(store.get(SWITCH_KEY), undefined);
 });
+
+// A shared game's guest was told it played on the host's key, with nothing to set up, while its advisor, suggestions,
+// generals and Search used its own (the gap audit of 2026-11-18). It is asked like anyone, in that game's own words.
+test("a shared game's guest is asked too, in the words of that game's rules", () => {
+  // (Without an apostrophe, which the markup writes as an entity.)
+  const lead = "In this shared game your own AI answers your advisor, AI suggestions, generals and Rostra Search.";
+  const html = render({ lead });
+  assert.ok(words(html).includes(lead));
+  assert.equal(html.includes("fall back to canned events"), false, "a guest's rounds are the host's: no word of canned events");
+  assert.equal(cards(html).length, 3, "the same three choices");
+  assert.ok(words(render()).includes("fall back to canned events"), "and nothing changes for anyone else");
+  const main = fs.readFileSync(new URL("./main.jsx", import.meta.url), "utf8");
+  assert.match(main, /&& \(sharedRole !== "guest" \|\| Boolean\(sharedRules\)\);/);
+  assert.match(main, /lead=\{sharedRole === "guest" && sharedRules \? ownAiUsesOf\(sharedRules\) : ""\}/);
+});

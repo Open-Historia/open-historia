@@ -76,6 +76,18 @@ export const playedByPerson = (country) => {
   return Boolean(key) && people.some((name) => name.toLowerCase() === key);
 };
 
+// The rules of the shared game as the host's lobby states them (host/settings.js:
+// who pays for what, the Game Master), for the screens that say them: null in no
+// shared game. For useSyncExternalStore, with the role's subscription.
+let rules = null;
+export const sharedGameSettings = () => rules;
+export const setSharedGameSettings = (settings) => {
+  const next = settings && typeof settings === "object" ? settings : null;
+  if (JSON.stringify(next) === JSON.stringify(rules)) return;
+  rules = next ? Object.freeze({ ...next }) : null;
+  for (const listener of [...roleListeners]) listener();
+};
+
 export const setSharedRequester = (request) => {
   requester = typeof request === "function" ? request : null;
 };

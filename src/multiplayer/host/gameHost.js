@@ -26,7 +26,10 @@ import { createWorldQueue } from "./worldQueue.js";
 import { SEAT_STATUS, createSeatBook } from "./seats.js";
 import { seatFoundings, seatSuccessions, withSeatLetGo, withSeatMoved } from "./foundings.js";
 import { sessionRecordOf } from "./sessionRecord.js";
-import { REPLY_MODES, roundSettingsOf } from "./settings.js";
+import { REPLY_MODES, gameMasterAllowed, roundSettingsOf } from "./settings.js";
+import { createHostAnswers, hostAnswersSpent, hostTurnsSpent } from "./hostAnswers.js";
+import { createRoundPayers } from "./roundPayers.js";
+import { GAME_MASTER_COMMAND_MAX, gameMasterEntryOf, gameMasterNotice, keptGameMasterLog, withGameMasterEntry } from "./gameMaster.js";
 import { projectForViewer } from "./projection.js";
 import { COUNTRY_MAX_CHARS, HOST_MESSAGES, ORDER_MAX_CHARS, ORDER_TITLE_MAX, THREAD_MEMBERS_MAX, THREAD_TITLE_MAX, VIEW_KEYS } from "../game/messages.js";
 import { createPlayerPollEvent, eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
@@ -64,7 +67,10 @@ const ANSWERS_KEPT = 128;
 // Answered at once, whatever is being applied: they change no document (the
 // round's own state, or what a page did with a view), so a round being
 // resolved never holds them up.
-const AT_ONCE = new Set(["ready", "revealed", "viewed"]);
+// A paying device's answer to the round's request, and its lookups, are part of
+// the round being resolved, which is itself an entry of the queue: behind it
+// they would wait for ever.
+const AT_ONCE = new Set(["ready", "revealed", "viewed", "paid", "payLookup"]);
 // Their thinking is the AI's, done outside the queue so it holds nobody up;
 // what they write is put in the queue (a stat sheet under the game's own lock,
 // an institution's business by the desk, engineMain.js).
@@ -236,6 +242,13 @@ export const createGameHost = ({
   institution = async () => {
     throw new Error("Institutions are not run here.");
   },
+  // The Game Master's command, run by the game's own console (gameplay.js
+  // previewGameMasterCommand, then applyGameMasterPreview at once): resolves
+  // { summary, ... } for what it changed, or rejects with the reason
+  // (host/gameMaster.js). Asked only of a game whose settings allow it.
+  gameMaster = async () => {
+    throw new Error("The Game Master is not run here.");
+  },
   onStatus = () => {},
   // Seats that followed their people to a country they founded
   // (host/foundings.js): [{ from, to, host }], `host` when it was the host's own.
@@ -279,6 +292,23 @@ export const createGameHost = ({
   // `replies`): the host's computer, or the writer's own device. The host may
   // change it while the game runs (control.setReplies).
   let replies = REPLY_MODES.includes(settings.replies) ? settings.replies : "host";
+  // With "own": the answers of the host's AI each player may have a round from
+  // a government whose answer can act (settings.hostAnswers, host/hostAnswers.js).
+  const hostAnswers = createHostAnswers({ limit: settings.hostAnswers });
+  // The settings as they stand, the host's changes during the game included.
+  const settingsNow = () => ({ ...settings, replies, hostAnswers: hostAnswers.limit });
+  // With settings.payment "cycle": whose device makes each round's request
+  // (host/roundPayers.js), and how many each has made, kept with the session.
+  const payers = createRoundPayers({
+    send: (device, message) => answerDevice(device, message),
+    connected: (device) => [...connections.values()].some((entry) => entry.device === device),
+    lastPayer: restored?.lastPayer ?? "",
+    log,
+    timers,
+  });
+  // What the Game Master changed, in this game (host/gameMaster.js): every
+  // player's lobby carries it, and the session keeps it.
+  let gameMasterLog = keptGameMasterLog(restored?.gameMaster);
   // "own": the lines whose answer their writer's device is writing: line id →
   // { thread, seat }. A "reply" is taken for one of these, once, and for
   // nothing else. In memory: one still waiting when the host closes is written
@@ -346,7 +376,9 @@ export const createGameHost = ({
     changes: [...changes.values()],
     ownLines: [...ownLines].map(([line, entry]) => ({ line, ...entry })),
     banned: [...banned],
-    settings: { ...settings, replies },
+    settings: settingsNow(),
+    lastPayer: payers.record(),
+    gameMaster: gameMasterLog,
   });
   const sessionChanged = () => {
     if (sessionWanted || stopped || !campaign || typeof store.writeShared !== "function") return;
@@ -370,7 +402,7 @@ export const createGameHost = ({
 
   const lobbyFor = (connection) => ({
     t: "lobby",
-    settings: { ...settings, replies },
+    settings: settingsNow(),
     scenario,
     // The countries that may be taken now, and every seat's own.
     countries: countriesNow.filter(fits).slice(0, 600),
@@ -397,6 +429,8 @@ export const createGameHost = ({
       .filter((entry) => fits(entry.from) && fits(entry.to)).slice(0, 64),
     ...(features && typeof features === "object" ? { features } : {}),
     ...(roundRules ? { rules: roundRules } : {}),
+    // What the Game Master changed, for every player to read (decision 8).
+    ...(gameMasterLog.length ? { gameMaster: gameMasterLog } : {}),
   });
 
   const roundMessage = (status) => ({
@@ -410,7 +444,15 @@ export const createGameHost = ({
     needed: status.needed,
     failed: status.failure?.round ?? 0,
     failure: clean(status.failure?.reason).slice(0, 300),
+    // Whose device makes this round's request, with settings.payment "cycle".
+    ...(payingCountry(status) && fits(payingCountry(status)) ? { payer: payingCountry(status) } : {}),
   });
+  // The country whose device pays the round being resolved, or is due to pay
+  // the one being planned: the one the host took on itself, or the next in turn.
+  const payerFor = (number) => (settings.payment === "cycle"
+    ? payers.payerOf({ seats: seats.list().map((seat) => ({ ...seat, here: seat.status === SEAT_STATUS.HUMAN })), host: hostSeat.device, round: number })
+    : null);
+  const payingCountry = (status) => clean((payers.paying()?.round === status.round ? payers.paying() : payerFor(status.round))?.country);
 
   // What the host sends is held to the same schemas the players read it by
   // (game/messages.js): one they would drop is not sent, and is said here.
@@ -567,8 +609,15 @@ export const createGameHost = ({
       const before = { eventIds: new Set(list(start.events).map((event) => clean(event?.id))), areas: { ...(start.world?.groupAreas ?? {}) } };
       roundAbort = new AbortController();
       roundCancelled = false;
+      // With settings.payment "cycle", the device whose turn it is pays: the
+      // host's own makes the request as ever, and another's is sent the
+      // request the engine builds, carries it to its own AI and sends back the
+      // answer, which the engine takes as its own (host/roundPayers.js `carry`).
+      const payer = payerFor(number);
+      const carry = payer && payer.device !== hostSeat.device ? payers.carry({ ...payer, round: number, signal: roundAbort.signal }) : null;
+      payers.begin(payer ? { ...payer, round: number } : null);
       try {
-        await resolveRound({ round: number, humanCountries: seats.humanCountries(), daysPerRound: settings.daysPerRound, signal: roundAbort.signal });
+        await resolveRound({ round: number, humanCountries: seats.humanCountries(), daysPerRound: settings.daysPerRound, signal: roundAbort.signal, ...(carry ? { carry } : {}) });
       } catch (error) {
         // The host called it off (control.cancelRound): said as that, and the
         // round waits with its orders, as one that failed does.
@@ -591,6 +640,13 @@ export const createGameHost = ({
         throw error;
       } finally {
         roundAbort = null;
+        payers.begin(null);
+      }
+      // The next round is the next seat's to pay (saved with the session), and
+      // the host's taking a round on itself is spent.
+      if (payer) {
+        payers.landed(payer);
+        sessionChanged();
       }
       await followSeats(before).catch((error) => log("warn", "a seat did not follow its country", { error: String(error?.message || error) }));
       await store.updateWorld(withFleetPosturesSeen);
@@ -771,6 +827,14 @@ export const createGameHost = ({
       log("warn", "reply failed", { error: String(error?.message || error) });
     });
   };
+
+  // With settings.replies "own": one of the answers the host's AI gives this
+  // seat this round (host/hostAnswers.js). The host's own lines are its own
+  // key's either way and are never counted, and a line written while the
+  // seat's answer at that table still waits is answered with it, for nothing.
+  const hostAnswerFor = (connection, seat, chatId) => isHost(connection)
+    || Boolean(chatId && tables.get(chatId)?.waiting.has(fold(seat.country)))
+    || hostAnswers.take(seat.country, round.status().round);
 
   // A line left to its writer's own device to answer.
   const awaitOwnReply = (line, entry) => {
@@ -1230,6 +1294,12 @@ export const createGameHost = ({
     // (engineMain.js). What was made goes back with the ack, so the asker's
     // screen can show it.
     institution: async (connection, { call, args }, seat) => {
+      // A Council's or a hearing's turn is the host's AI answering for the
+      // governments there, which vote and decide: with each player's own AI,
+      // one of the answers the host gives this seat this round.
+      if (replies === "own" && ["council", "hearing"].includes(call) && !hostAnswerFor(connection, seat, "")) {
+        return hostTurnsSpent(hostAnswers.limit);
+      }
       try {
         // A Council's or a hearing's turn is the table's next (onTable).
         const made = await institution({ seat: seat.country, call, args: args ?? {}, onTable });
@@ -1544,7 +1614,9 @@ export const createGameHost = ({
         // answer, and a government at war with the writer may make peace in
         // its own, or accept the writer's terms (AI/warStatsPrompt.js
         // describePeaceTalk, which asks the same of the same wars). Those are
-        // answered here, whatever the setting.
+        // answered here, whatever the setting: with each player's own AI, up
+        // to the host's number a round (settings.hostAnswers), which the
+        // lobby states.
         // So does a government that is the writer's own Overlord or Puppet: its
         // answer may make, answer or settle a demand, which the host's engine
         // checks after it (engineMain.js replyTo, gameplay.js checkDemandReply).
@@ -1556,10 +1628,22 @@ export const createGameHost = ({
           // (client/ownReplies.js). The words come back as a "reply".
           awaitOwnReply(message.id, { thread: chatId, seat: seat.country });
           Object.assign(result, { answer: "own", line: message.id, governments: governments.slice(0, 16) });
+        } else if (replies === "own" && !hostAnswerFor(connection, seat, chatId)) {
+          // Past what the host gives each player a round (settings.hostAnswers):
+          // the line stands, and the round reads it.
+          tell(seat.country, "info", hostAnswersSpent(hostAnswers.limit));
+          Object.assign(result, { answer: "round" });
         } else answerOnHost(chatId, seat.country, governments);
       }
       return Object.keys(result).length ? { error: "", result } : "";
     },
+    // With settings.payment "cycle": the answer the paying device's own AI gave
+    // to the round's request the host sent it, or why it gave none; and a
+    // lookup that request's model asked for, answered from the host's own game
+    // as it would have been here (host/roundPayers.js). Only from the device
+    // the request was sent to, and only while it waits.
+    paid: async (connection, { job, answer, error, statuses }) => payers.answered(connection.device, { job, answer: answer ?? null, error: error ?? "", statuses: statuses ?? [] }),
+    payLookup: async (connection, { job, name, args }) => payers.lookup(connection.device, { job, name, args }),
     // With settings.replies "own": what the governments the AI plays answered
     // a line of this seat's, written on the seat's own device and AI key. Words
     // alone, taken for a line the host itself left to that device ("say"),
@@ -1700,6 +1784,8 @@ export const createGameHost = ({
       send(connection, lobbyFor(connection));
       if (isHost(connection)) hostReturned();
       send(connection, roundMessage(round.status()));
+      // A paying device back on a new connection is sent the request again.
+      payers.joined(player.device);
       void seatsChanged();
     },
     leave(player) {
@@ -1708,6 +1794,9 @@ export const createGameHost = ({
       connections.delete(player.id);
       // Another connection of the same device (a reconnect) keeps the seat.
       if ([...connections.values()].some((entry) => entry.device === connection.device)) return;
+      // A device paying the round that is gone is waited for a little, then
+      // the round fails visibly (host/roundPayers.js PAYER_GONE_MS).
+      payers.left(connection.device);
       // The host's own seat is the host's for as long as the game runs: the
       // round waits for its screen to come back.
       if (isHost(connection)) {
@@ -1743,6 +1832,66 @@ export const createGameHost = ({
         return true;
       },
       resolveNow: () => round.resolveNow(),
+      // With settings.payment "cycle": the host pays the round being planned
+      // itself, on its own AI, and runs it now (a payer that is away, or whose
+      // AI failed: decision 9, the round waits until the host runs it again).
+      // The player whose turn it was is still the next to pay.
+      payRound() {
+        const status = round.status();
+        if (settings.payment !== "cycle" || !["planning", "countdown"].includes(status.phase)) return false;
+        payers.hostPays(status.round);
+        for (const connection of connections.values()) send(connection, notice("info", `The host pays for round ${status.round} itself.`));
+        round.resolveNow();
+        return true;
+      },
+      // How many answers of the host's AI each player may have a round from a
+      // government whose answer can act, with each player's own AI (settings.hostAnswers).
+      setHostAnswers(count) {
+        if (!hostAnswers.setLimit(count)) return false;
+        broadcastLobby();
+        sessionChanged();
+        const text = hostAnswers.limit
+          ? `From now on the host's AI answers up to ${hostAnswers.limit} of each player's messages a round to a government that can act on them (one at war with them, their overlord or puppet, an institution).`
+          : "From now on the host's AI answers no messages between rounds to a government that can act on them (one at war with the writer, their overlord or puppet, an institution): the round reads them.";
+        for (const connection of connections.values()) send(connection, notice("info", text));
+        return true;
+      },
+      // The Game Master's command (decision 8), the host's alone and only in a
+      // game whose lobby says so (settings.cheats "host"): run by the game's
+      // own console in the host's engine as one entry of the queue, never while
+      // a round is resolved (it waits for none: it is refused), and what it
+      // changed told to every player and kept in every lobby
+      // (host/gameMaster.js). Its reason goes to the host when it changes
+      // nothing. Resolves whether it changed anything.
+      async gameMaster(command) {
+        const toHost = (text) => {
+          for (const connection of connections.values()) if (isHost(connection)) send(connection, notice("warn", text));
+          return false;
+        };
+        const asked = clean(command).slice(0, GAME_MASTER_COMMAND_MAX);
+        if (!gameMasterAllowed(settings)) return toHost("The Game Master is off in this game: its lobby says so to every player.");
+        if (!asked) return toHost("Tell the Game Master what to change.");
+        if (round.status().phase === "resolving") return toHost("Not while a round is being resolved: ask the Game Master once it has landed.");
+        try {
+          const made = await queue.run("game-master", async () => {
+            const done = await gameMaster({ command: asked });
+            // A country it renamed keeps its player (host/foundings.js).
+            await followSeats().catch((error) => log("warn", "a seat did not follow its country after the Game Master", { error: String(error?.message || error) }));
+            return done;
+          });
+          const game = (await store.read())?.game ?? {};
+          const entry = gameMasterEntryOf(made, { round: round.status().round, date: clean(game.gameDate) });
+          gameMasterLog = withGameMasterEntry(gameMasterLog, entry);
+          log("info", "the host used the Game Master", { summary: entry.summary });
+          broadcastLobby();
+          sessionChanged();
+          for (const connection of connections.values()) send(connection, notice("info", gameMasterNotice(entry)));
+          return true;
+        } catch (error) {
+          log("warn", "the Game Master changed nothing", { error: String(error?.message || error) });
+          return toHost(`The Game Master changed nothing: ${clean(error?.message || error).slice(0, 400) || "it did not answer."}`);
+        }
+      },
       setRoundMinutes: (minutes) => round.setRoundMinutes(minutes),
       // What decides the rounds changed on the host's computer (its AI
       // settings): every screen is told, in the lobby.
@@ -1854,6 +2003,7 @@ export const createGameHost = ({
       timers.clearInterval(expiryTimer);
       round.stop();
       roundAbort?.abort(new Error("The shared game was stopped."));
+      payers.stop();
       await pushing.catch(() => {});
       await queue.run("end", forgetHumans).catch((error) => log("warn", "the shared game's players were not cleared", { error: String(error?.message || error) }));
     },

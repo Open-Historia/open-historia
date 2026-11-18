@@ -17,6 +17,7 @@ import { hostSharedGame, joinSharedGame, useSharedGame } from "../client/sharedG
 import { sharedRoundAnswerer, sharedRoundRefusal } from "../../Game/AI/providerConfig.js";
 import { STAND_IN_NOT_SHARED } from "../../runtime/standInGames.js";
 import PublicLobbies from "./PublicLobbies.jsx";
+import { HostCostFields, HostCostSummary } from "./HostCostFields.jsx";
 
 const card = {
   background: "var(--oh-ui-surface, #12141a)",
@@ -187,7 +188,7 @@ const HostPanel = ({ onClose, onEnterGame }) => {
       <h3 style={heading}>Host a lobby</h3>
       <p style={lead}>
         Your lobby is the game you have open. You keep playing your own country; players you send the invite code to take others.
-        Your computer runs the game and pays for its AI with your key.
+        Your computer runs the game; who pays for its AI is yours to choose below, and every player is told.
       </p>
       {desktop === false && !import.meta.env?.DEV ? (
         <p style={note}>Hosting needs the desktop app. You can still join lobbies from here.</p>
@@ -236,7 +237,10 @@ const HostPanel = ({ onClose, onEnterGame }) => {
                 {LANGUAGES.map((entry) => <option key={entry.code} value={entry.code}>{entry.native === entry.name ? entry.name : `${entry.native} (${entry.name})`}</option>)}
               </select>
             </Field>
+            {/* Who pays for each round, the host's answers a round, and the Game Master. */}
+            <HostCostFields settings={settings} setSettings={setSettings} />
           </div>
+          <HostCostSummary settings={settings} />
           <label style={{ alignItems: "center", color: "rgba(255,255,255,0.8)", display: "flex", fontSize: "0.85rem", gap: "0.5rem", marginTop: "0.9rem" }}>
             <input type="checkbox" checked={settings.allowMidGameJoin} onChange={update("allowMidGameJoin")} />
             Players may join a game already under way, taking a country the AI plays

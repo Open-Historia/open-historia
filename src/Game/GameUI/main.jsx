@@ -50,7 +50,8 @@ import { BordersFallbackNotice } from "./bordersFallbackNotice.jsx";
 import { PromptLimitNotice } from "./promptLimitNotice.jsx";
 import { PLAYER_ACTIVITY_EVENTS, createPlayerActivity } from "../../runtime/playerActivity.js";
 import { MAP_SETTING_KEYS, useMapSettingDefaultOn } from "../../runtime/mapSettings.js";
-import { inSharedGame, sharedGameRole, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame, sharedGameRole, sharedGameSettings, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
+import { ownAiUsesOf } from "../../multiplayer/costRules.js";
 
 // Whether anything in the Fallback list has what its provider needs, and the
 // top entry's provider for the start-of-game prompt's wording. Re-read whenever
@@ -431,11 +432,16 @@ const Main = ({
     setApiPromptAnsweredFor(id);
     try { sessionStorage.setItem("oh:api-setup-answered", id); } catch { /* the prompt just shows again next time */ }
   };
-  // A guest in a shared game plays on the host's key: nothing to set up.
+  // A guest in a shared game is asked too, in the words of that game's rules
+  // (multiplayer/costRules.js ownAiUsesOf): its advisor, suggestions, generals
+  // and Search are always its own AI's, and the host's settings may leave it
+  // its letters, sheets and its turn to pay for a round. It used to be told it
+  // played on the host's key, with nothing to set up.
   const sharedRole = useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole);
+  const sharedRules = useSyncExternalStore(subscribeSharedGameRole, sharedGameSettings, sharedGameSettings);
   const showApiPrompt = loaded && Boolean(activeGame?.id) && !mainMenuOpen && !providerReady
     && apiPromptAnsweredFor !== String(activeGame?.id) && !isSettingsOpen && !showGameLoading
-    && sharedRole !== "guest";
+    && (sharedRole !== "guest" || Boolean(sharedRules));
   // The game master's tools are not offered in a shared game (see onOpenCheats
   // below): a panel already open when one begins closes, and so does its Force
   // Manager (the Forces panel, which only the Cheats panel opens: it edits and
@@ -959,6 +965,7 @@ const Main = ({
         <ApiSetupPrompt
           providerLabel={getProviderMeta(aiSetup.provider)?.label || "the selected provider"}
           missing={describeProviderSetupNeed(aiSetup.provider)}
+          lead={sharedRole === "guest" && sharedRules ? ownAiUsesOf(sharedRules) : ""}
           onDismiss={answerApiPrompt}
           onConfigure={() => {
             answerApiPrompt();

@@ -33,8 +33,9 @@ import { setHostingSharedGame } from "../../runtime/humanPolities.js";
 import { discardHeldTurns, endSimulation, enterSimulation } from "../../Game/AI/simulationStatus.js";
 import { getDebugLogEntries, logDebugEvent, setDebugLogPersistence, subscribeToDebugLog } from "../../runtime/debugLog.js";
 import { GENERATION_COMPLETE_EVENT } from "../../Game/AI/telemetry.js";
-import { assessPoliticalLandscape, checkDemandReply, declineInteractiveOffer, hasCompiledParties, hasCountryStatSheet, maybeGeneratePregameHistory, maybeOpenScenarioFronts, takePoliticalLandscape, readCountryForPlayer, runChatActionBatch, setAsideActiveInteractive, simulateTimelineJump, takeCountryStatSheet, warRoomChart } from "../../Game/AI/gameplay.js";
+import { applyGameMasterPreview, assessPoliticalLandscape, checkDemandReply, declineInteractiveOffer, hasCompiledParties, hasCountryStatSheet, maybeGeneratePregameHistory, maybeOpenScenarioFronts, previewGameMasterCommand, readCountryForPlayer, runChatActionBatch, setAsideActiveInteractive, simulateTimelineJump, takeCountryStatSheet, takePoliticalLandscape, warRoomChart } from "../../Game/AI/gameplay.js";
 import { finishGameStart } from "./gameStart.js";
+import { installRoundCarrier } from "../../Game/AI/roundCarrier.js";
 import { lendBoards, returnBoards } from "./seatBoards.js";
 import { createLoopbackEngineSide } from "../transport/loopback.js";
 import { createHostSession } from "../session/host.js";
@@ -281,6 +282,9 @@ const boot = async () => {
   });
   // Stops reading the host's AI settings for the lobby (openGame).
   let forgetRules = () => {};
+  // The Game Master at work on the host's command (control "gm"), for the
+  // host's screen to say so.
+  let gameMasterBusy = false;
 
   const loopback = createLoopbackEngineSide({
     onHello: ({ device, name }) => {
@@ -332,6 +336,7 @@ const boot = async () => {
       unreachable: people.unreachable,
       clockRefused: people.clockRefused === true,
       network,
+      gameMasterBusy,
     });
   };
 
@@ -440,7 +445,7 @@ const boot = async () => {
       restored,
       campaignRound: Number(started.game?.round) || 0,
       store,
-      resolveRound: async ({ daysPerRound, humanCountries, signal }) => {
+      resolveRound: async ({ daysPerRound, humanCountries, signal, carry = null }) => {
         // Fronts the game began with that could not be built when it opened.
         await openPendingFronts();
         // The game's own lock, waited for and taken in one step: a stat sheet
@@ -461,6 +466,10 @@ const boot = async () => {
             for (const board of Object.values(lent?.seatBoards ?? {})) for (const row of list(board)) hostHad.delete(clean(row?.id));
             return lent === world ? null : lent;
           });
+          // A round another player's device pays (settings.payment "cycle"):
+          // its skip's requests go, as built, to that device and its answer
+          // comes back to be applied here as ever (Game/AI/roundCarrier.js).
+          const uncarry = carry ? installRoundCarrier(carry) : () => {};
           try {
             // Never a canned turn in a shared game: a skip the AI could not
             // write fails, and the round says why (host/round.js).
@@ -473,6 +482,7 @@ const boot = async () => {
             discardHeldTurns();
             throw error;
           } finally {
+            uncarry();
             await mutateWorldState((world) => {
               const home = returnBoards(world, { ...people, hostHad });
               return home === world ? null : home;
@@ -508,6 +518,11 @@ const boot = async () => {
         await setPolityFlag({ polity: country, world: docs.world, dataUrl: image });
       },
       replyTo,
+      // The Game Master's command (host/gameMaster.js), as the Cheats panel's
+      // console runs one: its preview asked of the host's AI, then applied at
+      // once, its fingerprint checked against the world as it stands. The host
+      // reads what it changed in the notice every player is sent.
+      gameMaster: async ({ command }) => applyGameMasterPreview(await previewGameMasterCommand(command)),
       // A player's institution business, run here for their country. Each
       // thing it writes is an entry in the queue; a Council's or a hearing's
       // turn asks the AI outside it (tableTurn).
@@ -609,6 +624,22 @@ const boot = async () => {
       case "resolveNow": return gameHost.control.resolveNow();
       // Who answers for the AI's governments from here on (host/settings.js `replies`).
       case "replies": return gameHost.control.setReplies(clean(args?.mode));
+      // And how many answers of the host's AI each player has a round with their own (`hostAnswers`).
+      case "hostAnswers": return gameHost.control.setHostAnswers(Number(args?.count));
+      // The host pays the round being planned itself, and runs it (settings.payment "cycle").
+      case "payRound": return gameHost.control.payRound();
+      // The Game Master's command (host/gameMaster.js): one at a time.
+      case "gm": {
+        if (gameMasterBusy) return undefined;
+        gameMasterBusy = true;
+        report();
+        try {
+          return await gameHost.control.gameMaster(String(args?.command ?? ""));
+        } finally {
+          gameMasterBusy = false;
+          report();
+        }
+      }
       case "kick": {
         // The country is taken back; with `ban` its player's device is kept
         // out of this game for good (saved with it), and sent away now.

@@ -27,8 +27,9 @@ import { GENERATION_COMPLETE_EVENT, adoptStoredAiRecord } from "../../Game/AI/te
 import { planGameWrite, planWorldWrite, revealedTurnOf, suggestionsOutlived, unroutedChanges } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
-import { SHARED_ROUND_LANDED, setSharedGamePeople, setSharedGameRole, setSharedRequester, setSharedRoundBase, setSharedRoundDays } from "./sharedGameBridge.js";
+import { setSharedGamePeople, setSharedGameRole, setSharedGameSettings, setSharedRequester, setSharedRoundBase, setSharedRoundDays, SHARED_ROUND_LANDED } from "./sharedGameBridge.js";
 import { roundBaseOf } from "./roundBase.js";
+import { createRoundPayer } from "./roundPayer.js";
 import { createLoopbackScreenSide } from "../transport/loopback.js";
 import { createClientSession } from "../session/client.js";
 import { probeNetwork } from "../transport/peer.js";
@@ -267,6 +268,8 @@ const makeClient = (send) => createGameClient({
     if (lobby?.features) setSharedGameFeatures(lobby.features);
     // The language the host's world is written in, for every request this page makes (runtime/i18n.js).
     if (lobby?.settings) setWorldLanguage(lobby.settings.language);
+    // And the rules of the game every screen says (who pays for what, the Game Master).
+    if (lobby?.settings) setSharedGameSettings(lobby.settings);
     // And who plays which country: a seat a person's device holds (game/messages.js SEAT `held`), not one they watch.
     if (lobby) setSharedGamePeople((Array.isArray(lobby.seats) ? lobby.seats : []).filter((seat) => seat?.held === true && seat?.status !== "watching").map((seat) => seat.country));
     // And how far each round moves the world, which the Timeline panel shows in place of its skips.
@@ -278,6 +281,8 @@ const makeClient = (send) => createGameClient({
       mode: state.mode === "opening" ? "lobby" : lobby?.started && state.mode === "lobby" ? "playing" : state.mode,
     });
   },
+  // A request of the round this device is to pay for, in its turn.
+  onPay: (message) => roundPayer.receive(message),
 });
 
 const startViews = () => {
@@ -589,6 +594,17 @@ export const sharedRequest = (t, fields = {}, options = {}) => (current?.client
 // The game's own panels reach the host through the bridge.
 setSharedRequester(sharedRequest);
 
+// With the host's setting that players take turns to pay (host/settings.js
+// payment "cycle"): this device's turn, made on its own AI (client/roundPayer.js).
+// The game's AI is loaded only when a request comes.
+const roundPayer = createRoundPayer({
+  ask: async (call, options) => (await import("../../Game/AI/main.jsx")).carryRoundRequest(call, options),
+  answer: (fields) => sharedRequest("paid", fields),
+  lookup: (fields) => sharedRequest("payLookup", fields),
+  cycle: () => state.lobby?.settings?.payment === "cycle",
+  log: (text) => logDebugEvent("shared game", text, undefined, { problem: true }),
+});
+
 export const sharedRemainingMs = () => current?.client?.remainingMs() ?? 0;
 
 export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
@@ -597,6 +613,7 @@ export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
   // cannot be trusted to close itself when it is told to stop.
   const unanswered = Boolean(leaving?.screen) && (leaving.engineGone || !state.engine?.open);
   current = null;
+  roundPayer.close();
   if (remoteRuntimeActive()) stopRemoteRuntime();
   leaving?.client?.close();
   if (leaving?.screen) {
@@ -616,6 +633,7 @@ export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
   setSharedGamePeople([]);
   setSharedRoundBase(null);
   setSharedRoundDays(0);
+  setSharedGameSettings(null);
   // This device's own features again, and its own language.
   setSharedGameFeatures(null);
   setWorldLanguage("");

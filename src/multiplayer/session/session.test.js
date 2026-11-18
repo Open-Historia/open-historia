@@ -279,13 +279,13 @@ test("a large message arrives whole, both ways", async () => {
   setup.host.send(player.client.player, { t: "blob", data });
   assert.ok(await until(() => player.log.messages.length === 1, 5000));
   assert.equal(player.log.messages[0].data.length, data.length);
-  // From a player, anything up to the host's limit for one (a Projects board
-  // at its fullest is the largest thing a player sends).
-  player.client.send({ t: "blob", data: "orders ".repeat(50_000) });
+  // From a player, anything up to the host's limit for one (the answer its own
+  // AI gave to a round it pays for is the largest thing a player sends).
+  player.client.send({ t: "blob", data: "orders ".repeat(300_000) });
   assert.ok(await until(() => setup.events.messages.length === 1, 5000));
-  assert.equal(setup.events.messages[0].message.data.length, 350_000);
+  assert.equal(setup.events.messages[0].message.data.length, 2_100_000);
   // And nothing larger: a message over the limit never arrives.
-  player.client.send({ t: "blob", data: "orders ".repeat(100_000) });
+  player.client.send({ t: "blob", data: "orders ".repeat(500_000) });
   await wait(400);
   assert.equal(setup.events.messages.length, 1);
   setup.host.stop();

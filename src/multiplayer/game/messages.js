@@ -126,6 +126,31 @@ export const COUNTRY_MAX_CHARS = 200;
 const COUNTRY = NAME(COUNTRY_MAX_CHARS);
 const REQUEST_ID = HEX_ID(8);
 
+// Taking turns to pay (host/settings.js payment "cycle", host/roundPayers.js):
+// a request of the round, as the host's engine built it, carried by the paying
+// device to its own AI (Game/AI/roundCarrier.js), and the answer it got. Words
+// and JSON only: no key goes either way. A skip's prompt is long, and so may its
+// answer be; both are held to bounds well above what a round has needed.
+export const CARRIED_PROMPT_MAX = 4_000_000;
+export const PAID_ANSWER_MAX = 1_000_000;
+const PAY_JOB = str(40, { min: 1, pattern: /^[0-9a-z-]+$/ });
+const CARRIED_CALL = obj({
+  systemPrompt: str(CARRIED_PROMPT_MAX, { min: 1 }),
+  history: json(12),
+  tool: json(64, { nullable: true }),
+  lookupTools: list(json(64), 32),
+  maxRounds: int(0, 16, { nullable: true }),
+  taskKey: str(60),
+  staticPrefixEnd: int(0, CARRIED_PROMPT_MAX, { nullable: true }),
+  sharedPrefixEnd: int(0, CARRIED_PROMPT_MAX, { nullable: true }),
+  promptCacheKey: str(200),
+  maxTokens: int(1, 1_000_000, { nullable: true }),
+});
+// What the Game Master changed (host/gameMaster.js), as every lobby carries it.
+export const GAME_MASTER_LOG_MAX = 24;
+export const GAME_MASTER_SUMMARY_MAX = 400;
+const GAME_MASTER_ENTRY = obj({ round: int(0, 1_000_000), date: str(40), summary: str(GAME_MASTER_SUMMARY_MAX, { min: 1 }) });
+
 export const PLAYER_REQUESTS = Object.freeze({
   // The lobby.
   pick: obj({ t: literal("pick"), id: REQUEST_ID, country: COUNTRY }),
@@ -308,6 +333,20 @@ export const PLAYER_REQUESTS = Object.freeze({
     t: literal("reply"), id: REQUEST_ID, thread: str(120, { min: 1 }), line: str(160, { min: 1 }),
     lines: list(obj({ speaker: COUNTRY, text: str(REPLY_MAX_CHARS, { min: 1 }) }), REPLY_MAX_LINES),
   }),
+  // With settings.payment "cycle": what this device's own AI answered a request
+  // of the round the host sent it ("pay", by its `job`), as it came (`text`, and
+  // a function call's input as JSON text), or why it gave none (`error`); and
+  // the status of each provider response it took, which the host's skip reads
+  // as its own (a contract the provider refused is asked again the old way).
+  paid: obj({
+    t: literal("paid"), id: REQUEST_ID, job: PAY_JOB,
+    answer: obj({ text: str(PAID_ANSWER_MAX), toolJson: str(PAID_ANSWER_MAX), asText: bool() }),
+    error: str(300),
+    statuses: list(int(0, 999), 32),
+  }, ["answer", "error", "statuses"]),
+  // And a lookup that request's model asked for on the way, which the host
+  // answers from its own game (the ack's `result.text`, as JSON text).
+  payLookup: obj({ t: literal("payLookup"), id: REQUEST_ID, job: PAY_JOB, name: str(80, { min: 1 }), args: json(12) }),
   // What the page did with a view (client/sharedGame.js): applied it (`ok`), or
   // found it did not follow the one it holds or did not add up, and wants the
   // whole view again. Not a request: it has no id and is not answered.
@@ -346,7 +385,9 @@ export const HOST_MESSAGES = Object.freeze({
       most: int(1, 64),
       stallMinutes: int(0, 24 * 60),
     }),
-  }, ["changes", "features", "rules"]),
+    // What the Game Master changed in this game, newest last (decision 8).
+    gameMaster: list(GAME_MASTER_ENTRY, GAME_MASTER_LOG_MAX),
+  }, ["changes", "features", "rules", "gameMaster"]),
   round: obj({
     t: literal("round"),
     phase: str(12, { enum: ["lobby", "planning", "countdown", "resolving", "revealing"] }),
@@ -360,7 +401,14 @@ export const HOST_MESSAGES = Object.freeze({
     // round lands.
     failed: int(0, 1_000_000),
     failure: str(300),
-  }),
+    // With settings.payment "cycle": the country whose device pays this round.
+    payer: COUNTRY,
+  }, ["payer"]),
+  // With settings.payment "cycle": a request of the round, for the device that
+  // pays it to carry to its own AI and answer ("paid"); and the host's word
+  // that it no longer waits for one (the round was cancelled or stopped).
+  pay: obj({ t: literal("pay"), job: PAY_JOB, round: int(0, 1_000_000), call: CARRIED_CALL }),
+  payStop: obj({ t: literal("payStop"), job: PAY_JOB }),
   // `result`: what the host made for the request, by id (an institution, a
   // proposal, a thread), which the asker's screen goes on to show.
   ack: obj({ t: literal("ack"), id: REQUEST_ID, ok: bool(), error: str(300, { nullable: true }), result: json(3) }, ["result"]),

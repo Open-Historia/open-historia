@@ -27,6 +27,7 @@ import { OWN_MAP_NOTE, hostLines, joinStage } from "../client/joinProgress.js";
 import { roundDatesOf } from "../client/roundDates.js";
 import { languageDisplayName } from "../../runtime/i18n.js";
 import { difficultyMeta } from "../../runtime/difficulty.js";
+import { GameMasterBox, GameMasterMark, GameRules, PayItYourself, PayerLine } from "./GameRules.jsx";
 
 const glass = {
   background: "rgba(19,19,21,0.86)",
@@ -167,9 +168,10 @@ const CountryPicker = ({ lobby, asking = false }) => {
 const RepliesSetting = ({ shared }) => {
   if (!shared.lobby) return null;
   const mode = shared.lobby.settings?.replies === "own" ? "own" : "host";
-  if (shared.role !== "host") {
-    return mode === "own" ? <div style={{ ...small, marginTop: "0.5rem", textAlign: "end" }}>Countries the AI plays answer your messages with your own AI key.</div> : null;
-  }
+  // A player is told under "Who pays" (ui/GameRules.jsx), with what the host's
+  // AI still answers: "Countries the AI plays answer your messages with your
+  // own AI key" was said here, and some of them never did.
+  if (shared.role !== "host") return null;
   // At the end of its row: during a game the Events panel lies over the start
   // of the round bar's lower rows, and covered the start of this one.
   return (
@@ -212,7 +214,7 @@ const betweenRoundsLine = (features) => {
   if (agents) return "Between rounds no agent reports: reports come with each round.";
   return "";
 };
-const GameRules = ({ shared }) => {
+const RoundRules = ({ shared }) => {
   const lobby = shared.lobby;
   if (!lobby) return null;
   const rules = lobby.rules;
@@ -294,6 +296,8 @@ const Lobby = ({ shared, me }) => {
         <SeatList seats={lobby?.seats} host={role === "host"} />
         <RepliesSetting shared={shared} />
         <WorldLanguage shared={shared} />
+        {/* What decides every round (host/hostRules.js), then who pays for what and the Game Master (multiplayer/costRules.js). */}
+        <RoundRules shared={shared} />
         <GameRules shared={shared} />
       </div>
 
@@ -364,6 +368,7 @@ const RoundBar = ({ shared, me, watching = "" }) => {
         </span>
       ) : null}
       <span style={small}>{round ? `${round.ready?.length ?? 0} of ${round.counted ?? 0} ready${round.needed ? ` (countdown at ${round.needed})` : ""}` : ""}</span>
+      <GameMasterMark shared={shared} />
       {["planning", "countdown"].includes(round?.phase) && me ? (
         <button type="button" style={ready ? primary : button} onClick={() => sharedRequest("ready", { value: !ready })}>{ready ? "Ready ✓" : "I'm ready"}</button>
       ) : null}
@@ -384,8 +389,11 @@ const RoundBar = ({ shared, me, watching = "" }) => {
         <span style={{ ...small, ...problemText, alignItems: "center", display: "flex", flexBasis: "100%", flexWrap: "wrap", gap: "0.5rem", justifyContent: "center" }}>
           <span style={isolate}>{`Round ${round.failed} could not be resolved: ${round.failure || "the host's AI did not answer."}`}</span>
           {role === "host" && ["planning", "countdown"].includes(round?.phase) ? <button type="button" style={button} onClick={() => hostControl("resolveNow")}>Try again now</button> : null}
+          <PayItYourself shared={shared} />
         </span>
       ) : null}
+      {/* Whose device makes this round's request, when players take turns to pay. */}
+      <PayerLine shared={shared} me={me} />
       {watching ? <span style={{ ...small, ...isolate, flexBasis: "100%", textAlign: "center" }}>{`${watching} is gone: you are watching. Take a free country under Players.`}</span> : null}
       {recent ? <span style={{ ...small, flexBasis: "100%", textAlign: "center" }}>{recent.text}</span> : null}
       {showPlayers ? (
@@ -396,9 +404,12 @@ const RoundBar = ({ shared, me, watching = "" }) => {
           {role !== "host" && (me || watching) ? <CountryPicker lobby={shared.lobby} asking={Boolean(me)} /> : null}
           <RepliesSetting shared={shared} />
           <WorldLanguage shared={shared} />
+          <RoundRules shared={shared} />
           <GameRules shared={shared} />
         </div>
       ) : null}
+      {/* The host's command to the Game Master, where the game allows it. */}
+      <GameMasterBox shared={shared} />
     </div>
   );
 };

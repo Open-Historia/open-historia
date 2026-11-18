@@ -5,8 +5,25 @@
 //     Phase 5b), so the slider runs to 64 but can only be set to 8 for now;
 //   - the round: its length, the share of ready players that starts the
 //     countdown (2/3 by default), and the countdown's length;
-//   - cheats "not allowed by default" (off, the host alone, or put to a vote);
-//   - who pays: the host, for now; the rotating payer comes with Phase 2;
+//   - cheats "not allowed by default": the Game Master's tools (decision 8,
+//     "behind a visible notice") are off, or the host's ("host"), every change
+//     they make told to every player and kept in the lobby's log
+//     (host/gameMaster.js). "vote" is not built: it allows nothing;
+//   - who pays for the round's one AI request (`payment`): the host ("host"),
+//     or each player's device in turn, on its own AI ("cycle"; the owner's
+//     decision 14, "build it now, option B"). No key is sent: the host's engine
+//     builds the round's request and the paying device carries it to its own AI
+//     and sends back the answer (host/roundPayers.js). That device sees the
+//     round's whole request, every player's orders and secrets included, which
+//     the lobby says plainly (multiplayer/costRules.js);
+//   - with `replies` "own", how many answers of the host's AI a player may have
+//     a round from a government whose answer can act (`hostAnswers`: one at war
+//     with them, their overlord or puppet, an institution's table, Council or
+//     hearing). Those can end a war, sign or vote, which only the host's own
+//     game may carry out, so they are never left to a player's device; and they
+//     are the host's requests, so they are a number the host sets, none unless
+//     it says (rule 3: anything extra is off by default). Beyond it a line is
+//     still written, and the round reads it;
 //   - who answers a player's message to a government the AI plays (`replies`):
 //     the host's computer on the host's key ("host"), or the writer's own
 //     device on the writer's own key ("own"). The owner, 2026-11-15: "build C
@@ -30,6 +47,14 @@ export const SEATS_AVAILABLE_NOW = 8;
 
 // Who writes an AI government's reply to a player's message.
 export const REPLY_MODES = Object.freeze(["host", "own"]);
+// Who pays for the round's one AI request.
+export const PAYMENT_MODES = Object.freeze(["host", "cycle"]);
+// The most answers of the host's AI the host may give each player a round (`hostAnswers`).
+export const HOST_ANSWERS_MAX = 50;
+// Keys a record or a lobby from before they existed may lack: read as their
+// default (normalizeSettings), never a reason to refuse the whole of it. A
+// session record whose settings did not read was dropped whole, seats and all.
+const LATER_KEYS = Object.freeze(["hostAnswers"]);
 // The languages a world can be written in (runtime/i18n.js LANGUAGES), by code.
 export const WORLD_LANGUAGES = Object.freeze(LANGUAGES.map((entry) => entry.code));
 
@@ -49,6 +74,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   payment: "host",
   replies: "host",
   language: "",
+  hostAnswers: 0,
 });
 
 export const SETTINGS_SCHEMA = obj({
@@ -64,10 +90,14 @@ export const SETTINGS_SCHEMA = obj({
   leaverGraceMinutes: int(0, 24 * 60),
   allowMidGameJoin: bool(),
   cheats: str(8, { enum: ["off", "host", "vote"] }),
-  payment: str(8, { enum: ["host"] }),
+  payment: str(8, { enum: PAYMENT_MODES }),
   replies: str(8, { enum: REPLY_MODES }),
   language: str(16, { enum: ["", ...WORLD_LANGUAGES] }),
-});
+  hostAnswers: int(0, HOST_ANSWERS_MAX),
+}, LATER_KEYS);
+
+// Whether the host may use the Game Master in this game (`cheats`).
+export const gameMasterAllowed = (settings) => settings?.cheats === "host";
 
 // Settings the host typed, made whole and safe: unknown keys are dropped,
 // anything out of range is refused with the reason, and the seats are held to

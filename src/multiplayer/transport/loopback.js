@@ -29,7 +29,7 @@ import { HOST_MESSAGES, PLAYER_REQUESTS } from "../game/messages.js";
 import { bool, json, list, literal, obj, str, union, validate } from "../protocol/validate.js";
 
 export const LOOPBACK_CHANNEL = "oh-mp-host";
-export const HOST_CONTROLS = Object.freeze(["open", "start", "pause", "resume", "resolveNow", "cancelRound", "replies", "seat", "kick", "rotate", "stop"]);
+export const HOST_CONTROLS = Object.freeze(["open", "start", "pause", "resume", "resolveNow", "cancelRound", "replies", "hostAnswers", "payRound", "gm", "seat", "kick", "rotate", "stop"]);
 export const ALIVE_MS = 5_000;
 export const GONE_MS = 20_000;
 

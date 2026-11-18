@@ -16,6 +16,8 @@
 
 import { NAME, bool, int, list, literal, obj, str, validate } from "../protocol/validate.js";
 import { SETTINGS_SCHEMA, normalizeSettings } from "./settings.js";
+import { GAME_MASTER_LOG_MAX, GAME_MASTER_SUMMARY_MAX } from "../game/messages.js";
+import { keptGameMasterLog } from "./gameMaster.js";
 
 export const SESSION_RECORD_VERSION = 1;
 
@@ -49,12 +51,17 @@ const SCHEMA = obj({
   // the game included: a game taken up again starts from them, so a host
   // sharing it another day is shown its rules, not the defaults.
   settings: SETTINGS_SCHEMA,
-}, ["watching", "changes", "ownLines", "banned", "settings"]);
+  // With settings.payment "cycle": the device that paid the last round that
+  // landed (host/roundPayers.js), so the turns go on where they were.
+  lastPayer: str(64),
+  // What the Game Master changed in this game (host/gameMaster.js).
+  gameMaster: list(obj({ round: int(0, 1_000_000), date: str(40), summary: str(GAME_MASTER_SUMMARY_MAX, { min: 1 }) }), GAME_MASTER_LOG_MAX),
+}, ["watching", "changes", "ownLines", "banned", "settings", "lastPayer", "gameMaster"]);
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
 // The record of a session as it stands.
-export const sessionRecordOf = ({ campaign, started, round, hostDevice, seats = [], watching = [], changes = [], ownLines = [], banned = [], settings = null }) => ({
+export const sessionRecordOf = ({ campaign, started, round, hostDevice, seats = [], watching = [], changes = [], ownLines = [], banned = [], settings = null, lastPayer = "", gameMaster = [] }) => ({
   v: SESSION_RECORD_VERSION,
   campaign: clean(campaign).slice(0, 160),
   started: Boolean(started),
@@ -74,6 +81,8 @@ export const sessionRecordOf = ({ campaign, started, round, hostDevice, seats = 
     .filter((entry) => entry.line && entry.thread && entry.seat),
   banned: [...new Set(banned.map((device) => clean(device).slice(0, 64)).filter(Boolean))].slice(0, 256),
   ...(settings && normalizeSettings(settings).ok ? { settings: normalizeSettings(settings).settings } : {}),
+  lastPayer: clean(lastPayer).slice(0, 64),
+  gameMaster: keptGameMasterLog(gameMaster),
 });
 
 // The session a record holds, for `campaign` and the host on `hostDevice`; null
@@ -94,6 +103,8 @@ export const sessionFromRecord = (record, { campaign, hostDevice }) => {
     ownLines: value.ownLines ?? [],
     banned: value.banned ?? [],
     settings: value.settings ?? null,
+    lastPayer: value.lastPayer ?? "",
+    gameMaster: value.gameMaster ?? [],
   };
 };
 
