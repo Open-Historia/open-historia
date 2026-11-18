@@ -603,10 +603,14 @@ const boot = async () => {
       replyTo,
       worldWords,
       // The Game Master's command (host/gameMaster.js), as the Cheats panel's
-      // console runs one: its preview asked of the host's AI, then applied at
-      // once, its fingerprint checked against the world as it stands. The host
+      // console runs one: its preview asked of the host's AI outside the
+      // host's queue, then applied as one entry of it (`write`), its
+      // fingerprint checked against the world as it stands then. The host
       // reads what it changed in the notice every player is sent.
-      gameMaster: async ({ command }) => applyGameMasterPreview(await previewGameMasterCommand(command)),
+      gameMaster: async ({ command, write }) => {
+        const preview = await previewGameMasterCommand(command);
+        return write(() => applyGameMasterPreview(preview));
+      },
       // A player's institution business, run here for their country. Each
       // thing it writes is an entry in the queue, for the seat as it is when
       // the entry runs (host/institutions.js); a Council's or a hearing's

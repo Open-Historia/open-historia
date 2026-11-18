@@ -3160,7 +3160,9 @@ test("a round the host cancels while a player's device pays it tells that device
   assert.equal(t.to(t.guest, "round").at(-1).payer, LATVIA);
 });
 
-test("the Game Master is the host's, only where the lobby says so: one entry of the queue, never while a round resolves, and told to every player", async () => {
+// The Game Master's whole AI call was one entry of the queue, and every player's requests waited behind the model
+// with no word (FOLLOWUPS A5). It thinks outside the queue and writes inside it, as the rest of the AI's work does.
+test("the Game Master is the host's, only where the lobby says so: it thinks outside the queue and writes as one entry, never while a round resolves, and told to every player", async () => {
   // Off unless the host says: nothing is asked.
   const off = setup({ gameMaster: async () => assert.fail("asked in a game without a Game Master") });
   off.host.join(off.hostPlayer);
@@ -3168,35 +3170,41 @@ test("the Game Master is the host's, only where the lobby says so: one entry of 
   assert.match(off.to(off.hostPlayer, "notice").at(-1).text, /The Game Master is off in this game/);
 
   const commands = [];
+  const applied = [];
   let gate = Promise.resolve();
   let s = null;
   s = setup({
     settings: { cheats: "host" },
     holdResolve: new Promise(() => {}),
-    gameMaster: async ({ command }) => {
+    // The engine's (engineMain.js): the preview asked of the AI, then applied in the host's order.
+    gameMaster: async ({ command, write }) => {
       commands.push(command);
       await gate;
-      if (/fail/.test(command)) throw new Error("Canonical state changed after this preview was generated.");
-      s.store.docs.world = { ...s.store.docs.world, gmTouched: true };
-      return { summary: "Estonia's border moved to the Narva.", eventIds: ["event-gm-1"], warIds: [], statCountries: [ESTONIA] };
+      return write(async () => {
+        if (/fail/.test(command)) throw new Error("Canonical state changed after this preview was generated.");
+        applied.push({ command, actions: s.store.docs.actions.map((action) => action.text) });
+        s.store.docs.world = { ...s.store.docs.world, gmTouched: true };
+        return { summary: "Estonia's border moved to the Narva.", eventIds: ["event-gm-1"], warIds: [], statCountries: [ESTONIA] };
+      });
     },
   });
   s.host.join(s.hostPlayer);
   s.host.join(s.guest);
   await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
   await s.host.control.start();
-  // One entry of the queue: a player's order given while it works is applied after it.
+  // While it thinks, a player's order is applied at once; what it changes is written after, in the queue's order.
   let open;
   gate = new Promise((resolve) => { open = resolve; });
   const working = s.host.control.gameMaster("Move Estonia's border to the Narva.");
   await s.clock.flush();
-  const ordering = s.request(s.guest, { t: "order", id: id(2), text: "Hold the line at Pskov" });
-  await s.clock.flush();
-  assert.equal(s.store.docs.actions.some((action) => action.text === "Hold the line at Pskov"), false, "waits behind the Game Master");
+  await s.request(s.guest, { t: "order", id: id(2), text: "Hold the line at Pskov" });
+  assert.equal(s.ack(s.guest, id(2)).ok, true, "answered while the Game Master thinks");
+  assert.deepEqual(s.to(s.guest, "held"), [], "nothing waits for it");
+  assert.equal(s.store.docs.world.gmTouched, undefined, "nothing of it is written yet");
   open();
   assert.equal(await working, true);
-  await ordering;
-  assert.ok(s.store.docs.actions.some((action) => action.text === "Hold the line at Pskov"));
+  assert.ok(applied[0].actions.includes("Hold the line at Pskov"), "written after what was applied while it thought");
+  assert.equal(s.store.docs.world.gmTouched, true);
   assert.deepEqual(commands, ["Move Estonia's border to the Narva."]);
   // Every player is told what it changed, and every lobby lists it, with what
   // it touched as fields each screen says in its own words (gameMasterChangeLines).
@@ -3218,12 +3226,20 @@ test("the Game Master is the host's, only where the lobby says so: one entry of 
   assert.equal(validate(HOST_MESSAGES.notice, s.to(s.hostPlayer, "notice").at(-1)).ok, true);
   assert.equal(s.to(s.guest, "notice").some((entry) => /changed nothing/.test(entry.text)), false);
   assert.equal(s.to(s.guest, "lobby").at(-1).gameMaster.length, 1);
-  // Never while a round is resolved.
+  // A round that begins while it thinks moves the world it read on: nothing is written, and the host is told now.
+  gate = new Promise((resolve) => { open = resolve; });
+  const overtaken = s.host.control.gameMaster("Move the border north.");
+  await s.clock.flush();
   await playRound(s, [s.hostPlayer, s.guest]);
   assert.equal(s.to(s.guest, "round").at(-1).phase, "resolving");
+  open();
+  assert.equal(await overtaken, false);
+  assert.match(s.to(s.hostPlayer, "notice").at(-1).text, /A round began while the Game Master was at work/);
+  assert.equal(applied.length, 1, "nothing of it was applied");
+  // Never asked while a round is resolved.
   assert.equal(await s.host.control.gameMaster("Move it back."), false);
   assert.match(s.to(s.hostPlayer, "notice").at(-1).text, /Not while a round is being resolved/);
-  assert.equal(commands.length, 2);
+  assert.equal(commands.length, 3);
 });
 
 // An institution's Council turn ran outside the one answer at a time at each

@@ -74,6 +74,8 @@ import { createRequestWaits } from "./requestWaits.js";
 import { blindId, blindToken } from "../../runtime/blindIds.js";
 
 export const MAX_ORDERS_PER_ROUND = 12;
+// Said to the host when a round began while the Game Master thought (control.gameMaster).
+const GAME_MASTER_ROUND_BEGAN = "A round began while the Game Master was at work, so nothing was changed: ask again once the round has landed.";
 // The answers a device's requests were given, kept so that one sent again (the
 // page sends again what was not answered before a reconnect) is applied once
 // and answered as it was the first time.
@@ -2529,11 +2531,16 @@ export const createGameHost = ({
       },
       // The Game Master's command (decision 8), the host's alone and only in a
       // game whose lobby says so (settings.cheats "host"): run by the game's
-      // own console in the host's engine as one entry of the queue, never while
-      // a round is resolved (it waits for none: it is refused), and what it
-      // changed told to every player and kept in every lobby
-      // (host/gameMaster.js). Its reason goes to the host when it changes
-      // nothing. Resolves whether it changed anything.
+      // own console in the host's engine, never while a round is resolved (it
+      // waits for none: it is refused), and what it changed told to every
+      // player and kept in every lobby (host/gameMaster.js). It thinks outside
+      // the queue and writes inside it, as the rest of the AI's work does
+      // (`write`, one entry): its whole AI call was an entry, and every
+      // player's requests waited behind the model with no word (FOLLOWUPS A5).
+      // What it changes is checked against the world as it stands when its
+      // entry runs (the preview's fingerprint), so a request applied while it
+      // thought is never written over. Its reason goes to the host when it
+      // changes nothing. Resolves whether it changed anything.
       async gameMaster(command) {
         const toHost = (text) => {
           for (const connection of connections.values()) if (isHost(connection)) send(connection, notice("warn", text, { about: "gm" }));
@@ -2543,12 +2550,22 @@ export const createGameHost = ({
         if (!gameMasterAllowed(settings)) return toHost("The Game Master is off in this game: its lobby says so to every player.");
         if (!asked) return toHost("Tell the Game Master what to change.");
         if (round.status().phase === "resolving") return toHost("Not while a round is being resolved: ask the Game Master once it has landed.");
+        const askedIn = round.status().round;
         try {
-          const made = await queue.run("game-master", async () => {
-            const done = await gameMaster({ command: asked });
-            // A country it renamed keeps its player (host/foundings.js).
-            await followSeats().catch((error) => log("warn", "a seat did not follow its country after the Game Master", { error: String(error?.message || error) }));
-            return done;
+          const made = await gameMaster({
+            command: asked,
+            write: (apply) => {
+              // A round that began while it thought moves the world it read on:
+              // nothing is applied, and the host is told now, not after the round.
+              const status = round.status();
+              if (status.phase === "resolving" || status.round !== askedIn) throw new Error(GAME_MASTER_ROUND_BEGAN);
+              return queue.run("game-master", async () => {
+                const done = await apply();
+                // A country it renamed keeps its player (host/foundings.js).
+                await followSeats().catch((error) => log("warn", "a seat did not follow its country after the Game Master", { error: String(error?.message || error) }));
+                return done;
+              });
+            },
           });
           const game = (await store.read())?.game ?? {};
           const entry = gameMasterEntryOf(made, { round: round.status().round, date: clean(game.gameDate) });
@@ -2560,6 +2577,7 @@ export const createGameHost = ({
           return true;
         } catch (error) {
           log("warn", "the Game Master changed nothing", { error: String(error?.message || error) });
+          if (error?.message === GAME_MASTER_ROUND_BEGAN) return toHost(GAME_MASTER_ROUND_BEGAN);
           return toHost(`The Game Master changed nothing: ${clean(error?.message || error).slice(0, 400) || "it did not answer."}`);
         }
       },
