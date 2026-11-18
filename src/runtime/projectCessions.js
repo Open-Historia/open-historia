@@ -39,3 +39,24 @@ export const cessionsPeopleKeep = ({ transfers = [], owner = "", people = [], wo
   }
   return { kept, refused };
 };
+
+// And a person's polity is theirs: a completion's polity changes (a save's
+// project from before the engine carries them, gameState.js
+// normalizeProjectOnComplete) that name a country a person plays, where the
+// project is not that person's own, are left out of it, as a region of theirs
+// is. One such change dissolved another player's country, or set its figures
+// to nothing, with no war and no word of theirs (the review of 2026-11-18).
+// `changes`: the completion's polityChanges. Returns { kept, refused }, each
+// refused change with its `holder`.
+export const polityChangesPeopleKeep = ({ changes = [], owner = "", people = [] } = {}) => {
+  const persons = list(people).map(fold).filter(Boolean);
+  if (!persons.length) return { kept: list(changes), refused: [] };
+  const kept = [];
+  const refused = [];
+  for (const change of list(changes)) {
+    const holder = [change?.code, change?.name].map(text).find((name) => name && persons.includes(fold(name)) && fold(name) !== fold(owner)) || "";
+    if (holder) refused.push({ ...change, holder });
+    else kept.push(change);
+  }
+  return { kept, refused };
+};

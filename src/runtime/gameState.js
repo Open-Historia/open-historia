@@ -2261,10 +2261,20 @@ const normalizeProjectOp = (entry) => {
     // are never a create's to say (the engine keeps both).
     const { knownBy: _knownBy, lentFrom: _lentFrom, ...source } = entry.project && typeof entry.project === "object" ? entry.project : entry;
     // A create opens an entry with no progress of its own and no plan it has not
-    // been given: "planning" when it carries none.
+    // been given: "planning" when it carries none. It carries what a government
+    // gives a new effort (PROJECT_FIELD_ALIASES), its id, and nothing of what the
+    // engine records of one under way: never that it is set up already, done,
+    // paid or yielding, nor a completion of its own that moves a border or a
+    // polity (onComplete is a save's from before the engine). It was read with
+    // the reader of the board's own saved entries, so a writer's create that
+    // said so was a programme set up from its first day, or one that dissolved
+    // a country when it completed (the review of 2026-11-18).
+    const given = Object.fromEntries(["id", "priority", ...Object.values(PROJECT_FIELD_ALIASES).flat()]
+      .filter((key) => source[key] !== undefined)
+      .map((key) => [key, source[key]]));
     const planned = normalizeProjectPlan(source.plan);
     const project = normalizeProjectEntry({
-      ...source,
+      ...given,
       progress: 0,
       status: planned ? "active" : "planning",
       plan: planned,

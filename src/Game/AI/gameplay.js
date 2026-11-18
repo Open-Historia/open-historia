@@ -268,7 +268,7 @@ import { airStrikeVisuals } from "../../runtime/fronts/airStrike.js";
 import { answerPeaceProposal, offerPeace, playerDiplomacy, turnDays, turnWarAndPeace } from "./warAndPeace.js";
 import { holdPlayersWars } from "./playersWarsHold.js";
 // A person's land is theirs to give: a completed project cedes none they hold (runProjectsEngine).
-import { cessionsPeopleKeep } from "../../runtime/projectCessions.js";
+import { cessionsPeopleKeep, polityChangesPeopleKeep } from "../../runtime/projectCessions.js";
 import { chatMessageTags } from "./chatTags.js";
 import { PEACE_BLOCK_HEADING, buildPeaceBlock } from "./peacePrompt.js";
 import { WAR_FIGURES_WANTED_MOST, buildWarFiguresBlock, readWarFigures } from "./warFiguresPrompt.js";
@@ -8881,6 +8881,12 @@ const runProjectsEngine = async ({ baseWorld, world, colors, fromDate, toDate, h
           container.impacts.regionTransfers = kept;
           for (const entry of refused) {
             logDebugEvent("turn", `"${released.territory[index].project}" would have taken ${normalizeString(entry.regionId)} from ${entry.holder}, which a person plays and did not give: that part of its completion was left out.`, undefined, { problem: true });
+          }
+          // And a person's polity is theirs (polityChangesPeopleKeep).
+          const polities = polityChangesPeopleKeep({ changes: released.territory[index].polityChanges, owner: released.territory[index].owner, people });
+          released.territory[index].polityChanges = polities.kept;
+          for (const entry of polities.refused) {
+            logDebugEvent("turn", `"${released.territory[index].project}" would have changed ${entry.holder}, which a person plays: that part of its completion was left out.`, undefined, { problem: true });
           }
         });
       }

@@ -41,6 +41,7 @@ import { digestText } from "../protocol/digest.js";
 import { withGoalProgress, withPlayerGoal } from "../../runtime/playerGoal.js";
 import { normalizeSocialFeed, withPlayerPost } from "../../runtime/socialFeed.js";
 import { applyProjectOpsToWorld, normalizeProjects } from "../../runtime/gameState.js";
+import { seatProjectOps } from "./seatProjects.js";
 import { deployFor, disbandFor, revertOrderFor } from "./forces.js";
 import { orderCapRefusal } from "./orderCap.js";
 import { huntSeenBy, opaqueId, withFleetOrdered, withLineGivenUp, withOrdersSeen, withRenamed } from "./onlyOrdered.js";
@@ -1674,10 +1675,7 @@ export const createGameHost = ({
     // host kept it: a page could write any entry's progress, or a plan that
     // took another player's land, and a board saved while a round resolved
     // replaced the progress the round had made (the gap audit of 2026-11-18).
-    projectOps: async (connection, { ops, by }, seat) => {
-      // A programme of another country's is no seat's to open or steer: the
-      // door leaves such a create out without a word, so it is refused here.
-      if (list(ops).some((op) => clean(op?.ownerCode) && !same(op.ownerCode, seat.country))) return "That is not one of your own programmes.";
+    projectOps: async (connection, { ops }, seat) => {
       const docs = await store.read();
       const date = clean(docs?.game?.gameDate);
       const turn = Number(docs?.game?.round) || 0;
@@ -1687,17 +1685,26 @@ export const createGameHost = ({
         const boards = isRecord(world?.seatBoards) ? world.seatBoards : {};
         const key = Object.keys(boards).find((country) => same(country, seat.country));
         const board = mine ? list(world?.projects) : list(key ? boards[key] : []);
+        // Every op made again by the host, from what a government decides for
+        // its own work (host/seatProjects.js): ids the host's, a plan priced
+        // and held to the seat's own country. And the player's, whoever on the
+        // page wrote it: `by` is the page's word, and lifted nothing.
+        const door = seatProjectOps(list(ops), { board, world, country: seat.country, mint: () => mintId("project", now) });
+        if (!door.ops.length) {
+          refusal = door.refusal;
+          return null;
+        }
         const { refusedProjectIds, world: next } = applyProjectOpsToWorld({
-          actor: by === "advisor" ? "ai" : "player",
+          actor: "player",
           date,
-          ops: list(ops),
+          ops: door.ops,
           playerCountry: seat.country,
           round: turn,
           world: { ...world, projects: board },
         });
         const changed = JSON.stringify(next.projects) !== JSON.stringify(normalizeProjects(board));
         if (!changed) {
-          refusal = refusedProjectIds.length ? "That is not one of your own programmes." : "";
+          refusal = refusedProjectIds.length ? "That is not one of your own programmes." : door.refusal;
           return null;
         }
         return withSeatBoard(world, seat.country, next.projects, { host: hostCountry });

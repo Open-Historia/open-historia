@@ -23,6 +23,7 @@ import {
   SKIP_CREATES_MOST,
   STALL_AFTER_DAYS,
   STAT_BOUNDS,
+  PLAN_WORTH_BUDGET_MONTHS,
   boundPlanForOwner,
   capacityOf,
   describeOutcomes,
@@ -33,6 +34,8 @@ import {
   normalizeProjectEffect,
   normalizeProjectPlan,
   ownerMeans,
+  planWorth,
+  pricePlanForOwner,
   tickProjects,
   worldProjectGate,
 } from "./projectEngine.js";
@@ -320,4 +323,43 @@ test("a save from before the engine takes up where it stood: its span, nothing a
   assert.equal(outcomes.filter((outcome) => outcome.type === "milestone" && outcome.project === "Tempest Fighter Programme").length >= 0, true);
   assert.equal(projects[2].status, "complete", "a finished entry stays finished");
   assert.equal(projects[2].progress, 100);
+});
+
+// ---- what a plan does, paid for ---------------------------------------------------------
+
+test("a plan is priced by what it does: an honest one stands, a free one pays, and one that does more takes longer", () => {
+  // The budget is 2 billion a month; a project may cost 1 billion a month at most.
+  const honest = { durationDays: 540, monthlyCost: 4e8, effects: [{ type: "stat", stat: "military.sea", change: 4 }] };
+  assert.deepEqual(planWorth(boundPlanForOwner(honest, SHEET), SHEET), { once: 0.5, monthly: 0 });
+  const kept = pricePlanForOwner(honest, SHEET);
+  assert.equal(kept.monthlyCost, 4e8, "an honest plan's cost stands");
+  assert.equal(kept.durationDays, 540, "and its days");
+  assert.equal(pricePlanForOwner({ ...honest, monthlyCost: 9e12 }, SHEET).monthlyCost, monthlyProjectBudget(SHEET) * COST_SHARE_OF_BUDGET_MOST, "held to the most a project may cost, as ever");
+
+  // Eight points off an army, for nothing, in a fortnight: it is worth a month of the whole budget.
+  const free = pricePlanForOwner({ durationDays: 1, monthlyCost: 0, effects: [{ type: "stat", stat: "military.land", change: 8 }] }, SHEET);
+  assert.ok(free.monthlyCost * free.durationDays / 30 >= PLAN_WORTH_BUDGET_MONTHS * monthlyProjectBudget(SHEET) - 1, `paid for: ${free.monthlyCost} a month for ${free.durationDays} days`);
+  assert.ok(free.monthlyCost <= monthlyProjectBudget(SHEET) * COST_SHARE_OF_BUDGET_MOST);
+  assert.equal(free.durationDays, 60, "at the most a project may cost a month, a month of the budget takes two");
+
+  // The most a plan may do takes the longest: eight effects at their bounds.
+  const most = pricePlanForOwner({
+    durationDays: 14,
+    monthlyCost: 0,
+    effects: ["quality", "technology", "land", "sea", "air", "spending"].map((figure) => ({ type: "stat", stat: `military.${figure}`, change: 50 }))
+      .concat([{ type: "stat", stat: "stability", change: 50 }, { type: "relation", country: "Spain", change: 50 }]),
+  }, SHEET);
+  assert.equal(planWorth(most, SHEET).once, 8);
+  assert.equal(most.durationDays, 480);
+  // A programme's yields are paid for every month it runs.
+  const yields = pricePlanForOwner({ durationDays: 30, monthlyCost: 0, ongoing: true, yields: [{ type: "stat", stat: "stability", change: 5 }] }, SHEET);
+  assert.equal(yields.yields[0].change, STAT_BOUNDS.points.month);
+  assert.equal(yields.monthlyCost, (STAT_BOUNDS.points.month / STAT_BOUNDS.points.once) * monthlyProjectBudget(SHEET));
+  // An owner whose economy is not on record pays in full, so only the days hold it.
+  const unknown = pricePlanForOwner({ durationDays: 14, monthlyCost: 0, effects: [{ type: "stat", stat: "stability", change: 8 }] }, null);
+  assert.equal(unknown.monthlyCost, 0);
+  assert.equal(unknown.durationDays, 60);
+  // A plan that does nothing costs what it says.
+  assert.equal(pricePlanForOwner({ durationDays: 20, monthlyCost: 0 }, SHEET).monthlyCost, 0);
+  assert.equal(pricePlanForOwner({ monthlyCost: 5 }, SHEET), null);
 });
