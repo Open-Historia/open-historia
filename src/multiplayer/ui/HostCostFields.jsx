@@ -31,7 +31,7 @@ export const HostCostFields = ({ settings, setSettings }) => {
     <>
       <Field
         title="Each round's AI request is paid by"
-        hint={settings.payment === "cycle" ? "The paying player's device sees that round's whole request, every player's orders and secrets included. Every player needs an AI set up on their own device." : undefined}
+        hint={settings.payment === "cycle" ? "The paying player's device sees that round's whole request, every player's orders and secrets included, and could change what happens in that round. A player whose device has no AI that can make the request is passed over, and your AI pays when nobody else can." : undefined}
       >
         <select style={input} value={settings.payment} onChange={(event) => set("payment", event.target.value)}>
           <option value="host">Your AI key</option>

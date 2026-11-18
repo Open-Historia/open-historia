@@ -298,6 +298,7 @@ import { LOOKUP_DIRECTIVE, buildLookupContext, executeLookup, lookupDirective, l
 import { findPastTalks, findRelatedForSkip, installRelatedEventsIndexer, pastTalksSearch, similarEventsSearch } from "./relatedEventsSearch.js";
 import { FRONT_ORDER_FUNCTION, withFrontOrderFunction } from "./frontOrderFunction.js";
 import { carriedRoundCount, createLookupCarry } from "./toolTurns.js";
+import { carriedSkipRules, roundCarried } from "./roundCarrier.js";
 import {
   BACKGROUND_REQUEST,
   SKIP_SPENDERS,
@@ -1626,10 +1627,12 @@ const buildTemplateVariables = async (bundle, options = {}) => {
 
   // A task that declares the lookup functions gets the slim prompt (the
   // functions carry the detail); with the setting off it gets the full one.
-  const lookups = Boolean(options?.lookups) && lookupFunctionsEnabled();
+  // `spending`: a skip's rules, by whoever pays for it (skipRules).
+  const spending = options?.spending ?? null;
+  const lookups = Boolean(options?.lookups) && (spending ? spending.lookups === true : lookupFunctionsEnabled());
   // With no request limit, slimmer still: the model may ask more rounds, so
   // less is sent up front (promptContext.js `leanLookups`).
-  const leanLookups = lookups && unlimitedRequests();
+  const leanLookups = lookups && (spending ? spending.unlimited === true : unlimitedRequests());
   // Background work hands in nextTask: nobody is waiting on it, and the map may be moving.
   const pause = options?.pause;
   const variables = await buildPromptContext(bundle, { ...options, lookups, leanLookups, requiredKeys, taskKey });
@@ -1914,9 +1917,28 @@ const abortableWait = (ms, signal) => new Promise((resolve, reject) => {
 // answers (ADR 0008), so they are on for it exactly as for an API entry.
 const lookupFunctionsEnabled = () => !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
 
+// What a time skip may spend, by the settings of whoever's key pays for it:
+// this device's, or, for a shared round another player's device pays
+// (multiplayer/host/settings.js payment "cycle"), that device's own as it
+// stated them, with no key (roundCarrier.js carriedSkipRules). Read at each of
+// the skip's own decisions: its budget's cap and lookup rounds, whether it
+// declares the lookup functions and builds the slim prompt for them, how many
+// segments it is, and how its riders are weighed for Gemini. Before, a round on
+// a guest's free key was shaped by the host's "no request limit" (the review of
+// 2026-11-18, cost 2 and 8).
+const skipRules = () => carriedSkipRules() ?? {
+  unlimited: unlimitedRequests(),
+  lookups: lookupFunctionsEnabled(),
+  segmented: getMapSetting(MAP_SETTING_KEYS.chunkLongJumps),
+  // (Asked of this device's own Fallback list where it is wanted: main.jsx geminiDeclaresTaskFunction.)
+  declares: null,
+  who: "",
+};
+
 // My key has no request limit (requestBudget.js): more rounds, and the
 // directive says how many. Off, the directive is the one it always was.
-const activeLookupDirective = () => (unlimitedRequests()
+// `unlimited`: a skip's, by whoever pays for it (skipRules).
+const activeLookupDirective = (unlimited = unlimitedRequests()) => (unlimited
   ? lookupDirective({ rounds: lookupRoundLimit({ unlimited: true }) })
   : LOOKUP_DIRECTIVE);
 
@@ -1925,8 +1947,9 @@ const activeLookupDirective = () => (unlimitedRequests()
 // default, and it is passed on explicitly rather than left to a blank. A surface
 // that speaks AS a polity must pass a viewer here: chat_history, spy_network and
 // list_projects answer from material a government keeps to itself.
-const buildTaskLookups = (bundle, { maxRounds, audience = SIMULATION_AUDIENCE, mapSource = null } = {}) => {
-  if (!lookupFunctionsEnabled()) return null;
+// `enabled`: whether they are on, where the caller decides it (a skip, by skipRules).
+const buildTaskLookups = (bundle, { maxRounds, audience = SIMULATION_AUDIENCE, mapSource = null, enabled = null } = {}) => {
+  if (!(enabled ?? lookupFunctionsEnabled())) return null;
   const context = lazyLookupContext(bundle, { audience, mapSource });
   // similar_events beside them once the related-events model has loaded
   // (relatedEventsSearch.js), and past_talks while some chat is kept on file
@@ -3365,7 +3388,7 @@ ${briefs[0]}`);
   }
 
   // (The function that gives a player's troops their orders is no lookup: the [Fronts] block says what it is for.)
-  if (Array.isArray(lookups?.tools) && lookups.tools.some((tool) => tool?.name !== FRONT_ORDER_FUNCTION)) blocks.push(activeLookupDirective());
+  if (Array.isArray(lookups?.tools) && lookups.tools.some((tool) => tool?.name !== FRONT_ORDER_FUNCTION)) blocks.push(activeLookupDirective(skipRules().unlimited));
   // Without one, a line saying the history field is to be left out: the
   // function offers it on every turn where it fits (gameplaySchemas.js
   // NO_SKIP_HISTORY_JOB), and where it was left out there is nothing to say.
@@ -4262,8 +4285,9 @@ const runJsonTask = async (taskKey, {
       // for an ordinary skip, which makes three requests the most a skip is).
       // Rounds an earlier attempt already had answered are carried, not asked
       // again, so they count toward the limit without costing anything now.
+      // (Only a skip has a budget: its limit is by whoever pays for it, skipRules.)
       const lookupRounds = budget && Array.isArray(lookups?.tools) && lookups.tools.length
-        ? Math.min(carriedRoundCount(lookupCarry) + budget.free, lookupRoundLimit({ unlimited: unlimitedRequests() }))
+        ? Math.min(carriedRoundCount(lookupCarry) + budget.free, lookupRoundLimit({ unlimited: skipRules().unlimited }))
         : null;
       const lastChance = outputAttempt === 2 || salvageFirst;
       // Observational only, and off unless enabled from DevTools: measures the
@@ -16754,7 +16778,12 @@ const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => 
 // (ceilingAfterRefusal), so the next skip folds again carrying at least one
 // rider fewer, and each refusal after that takes one more off, for the rest of
 // the session.
-let foldedSkipCeiling = FOLDED_SKIP_SCHEMA_BUDGET;
+// The ceiling is what one provider took, so it is kept for whoever answers the
+// skip: this device's own (""), or the device of the player who pays a shared
+// round (skipRules `who`). One payer's Gemini refusing a contract is no
+// reason to fold less for every other player's round.
+const foldedSkipCeilings = new Map();
+const foldedSkipCeilingFor = (who = "") => foldedSkipCeilings.get(who) ?? FOLDED_SKIP_SCHEMA_BUDGET;
 // The riders the last skip left out that had a job to do, which the next skip
 // leaves out after the others (fitSkipRiders `waited`).
 let skipRidersWaiting = [];
@@ -17214,8 +17243,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // The lookup functions the request will declare beside the skip's
         // function, the same set askSegment hands it; none where they will not
         // be beside it (skipDeclaredChars).
-        const declaredBeside = geminiDeclaresTaskFunction(skipTaskKey, { watched: Boolean(showEvents) })
-          ? normalizeArray(withFrontOrderFunction(buildTaskLookups(segmentBundle), frontOrderCall(context))?.tools)
+        // Whose Gemini, and whose ceiling: whoever pays for this skip (skipRules).
+        const spending = skipRules();
+        const foldedSkipCeiling = foldedSkipCeilingFor(spending.who);
+        const declaredBeside = (spending.declares ?? geminiDeclaresTaskFunction(skipTaskKey, { watched: Boolean(showEvents) }))
+          ? normalizeArray(withFrontOrderFunction(buildTaskLookups(segmentBundle, { enabled: spending.lookups }), frontOrderCall(context))?.tools)
           : [];
         const fit = fitSkipRiders({
           wanted: { board: true, agentReports: dueAgentJobs.length > 0, history: true },
@@ -17267,7 +17299,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // by the skip's budget (runJsonTask).
         // And the function that gives a player's troops the orders their
         // actions give them, where there is a fought period to fight again.
-        lookups: withFrontOrderFunction(buildTaskLookups(segmentBundle), frontOrderCall(context)),
+        lookups: withFrontOrderFunction(buildTaskLookups(segmentBundle, { enabled: skipRules().lookups }), frontOrderCall(context)),
         // The skip itself always runs; asking again is what the budget weighs.
         ...spend,
         // One request in every mode: a flaw is cut out or repaired in place,
@@ -17560,8 +17592,10 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // next skip folds again under a lower ceiling (ceilingAfterRefusal),
           // so it carries at least one rider fewer than was refused.
           if (answer.generation?.source !== "fallback") {
-            foldedSkipCeiling = ceilingAfterRefusal(foldedSkipCeiling, state.foldedChars);
-            logDebugEvent("turn", `Folded skip: later skips fold again, carrying what fits under ${foldedSkipCeiling} characters.`, { refusedChars: state.foldedChars }, { verbose: true });
+            // (Kept for whoever answered it: skipRules `who`.)
+            const who = skipRules().who;
+            foldedSkipCeilings.set(who, ceilingAfterRefusal(foldedSkipCeilingFor(who), state.foldedChars));
+            logDebugEvent("turn", `Folded skip: later skips fold again, carrying what fits under ${foldedSkipCeilingFor(who)} characters.`, { refusedChars: state.foldedChars }, { verbose: true });
           }
         }
       } else {
@@ -17804,9 +17838,10 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 // automatic Stats refresh and the event consolidator were the last of it, and
 // went on 2026-11-07.
 const createJumpRequests = ({ segments = 1, reserveInstitutionBallot = false } = {}) => {
-  const saving = savingRequests();
+  // By the settings of whoever's key pays for the skip (skipRules).
+  const { unlimited } = skipRules();
+  const saving = !unlimited;
   // No request limit: up to eight, for six rounds of lookups (requestBudget.js).
-  const unlimited = unlimitedRequests();
   const pieces = Math.max(1, Math.round(Number(segments) || 1));
   const budget = createJumpBudget({ cap: jumpRequestCap({ segments: pieces, unlimited }), only: SKIP_SPENDERS });
   budget.reserve("jump", pieces);
@@ -17831,8 +17866,10 @@ const jumpTaskOptions = (requests, spender) => (requests ? {
 // Told to the ledger (the time panel shows it) and to the turn log.
 const reportJumpRequests = (requests) => {
   if (!requests) return;
+  // A shared round another player's device paid for (roundCarrier.js) cost
+  // this device's key nothing: its time panel is not told it did.
   try {
-    requestLedger.noteJump({ used: requests.used, refused: requests.refused });
+    if (!roundCarried()) requestLedger.noteJump({ used: requests.used, refused: requests.refused });
   } catch { /* a count is never worth a turn */ }
   const skipped = requests.budget.skipped;
   // What a skip never spends a request on (requestBudget.js SKIP_SPENDERS), and
@@ -18631,6 +18668,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   ]);
   const variables = await buildTemplateVariables(bundle, {
     lookups: true,
+    // Whether its lookups are declared, and its prompt slim for them, by whoever pays for it.
+    spending: skipRules(),
     relatedEvents,
     pastTalks,
     taskKey: mode === "auto" ? "autoJumpForward" : "jumpForward",
@@ -18681,7 +18720,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   // never split: they stop at the next notable moment, so there is no span to
   // divide up front. Short enough, or the setting off (the default), is a single call worded and
   // validated exactly as it always was.
-  const segmentDays = (getMapSetting(MAP_SETTING_KEYS.chunkLongJumps)
+  // (A segment is a request: by whoever pays for the skip, skipRules.)
+  const segmentDays = (skipRules().segmented
     && mode !== "auto"
     && dateStep >= SEGMENTED_JUMP_MIN_DAYS)
     ? planJumpSegments(dateStep)

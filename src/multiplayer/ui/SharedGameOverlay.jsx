@@ -28,6 +28,7 @@ import { roundDatesOf } from "../client/roundDates.js";
 import { languageDisplayName } from "../../runtime/i18n.js";
 import { difficultyMeta } from "../../runtime/difficulty.js";
 import { GameMasterBox, GameMasterMark, GameRules, PayItYourself, PayerLine } from "./GameRules.jsx";
+import { roundCostLinesOf } from "../costRules.js";
 
 const glass = {
   background: "rgba(19,19,21,0.86)",
@@ -195,17 +196,10 @@ const WorldLanguage = ({ shared }) => {
 
 // What decides every round, as the host states it (game/messages.js lobby
 // `rules`, host/hostRules.js): one difficulty for every player, what a round
-// costs the host's AI and how long it waits on it, how long a leaver's country
+// costs and how long it waits on a silent AI, by who pays for it
+// (multiplayer/costRules.js roundCostLinesOf), how long a leaver's country
 // waits for them, and what a shared game does not do between rounds. On the
 // host's computer alone, these used to be nobody else's to see.
-const roundCostLine = ({ requests, most }) => {
-  if (most > requests) {
-    return requests === 1
-      ? `Each round is one request to the host's AI, up to ${most} when it looks things up.`
-      : `Each round is ${requests} requests to the host's AI, up to ${most} when it looks things up.`;
-  }
-  return requests === 1 ? "Each round is one request to the host's AI." : `Each round is ${requests} requests to the host's AI.`;
-};
 const betweenRoundsLine = (features) => {
   const letters = features?.idleDiplomacy?.enabled !== false;
   const agents = features?.espionage?.enabled !== false;
@@ -221,10 +215,7 @@ const RoundRules = ({ shared }) => {
   const grace = Number(lobby.settings?.leaverGraceMinutes) || 0;
   const lines = [
     rules ? `Difficulty: ${difficultyMeta(rules.difficulty).label} for every player against the countries the AI plays; between players it favours nobody.` : "",
-    rules ? roundCostLine(rules) : "",
-    rules ? (rules.stallMinutes
-      ? `A round whose AI is silent for ${rules.stallMinutes} minutes fails, and the host can run it again.`
-      : "A round waits for the host's AI as long as it takes, and the host can cancel it.") : "",
+    ...roundCostLinesOf(rules, lobby.settings),
     grace
       ? `A player who leaves keeps their country for ${grace} minutes; then the AI plays it until they are back.`
       : "A player who leaves has their country played by the AI until they are back.",

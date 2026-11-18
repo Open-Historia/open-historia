@@ -297,6 +297,8 @@ const makeClient = (send) => createGameClient({
       notices: current ? noticesNow() : notices,
       mode: state.mode === "opening" ? "lobby" : lobby?.started && state.mode === "lobby" ? "playing" : state.mode,
     });
+    // Whether this device can take its turn to pay, to a host whose players take turns.
+    void statePayProfile();
   },
   // A request of the round this device is to pay for, in its turn.
   onPay: (message) => roundPayer.receive(message),
@@ -571,6 +573,9 @@ export const joinSharedGame = async ({ token, name } = {}) => {
       if (back) {
         const again = current.client?.resend() ?? 0;
         if (again) logDebugEvent("shared game", `reconnected: ${again} request(s) not yet answered were sent again`);
+        // A host that restarted has forgotten what this device said of paying: said again.
+        statedPay = { owner: null, key: "", round: -1 };
+        void statePayProfile();
       }
       if (!["rejected", "lost", "invalid"].includes(connection)) return;
       logDebugEvent("shared game", `joining ended: ${connection} (${detail.reason || detail.message || "no reason given"})`, undefined, { problem: true });
@@ -618,9 +623,40 @@ const roundPayer = createRoundPayer({
   ask: async (call, options) => (await import("../../Game/AI/main.jsx")).carryRoundRequest(call, options),
   answer: (fields) => sharedRequest("paid", fields),
   lookup: (fields) => sharedRequest("payLookup", fields),
+  alive: (message) => current?.client?.notify(message),
   cycle: () => state.lobby?.settings?.payment === "cycle",
   log: (text) => logDebugEvent("shared game", text, undefined, { problem: true }),
 });
+
+// What this device states about paying for a round, with no key
+// (Game/AI/main.jsx roundPayProfile): whether its AI can answer one now, and
+// its own settings that decide what a round spends on its key. Only a device
+// that has said it can is given its turn (host/roundPayers.js). Said in a game
+// whose players take turns, once a round (a free allowance can be spent by
+// the last), whenever it changes, and again after a reconnect.
+let statedPay = { owner: null, key: "", round: -1 };
+const statePayProfile = async () => {
+  const owner = current;
+  if (!owner?.client || state.role !== "guest" || state.lobby?.settings?.payment !== "cycle") return;
+  let profile;
+  try {
+    profile = (await import("../../Game/AI/main.jsx")).roundPayProfile();
+  } catch (error) {
+    logDebugEvent("shared game", `this device's AI could not be read for its turn to pay: ${String(error?.message || error)}`, undefined, { problem: true });
+    return;
+  }
+  if (current !== owner) return;
+  const key = JSON.stringify(profile);
+  const round = Number(state.round?.round) || 0;
+  if (statedPay.owner === owner && statedPay.key === key && statedPay.round === round) return;
+  statedPay = { owner, key, round };
+  void sharedRequest("canPay", profile);
+};
+if (typeof window !== "undefined") {
+  for (const name of ["ai:request-budget", "mapSettings:updated", "ai:fallback-changed", "ai:fallback-switch"]) {
+    window.addEventListener(name, () => void statePayProfile());
+  }
+}
 
 export const sharedRemainingMs = () => current?.client?.remainingMs() ?? 0;
 

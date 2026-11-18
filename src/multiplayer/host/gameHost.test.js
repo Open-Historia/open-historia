@@ -30,7 +30,7 @@ import { sessionFromRecord } from "./sessionRecord.js";
 import { advisorChangesOf } from "../game/advisorChanges.js";
 import { advisorOfSeat } from "../../runtime/seatAdvisors.js";
 import { PAYER_GONE_MS } from "./roundPayers.js";
-import { carriedRequestOf } from "../../Game/AI/roundCarrier.js";
+import { carriedCall, carriedRequestOf, installRoundCarrier } from "../../Game/AI/roundCarrier.js";
 import { createInstitutionDesk } from "./institutions.js";
 
 const LATVIA = "Republic of Latvia";
@@ -2539,22 +2539,37 @@ test("with each player's own AI, what only the host's AI may answer is held to t
 });
 
 // The request the host's engine builds, as callAI hands it to the carrier (Game/AI/roundCarrier.js).
-const builtRequest = (extra = {}) => carriedRequestOf({
+const BUILT = {
   systemPrompt: "[Difficulty]\n\nThe world as the host's engine built it: every player's orders and secrets.",
   history: [{ role: "user", parts: [{ text: "Simulate the next 30 days." }] }],
   opts: { tool: { name: "submit_jump", description: "The period.", schema: { type: "object", properties: { events: { type: "array" } } } }, taskKey: "jumpForward", staticPrefixEnd: 12 },
-  lookups: { tools: [{ name: "look_up_region", description: "A region.", schema: { type: "object" } }], maxRounds: 2, execute: () => null },
-  ...extra,
-});
+  lookups: { tools: [{ name: "look_up_region", description: "A region.", schema: { type: "object" } }], maxRounds: 2 },
+};
+const builtRequest = () => carriedRequestOf(BUILT);
+// What a guest's device states about paying for a round: it can, and its own settings. No key.
+const CAN_PAY = { ready: true, noRequestLimit: false, lookups: true, segmented: false, declares: false };
+// The engine's skip, as engineMain.js runs it around a round another device pays: the carrier
+// installed with that device's own rules, and the skip's request through callAI's carried path.
+const carryThrough = async (info, { execute = async () => null, counted = [] } = {}) => {
+  const uninstall = installRoundCarrier(info.carry, { rules: info.payer?.rules ?? null, who: info.payer?.device ?? "" });
+  try {
+    return await carriedCall({ ...BUILT, lookups: { ...BUILT.lookups, execute, onRound: (round) => counted.push(round) }, spender: "jump" });
+  } finally {
+    uninstall();
+  }
+};
 
-test("players take turns to pay: the round's request goes, as built, to the paying device, which carries it to its own AI, and its answer is the round's", async () => {
+test("players take turns to pay: a device that says it can is given its turn, and the round's request goes to it, as built, under its own settings", async () => {
   const answers = [];
   const looked = [];
+  const rules = [];
+  const counted = [];
   const s = setup({
     settings: { payment: "cycle" },
     carried: async (info) => {
       if (!info.carry) return;
-      answers.push(await info.carry(builtRequest(), { execute: async (name, args) => { looked.push({ name, args }); return { region: "Narva", holder: ESTONIA }; } }));
+      rules.push(info.payer?.rules);
+      answers.push(await carryThrough(info, { counted, execute: async (name, args) => { looked.push({ name, args }); return { region: "Narva", holder: ESTONIA }; } }));
     },
   });
   s.host.join(s.hostPlayer);
@@ -2570,21 +2585,31 @@ test("players take turns to pay: the round's request goes, as built, to the payi
   assert.equal(s.resolved[0].carry, undefined);
   assert.equal(s.to(s.guest, "pay").length, 0);
   await readRound(s, [s.hostPlayer, s.guest], 2);
-  // The second is Russia's: its device is sent the request as the host built it, and the round waits for its answer.
+  // Russia's device has said nothing of paying: it is not asked, and the host's AI pays again.
+  assert.equal(s.to(s.guest, "round").at(-1).payer, LATVIA);
+  assert.equal(s.to(s.guest, "lobby").at(-1).seats.find((seat) => seat.country === RUSSIA).pays, false);
+  // It says it can, with its own settings and no key: every screen hears whose turn is next.
+  await s.request(s.guest, { t: "canPay", id: id(10), ...CAN_PAY });
+  assert.equal(s.ack(s.guest, id(10)).ok, true);
+  assert.equal(s.to(s.guest, "lobby").at(-1).seats.find((seat) => seat.country === RUSSIA).pays, true);
+  assert.equal(validate(HOST_MESSAGES.lobby, s.to(s.guest, "lobby").at(-1)).ok, true);
   assert.equal(s.to(s.guest, "round").at(-1).payer, RUSSIA);
   assert.equal(validate(HOST_MESSAGES.round, s.to(s.guest, "round").at(-1)).ok, true);
   await playRound(s, [s.hostPlayer, s.guest]);
   assert.equal(s.to(s.guest, "round").at(-1).phase, "resolving");
+  assert.deepEqual(rules, [CAN_PAY], "the engine builds the round under the paying device's own settings");
   const pay = s.to(s.guest, "pay").at(-1);
   assert.equal(validate(HOST_MESSAGES.pay, pay).ok, true);
   assert.equal(pay.round, 2);
   assert.deepEqual(pay.call, builtRequest(), "exactly the request the engine built: no key, and nothing taken out");
   assert.equal(JSON.stringify(pay).includes("apiKey"), false);
   assert.equal(s.to(s.hostPlayer, "pay").length, 0, "sent to the payer alone");
-  // A lookup its model asks for is answered from the host's own game.
-  await s.request(s.guest, { t: "payLookup", id: id(2), job: pay.job, name: "look_up_region", args: { name: "Narva" } });
+  // A lookup its model asks for is answered from the host's own game, and the round it begins is counted.
+  await s.request(s.guest, { t: "payLookup", id: id(2), job: pay.job, name: "look_up_region", args: { name: "Narva" }, round: 1 });
   assert.deepEqual(looked, [{ name: "look_up_region", args: { name: "Narva" } }]);
   assert.deepEqual(JSON.parse(s.ack(s.guest, id(2)).result.text), { region: "Narva", holder: ESTONIA });
+  await s.host.receive(s.guest, { t: "payAlive", job: pay.job, round: 1 });
+  assert.deepEqual(counted, [1], "the skip's budget hears the payer's lookup round as one of its own");
   // Nobody else answers for it: not the host's screen, and not a request that is not waiting.
   await s.request(s.hostPlayer, { t: "paid", id: id(3), job: pay.job, answer: { text: "Forged.", toolJson: "", asText: true } });
   assert.match(s.ack(s.hostPlayer, id(3)).error, /not waiting for an answer from your device/);
@@ -2607,58 +2632,78 @@ test("players take turns to pay: the round's request goes, as built, to the payi
   assert.equal(s.to(s.guest, "round").at(-1).payer, LATVIA);
 });
 
-test("a payer whose AI fails, or who is gone, fails the round visibly; the host can run it again or pay it itself, and the turn stays theirs", async () => {
+test("a payer whose AI fails, or who is gone, fails the round visibly and its turn is taken; the host paying instead leaves the turn where it was", async () => {
   const s = setup({
     settings: { payment: "cycle" },
     carried: async (info) => {
-      if (info.carry) await info.carry(builtRequest(), {});
+      if (info.carry) await carryThrough(info);
     },
   });
   s.host.join(s.hostPlayer);
   s.host.join(s.guest);
   await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.request(s.guest, { t: "canPay", id: id(20), ...CAN_PAY });
   await s.host.control.start();
   await playRound(s, [s.hostPlayer, s.guest]);
   await readRound(s, [s.hostPlayer, s.guest], 2);
-  // Russia's turn, and its AI cannot answer: the round says why, and waits.
+  // Russia's turn, and its AI cannot answer: the round says why in the host's words, and waits.
   await playRound(s, [s.hostPlayer, s.guest]);
   const pay = s.to(s.guest, "pay").at(-1);
-  await s.request(s.guest, { t: "paid", id: id(2), job: pay.job, error: "No AI is set up on this device." });
+  await s.request(s.guest, { t: "paid", id: id(2), job: pay.job, failure: { kind: "none", busy: false } });
   await s.clock.flush();
   let status = s.to(s.guest, "round").at(-1);
   assert.equal(status.phase, "planning");
   assert.equal(status.failed, 2);
-  assert.match(status.failure, /Russian Federation's device could not make the round's request: No AI is set up on this device\./);
-  assert.match(s.to(s.hostPlayer, "notice").at(-1).text, /Round 2 could not be resolved/);
-  assert.equal(status.payer, RUSSIA, "Retry asks the same device");
-  // Retry: the same payer is asked again, and this time its device has gone.
+  assert.match(status.failure, /Russian Federation's device could not make the round's request: it has no AI that can make it now\./);
+  const told = s.to(s.hostPlayer, "notice").map((entry) => entry.text).join(" ");
+  assert.match(told, /Round 2 could not be resolved/);
+  assert.match(told, /Russian Federation's turn to pay is taken: run again, round 2 is paid by the next player in turn\./);
+  // Its device says it cannot pay now: it is passed over, and the round run again is the host's.
+  await s.request(s.guest, { t: "canPay", id: id(21), ...CAN_PAY, ready: false });
+  assert.equal(s.to(s.guest, "lobby").at(-1).seats.find((seat) => seat.country === RUSSIA).pays, false);
+  status = s.to(s.guest, "round").at(-1);
+  assert.equal(status.payer, LATVIA, "never asked again while it cannot: before, it kept the turn for ever");
+  const asked = s.to(s.guest, "pay").length;
   s.host.control.resolveNow();
   await s.clock.flush();
+  assert.equal(s.to(s.guest, "pay").length, asked, "no request left the host's computer");
+  assert.equal(s.resolved.length, 2);
+  await readRound(s, [s.hostPlayer, s.guest], 3);
+  // Set up again, it takes its turn; its device goes and comes back within the wait.
+  await s.request(s.guest, { t: "canPay", id: id(22), ...CAN_PAY });
+  assert.equal(s.to(s.guest, "round").at(-1).payer, RUSSIA);
+  await playRound(s, [s.hostPlayer, s.guest]);
   const again = s.to(s.guest, "pay").at(-1);
   assert.notEqual(again.job, pay.job);
   s.host.leave(s.guest);
-  // Back within the wait, it is sent the request once more.
   await s.clock.advance(PAYER_GONE_MS / 2);
   const back = { ...s.guest, id: "p-guest-2" };
   s.host.join(back);
   await s.clock.flush();
-  assert.equal(s.to(back, "pay").at(-1).job, again.job);
-  // Gone for good: the round fails with why.
+  assert.equal(s.to(back, "pay").at(-1).job, again.job, "sent the request once more");
+  // Gone for good: the round fails with why, and the turn is taken.
   s.host.leave(back);
   await s.clock.advance(PAYER_GONE_MS + 1000);
   status = s.sent.filter((entry) => entry.message.t === "round").at(-1).message;
   assert.equal(status.phase, "planning");
   assert.match(status.failure, /left before it made the round's request/);
-  // The host pays it itself, and it lands; the turn is still Russia's for the round after.
+  assert.equal(status.payer, LATVIA);
+  // Run again on the host's AI, it lands; the next is Russia's.
   s.host.join(s.guest);
   await s.clock.flush();
+  s.host.control.resolveNow();
+  await s.clock.flush();
+  assert.equal(s.resolved.length, 3);
+  await readRound(s, [s.hostPlayer, s.guest], 4);
+  assert.equal(s.to(s.guest, "round").at(-1).payer, RUSSIA);
+  // The host pays Russia's round itself: Russia was never asked, and the turn is still Russia's after.
   assert.equal(s.host.control.payRound(), true);
   await s.clock.flush();
-  assert.match(s.to(s.guest, "notice").map((entry) => entry.text).join(" "), /The host pays for round 2 itself\./);
-  assert.equal(s.resolved.length, 2);
-  assert.equal(s.resolved[1].carry, undefined, "no request left the host's computer");
+  assert.match(s.to(s.guest, "notice").map((entry) => entry.text).join(" "), /The host pays for round 4 itself\./);
+  assert.equal(s.resolved.length, 4);
+  assert.equal(s.resolved[3].carry, undefined, "no request left the host's computer");
   assert.equal(s.to(s.guest, "round").at(-1).failed, 0);
-  await readRound(s, [s.hostPlayer, s.guest], 3);
+  await readRound(s, [s.hostPlayer, s.guest], 5);
   assert.equal(s.to(s.guest, "round").at(-1).payer, RUSSIA);
   // Not a way to pay where the host pays for every round.
   const t = setup();
@@ -2668,12 +2713,35 @@ test("a payer whose AI fails, or who is gone, fails the round visibly; the host 
   assert.equal(t.to(t.hostPlayer, "round").at(-1).payer, undefined);
 });
 
-test("a round the host cancels while a player's device pays it tells that device to stop; who paid last is kept with the session", async () => {
-  const campaign = "game-baltic";
-  const s = setup({ campaign, settings: { payment: "cycle" }, carried: async (info) => { if (info.carry) await info.carry(builtRequest(), {}); } });
+test("a payer the host lets go of while it pays fails the round at once, and its late answer is not waited for", async () => {
+  const s = setup({ settings: { payment: "cycle" }, carried: async (info) => { if (info.carry) await carryThrough(info); } });
   s.host.join(s.hostPlayer);
   s.host.join(s.guest);
   await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.request(s.guest, { t: "canPay", id: id(30), ...CAN_PAY });
+  await s.host.control.start();
+  await playRound(s, [s.hostPlayer, s.guest]);
+  await readRound(s, [s.hostPlayer, s.guest], 2);
+  await playRound(s, [s.hostPlayer, s.guest]);
+  const pay = s.to(s.guest, "pay").at(-1);
+  assert.equal(s.host.control.kick(RUSSIA), s.guest.device);
+  await s.clock.flush();
+  assert.deepEqual(s.to(s.guest, "payStop").at(-1), { t: "payStop", job: pay.job });
+  const status = s.to(s.hostPlayer, "round").at(-1);
+  assert.equal(status.phase, "planning", "before, the round waited for ever");
+  assert.match(status.failure, /Russian Federation's player was let go before their device made the round's request/);
+  // Still connected, its answer is judged by its device and job, not by a seat it no longer has.
+  await s.request(s.guest, { t: "paid", id: id(31), job: pay.job, answer: { text: "Late.", toolJson: "", asText: true } });
+  assert.match(s.ack(s.guest, id(31)).error, /not waiting for an answer from your device/);
+});
+
+test("a round the host cancels while a player's device pays it tells that device to stop and takes its turn; who took it last is kept with the session", async () => {
+  const campaign = "game-baltic";
+  const s = setup({ campaign, settings: { payment: "cycle" }, carried: async (info) => { if (info.carry) await carryThrough(info); } });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.request(s.guest, { t: "canPay", id: id(40), ...CAN_PAY });
   await s.host.control.start();
   await playRound(s, [s.hostPlayer, s.guest]);
   await readRound(s, [s.hostPlayer, s.guest], 2);
@@ -2684,17 +2752,18 @@ test("a round the host cancels while a player's device pays it tells that device
   assert.deepEqual(s.to(s.guest, "payStop").at(-1), { t: "payStop", job: pay.job });
   assert.equal(validate(HOST_MESSAGES.payStop, s.to(s.guest, "payStop").at(-1)).ok, true);
   assert.match(s.to(s.guest, "round").at(-1).failure, /cancelled/);
-  // The host paid round 1; the record says so, and a game taken up again goes on with Russia's turn.
+  assert.equal(s.to(s.guest, "round").at(-1).payer, LATVIA, "its key spent what it spent: run again, the round is the next payer's");
+  // The record says Russia took the last turn, and a game taken up again goes on with the next.
   await s.host.stop();
   const record = s.store.shared.at(-1);
-  assert.equal(record.lastPayer, "device-host");
+  assert.equal(record.lastPayer, "device-guest");
   const restored = sessionFromRecord(record, { campaign, hostDevice: "device-host" });
-  assert.equal(restored.lastPayer, "device-host");
+  assert.equal(restored.lastPayer, "device-guest");
   const t = setup({ campaign, settings: { payment: "cycle" }, restored });
   t.host.join(t.hostPlayer);
   t.host.join(t.guest);
   await t.clock.flush();
-  assert.equal(t.to(t.guest, "round").at(-1).payer, RUSSIA);
+  assert.equal(t.to(t.guest, "round").at(-1).payer, LATVIA);
 });
 
 test("the Game Master is the host's, only where the lobby says so: one entry of the queue, never while a round resolves, and told to every player", async () => {

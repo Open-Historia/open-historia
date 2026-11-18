@@ -10,7 +10,7 @@
 
 import React, { useState } from "react";
 import { hostControl } from "../client/sharedGame.js";
-import { HOST_ANSWER_CHOICES, costRulesOf, gameMasterRuleOf, payerLineOf } from "../costRules.js";
+import { HOST_ANSWER_CHOICES, costRulesOf, gameMasterRuleOf, payerLineOf, payersLinesOf } from "../costRules.js";
 import { gameMasterAllowed } from "../host/settings.js";
 import { GAME_MASTER_COMMAND_MAX } from "../host/gameMaster.js";
 
@@ -53,7 +53,8 @@ export const GameRules = ({ shared }) => {
   return (
     <div style={{ marginTop: "0.4rem" }}>
       <div style={heading}>Who pays</div>
-      {costRulesOf(settings).map((line) => <div key={line} style={{ ...small, marginTop: "0.2rem" }}>{line}</div>)}
+      {costRulesOf(settings, { host }).map((line) => <div key={line} style={{ ...small, marginTop: "0.2rem" }}>{line}</div>)}
+      {payersLinesOf(settings, shared.lobby?.seats).map((line) => <div key={line} style={{ ...small, ...isolate, marginTop: "0.2rem" }}>{line}</div>)}
       {host && settings.replies === "own" ? <HostAnswersSetting settings={settings} /> : null}
       <div style={heading}>Game Master</div>
       <div style={small}>{gameMasterRuleOf(settings)}</div>

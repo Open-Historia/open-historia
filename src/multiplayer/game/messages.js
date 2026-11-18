@@ -24,6 +24,7 @@ import { PLAYER_GOAL_MAX_CHARS } from "../../runtime/playerGoal.js";
 import { MILITARY_BATCH_MOST } from "../../Game/AI/militaryRating.js";
 import { POLL_LABEL_MAX_CHARS, POLL_OPTION_LIMIT, POLL_QUESTION_MAX_CHARS } from "../../runtime/chatThreads.js";
 import { DIFFICULTY_LEVELS } from "../../runtime/difficulty.js";
+import { PAY_FAILURE_KINDS, REASONING_SENT_MAX } from "../../Game/AI/roundCarrier.js";
 
 const DIFFICULTY_IDS = Object.freeze(DIFFICULTY_LEVELS.map((level) => level.id));
 
@@ -163,6 +164,9 @@ export const RATINGS_ASKED_MOST = 300;
 export const CARRIED_PROMPT_MAX = 4_000_000;
 export const PAID_ANSWER_MAX = 1_000_000;
 const PAY_JOB = str(40, { min: 1, pattern: /^[0-9a-z-]+$/ });
+// The whole of callAI's contract crosses (Game/AI/roundCarrier.js CALL_CONTRACT):
+// with the request, the lookup rounds an earlier attempt of the task already had
+// answered (`carried`, JSON text) and how long the host still waits (`waitMs`).
 const CARRIED_CALL = obj({
   systemPrompt: str(CARRIED_PROMPT_MAX, { min: 1 }),
   history: json(12),
@@ -174,7 +178,9 @@ const CARRIED_CALL = obj({
   sharedPrefixEnd: int(0, CARRIED_PROMPT_MAX, { nullable: true }),
   promptCacheKey: str(200),
   maxTokens: int(1, 1_000_000, { nullable: true }),
-});
+  carried: str(CARRIED_PROMPT_MAX),
+  waitMs: int(0, 86_400_000),
+}, ["carried", "waitMs"]);
 // What the Game Master changed (host/gameMaster.js), as every lobby carries it.
 export const GAME_MASTER_LOG_MAX = 24;
 export const GAME_MASTER_SUMMARY_MAX = 400;
@@ -387,19 +393,38 @@ export const PLAYER_REQUESTS = Object.freeze({
     lines: list(obj({ speaker: COUNTRY, text: str(REPLY_MAX_CHARS, { min: 1 }) }), REPLY_MAX_LINES),
   }),
   // With settings.payment "cycle": what this device's own AI answered a request
-  // of the round the host sent it ("pay", by its `job`), as it came (`text`, and
-  // a function call's input as JSON text), or why it gave none (`error`); and
-  // the status of each provider response it took, which the host's skip reads
-  // as its own (a contract the provider refused is asked again the old way).
+  // of the round the host sent it ("pay", by its `job`), as it came (`text`, a
+  // function call's input as JSON text, the model's reasoning where its
+  // provider gave it apart, `cut` when it stopped at the model's output limit,
+  // `outputOnly` when it asked a lookup it already had answered), or what kind
+  // of failure kept it from one (`failure`: a kind, never the provider's words,
+  // Game/AI/roundCarrier.js PAY_FAILURE_KINDS); and the status of each provider
+  // response it took, which the host's skip reads as its own (a contract the
+  // provider refused is asked again the old way).
   paid: obj({
     t: literal("paid"), id: REQUEST_ID, job: PAY_JOB,
-    answer: obj({ text: str(PAID_ANSWER_MAX), toolJson: str(PAID_ANSWER_MAX), asText: bool() }),
-    error: str(300),
+    answer: obj({
+      text: str(PAID_ANSWER_MAX), toolJson: str(PAID_ANSWER_MAX), asText: bool(),
+      reasoning: str(REASONING_SENT_MAX), cut: bool(), outputOnly: bool(),
+    }, ["reasoning", "cut", "outputOnly"]),
+    failure: obj({ kind: str(16, { enum: PAY_FAILURE_KINDS }), busy: bool() }, ["busy"]),
     statuses: list(int(0, 999), 32),
-  }, ["answer", "error", "statuses"]),
+  }, ["answer", "failure", "statuses"]),
   // And a lookup that request's model asked for on the way, which the host
-  // answers from its own game (the ack's `result.text`, as JSON text).
-  payLookup: obj({ t: literal("payLookup"), id: REQUEST_ID, job: PAY_JOB, name: str(80, { min: 1 }), args: json(12) }),
+  // answers from its own game (the ack's `result.text`, as JSON text), with
+  // the lookup round it was asked in, which the host keeps it by for the
+  // task's next attempt.
+  payLookup: obj({ t: literal("payLookup"), id: REQUEST_ID, job: PAY_JOB, name: str(80, { min: 1 }), args: json(12), round: int(1, 16) }, ["round"]),
+  // And that its model is still at work on it: an answer arriving, or a lookup
+  // round begun (`round`, which the host counts into the skip's budget as its
+  // own). The host's own deadline for a silent model counts from these. Not a
+  // request: it has no id and is not answered.
+  payAlive: obj({ t: literal("payAlive"), job: PAY_JOB, round: int(0, 16) }),
+  // What this device states about paying for a round, with no key
+  // (Game/AI/roundCarrier.js payProfileOf): whether its AI can answer a round
+  // now, and its own settings that decide what a round spends on its key. A
+  // device that has not said it can is never the one whose turn it is.
+  canPay: obj({ t: literal("canPay"), id: REQUEST_ID, ready: bool(), noRequestLimit: bool(), lookups: bool(), segmented: bool(), declares: bool() }),
   // What the page did with a view (client/sharedGame.js): applied it (`ok`), or
   // found it did not follow the one it holds or did not add up, and wants the
   // whole view again. Not a request: it has no id and is not answered.
@@ -415,7 +440,10 @@ const SEAT = obj({
   // it until the host releases it. False for a country the AI plays for good.
   held: bool(),
   you: bool(),
-});
+  // With settings.payment "cycle": its device has said it can pay for a round
+  // (the "canPay" request), so it takes its turn.
+  pays: bool(),
+}, ["pays"]);
 
 export const HOST_MESSAGES = Object.freeze({
   lobby: obj({

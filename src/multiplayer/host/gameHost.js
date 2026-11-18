@@ -77,7 +77,11 @@ const ANSWERS_KEPT = 128;
 // A paying device's answer to the round's request, and its lookups, are part of
 // the round being resolved, which is itself an entry of the queue: behind it
 // they would wait for ever.
-const AT_ONCE = new Set(["ready", "revealed", "viewed", "paid", "payLookup"]);
+const AT_ONCE = new Set(["ready", "revealed", "viewed", "paid", "payLookup", "payAlive", "canPay"]);
+// Judged by the device that sends them, not by a seat (host/roundPayers.js:
+// only the device a request was sent to may answer it). A payer the host let
+// go of had its answer refused for having no seat, and the round waited for ever.
+const SEATLESS = new Set(["pick", "unpick", "paid", "payLookup", "payAlive", "canPay"]);
 // Their thinking is the AI's, done outside the queue so it holds nobody up;
 // what they write is put in the queue (a stat sheet under the game's own lock,
 // an institution's business by the desk, engineMain.js).
@@ -431,6 +435,8 @@ export const createGameHost = ({
         status: seat.status,
         held: Boolean(seat.device),
         you: Boolean(connection) && seat.device === connection.device,
+        // With settings.payment "cycle": whether its device takes its turn to pay.
+        ...(settings.payment === "cycle" && seat.device ? { pays: payers.canPay(seat.device, hostSeat.device) } : {}),
       })),
       ...seats.watching().map((entry) => ({
         country: entry.was,
@@ -471,6 +477,13 @@ export const createGameHost = ({
     ? payers.payerOf({ seats: seats.list().map((seat) => ({ ...seat, here: seat.status === SEAT_STATUS.HUMAN })), host: hostSeat.device, round: number })
     : null);
   const payingCountry = (status) => clean((payers.paying()?.round === status.round ? payers.paying() : payerFor(status.round))?.country);
+  // Who pays in turn changed (a device said whether it can pay): every lobby
+  // says it, and every round bar whose turn is next.
+  const payersChanged = () => {
+    broadcastLobby();
+    const message = roundMessage(round.status());
+    for (const connection of connections.values()) send(connection, message);
+  };
 
   // What the host sends is held to the same schemas the players read it by
   // (game/messages.js): one they would drop is not sent, and is said here.
@@ -659,9 +672,20 @@ export const createGameHost = ({
       const payer = payerFor(number);
       const carry = payer && payer.device !== hostSeat.device ? payers.carry({ ...payer, round: number, signal: roundAbort.signal }) : null;
       payers.begin(payer ? { ...payer, round: number } : null);
+      // The skip is built under the paying device's own settings, as it stated them (no key).
+      const paying = carry ? { carry, payer: { device: payer.device, rules: payers.profileOf(payer.device) } } : {};
       try {
-        await resolveRound({ round: number, humanCountries: seats.humanCountries(), daysPerRound: settings.daysPerRound, signal: roundAbort.signal, ...(carry ? { carry } : {}) });
+        await resolveRound({ round: number, humanCountries: seats.humanCountries(), daysPerRound: settings.daysPerRound, signal: roundAbort.signal, ...paying });
       } catch (error) {
+        // A payer whose device was asked for this round has taken its turn,
+        // landed or not: run again, the round is the next payer's. Before, the
+        // same device was asked every time and the round failed every time.
+        if (payer && payers.missed(payer) && !stopped) {
+          sessionChanged();
+          for (const connection of connections.values()) {
+            send(connection, notice("info", `${payer.country}'s turn to pay is taken: run again, round ${number} is paid by the next player in turn.`));
+          }
+        }
         // The host called it off (control.cancelRound): said as that, and the
         // round waits with its orders, as one that failed does.
         if (roundCancelled && !stopped) {
@@ -1826,8 +1850,22 @@ export const createGameHost = ({
     // lookup that request's model asked for, answered from the host's own game
     // as it would have been here (host/roundPayers.js). Only from the device
     // the request was sent to, and only while it waits.
-    paid: async (connection, { job, answer, error, statuses }) => payers.answered(connection.device, { job, answer: answer ?? null, error: error ?? "", statuses: statuses ?? [] }),
-    payLookup: async (connection, { job, name, args }) => payers.lookup(connection.device, { job, name, args }),
+    paid: async (connection, { job, answer, failure, statuses }) => payers.answered(connection.device, { job, answer: answer ?? null, failure: failure ?? null, statuses: statuses ?? [] }),
+    payLookup: async (connection, { job, name, args, round }) => payers.lookup(connection.device, { job, name, args, round: round ?? 1 }),
+    // That the paying device's model is at work (the engine's deadline for a
+    // silent model counts from these), and a lookup round it began, counted
+    // into the round's budget as the host's own are.
+    payAlive: async (connection, { job, round }) => {
+      payers.alive(connection.device, { job, round });
+      return "";
+    },
+    // What a device states about paying for a round, with no key: whether it
+    // can, and its own settings, which a round it pays is built under. Every
+    // screen hears who pays in turn.
+    canPay: async (connection, profile) => {
+      if (payers.state(connection.device, profile) && settings.payment === "cycle") payersChanged();
+      return "";
+    },
     // A Retry from an error bubble (chat.jsx handleRetry): the governments at a
     // thread answer the seat's own last line again, as they would have when it
     // was written, by the same rule ("say" answerLine). No line is sent: the
@@ -1940,7 +1978,7 @@ export const createGameHost = ({
       while (mine.size > ANSWERS_KEPT) mine.delete(mine.keys().next().value);
     }
     const seat = seatOf(connection);
-    const needsSeat = !["pick", "unpick"].includes(message.t);
+    const needsSeat = !SEATLESS.has(message.t);
     // A request for what the host's game has switched off (host/featureGates.js).
     const switchedOff = featureRefusal(message, features);
     let error = "";
@@ -2132,6 +2170,8 @@ export const createGameHost = ({
         if (device) {
           changes.delete(device);
           if (ban) banned.add(device);
+          // A round its device was paying fails now, with why, and waits for the host.
+          payers.released(device);
           void letSeatGo(named, people);
         }
         void seatsChanged();

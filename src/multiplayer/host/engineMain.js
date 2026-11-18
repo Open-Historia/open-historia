@@ -487,7 +487,7 @@ const boot = async () => {
       restored,
       campaignRound: Number(started.game?.round) || 0,
       store,
-      resolveRound: async ({ daysPerRound, humanCountries, signal, carry = null }) => {
+      resolveRound: async ({ daysPerRound, humanCountries, signal, carry = null, payer = null }) => {
         // Fronts the game began with that could not be built when it opened.
         await openPendingFronts();
         // The game's own lock, waited for and taken in one step: a stat sheet
@@ -510,8 +510,10 @@ const boot = async () => {
           });
           // A round another player's device pays (settings.payment "cycle"):
           // its skip's requests go, as built, to that device and its answer
-          // comes back to be applied here as ever (Game/AI/roundCarrier.js).
-          const uncarry = carry ? installRoundCarrier(carry) : () => {};
+          // comes back to be applied here as ever (Game/AI/roundCarrier.js);
+          // and the skip spends by that device's own settings, as it stated
+          // them (`payer.rules`), not this computer's.
+          const uncarry = carry ? installRoundCarrier(carry, { rules: payer?.rules ?? null, who: payer?.device ?? "" }) : () => {};
           try {
             // Never a canned turn in a shared game: a skip the AI could not
             // write fails, and the round says why (host/round.js).

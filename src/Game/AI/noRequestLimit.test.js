@@ -211,7 +211,8 @@ test("the callers read the switch through the getters, and nothing reads the old
     assert.match(gameplay, /const lookupFunctionsEnabled = \(\) => !savingRequests\(\) && getMapSettingDefaultOn\(MAP_SETTING_KEYS\.lookupFunctions\);/);
     assert.match(main, /const advisorGroupFunctionsAllowed = \(\) => !savingRequests\(\) && getMapSettingDefaultOn\(MAP_SETTING_KEYS\.lookupFunctions\);/);
     assert.match(gameplay, /const salvageFirst = \(salvage \|\| savingRequests\(\)\) && !strictFirst;/);
-    assert.match(gameplay, /const unlimited = unlimitedRequests\(\);/);
+    // A skip reads it once, where whoever pays for the skip decides (skipRules).
+    assert.match(gameplay, /const skipRules = \(\) => carriedSkipRules\(\) \?\? \{\n\s*unlimited: unlimitedRequests\(\),\n\s*lookups: lookupFunctionsEnabled\(\),/);
     const settings = source("../GameUI/settings.jsx");
     const time = source("../GameUI/time.jsx");
     const settingsLog = source("../../runtime/settingsLog.js");
