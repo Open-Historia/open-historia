@@ -1,5 +1,12 @@
 extends SceneTree
 
+class DevProbe extends RefCounted:
+	func link_request(_id: int, _method: String, _args: Dictionary, _size: int) -> void:
+		pass
+
+	func link_reply(_id: int, _reply: Dictionary, _size: int) -> void:
+		pass
+
 var main: Node
 var shots := ""
 var started := 0
@@ -109,14 +116,14 @@ func _make_host() -> void:
 	host.add_child(page)
 	scroll = ScrollContainer.new()
 	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	scroll.offset_left = 270
-	scroll.offset_right = -250
+	scroll.offset_left = 12 if UI.phone() else 270
+	scroll.offset_right = -12 if UI.phone() else -250
 	scroll.offset_top = 20
 	scroll.offset_bottom = -20
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	host.add_child(scroll)
 	column = VBoxContainer.new()
-	column.custom_minimum_size.x = 900
+	column.custom_minimum_size.x = 0 if UI.phone() else 900
 	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	column.add_theme_constant_override("separation", 0)
 	scroll.add_child(column)
@@ -186,9 +193,12 @@ func _history(details: Dictionary, form: Dictionary) -> void:
 	_say("generated %d events in %d ms; message: %s; error: %s" % [events.size(), Time.get_ticks_msec() - started_at, history._message, history._error])
 	_check(events.size() == 4, "generation filled the draft with the stand-in's four events")
 	_check(history._message == "Generated. Edit anything below, then save the pre-history.", "the generated message")
+	await _settle(history)
 	_check(history._day_one.visible and history._day_one_rows.get_child_count() == 2, "two Day-one facts listed")
 	for row in history._day_one_rows.get_children():
-		_say("  day one: " + str((_find_all(row, func(entry: Node) -> bool: return entry is Label, [])[0] as Label).text))
+		var shown := _find_all(row, func(entry: Node) -> bool: return entry is Button and (entry as Button).text.begins_with("▸ "), [])
+		_say("  day one: " + ((shown[0] as Button).text if not shown.is_empty() else str((_find_all(row, func(entry: Node) -> bool: return entry is Label, [])[0] as Label).text)))
+	_check(history._fact_editors.has("canonicalUpdates:1") and not history._fact_editors.has("canonicalUpdates:0"), "the relation opens as an editor and the war stays a removable line")
 	await _shoot("war-2-history-generated")
 	var toggles := _find_all(history, func(entry: Node) -> bool: return entry is Button and (entry as Button).text.ends_with("Advanced event metadata"), [])
 	if not toggles.is_empty():
@@ -214,7 +224,7 @@ func _history(details: Dictionary, form: Dictionary) -> void:
 	await _frames(2)
 	_say("after move: first title = %s" % str(history._draft["events"][0]["title"]))
 	await history._save()
-	_check(history._message == "Pre-history saved. New games from this scenario start with it.", "the saved message")
+	_check(history._message == "Starting history saved. New games from this scenario use the updated agreements and Day-one facts.", "the saved message: %s %s" % [history._message, history._error])
 	_check(details_events == 1, "details_changed emitted once on save")
 	var check: Dictionary = await main.engine.request("editor.details", {"kind": "scenario", "id": "default"})
 	var saved: Dictionary = check["result"]["details"]["data"]["world"].get("prehistory", {})
@@ -246,6 +256,202 @@ func _history(details: Dictionary, form: Dictionary) -> void:
 	_check(not history._discard_button.disabled, "Discard enabled after an edit")
 	history._discard_button.pressed.emit()
 	_check(history._summary_edit.text != "A different summary." and not history._changed(), "Discard puts the saved pre-history back")
+	await _day_one_facts(history)
+	await _existing_agreements(history)
+
+
+func _settle(history: EditorHistoryPanel, since := -1) -> void:
+	if since >= 0:
+		var deadline := Time.get_ticks_msec() + 5000
+		while history._check_seq == since and Time.get_ticks_msec() < deadline:
+			await process_frame
+	var until := Time.get_ticks_msec() + 10000
+	while history._checks_running > 0 and Time.get_ticks_msec() < until:
+		await process_frame
+	await _frames(2)
+
+
+func _field_edit(node: Node, label: String) -> Control:
+	var labels := _find_all(node, func(entry: Node) -> bool: return entry is Label and (entry as Label).text == label, [])
+	if labels.is_empty():
+		return null
+	var box: Node = (labels[0] as Node).get_parent()
+	for child in box.get_children():
+		if child is LineEdit or child is TextEdit or child is OptionButton:
+			return child
+	return null
+
+
+func _open_editor(editor: Node) -> void:
+	if not bool(editor._section["open"]):
+		(editor._section["summary"] as Button).pressed.emit()
+	await _frames(2)
+
+
+func _free_polities(history: EditorHistoryPanel) -> Array:
+	var free: Array = []
+	for name in history._polities:
+		if not ["France", "Germany", "Ukraine", "Russia"].has(str(name)):
+			free.append(str(name))
+	return free
+
+
+func _day_one_facts(history: EditorHistoryPanel) -> void:
+	await _settle(history)
+	for label in ["+ Relationship", "+ Agreement", "+ Storyline"]:
+		var add := _button(history, label)
+		_check(add != null and not add.disabled, "the %s button is there" % label)
+	var free := _free_polities(history)
+	_say("polities offered: %d; using %s" % [history._polities.size(), str(free.slice(0, 6))])
+	if free.size() < 6:
+		_check(false, "six free polities to write facts with")
+		return
+	var since := history._check_seq
+	_button(history, "+ Relationship").pressed.emit()
+	await _settle(history, since)
+	var facts: Array = history._draft["updates"]["canonicalUpdates"]
+	_check(facts.size() == 3 and str((facts[2] as Dictionary).get("kind", "")) == "relation", "+ Relationship adds a relation fact")
+	var editor: Node = history._fact_editors.get("canonicalUpdates:2")
+	_check(editor != null, "the new relation is an editor")
+	_say("problems: " + JSON.stringify(history._day_one_problems))
+	_check(history._day_problems_holder.visible and history._save_button.disabled, "a blank relationship stops the save")
+	_check(_has_label(editor, "Name two different countries in this relationship."), "its problem shows inside it")
+	await _open_editor(editor)
+	await _scroll_to(editor)
+	await _shoot("war-5b-day-one-relation-problems")
+	_type(_field_edit(editor, "First country"), free[0])
+	_type(_field_edit(editor, "Second country"), free[1])
+	_type(_field_edit(editor, "Relationship score (-100 to 100)"), "-35")
+	var summary: TextEdit = _field_edit(editor, "Relationship summary")
+	summary.text = "Old rivals across a contested border."
+	summary.text_changed.emit()
+	await _settle(history)
+	_check(str((editor._section["summary"] as Button).text).ends_with("Relationship: %s / %s" % [free[0], free[1]]), "the summary names both countries")
+	_check(history._day_one_problems.is_empty() and not history._save_button.disabled, "a filled relationship can be saved")
+	since = history._check_seq
+	_button(history, "+ Agreement").pressed.emit()
+	await _settle(history, since)
+	var agreement: Node = history._fact_editors.get("canonicalUpdates:3")
+	await _open_editor(agreement)
+	var types: OptionButton = _field_edit(agreement, "Agreement type")
+	var guarantee := -1
+	for index in range(types.item_count):
+		if str(types.get_item_metadata(index)) == "guarantee":
+			guarantee = index
+	_say("agreement types offered: %d, first %s" % [types.item_count, types.get_item_text(0)])
+	since = history._check_seq
+	types.select(guarantee)
+	types.item_selected.emit(guarantee)
+	await _settle(history, since)
+	facts = history._draft["updates"]["canonicalUpdates"]
+	var guaranteed: Dictionary = facts[3]
+	_check(str(guaranteed.get("type", "")) == "guarantee" and guaranteed.has("guarantor") and not guaranteed.has("parties"), "a Guarantee swaps the signatories for a guarantor and a beneficiary")
+	agreement = history._fact_editors.get("canonicalUpdates:3")
+	_check(agreement != null and bool(agreement._section["open"]), "the agreement stays open after its type changes")
+	_type(_field_edit(agreement, "Agreement title"), "Guarantee of independence")
+	_type(_field_edit(agreement, "Guarantor (protecting country)"), free[2])
+	_type(_field_edit(agreement, "Beneficiary (protected country)"), free[3])
+	since = history._check_seq
+	_button(history, "+ Storyline").pressed.emit()
+	await _settle(history, since)
+	var story: Node = history._fact_editors.get("canonicalUpdates:4")
+	await _open_editor(story)
+	_type(_field_edit(story, "Storyline title"), "A border dispute simmers")
+	(_button(story, "+ Add country") as Button).pressed.emit()
+	await _frames(2)
+	var rows := _find_all(story, func(entry: Node) -> bool: return entry is LineEdit and (entry as LineEdit).tooltip_text == "Participating countries 1", [])
+	_type(rows[0], free[0])
+	_type(_field_edit(story, "Pressure (0-100)"), "40")
+	_type(_field_edit(story, "Momentum (0-100)"), "55")
+	await _settle(history)
+	_say("problems after filling: " + JSON.stringify(history._day_one_problems))
+	_check(history._day_one_problems.is_empty() and not history._save_button.disabled, "three filled facts can be saved")
+	since = history._check_seq
+	_button(history, "+ Relationship").pressed.emit()
+	await _settle(history, since)
+	var extra: Node = history._fact_editors.get("canonicalUpdates:5")
+	_check(extra != null and history._save_button.disabled, "a fourth blank fact stops the save again")
+	since = history._check_seq
+	(_button(extra, "Remove fact") as Button).pressed.emit()
+	await _settle(history, since)
+	facts = history._draft["updates"]["canonicalUpdates"]
+	_check(facts.size() == 5 and not history._save_button.disabled, "Remove fact takes it out")
+	agreement = history._fact_editors.get("canonicalUpdates:3")
+	await _scroll_to(agreement)
+	await _shoot("war-5c-day-one-filled")
+	await history._save()
+	_check(history._message == "Starting history saved. New games from this scenario use the updated agreements and Day-one facts.", "the starting history saved: %s %s" % [history._message, history._error])
+	var reread: Dictionary = await main.engine.request("editor.details", {"kind": "scenario", "id": "default"})
+	var saved: Dictionary = reread["result"]["details"]["data"]["world"].get("prehistory", {})
+	var kept: Array = saved.get("updates", {}).get("canonicalUpdates", [])
+	_say("saved facts: " + JSON.stringify(kept.slice(2)))
+	var relation: Dictionary = kept[2] if kept.size() > 2 else {}
+	var pledge: Dictionary = kept[3] if kept.size() > 3 else {}
+	var process: Dictionary = kept[4] if kept.size() > 4 else {}
+	_check(kept.size() == 5, "five Day-one facts saved")
+	_check(str(relation.get("a", "")) == free[0] and int(relation.get("score", 0)) == -35, "the relationship saved with its countries and score")
+	_check(str(pledge.get("guarantor", "")) == free[2] and str(pledge.get("beneficiary", "")) == free[3], "the guarantee saved with its roles")
+	_check(int(process.get("pressure", 0)) == 40 and (process.get("participants", []) as Array).has(free[0]), "the storyline saved with its participants and pressure")
+
+
+func _seed_agreements(agreements: Array) -> Dictionary:
+	var probe := DevProbe.new()
+	main.engine.devtools = probe
+	var opened: Dictionary = await main.engine.devtools_request(probe, "devtools.open", {})
+	var key := str((opened.get("result", {}) as Dictionary).get("key", ""))
+	var code := "engine.library.saveScenario(\"default\", { worldPatch: { agreements: %s } }).then(() => \"seeded\")" % JSON.stringify(agreements)
+	var reply: Dictionary = await main.engine.devtools_request(probe, "devtools.eval", {"key": key, "code": code})
+	await main.engine.devtools_request(probe, "devtools.close", {"key": key})
+	main.engine.devtools = null
+	return reply
+
+
+func _existing_agreements(history: EditorHistoryPanel) -> void:
+	var free := _free_polities(history)
+	if free.size() < 8:
+		return
+	var first := {"id": "agreement-native-test-1", "type": "alliance", "title": "Native test entente", "parties": [free[4], free[5]], "status": "active", "terms": "Consult before any war.", "startedDate": "2010-03-01"}
+	var second := {"id": "agreement-native-test-2", "type": "non_aggression", "title": "Native test pact", "parties": [free[6], free[7]], "status": "active"}
+	var seeded := await _seed_agreements([first, second])
+	_say("seeded: " + JSON.stringify(seeded))
+	var reread: Dictionary = await main.engine.request("editor.details", {"kind": "scenario", "id": "default"})
+	history.update_props({"details": reread["result"]["details"]})
+	await _frames(4)
+	history._discard()
+	await _settle(history)
+	await _wait(0.5)
+	await _settle(history)
+	_check(history._canonical_box.visible and history._agreement_editors.size() == 2, "the scenario's two agreements are listed under Existing scenario agreements")
+	var entente: Node = history._agreement_editors.get("agreement-native-test-1")
+	if entente == null:
+		return
+	await _open_editor(entente)
+	_check(_has_label(entente, "Existing scenario agreement - ID: agreement-native-test-1 - Status: Active. Editing its starting record does not modify existing campaigns."), "the agreement's own line names its ID and status")
+	_check(_field_edit(entente, "Signed / effective date (optional)") != null, "its signed date is editable")
+	await _scroll_to(entente)
+	await _shoot("war-5d-existing-agreements")
+	_type(_field_edit(entente, "Agreement title"), "")
+	await _settle(history)
+	_say("agreement problems: " + JSON.stringify(history._canonical_problems))
+	_check(history._canonical_problems_holder.visible and history._save_button.disabled, "a blank title stops the save")
+	_check(_has_label(entente, "Title must contain 1 to 180 characters."), "the problem shows inside the agreement")
+	_type(_field_edit(entente, "Agreement title"), "Entente renewed")
+	await _settle(history)
+	_check(not history._canonical_problems_holder.visible and not history._save_button.disabled, "a retitled agreement can be saved")
+	var pact: Node = history._agreement_editors.get("agreement-native-test-2")
+	var since := history._check_seq
+	_confirm_soon()
+	(_button(pact, "Remove fact") as Button).pressed.emit()
+	await _settle(history, since)
+	_check(history._canonical.size() == 1, "Remove fact takes the pact out after the confirm")
+	await history._save()
+	_check(history._message == "Starting history saved. New games from this scenario use the updated agreements and Day-one facts.", "agreements saved: %s" % history._error)
+	var after: Dictionary = await main.engine.request("editor.details", {"kind": "scenario", "id": "default"})
+	var ledger: Array = after["result"]["details"]["data"]["world"].get("agreements", [])
+	_say("saved agreements: " + JSON.stringify(ledger))
+	_check(ledger.size() == 1 and str((ledger[0] as Dictionary).get("title", "")) == "Entente renewed" and str((ledger[0] as Dictionary).get("id", "")) == "agreement-native-test-1", "world.agreements keeps the retitled entente and drops the pact")
+	await _scroll_to(history._canonical_box)
+	await _shoot("war-5e-existing-agreements-saved")
 
 
 func _fronts_tab(details: Dictionary, form: Dictionary) -> void:

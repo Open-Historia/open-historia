@@ -5,6 +5,8 @@ signal details_changed(details: Dictionary)
 signal value_changed(value: Variant)
 
 const PROBLEM_BORDER := Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.35)
+const DayOneFactEditor := preload("res://scripts/editor/day_one_fact_editor.gd")
+const ADD_LABELS := {"relation": "+ Relationship", "agreement": "+ Agreement", "storyline": "+ Storyline"}
 
 var engine: EngineLink
 var _props := {}
@@ -37,6 +39,31 @@ var _events_box: VBoxContainer
 var _summary_edit: TextEdit
 var _day_one: Control
 var _day_one_rows: VBoxContainer
+var _day_one_empty: Control
+var _day_one_adds: Array[Button] = []
+var _canonical_box: Control
+var _canonical_rows: VBoxContainer
+var _general_problems: VBoxContainer
+var _day_problems_holder: Control
+var _canonical_problems_holder: Control
+var _canonical_problems_lines: VBoxContainer
+var _suggest_box: PanelContainer
+var _suggest_list: VBoxContainer
+var _suggest_target: LineEdit
+var _world := {}
+var _canonical: Array = []
+var _saved_canonical: Array = []
+var _polities: Array = []
+var _kinds: Array = ["relation", "agreement", "storyline"]
+var _agreement_types: Array = []
+var _most_facts := 32
+var _day_one_problems: Array = []
+var _canonical_problems: Array = []
+var _fact_editors := {}
+var _agreement_editors := {}
+var _open_facts := {}
+var _check_seq := 0
+var _checks_running := 0
 var _error_holder: Control
 var _error_label: Label
 var _message_holder: Control
@@ -55,6 +82,7 @@ func setup(engine_link: EngineLink, props: Dictionary) -> void:
 	_reset_draft()
 	_build()
 	_render_all()
+	_open_day_one()
 
 
 func update_props(props: Dictionary) -> void:
@@ -71,6 +99,7 @@ func update_props(props: Dictionary) -> void:
 				_render_all()
 		elif _events_box:
 			_render_status()
+		_open_day_one()
 
 
 func _adopt_details(details: Dictionary) -> void:
@@ -86,11 +115,16 @@ func _adopt_details(details: Dictionary) -> void:
 	_start_date = start
 	_briefing = EditorWarRules.js_string(world.get("startingTimelineText")).strip_edges()
 	_saved = EditorHistoryRules.normalize_record(world.get("prehistory"), true)
+	_world = world
+	_saved_canonical = (world.get("agreements") as Array).duplicate(true) if world.get("agreements") is Array else []
 
 
 func _reset_draft() -> void:
 	_draft = (_saved as Dictionary).duplicate(true) if _saved != null else EditorHistoryRules.empty_record()
 	_prompt = str((_saved as Dictionary).get("prompt", "")) if _saved != null else ""
+	_canonical = _saved_canonical.duplicate(true)
+	_day_one_problems = []
+	_canonical_problems = []
 
 
 func _events() -> Array:
@@ -109,8 +143,16 @@ func _changed() -> bool:
 	return not EditorHistoryRules.same_record(_with_prompt(), _saved if _saved != null else EditorHistoryRules.empty_record())
 
 
+func _canonical_dirty() -> bool:
+	return not EditorWarRules.same_json(_canonical, _saved_canonical)
+
+
 func _dirty() -> bool:
-	return _changed() or (_saved == null and not _briefing.is_empty())
+	return _changed() or _canonical_dirty() or (_saved == null and not _briefing.is_empty())
+
+
+func _shown_canonical_problems() -> Array:
+	return _canonical_problems if _canonical_dirty() else []
 
 
 func _problems() -> Array:
@@ -206,13 +248,65 @@ func _build() -> void:
 	_day_one = day_one[0]
 	column.add_child(_day_one)
 	var day_column: VBoxContainer = day_one[1]
-	day_column.add_child(EditorWarKit.section_title("Day-one facts"))
+	var day_header := HFlowContainer.new()
+	day_header.add_theme_constant_override("h_separation", 7)
+	day_header.add_theme_constant_override("v_separation", 7)
+	var day_title := EditorWarKit.section_title("Day-one facts")
+	day_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	day_title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	day_header.add_child(day_title)
+	var adds := HBoxContainer.new()
+	adds.add_theme_constant_override("separation", 6)
+	_day_one_adds.clear()
+	for kind in _kinds:
+		var add := EditorWarKit.button(str(ADD_LABELS.get(kind, kind)))
+		add.pressed.connect(_add_day_one.bind(str(kind)))
+		adds.add_child(add)
+		_day_one_adds.append(add)
+	day_header.add_child(adds)
+	day_column.add_child(day_header)
+	day_column.add_child(EditorWarKit.gap(9))
+	day_column.add_child(EditorWarKit.hint("Add or edit the diplomatic relationships, treaties and ongoing processes that already exist on the start date. They become canonical game records when a new campaign opens. Use the exact scenario country names. Existing wars and subordinations remain removable; the native war and puppet authoring contracts are unchanged."))
 	day_column.add_child(EditorWarKit.gap(8))
-	day_column.add_child(EditorWarKit.hint("Wars, relations and agreements already true on the start date, written by the generation. A new game starts with them in its records."))
-	day_column.add_child(EditorWarKit.gap(6))
+	_day_one_empty = EditorWarKit.hint("No Day-one facts yet. You can add one without generating pre-history.")
+	day_column.add_child(_day_one_empty)
 	_day_one_rows = VBoxContainer.new()
-	_day_one_rows.add_theme_constant_override("separation", 0)
+	_day_one_rows.add_theme_constant_override("separation", 7)
 	day_column.add_child(_day_one_rows)
+	var canonical := VBoxContainer.new()
+	canonical.add_theme_constant_override("separation", 0)
+	canonical.add_child(EditorWarKit.gap(10))
+	var rule := ColorRect.new()
+	rule.color = Color(1, 1, 1, 0.08)
+	rule.custom_minimum_size.y = 1
+	canonical.add_child(rule)
+	canonical.add_child(EditorWarKit.gap(10))
+	canonical.add_child(EditorWarKit.section_title("Existing scenario agreements"))
+	canonical.add_child(EditorWarKit.gap(8))
+	canonical.add_child(EditorWarKit.hint("These are already in the scenario's formal agreements ledger (including Political World generated treaties), not generated Pre-history facts. Edit or remove them here to change the starting state of NEW campaigns. Existing campaign saves are unaffected."))
+	canonical.add_child(EditorWarKit.gap(8))
+	_canonical_rows = VBoxContainer.new()
+	_canonical_rows.add_theme_constant_override("separation", 7)
+	canonical.add_child(_canonical_rows)
+	_canonical_box = canonical
+	day_column.add_child(canonical)
+	_general_problems = VBoxContainer.new()
+	_general_problems.add_theme_constant_override("separation", 4)
+	day_column.add_child(_general_problems)
+	_suggest_box = PanelContainer.new()
+	_suggest_box.top_level = true
+	_suggest_box.visible = false
+	_suggest_box.z_index = 10
+	_suggest_box.add_theme_stylebox_override("panel", UI.box(Color8(26, 27, 31, 252), Color(1, 1, 1, 0.14), 9, 1, Vector4(4, 4, 4, 4)))
+	var suggest_scroll := ScrollContainer.new()
+	suggest_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	suggest_scroll.name = "Scroll"
+	_suggest_box.add_child(suggest_scroll)
+	_suggest_list = VBoxContainer.new()
+	_suggest_list.add_theme_constant_override("separation", 0)
+	_suggest_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	suggest_scroll.add_child(_suggest_list)
+	add_child(_suggest_box)
 
 	_error_label = UI.wrapped("", 12, EditorWarKit.ALERT)
 	_error_holder = _spaced(_error_label, 11)
@@ -222,10 +316,20 @@ func _build() -> void:
 	column.add_child(_message_holder)
 	_problems_holder = _spaced(UI.wrapped("Fix the events marked above before saving.", 12, EditorWarKit.ALERT), 11)
 	column.add_child(_problems_holder)
+	_day_problems_holder = _spaced(UI.wrapped("Fix the Day-one facts marked above before saving.", 12, EditorWarKit.ALERT), 6)
+	column.add_child(_day_problems_holder)
+	var canonical_problems := VBoxContainer.new()
+	canonical_problems.add_theme_constant_override("separation", 0)
+	canonical_problems.add_child(UI.wrapped("Fix the existing agreement problems before saving.", 12, EditorWarKit.ALERT))
+	_canonical_problems_lines = VBoxContainer.new()
+	_canonical_problems_lines.add_theme_constant_override("separation", 0)
+	canonical_problems.add_child(_canonical_problems_lines)
+	_canonical_problems_holder = _spaced(canonical_problems, 6)
+	column.add_child(_canonical_problems_holder)
 	column.add_child(EditorWarKit.gap(12))
 	var actions := HBoxContainer.new()
 	actions.add_theme_constant_override("separation", 7)
-	_save_button = EditorWarKit.button("Save pre-history", "primary")
+	_save_button = EditorWarKit.button("Save starting history", "primary")
 	_save_button.pressed.connect(_save)
 	actions.add_child(_save_button)
 	_discard_button = EditorWarKit.button("Discard changes")
@@ -253,11 +357,67 @@ func _render_events() -> void:
 		_events_box.add_child(_event_card(index))
 
 
+func _fact_kind(family: String, fact: Dictionary) -> String:
+	if family == "canonicalUpdates":
+		return str(fact.get("kind", ""))
+	return str({"relationUpdates": "relation", "agreementUpdates": "agreement", "storylineUpdates": "storyline"}.get(family, ""))
+
+
+func _fact_at(family: String, index: int) -> Variant:
+	var updates: Variant = _draft.get("updates")
+	if not (updates is Dictionary) or not ((updates as Dictionary).get(family) is Array):
+		return null
+	var rows: Array = (updates as Dictionary)[family]
+	return rows[index] if index >= 0 and index < rows.size() and rows[index] is Dictionary else null
+
+
+func _problems_for(family: String, index: int) -> Array:
+	var out: Array = []
+	for entry in _day_one_problems:
+		if entry is Dictionary and str(entry.get("family", "")) == family and int(EditorWarRules.to_number(entry.get("index"))) == index:
+			out.append(str(entry.get("problem", "")))
+	return out
+
+
+func _agreement_problems_for(id: String) -> Array:
+	var out: Array = []
+	for entry in _shown_canonical_problems():
+		if entry is Dictionary and str(entry.get("id", "")) == id:
+			out.append(str(entry.get("problem", "")))
+	return out
+
+
+func _agreement_id(agreement: Variant) -> String:
+	return EditorWarRules.js_string((agreement as Dictionary).get("id")).strip_edges() if agreement is Dictionary else ""
+
+
 func _render_day_one() -> void:
+	_hide_suggest()
 	EditorKit.clear(_day_one_rows)
+	EditorKit.clear(_canonical_rows)
+	_fact_editors.clear()
+	_agreement_editors.clear()
 	var rows := EditorHistoryRules.update_rows(_draft)
-	_day_one.visible = not rows.is_empty()
 	for row in rows:
+		var family := str(row.get("family", ""))
+		var at := int(row.get("index", 0))
+		var fact: Variant = _fact_at(family, at)
+		var kind := _fact_kind(family, fact if fact is Dictionary else {})
+		if fact is Dictionary and _kinds.has(kind):
+			var key := family + ":" + EditorWarRules.js_string((fact as Dictionary).get("ref", (fact as Dictionary).get("id", at)))
+			var editor := DayOneFactEditor.new()
+			editor.setup({"family": family, "index": at}, fact, {
+				"problems": _problems_for(family, at), "disabled": _busy, "agreementTypes": _agreement_types,
+				"suggest": _attach_suggest, "open": bool(_open_facts.get(key, false)),
+			})
+			editor.toggled.connect(_remember_open.bind(key))
+			editor.changed.connect(_edit_fact.bind(family, at))
+			editor.type_changed.connect(_change_fact_type.bind(at))
+			editor.reciprocal_changed.connect(_change_fact_reciprocal.bind(at))
+			editor.remove_requested.connect(_remove_day_one.bind(family, at))
+			_fact_editors[family + ":" + str(at)] = editor
+			_day_one_rows.add_child(editor)
+			continue
 		var line := HBoxContainer.new()
 		line.add_theme_constant_override("separation", 8)
 		var holder := MarginContainer.new()
@@ -271,15 +431,62 @@ func _render_day_one() -> void:
 		var remove := EditorWarKit.button("Remove")
 		remove.custom_minimum_size.y = 27
 		remove.add_theme_font_size_override("font_size", 11)
-		var family := str(row.get("family", ""))
-		var at := int(row.get("index", 0))
-		remove.pressed.connect(func() -> void:
-			var next: Variant = EditorHistoryRules.without_update(_draft, family, at)
-			if next is Dictionary:
-				_draft = next
-			_render_all())
+		remove.pressed.connect(_remove_day_one.bind(family, at))
 		line.add_child(remove)
 		_day_one_rows.add_child(line)
+	_canonical_box.visible = not _canonical.is_empty()
+	for index in range(_canonical.size()):
+		var agreement: Dictionary = _canonical[index] if _canonical[index] is Dictionary else {}
+		var id := _agreement_id(agreement)
+		var count := 0
+		for other in _canonical:
+			if _agreement_id(other) == id:
+				count += 1
+		var valid := not id.is_empty() and count == 1
+		var holder := VBoxContainer.new()
+		holder.add_theme_constant_override("separation", 3)
+		var editor := DayOneFactEditor.new()
+		editor.setup({"family": "worldAgreements"}, agreement, {
+			"problems": _agreement_problems_for(id), "disabled": _busy or not valid, "agreementTypes": _agreement_types,
+			"suggest": _attach_suggest, "open": bool(_open_facts.get("worldAgreements:" + id, false)),
+		})
+		editor.toggled.connect(_remember_open.bind("worldAgreements:" + id))
+		editor.changed.connect(_edit_agreement.bind(id))
+		editor.type_changed.connect(_agreement_op_type.bind(id))
+		editor.reciprocal_changed.connect(_agreement_op_reciprocal.bind(id))
+		editor.remove_requested.connect(_remove_agreement.bind(id))
+		if valid:
+			_agreement_editors[id] = editor
+		holder.add_child(editor)
+		if not valid:
+			holder.add_child(UI.wrapped("This older agreement has no unique canonical ID and cannot safely be edited here.", 11, EditorWarKit.ALERT))
+		_canonical_rows.add_child(holder)
+
+
+func _render_day_one_problems() -> void:
+	for key in _fact_editors:
+		var parts: PackedStringArray = str(key).split(":")
+		_fact_editors[key].set_problems(_problems_for(parts[0], int(parts[1])))
+	for id in _agreement_editors:
+		_agreement_editors[id].set_problems(_agreement_problems_for(str(id)))
+	EditorKit.clear(_general_problems)
+	for problem in _problems_for("canonicalUpdates", -1):
+		_general_problems.add_child(UI.wrapped(problem, 11, EditorWarKit.ALERT))
+	_general_problems.visible = _general_problems.get_child_count() > 0
+	EditorKit.clear(_canonical_problems_lines)
+	for entry in _shown_canonical_problems():
+		var id := str((entry as Dictionary).get("id", "")) if entry is Dictionary else ""
+		var shown := false
+		for agreement in _canonical:
+			if _agreement_id(agreement) == id:
+				shown = true
+				break
+		if not shown and entry is Dictionary:
+			_canonical_problems_lines.add_child(UI.wrapped(str((entry as Dictionary).get("problem", "")), 12, EditorWarKit.ALERT))
+
+
+func _remember_open(open: bool, key: String) -> void:
+	_open_facts[key] = open
 
 
 func _render_status() -> void:
@@ -308,8 +515,15 @@ func _render_status() -> void:
 	_message_label.text = _message
 	_message_holder.visible = not _message.is_empty()
 	_problems_holder.visible = not problems.is_empty()
-	EditorWarKit.set_enabled(_save_button, not _busy and _dirty() and problems.is_empty())
-	EditorWarKit.set_enabled(_discard_button, not _busy and _changed())
+	var facts: Array = (_draft.get("updates", {}) as Dictionary).get("canonicalUpdates", []) if _draft.get("updates") is Dictionary else []
+	for add in _day_one_adds:
+		EditorWarKit.set_enabled(add, not _busy and facts.size() < _most_facts)
+	_day_one_empty.visible = EditorHistoryRules.update_rows(_draft).is_empty() and _canonical.is_empty()
+	_day_problems_holder.visible = not _day_one_problems.is_empty()
+	_canonical_problems_holder.visible = not _shown_canonical_problems().is_empty()
+	_render_day_one_problems()
+	EditorWarKit.set_enabled(_save_button, not _busy and _dirty() and problems.is_empty() and _day_one_problems.is_empty() and _shown_canonical_problems().is_empty())
+	EditorWarKit.set_enabled(_discard_button, not _busy and _dirty())
 
 
 func _show_problems(card: Dictionary, problems: Array) -> void:
@@ -543,7 +757,7 @@ func _add_event() -> void:
 func _generate() -> void:
 	if _scenario_id.is_empty() or _busy:
 		return
-	if not _events().is_empty() and not await EditorKit.ask(EditorWarKit.host_of(self, _props), "Replace the events below with a newly generated pre-history? You can still discard the result before saving."):
+	if (not _events().is_empty() or not EditorHistoryRules.update_rows(_draft).is_empty()) and not await EditorKit.ask(EditorWarKit.host_of(self, _props), "Replace the events and Day-one facts below with a newly generated pre-history? You can still discard the result before saving."):
 		return
 	_error = ""
 	_message = ""
@@ -565,6 +779,7 @@ func _generate() -> void:
 		_draft = (reply["result"]["record"] as Dictionary).duplicate(true)
 		_message = "Generated. Edit anything below, then save the pre-history."
 		_render_all()
+		_request_check()
 	else:
 		if not bool(reply.get("aborted", false)):
 			_error = str(reply.get("error", ""))
@@ -580,13 +795,16 @@ func _cancel_generation() -> void:
 
 
 func _save() -> void:
-	if _scenario_id.is_empty() or _busy or not _problems().is_empty():
+	if _scenario_id.is_empty() or _busy or not _problems().is_empty() or not _day_one_problems.is_empty() or not _shown_canonical_problems().is_empty():
 		return
 	_busy = true
 	_error = ""
 	_message = ""
 	_render_status()
-	var reply := await engine.request("editor.history.save", {"scenarioId": _scenario_id, "draft": _draft, "prompt": _prompt})
+	var payload := {"scenarioId": _scenario_id, "draft": _draft, "prompt": _prompt, "startDate": _start_date, "withPrehistory": _changed() or (_saved == null and not _briefing.is_empty())}
+	if _canonical_dirty():
+		payload["agreements"] = _canonical
+	var reply := await engine.request("editor.history.save", payload)
 	_busy = false
 	if not is_inside_tree():
 		return
@@ -596,8 +814,10 @@ func _save() -> void:
 		details_changed.emit(details)
 		_adopt_details(details)
 		_draft = (result.get("draft", {}) as Dictionary).duplicate(true)
-		_message = "Pre-history saved. New games from this scenario start with it."
+		_canonical = _saved_canonical.duplicate(true)
+		_message = "Starting history saved. New games from this scenario use the updated agreements and Day-one facts."
 		_render_all()
+		_request_check()
 	else:
 		_error = str(reply.get("error", ""))
 		_render_status()
@@ -608,3 +828,221 @@ func _discard() -> void:
 	_message = ""
 	_error = ""
 	_render_all()
+	_request_check()
+
+
+func _open_day_one() -> void:
+	var asked := _scenario_id
+	var reply := await engine.request("editor.history.dayOne", {"op": "open", "scenarioId": _scenario_id})
+	if not is_inside_tree() or asked != _scenario_id or not reply.get("ok", false):
+		return
+	var result: Dictionary = reply["result"]
+	_polities = result.get("polities", []) if result.get("polities") is Array else []
+	_agreement_types = result.get("agreementTypes", []) if result.get("agreementTypes") is Array else []
+	_most_facts = int(EditorWarRules.to_number(result.get("most", 32)))
+	_render_day_one()
+	_render_status()
+	_request_check()
+
+
+func _request_check() -> void:
+	_check_seq += 1
+	var seq := _check_seq
+	_checks_running += 1
+	var reply := await engine.request("editor.history.dayOne", {"op": "check", "scenarioId": _scenario_id, "draft": _draft, "agreements": _canonical, "startDate": _start_date})
+	_checks_running -= 1
+	if not is_inside_tree() or seq != _check_seq or not reply.get("ok", false):
+		return
+	var result: Dictionary = reply["result"]
+	_day_one_problems = result.get("dayOne", []) if result.get("dayOne") is Array else []
+	_canonical_problems = result.get("canonical", []) if result.get("canonical") is Array else []
+	_render_status()
+
+
+func _day_one_op(payload: Dictionary) -> bool:
+	payload["draft"] = _draft
+	var reply := await engine.request("editor.history.dayOne", payload)
+	if not is_inside_tree():
+		return false
+	if not reply.get("ok", false):
+		_error = str(reply.get("error", ""))
+		_render_status()
+		return false
+	var result: Dictionary = reply["result"]
+	if result.get("draft") is Dictionary:
+		_draft = (result["draft"] as Dictionary).duplicate(true)
+	_error = ""
+	_render_day_one()
+	_render_status()
+	_request_check()
+	return true
+
+
+func _add_day_one(kind: String) -> void:
+	_message = ""
+	await _day_one_op({"op": "insert", "kind": kind})
+
+
+func _edit_fact(patch: Dictionary, family: String, index: int) -> void:
+	var fact: Variant = _fact_at(family, index)
+	if not (fact is Dictionary):
+		return
+	for key in patch:
+		if patch[key] == null:
+			(fact as Dictionary).erase(key)
+		else:
+			(fact as Dictionary)[key] = patch[key]
+	_error = ""
+	_message = ""
+	_render_status()
+	_request_check()
+
+
+func _change_fact_type(agreement_type: String, index: int) -> void:
+	await _day_one_op({"op": "type", "index": index, "type": agreement_type})
+
+
+func _change_fact_reciprocal(on: bool, index: int) -> void:
+	await _day_one_op({"op": "reciprocal", "index": index, "reciprocal": on})
+
+
+func _remove_day_one(family: String, index: int) -> void:
+	var next: Variant = EditorHistoryRules.without_update(_draft, family, index)
+	if next is Dictionary:
+		_draft = next
+	_error = ""
+	_message = ""
+	_render_day_one()
+	_render_status()
+	_request_check()
+
+
+func _agreement_op(payload: Dictionary) -> void:
+	payload["agreements"] = _canonical
+	var reply := await engine.request("editor.history.dayOne", payload)
+	if not is_inside_tree():
+		return
+	if not reply.get("ok", false):
+		_error = str(reply.get("error", ""))
+		_render_status()
+		return
+	var result: Dictionary = reply["result"]
+	if result.get("agreements") is Array:
+		_canonical = (result["agreements"] as Array).duplicate(true)
+	_error = ""
+	_message = ""
+	_render_day_one()
+	_render_status()
+	_request_check()
+
+
+func _edit_agreement(patch: Dictionary, id: String) -> void:
+	for agreement in _canonical:
+		if _agreement_id(agreement) == id:
+			for key in patch:
+				(agreement as Dictionary)[key] = patch[key] if patch[key] != null else ""
+			break
+	_error = ""
+	_message = ""
+	_render_status()
+	_request_check()
+
+
+func _agreement_op_type(agreement_type: String, id: String) -> void:
+	await _agreement_op({"op": "agreement-type", "id": id, "type": agreement_type})
+
+
+func _agreement_op_reciprocal(on: bool, id: String) -> void:
+	await _agreement_op({"op": "agreement-reciprocal", "id": id, "reciprocal": on})
+
+
+func _remove_agreement(id: String) -> void:
+	if not await EditorKit.ask(EditorWarKit.host_of(self, _props), "Remove this existing agreement from the scenario? Existing campaigns will not change."):
+		return
+	await _agreement_op({"op": "agreement-remove", "id": id})
+
+
+func _attach_suggest(line: LineEdit) -> void:
+	line.focus_entered.connect(_show_suggest.bind(line))
+	line.text_changed.connect(_suggest_typed.bind(line))
+	line.focus_exited.connect(_hide_suggest_later)
+
+
+func _suggest_typed(_text: String, line: LineEdit) -> void:
+	_show_suggest(line)
+
+
+func _suggest_row(value: String) -> Button:
+	var row := Button.new()
+	row.focus_mode = Control.FOCUS_NONE
+	row.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	row.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	row.custom_minimum_size.y = 28
+	row.text = value
+	row.clip_text = true
+	row.add_theme_font_override("font", UI.font(400))
+	row.add_theme_font_size_override("font_size", 12)
+	for color_name in ["font_color", "font_focus_color"]:
+		row.add_theme_color_override(color_name, Color(1, 1, 1, 0.86))
+	for color_name in ["font_hover_color", "font_pressed_color", "font_hover_pressed_color"]:
+		row.add_theme_color_override(color_name, UI.WHITE)
+	row.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 7, 0, Vector4(10, 0, 10, 0)))
+	row.add_theme_stylebox_override("focus", UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 7, 0, Vector4(10, 0, 10, 0)))
+	row.add_theme_stylebox_override("hover", UI.box(Color(1, 1, 1, 0.1), Color(0, 0, 0, 0), 7, 0, Vector4(10, 0, 10, 0)))
+	row.add_theme_stylebox_override("pressed", UI.box(Color(1, 1, 1, 0.14), Color(0, 0, 0, 0), 7, 0, Vector4(10, 0, 10, 0)))
+	row.pressed.connect(_pick_suggestion.bind(value))
+	return row
+
+
+func _show_suggest(line: LineEdit) -> void:
+	if not is_instance_valid(line) or not line.is_inside_tree() or _polities.is_empty():
+		return
+	_suggest_target = line
+	EditorKit.clear(_suggest_list)
+	var wanted := line.text.strip_edges().to_lower()
+	var shown := 0
+	for name in _polities:
+		var value := str(name)
+		if value == line.text or (not wanted.is_empty() and not value.to_lower().contains(wanted)):
+			continue
+		_suggest_list.add_child(_suggest_row(value))
+		shown += 1
+		if shown >= 60:
+			break
+	if shown == 0:
+		_suggest_box.visible = false
+		return
+	var rect := line.get_global_rect()
+	var width := maxf(rect.size.x, 220.0)
+	var scroll: ScrollContainer = _suggest_box.get_node("Scroll")
+	scroll.custom_minimum_size = Vector2(width - 8, minf(220.0, float(shown) * 28.0))
+	_suggest_box.global_position = Vector2(rect.position.x, rect.end.y + 4)
+	_suggest_box.size = Vector2(width, 0)
+	_suggest_box.reset_size()
+	var view := get_viewport_rect().size
+	if _suggest_box.global_position.y + _suggest_box.size.y > view.y - 8.0:
+		_suggest_box.global_position.y = rect.position.y - _suggest_box.size.y - 4.0
+	_suggest_box.visible = true
+
+
+func _pick_suggestion(value: String) -> void:
+	_suggest_box.visible = false
+	if not is_instance_valid(_suggest_target):
+		return
+	var target := _suggest_target
+	target.text = value
+	target.caret_column = value.length()
+	target.text_changed.emit(value)
+	_suggest_box.visible = false
+
+
+func _hide_suggest_later() -> void:
+	await get_tree().create_timer(0.15).timeout
+	if is_instance_valid(self) and is_inside_tree() and (not is_instance_valid(_suggest_target) or not _suggest_target.has_focus()):
+		_suggest_box.visible = false
+
+
+func _hide_suggest() -> void:
+	if _suggest_box:
+		_suggest_box.visible = false
+	_suggest_target = null

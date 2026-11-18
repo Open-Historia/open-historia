@@ -114,6 +114,16 @@ export const register = (ctx) => {
     .sort((a, b) => a.label.localeCompare(b.label));
 
   const generatedRecords = new Map();
+  const historyWorlds = new Map();
+  const historyWorld = async (scenarioId) => {
+    const id = clean(scenarioId);
+    if (!id) return {};
+    if (!historyWorlds.has(id)) {
+      const details = await lib.loadScenarioDetails(id).catch(() => null);
+      historyWorlds.set(id, details?.data?.world ?? {});
+    }
+    return historyWorlds.get(id);
+  };
 
   const stableKey = (value) => JSON.stringify(value ?? null, (_key, entry) => (
     entry && typeof entry === "object" && !Array.isArray(entry)
@@ -157,14 +167,70 @@ export const register = (ctx) => {
       generatedRecords.set(id, generated);
       return { record: plain(engine.scenarioPrehistory.normalizeScenarioPrehistory(generated, { draft: true })) };
     },
-    "editor.history.save": async ({ scenarioId, draft = null, prompt = "" }) => {
+    "editor.history.save": async ({ scenarioId, draft = null, prompt = "", startDate = "", withPrehistory = true, agreements = null }) => {
       const id = scenarioIdOf(scenarioId);
       const prehistory = engine.scenarioPrehistory;
       const current = await lib.loadScenarioDetails(id).catch(() => null);
-      const given = withOriginalUpdates(draft && typeof draft === "object" ? draft : {}, [current?.data?.world?.prehistory, generatedRecords.get(id)]);
+      const world = current?.data?.world ?? {};
+      const given = withOriginalUpdates(draft && typeof draft === "object" ? draft : {}, [world.prehistory, generatedRecords.get(id)]);
+      let canonical = null;
+      if (Array.isArray(agreements)) {
+        const checked = engine.canonicalAgreements.validateScenarioCanonicalAgreementEdits({
+          original: engine.canonicalAgreements.scenarioCanonicalAgreements(world), draft: agreements, world, prehistory: given, startDate: clean(startDate),
+        });
+        if (checked.errors.length) throw new Error(checked.errors.map((entry) => entry.problem).join(" "));
+        canonical = checked.agreements;
+      }
+      const stagedWorld = canonical ? { ...world, agreements: canonical } : world;
+      const verified = engine.dayOneFacts.dayOneEditorProblems(given, { startDate: clean(startDate), world: stagedWorld, verifyWorld: true });
+      if (verified.length) throw new Error("Day-one facts could not be saved: " + verified.map((entry) => entry.problem).join(" "));
       const record = prehistory.normalizeScenarioPrehistory({ ...given, prompt: String(prompt ?? "") });
-      const nextDetails = await lib.saveScenario(id, { worldPatch: { prehistory: record } });
-      return { details: detailsView(nextDetails), draft: plain(prehistory.normalizeScenarioPrehistory(record, { draft: true })) };
+      const worldPatch = { ...(withPrehistory !== false ? { prehistory: record } : {}), ...(canonical ? { agreements: canonical } : {}) };
+      const nextDetails = await lib.saveScenario(id, { worldPatch });
+      const savedWorld = nextDetails?.data?.world ?? {};
+      historyWorlds.set(id, savedWorld);
+      return {
+        details: detailsView(nextDetails),
+        draft: plain(prehistory.normalizeScenarioPrehistory(withPrehistory !== false ? record : given, { draft: true })),
+        agreements: plain(engine.canonicalAgreements.scenarioCanonicalAgreements(savedWorld)),
+      };
+    },
+    "editor.history.dayOne": async ({ scenarioId = "", draft = null, startDate = "", agreements = null, op = "", kind = "", index = -1, type = "", reciprocal = false, id: agreementId = "", patch = null, family = "" } = {}) => {
+      const facts = engine.dayOneFacts;
+      const canon = engine.canonicalAgreements;
+      const record = draft && typeof draft === "object" ? draft : {};
+      if (op === "open") {
+        historyWorlds.delete(clean(scenarioId));
+        const world = await historyWorld(scenarioId);
+        return {
+          agreements: plain(canon.scenarioCanonicalAgreements(world)),
+          polities: engine.warPolities.collectScenarioPoliticalPolities(world).map((entry) => entry.polityKey),
+          kinds: [...facts.AUTHORABLE_DAY_ONE_KINDS],
+          agreementTypes: [...facts.DAY_ONE_AGREEMENT_TYPES],
+          most: facts.MAX_SEMANTIC_DAY_ONE_FACTS,
+        };
+      }
+      if (op === "insert") return { draft: plain(facts.insertManualDayOneFact(record, clean(kind))) };
+      if (op === "type") return { draft: plain(facts.changeManualAgreementType(record, Number(index), clean(type))) };
+      if (op === "reciprocal") return { draft: plain(facts.changeManualAccessReciprocal(record, Number(index), reciprocal === true)) };
+      if (op === "update") return { draft: plain(facts.updateDayOneFact(record, clean(family), Number(index), patch && typeof patch === "object" ? patch : {})) };
+      if (op === "agreement-edit") return { agreements: plain(canon.editScenarioCanonicalAgreement(agreements, clean(agreementId), patch)) };
+      if (op === "agreement-type") return { agreements: plain(canon.changeScenarioCanonicalAgreementType(agreements, clean(agreementId), clean(type))) };
+      if (op === "agreement-reciprocal") return { agreements: plain(canon.changeScenarioCanonicalAccessReciprocal(agreements, clean(agreementId), reciprocal === true)) };
+      if (op === "agreement-remove") return { agreements: plain(canon.removeScenarioCanonicalAgreement(agreements, clean(agreementId))) };
+      if (op === "check") {
+        const dayOne = facts.dayOneEditorProblems(record, { startDate: clean(startDate) });
+        let canonical = [];
+        if (Array.isArray(agreements)) {
+          const world = await historyWorld(scenarioId);
+          const saved = canon.scenarioCanonicalAgreements(world);
+          if (!canon.sameScenarioCanonicalAgreements(agreements, saved)) {
+            canonical = canon.validateScenarioCanonicalAgreementEdits({ original: saved, draft: agreements, world, prehistory: record, startDate: clean(startDate) }).errors;
+          }
+        }
+        return { dayOne: plain(dayOne), canonical: plain(canonical) };
+      }
+      throw new Error(`Unknown Day-one edit: ${op}`);
     },
     "editor.war.militaryStatus": async ({ scenarioId }) => {
       const details = await lib.loadScenarioDetails(scenarioIdOf(scenarioId));
