@@ -471,14 +471,18 @@ try {
   await guest.eval(`(() => { const e = window.__e2e; e.type(document.querySelector('input[placeholder="oh1-…"]'), ${JSON.stringify(token)}); const name = [...document.querySelectorAll('input[placeholder="Player"]')][0]; if (name) e.type(name, "Guest"); return true; })()`);
   await sleep(300);
   await guest.eval(`(() => {
-    window.__seen = { loading: [], apiPrompt: false, steps: [] };
+    window.__seen = { loading: [], apiPrompt: false, apiPromptText: "", steps: [] };
     const look = () => {
       // The lobby box's line for the step of joining this is (client/joinProgress.js).
       const step = /(Found the host[^.…]*|Connected to the host. [^.…]*)/.exec(document.body.textContent)?.[1];
       if (step && !window.__seen.steps.includes(step)) window.__seen.steps.push(step);
       const screen = document.querySelector('.oh-loading-screen');
       if (screen && window.__seen.loading.at(-1) !== screen.textContent) window.__seen.loading.push(screen.textContent);
-      if (document.querySelector('[aria-label="Set up your AI provider"]')) window.__seen.apiPrompt = true;
+      const prompt = document.querySelector('[aria-label="Set up your AI provider"]');
+      if (prompt) {
+        window.__seen.apiPrompt = true;
+        window.__seen.apiPromptText ||= prompt.textContent;
+      }
     };
     new MutationObserver(look).observe(document.body, { childList: true, subtree: true, characterData: true });
     return true;
@@ -876,7 +880,12 @@ try {
   await shoot(guest, "2-guest-after-round");
   await shoot(host, "2-host-after-round");
   const seenAfter = await guest.eval("window.__seen");
-  check("the guest is never asked for an AI key (the host's key runs the game)", !seenAfter.apiPrompt && !(await guest.eval("Boolean(document.querySelector('[aria-label=\"Set up your AI provider\"]'))")));
+  // A guest's advisor, suggestions, generals and Search are its own AI's in any shared game, so it is asked for one
+  // in the words of this game's rules (multiplayer/costRules.js ownAiUsesOf; the gap audit of 2026-11-18 found it
+  // told it needed none). The round above ran on the host's AI without one.
+  check("the guest is asked for its own AI in this game's words, and plays the round on the host's without one",
+    seenAfter.apiPrompt && seenAfter.apiPromptText.includes("In this shared game the host's AI makes each round's request"),
+    JSON.stringify({ asked: seenAfter.apiPrompt, words: seenAfter.apiPromptText.slice(0, 160) }));
   const newDate = (await guest.eval("window.__e2e.view('game')"))?.gameDate || "";
   const datesMoved = newDate && newDate !== ORIGIN
     && (await Promise.all([host, guest].map((tab) => until(tab, `document.body.textContent.includes(${JSON.stringify(`/ ${newDate}`)})`, 10000)))).every(Boolean);
@@ -973,7 +982,8 @@ try {
   await until(host, `Boolean(${repliesSelect})`, 10000);
   await host.eval(`(() => { window.__e2e.choose(${repliesSelect}, 'own'); return true; })()`);
   await guest.eval("window.__e2e.click('Players')");
-  const guestTold = await until(guest, "document.body.textContent.includes('Countries the AI plays answer your messages with your own AI key.')", 15000);
+  // Under Players, "Who pays" (ui/GameRules.jsx, multiplayer/costRules.js) says it as it now is.
+  const guestTold = await until(guest, "document.body.textContent.includes('Your own AI answers your messages to countries the AI plays')", 15000);
   const hostShows = await until(host, `(() => { const select = ${repliesSelect}; return Boolean(select) && select.value === 'own'; })()`, 10000);
   await shoot(host, "3-host-whose-ai-answers");
   await host.eval("window.__e2e.click('Players')");
