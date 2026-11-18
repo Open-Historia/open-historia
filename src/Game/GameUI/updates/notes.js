@@ -54,6 +54,207 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "build C and D, and the host can choose, but no sending api keys" (the owner, 2026-11-15): who answers a player's message to a
+    // country the AI plays is the host's choice (multiplayer/host/settings.js `replies`): the host's AI, or each player's own device.
+    // "any issues should not be roughly patched or whackamoled, the core of the issue should be fixed archetecturally" (the owner,
+    // 2026-11-15): the shared game's middle rebuilt: checked views, one order for every change, and the session saved with the game.
+    // 2026-11-18, "is multiplayer ready now?": the rest of the redesign map (multiplayer-map/REMAINING.md) closed, which made this a
+    // major update of its own look (themes/SharedWorlds.jsx).
+    id: "2026-11-shared-game-replies",
+    kind: "major",
+    date: "2026-11-18",
+    channel: "beta",
+    banners: [
+      {
+        theme: "sharedWorlds",
+        scene: "table",
+        title: "Shared Worlds",
+        subtitle: "One world, every player in it",
+        lead: "Shared games are rebuilt so that everyone plays in the same world, each with their own country, their own secrets and their own say.",
+        sections: [
+          {
+            heading: "Your seat",
+            icon: "people",
+            items: [
+              "A shared game remembers who plays which country: share it again days later and every player gets their own country back.",
+              "Your country stays yours while you are away: after the minutes the lobby states, the AI plays it until you return.",
+              "Once the game has started, changing country needs the host's say. A player whose country is gone takes a free one or watches.",
+              "A player the host releases cannot take that country back, and their queued orders, goal, advice, letters and open offers go with them.",
+            ],
+          },
+          {
+            heading: "Rounds",
+            icon: "star",
+            items: [
+              "The round bar shows today's date and the day the round lands, and the Timeline panel shows the round.",
+              "After a round the map shows its events one at a time as you read them, as a single-player skip does.",
+              "Orders sent while a round is played count for the next one. An order left unanswered is marked overdue and no longer counts against the round.",
+              "A round that fails waits for the host, who can try it again or cancel one that hangs. Nothing is ever made up.",
+            ],
+          },
+          {
+            heading: "One map on every screen",
+            icon: "map",
+            items: [
+              "Every screen draws the host's map, its seas and projection included, and a copy of the scenario that differs is caught when you join.",
+              "The host's settings, difficulty and the language the world is written in apply to every player, and the lobby says what decides each round.",
+              "Joining no longer adds a copy of the game to your library, and your library stays as it was while the game is open.",
+              "Players on the website and the Android app can join a game hosted on the desktop app again.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "sharedWorlds",
+        scene: "ledger",
+        title: "Who Pays",
+        subtitle: "No key ever leaves your device",
+        lead: "The host decides whose AI does what, and the lobby says plainly what each choice means for every player.",
+        sections: [
+          {
+            heading: "Answers",
+            icon: "book",
+            items: [
+              "The host chooses whose AI answers messages to countries the AI plays, the host's or each player's own, and how many a round the host's answers.",
+              "With each player's own AI, the host sets how many messages a round its AI answers for governments that can act, such as one at war with you.",
+              "A country's figures, parties and military ratings are written once for everyone, and cannot be rebuilt from scratch.",
+              "No API key is ever sent to the host or to anyone else.",
+            ],
+          },
+          {
+            heading: "Taking turns",
+            icon: "gear",
+            items: [
+              "The host can let players take turns to pay for each round's AI request, each on their own AI.",
+              "The lobby warns that the paying player's device sees that round's whole request, every player's orders and secrets included, and could change what happens in it.",
+              "If the paying player's AI fails or they leave, the round waits: the host can try again or pay for it.",
+              "A player whose device has no AI that can pay is passed over, and each player's own AI settings decide what their turn spends.",
+            ],
+          },
+          {
+            heading: "Game Master",
+            icon: "eye",
+            items: [
+              "The host can allow the Game Master in a shared game, and every player sees that it is on.",
+              "Everyone is told of each change it makes, and can read the list of its changes.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "sharedWorlds",
+        scene: "secrets",
+        title: "Yours Alone",
+        subtitle: "What you plan stays yours",
+        lead: "What a player plans, writes and learns is their own until the world sees it happen.",
+        sections: [
+          {
+            heading: "Orders",
+            icon: "eye",
+            items: [
+              "What another player has only ordered stays theirs until the round is played: forces being raised, convoys, lines being fortified and a fleet's new orders.",
+              "What already stands on the map is seen by everyone.",
+              "Your Projects board changes only through your own panel and advisor, and your projects act on your own country, never on another player's.",
+            ],
+          },
+          {
+            heading: "Counsel",
+            icon: "book",
+            items: [
+              "Your advisor remembers your talks, after a new invite code too.",
+              "Your advisor's three suggested orders for each round are under Suggested Actions, and your standing goal guides your own government.",
+              "Papers that reach your government arrive in your own correspondence, and your advisor flags each one.",
+            ],
+          },
+          {
+            heading: "Spies",
+            icon: "eye",
+            items: [
+              "Every player's agents report, steal documents and run operations for their own service, and what they bring back is theirs alone.",
+              "Each time skip knows every player's spies, and who spies on each player.",
+              "Another player's spies never stall your projects, and nothing on your board gives their agents away.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "sharedWorlds",
+        scene: "envoys",
+        title: "Between Players",
+        subtitle: "Peace, treaties and votes",
+        lead: "Players make peace, sign treaties and vote together, and the world's governments write to every one of them.",
+        sections: [
+          {
+            heading: "Peace and treaties",
+            icon: "flag",
+            items: [
+              "Offer peace to another player in your chat with them: each country makes its own peace, and the war goes on for the rest.",
+              "Two players can sign a treaty there, and it holds like any treaty in the world.",
+              "Terms between two players are theirs alone until accepted, and a peace or treaty made between rounds is shown to everyone with the borders it moved.",
+            ],
+          },
+          {
+            heading: "Letters",
+            icon: "book",
+            items: [
+              "Every player gets letters from other governments, and an ally's call for help reaches the player it calls on.",
+              "Writing to a player who is away tells you so; once the AI plays their country, its government answers.",
+              "Retry on an unanswered message asks for the answer again without sending your message twice.",
+              "Renaming a conversation, adding a country to it or closing it applies for everyone in it.",
+            ],
+          },
+          {
+            heading: "Votes and institutions",
+            icon: "people",
+            items: [
+              "Call a vote in a group conversation and its governments vote in it; each country votes once, for itself.",
+              "In institutions every player casts their own vote, and the AI never votes for another player.",
+              "An invitation to an institution reaches the player it is for, in a conversation of its own with an Accept button.",
+            ],
+          },
+          {
+            heading: "Rostra and demands",
+            icon: "note",
+            items: [
+              "The host sets how many Rostra posts each player may make a round.",
+              "Demands between an overlord and its puppet are made and answered from their cards.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "sharedWorlds",
+        scene: "fronts",
+        title: "Fair Fronts",
+        subtitle: "One war, fought by the same rules",
+        lead: "Wars between players are fought on the same map, by the same rules, with every refusal explained.",
+        sections: [
+          {
+            heading: "Forces",
+            icon: "swords",
+            items: [
+              "Two players fighting on one front can both order air strikes there without replacing each other's.",
+              "You raise formations on your own land or the sea off it, and the limit of 15 counts only those you raised yourself.",
+              "Releasing a colony or a puppet from your own land no longer moves you onto it: you keep your country and its army.",
+              "When your people found a new country and the old one ends, your armies and air strikes go with you, and so do the structures on your new land.",
+            ],
+          },
+          {
+            heading: "Fair play",
+            icon: "chess",
+            items: [
+              "Difficulty weighs each player against the countries the AI plays, and never favours one player over another.",
+              "The host refuses an order for anything its game has switched off, and says why beside it. Its other words to you stay listed under Players.",
+              "A structure can be moved only onto its own country's land or the sea off it.",
+              "The military ranking and each country's Military card fill in during shared games.",
+            ],
+          },
+        ],
+        button: "Into the shared world",
+      },
+    ],
+  },
+  {
     // "readd the background ai for refreshing the stats where you could set how often it runs" and "there should be
     // an off choise in the thing where you pick how often it refreshes" (the owner, 2026-11-18): removed on
     // 2026-11-09 with the Background AI switch (bb37bd1e6); back as one picker, Off by default.
@@ -315,207 +516,6 @@ const NEW_UPDATES = [
           "Population advances only when an explicit demographic trend is recorded; legal territorial transfers pause stale national ledgers until reassessed.",
           "Refresh no longer calls AI solely because the date changed; Rebuild baseline remains available for a fresh assessment.",
         ],
-      },
-    ],
-  },
-  {
-    // "build C and D, and the host can choose, but no sending api keys" (the owner, 2026-11-15): who answers a player's message to a
-    // country the AI plays is the host's choice (multiplayer/host/settings.js `replies`): the host's AI, or each player's own device.
-    // "any issues should not be roughly patched or whackamoled, the core of the issue should be fixed archetecturally" (the owner,
-    // 2026-11-15): the shared game's middle rebuilt: checked views, one order for every change, and the session saved with the game.
-    // 2026-11-18, "is multiplayer ready now?": the rest of the redesign map (multiplayer-map/REMAINING.md) closed, which made this a
-    // major update of its own look (themes/SharedWorlds.jsx).
-    id: "2026-11-shared-game-replies",
-    kind: "major",
-    date: "2026-11-15",
-    channel: "beta",
-    banners: [
-      {
-        theme: "sharedWorlds",
-        scene: "table",
-        title: "Shared Worlds",
-        subtitle: "One world, every player in it",
-        lead: "Shared games are rebuilt so that everyone plays in the same world, each with their own country, their own secrets and their own say.",
-        sections: [
-          {
-            heading: "Your seat",
-            icon: "people",
-            items: [
-              "A shared game remembers who plays which country: share it again days later and every player gets their own country back.",
-              "Your country stays yours while you are away: after the minutes the lobby states, the AI plays it until you return.",
-              "Once the game has started, changing country needs the host's say. A player whose country is gone takes a free one or watches.",
-              "A player the host releases cannot take that country back, and their queued orders, goal, advice, letters and open offers go with them.",
-            ],
-          },
-          {
-            heading: "Rounds",
-            icon: "star",
-            items: [
-              "The round bar shows today's date and the day the round lands, and the Timeline panel shows the round.",
-              "After a round the map shows its events one at a time as you read them, as a single-player skip does.",
-              "Orders sent while a round is played count for the next one. An order left unanswered is marked overdue and no longer counts against the round.",
-              "A round that fails waits for the host, who can try it again or cancel one that hangs. Nothing is ever made up.",
-            ],
-          },
-          {
-            heading: "One map on every screen",
-            icon: "map",
-            items: [
-              "Every screen draws the host's map, its seas and projection included, and a copy of the scenario that differs is caught when you join.",
-              "The host's settings, difficulty and the language the world is written in apply to every player, and the lobby says what decides each round.",
-              "Joining no longer adds a copy of the game to your library, and your library stays as it was while the game is open.",
-              "Players on the website and the Android app can join a game hosted on the desktop app again.",
-            ],
-          },
-        ],
-      },
-      {
-        theme: "sharedWorlds",
-        scene: "ledger",
-        title: "Who Pays",
-        subtitle: "No key ever leaves your device",
-        lead: "The host decides whose AI does what, and the lobby says plainly what each choice means for every player.",
-        sections: [
-          {
-            heading: "Answers",
-            icon: "book",
-            items: [
-              "The host chooses whose AI answers messages to countries the AI plays, the host's or each player's own, and how many a round the host's answers.",
-              "With each player's own AI, the host sets how many messages a round its AI answers for governments that can act, such as one at war with you.",
-              "A country's figures, parties and military ratings are written once for everyone, and cannot be rebuilt from scratch.",
-              "No API key is ever sent to the host or to anyone else.",
-            ],
-          },
-          {
-            heading: "Taking turns",
-            icon: "gear",
-            items: [
-              "The host can let players take turns to pay for each round's AI request, each on their own AI.",
-              "The lobby warns that the paying player's device sees that round's whole request, every player's orders and secrets included, and could change what happens in it.",
-              "If the paying player's AI fails or they leave, the round waits: the host can try again or pay for it.",
-              "A player whose device has no AI that can pay is passed over, and each player's own AI settings decide what their turn spends.",
-            ],
-          },
-          {
-            heading: "Game Master",
-            icon: "eye",
-            items: [
-              "The host can allow the Game Master in a shared game, and every player sees that it is on.",
-              "Everyone is told of each change it makes, and can read the list of its changes.",
-            ],
-          },
-        ],
-      },
-      {
-        theme: "sharedWorlds",
-        scene: "secrets",
-        title: "Yours Alone",
-        subtitle: "What you plan stays yours",
-        lead: "What a player plans, writes and learns is their own until the world sees it happen.",
-        sections: [
-          {
-            heading: "Orders",
-            icon: "eye",
-            items: [
-              "What another player has only ordered stays theirs until the round is played: forces being raised, convoys, lines being fortified and a fleet's new orders.",
-              "What already stands on the map is seen by everyone.",
-              "Your Projects board changes only through your own panel and advisor, and your projects act on your own country, never on another player's.",
-            ],
-          },
-          {
-            heading: "Counsel",
-            icon: "book",
-            items: [
-              "Your advisor remembers your talks, after a new invite code too.",
-              "Your advisor's three suggested orders for each round are under Suggested Actions, and your standing goal guides your own government.",
-              "Papers that reach your government arrive in your own correspondence, and your advisor flags each one.",
-            ],
-          },
-          {
-            heading: "Spies",
-            icon: "eye",
-            items: [
-              "Every player's agents report, steal documents and run operations for their own service, and what they bring back is theirs alone.",
-              "Each time skip knows every player's spies, and who spies on each player.",
-              "Another player's spies never stall your projects, and nothing on your board gives their agents away.",
-            ],
-          },
-        ],
-      },
-      {
-        theme: "sharedWorlds",
-        scene: "envoys",
-        title: "Between Players",
-        subtitle: "Peace, treaties and votes",
-        lead: "Players make peace, sign treaties and vote together, and the world's governments write to every one of them.",
-        sections: [
-          {
-            heading: "Peace and treaties",
-            icon: "flag",
-            items: [
-              "Offer peace to another player in your chat with them: each country makes its own peace, and the war goes on for the rest.",
-              "Two players can sign a treaty there, and it holds like any treaty in the world.",
-              "Terms between two players are theirs alone until accepted, and a peace or treaty made between rounds is shown to everyone with the borders it moved.",
-            ],
-          },
-          {
-            heading: "Letters",
-            icon: "book",
-            items: [
-              "Every player gets letters from other governments, and an ally's call for help reaches the player it calls on.",
-              "Writing to a player who is away tells you so; once the AI plays their country, its government answers.",
-              "Retry on an unanswered message asks for the answer again without sending your message twice.",
-              "Renaming a conversation, adding a country to it or closing it applies for everyone in it.",
-            ],
-          },
-          {
-            heading: "Votes and institutions",
-            icon: "people",
-            items: [
-              "Call a vote in a group conversation and its governments vote in it; each country votes once, for itself.",
-              "In institutions every player casts their own vote, and the AI never votes for another player.",
-              "An invitation to an institution reaches the player it is for, in a conversation of its own with an Accept button.",
-            ],
-          },
-          {
-            heading: "Rostra and demands",
-            icon: "note",
-            items: [
-              "The host sets how many Rostra posts each player may make a round.",
-              "Demands between an overlord and its puppet are made and answered from their cards.",
-            ],
-          },
-        ],
-      },
-      {
-        theme: "sharedWorlds",
-        scene: "fronts",
-        title: "Fair Fronts",
-        subtitle: "One war, fought by the same rules",
-        lead: "Wars between players are fought on the same map, by the same rules, with every refusal explained.",
-        sections: [
-          {
-            heading: "Forces",
-            icon: "swords",
-            items: [
-              "Two players fighting on one front can both order air strikes there without replacing each other's.",
-              "You raise formations on your own land or the sea off it, and the limit of 15 counts only those you raised yourself.",
-              "Releasing a colony or a puppet from your own land no longer moves you onto it: you keep your country and its army.",
-              "When your people found a new country and the old one ends, your armies and air strikes go with you, and so do the structures on your new land.",
-            ],
-          },
-          {
-            heading: "Fair play",
-            icon: "chess",
-            items: [
-              "Difficulty weighs each player against the countries the AI plays, and never favours one player over another.",
-              "The host refuses an order for anything its game has switched off, and says why beside it. Its other words to you stay listed under Players.",
-              "A structure can be moved only onto its own country's land or the sea off it.",
-              "The military ranking and each country's Military card fill in during shared games.",
-            ],
-          },
-        ],
-        button: "Into the shared world",
       },
     ],
   },
