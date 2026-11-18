@@ -1110,16 +1110,14 @@ export const createGameHost = ({
   };
   // A peace a leader made in a turn's answer (engineMain.js decidedAndTold),
   // whether a person's line or an institution's business asked for the turn,
-  // is said to every player, as one two players make is, and the seats follow
-  // it in the next entry: a peace that annexes a country people play.
+  // is said to every player, as one two players make is. The seats followed it
+  // in the entry that wrote it (write's `told`): a peace that annexes a country
+  // people play.
   const onTable = (chatId, job) => {
     const table = tableOf(chatId);
     const turn = table.tail.then(() => (stopped ? undefined : job())).then((outcome) => {
       const landed = list(outcome?.landed);
-      if (landed.length && !stopped) {
-        tellEveryone(landed);
-        void queue.run("seats-follow", () => followLandings(landed));
-      }
+      if (landed.length && !stopped) tellEveryone(landed);
       return outcome;
     });
     const settled = turn.then(() => {}, () => {});
@@ -2721,8 +2719,18 @@ export const createGameHost = ({
     isMember: (device) => Boolean(device) && !banned.has(device) && (device === hostSeat.device || Boolean(seats.seatOf(device)) || Boolean(seats.watcherOf(device))),
     // A change made outside a request (an AI government's answer being
     // written, an institution's business): applied in the queue's order, and
-    // every view follows.
-    write: (label, fn) => queue.run(label, fn),
+    // every view follows. `fn({ told })`: a write that landed a peace or a
+    // treaty (host/landings.js) says so with `told(landed)`, and the seats
+    // follow it in the same entry, as a peace the "peace" request lands does.
+    // They followed in an entry of their own, queued after it: a request of
+    // the annexed country's player waiting between the two still acted for a
+    // country with no land (FOLLOWUPS A2).
+    write: (label, fn) => queue.run(label, async () => {
+      const landed = [];
+      const out = await fn({ told: (events) => landed.push(...list(events)) });
+      if (!stopped) await followLandings(landed);
+      return out;
+    }),
     status: () => ({ lobby: lobbyFor(null), round: round.status(), players: [...connections.values()].map((entry) => ({ id: entry.id, name: entry.name, seat: seatOf(entry)?.country ?? "" })) }),
   };
 };

@@ -240,20 +240,24 @@ const loadWorldWords = async (code) => {
 // one two players make between rounds is (host/landings.js): an event on the
 // timeline with the borders it moved. `landed` gathers the events, for the
 // host to tell every player. Read only when the decisions are written: the
-// world before them, and after.
-const decidedAndTold = async (write, landed) => {
+// world before them, and after. `entry`: the host's queue entry it is written
+// in (gameHost.js write), told of the landings so the seats follow them there.
+const decidedAndTold = async (write, landed, entry = null) => {
   const before = await readWorldState({ force: true });
   const out = await write();
   const after = await readWorldState({ force: true });
   if (!landingEvents(before, after).length) return out;
   const regions = await loadRegionCatalog().then((catalog) => filterToRenderedRegions(catalog, after)).catch(() => []);
   const baked = new Map(list(regions).map((region) => [clean(region?.id), region]));
+  const fresh = [];
   await mutateCanonicalTurnState(({ world, events, game }) => {
     const told = tellLandings({ before, after: world, events, game, ownerOf: (id) => (baked.has(id) ? regionOwnerNow(baked.get(id), {}) : ""), words: worldWords });
     if (!told) return null;
-    landed.push(...told.landed);
+    fresh.push(...told.landed);
     return { world: told.world, events: told.events };
   });
+  landed.push(...fresh);
+  entry?.told?.(fresh);
   return out;
 };
 
@@ -269,7 +273,7 @@ const tableTurn = async ({ chat, seat, ...flags }) => {
     chat,
     playerCountry: seat,
     useCanonicalState: true,
-    commit: (write) => writeInOrder("table-decided", () => decidedAndTold(write, landed)),
+    commit: (write) => writeInOrder("table-decided", (entry) => decidedAndTold(write, landed, entry)),
     ...flags,
   });
   if (landed.length && outcome && typeof outcome === "object") outcome.landed = landed;

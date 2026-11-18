@@ -3475,11 +3475,21 @@ test("a peace between rounds that annexes a played country lets its seat go at o
   assert.ok(!s.to(s.hostPlayer, "lobby").at(-1).countries.includes(ESTONIA), "the lobby no longer offers it");
 });
 
-test("a peace a leader made in a table's answer that ends the writer's country lets its seat go in the next entry", async () => {
-  const s = setup({
-    replyTo: async (_info, store) => {
-      store.docs.world.polityOverrides[RUSSIA] = { ...store.docs.world.polityOverrides[RUSSIA], status: "dissolved" };
-      return { landed: [{ id: "landing-peace-treaty:war-2:2014-04-01", concerns: [ESTONIA, RUSSIA] }] };
+// The seats followed in an entry of their own, queued after the one that wrote the peace: a request of the
+// annexed country's player waiting between the two acted for a country with no land (FOLLOWUPS A2). The engine
+// writes a table's decisions as an entry (engineMain.js decidedAndTold), and tells it what landed.
+test("a peace a leader made in a table's answer that ends the writer's country lets its seat go in the same entry", async () => {
+  const landing = { id: "landing-peace-treaty:war-2:2014-04-01", concerns: [ESTONIA, RUSSIA] };
+  let s = null;
+  s = setup({
+    replyTo: async () => {
+      await s.host.write("table-decided", async ({ told }) => {
+        s.store.docs.world.polityOverrides[RUSSIA] = { ...s.store.docs.world.polityOverrides[RUSSIA], status: "dissolved" };
+        // The annexed country's player gives an order while the decision is written: it waits behind this entry.
+        void s.host.receive(s.guest, { t: "order", id: id(3), text: "Raise the militia." });
+        told([landing]);
+      });
+      return { landed: [landing] };
     },
   });
   s.host.join(s.hostPlayer);
@@ -3489,7 +3499,10 @@ test("a peace a leader made in a table's answer that ends the writer's country l
   await s.request(s.guest, { t: "say", id: id(2), thread: null, to: [ESTONIA], text: "We give up." });
   await s.clock.flush();
   assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA]);
-  assert.match(s.to(s.guest, "notice").at(-1).text, /Russian Federation is gone/);
+  assert.ok(s.to(s.guest, "notice").some((notice) => /Russian Federation is gone/.test(notice.text)));
+  assert.equal(s.ack(s.guest, id(3)).ok, false, "the order waited behind the peace, and its seat had ended");
+  assert.match(s.ack(s.guest, id(3)).error, /no longer play/);
+  assert.ok(!s.store.docs.actions.some((action) => action.text === "Raise the militia."));
 });
 
 test("a request sent again after the game is shared again is answered as it was, and applied once", async () => {
