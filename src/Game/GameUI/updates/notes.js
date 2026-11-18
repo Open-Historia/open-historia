@@ -54,6 +54,26 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "readd the background ai for refreshing the stats where you could set how often it runs" and "there should be
+    // an off choise in the thing where you pick how often it refreshes" (the owner, 2026-11-18): removed on
+    // 2026-11-09 with the Background AI switch (bb37bd1e6); back as one picker, Off by default.
+    id: "2026-11-stats-refresh",
+    kind: "minor",
+    date: "2026-11-18",
+    channel: "beta",
+    banners: [
+      {
+        title: "Stat sheets that keep up",
+        items: [
+          "Settings, AI requests, can keep countries' stat sheets up to date for you: pick Off, after every time skip, or every 2, 3, 5 or 10.",
+          "After a time skip has finished, one background request brings up to date the sheets its news has changed, your own country's first, for up to 6 countries.",
+          "It costs about one request every so many time skips, and stops at the day's cap of requests nobody pressed a button for. Off is the default.",
+          "In a shared game it runs only on the host, while the host's AI answers for every player.",
+        ],
+      },
+    ],
+  },
+  {
     // The review of everything (2026-11-18) found these in the game's own code while fixing shared games: planted
     // intelligence ran as another country's real work, a doubt stalled real work for good, an accepted invitation
     // never admitted the player, a structure moved across the date line went nowhere.
