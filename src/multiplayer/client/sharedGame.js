@@ -24,7 +24,7 @@ import { normalizeActions, normalizeChats, normalizeEvents, normalizeGameData, n
 import { unseenEvents } from "../../runtime/unseenEvents.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { GENERATION_COMPLETE_EVENT, adoptStoredAiRecord } from "../../Game/AI/telemetry.js";
-import { planGameWrite, planWorldWrite, revealedTurnOf, suggestionsOutlived, unroutedChanges } from "./seatWrites.js";
+import { UNROUTED_NOTICE, planGameWrite, planWorldWrite, revealedTurnOf, suggestionsOutlived, unroutedChanges, unroutedRefusal } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
 import { setSharedGamePeople, setSharedGameRole, setSharedGameSettings, setSharedRequester, setSharedRequestsHeld, setSharedRoundBase, setSharedRoundDays, SHARED_ROUND_LANDED } from "./sharedGameBridge.js";
@@ -153,6 +153,9 @@ const asThePageSavesIt = (key, value) => {
   return value;
 };
 
+// A save no door takes is refused in development (seatWrites.js unroutedRefusal).
+const STRICT_DOOR = Boolean(import.meta.env?.DEV);
+
 // One of the game's screens saved a document (client/remoteRuntime.js).
 const ownWrite = ({ key, wanted, held }) => {
   const owner = current;
@@ -181,10 +184,13 @@ const ownWrite = ({ key, wanted, held }) => {
     });
     return after;
   }
-  // A change no door takes is said, not passed for saved (seatWrites.js unroutedChanges).
+  // A change no door takes is said, not passed for saved (seatWrites.js
+  // unroutedChanges): on the round bar and in the diagnostics log, and in
+  // development the save is refused, so the screen that made it fails there.
   const unrouted = unroutedChanges(key, before, after);
   if (unrouted.length) {
     logDebugEvent("shared game", `a change only this screen made, which the host never heard: ${key}: ${unrouted.slice(0, 8).join(", ")}`, undefined, { problem: true });
+    notify(UNROUTED_NOTICE);
   }
   if (key === "world") {
     const plan = planWorldWrite(before, after);
@@ -198,6 +204,10 @@ const ownWrite = ({ key, wanted, held }) => {
   if (key === "game") {
     const plan = planGameWrite(before, after);
     if (Object.keys(plan.device).length) owner.runtime.patch("game", plan.device, { quiet: true });
+  }
+  if (unrouted.length && STRICT_DOOR) {
+    console.error(`[shared game] a save no door takes: ${key}: ${unrouted.join(", ")}`);
+    throw unroutedRefusal(key, unrouted);
   }
   return asThePageSavesIt(key, owner.runtime.held(key));
 };

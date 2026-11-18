@@ -38,7 +38,7 @@ import { PeaceControls, ReparationsNote } from "./warAndPeace.jsx";
 import { WarReportsList } from "./afterAction.jsx";
 import { institutionPortfolioForPolity } from "../../runtime/institutionLifecycleCore.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
-import { sharedGameRole, sharedRequestsHeld, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame, sharedGameRole, sharedRequestsHeld, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
 import {
     appendCountryStatHistorySample,
@@ -2221,7 +2221,12 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 setHistoryState({ status: "ready", samples, error: "", recoveredCount, persistentCount });
 
                 const persistedSeries = persistent[targetCountry] || [];
-                if (JSON.stringify(persistedSeries) !== JSON.stringify(stored)) {
+                // In a shared game the history is the host's world's, which its
+                // own rounds add to, and the restore points are the host's: this
+                // page recovers nothing to keep. Its save of the field went
+                // nowhere and was answered "saved" (the review of 2026-11-18,
+                // door 3); the chart above shows what the view holds.
+                if (!inSharedGame() && JSON.stringify(persistedSeries) !== JSON.stringify(stored)) {
                     try {
                         // Re-read immediately before the best-effort migration write so
                         // opening a chart cannot put a stale pre-turn world object back

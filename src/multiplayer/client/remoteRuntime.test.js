@@ -180,6 +180,21 @@ test("a write never reaches the host's game or this device's store: a hook reads
   assert.equal(network.length, 0);
 });
 
+test("a save the hook refuses fails as a save, in the hook's words; a hook that merely fell over still answers with the held document", async () => {
+  const runtime = startRemoteRuntime({
+    publish: () => {},
+    urlFor,
+    onWrite: ({ key }) => {
+      if (key === "world") throw Object.assign(new Error("this save of world changed countryStatsHistory, which no request carries."), { refusal: true });
+      throw new Error("a bug in the hook");
+    },
+  });
+  runtime.apply(viewsFrom("e1").next({ world: { units: [1] }, game: {}, events: [], chat: [], actions: [] }));
+  const refused = await body(await target.fetch("/api/runtime/json/world?v=token", { method: "PUT", body: "{\"units\":[1],\"countryStatsHistory\":{}}" }));
+  assert.deepEqual(refused, { status: 409, json: { error: "this save of world changed countryStatsHistory, which no request carries." } });
+  assert.deepEqual(await body(await target.fetch("/api/runtime/json/actions?v=token", { method: "PUT", body: "[]" })), { status: 200, json: [] });
+});
+
 test("a save that repeats without end is stopped", async () => {
   const runtime = startRemoteRuntime({ publish: () => {}, urlFor, onWrite: () => undefined });
   runtime.apply(viewsFrom("e1").next({ world: {}, game: {}, events: [], chat: [], actions: [] }));

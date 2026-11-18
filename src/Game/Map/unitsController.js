@@ -240,9 +240,15 @@ const adoptGame = (game, { notify = true } = {}) => {
 // saves carry on units nothing is actually moving. See clearStaleUnitMotion for
 // what produced them and why a unit under a queued order is left alone. Written
 // back rather than merely displayed, so the save stops lying about it too.
+//
+// Not on a page playing a shared game: the world is the host's, and it is
+// repaired when its host plays it alone (a guest's view holds only its own
+// queue, so every other player's unit under orders would read as stale). The
+// write went nowhere and was answered "saved" (the review of 2026-11-18, door
+// 3). Not marked done, so the page's own game is repaired once it is back.
 let motionRepaired = false;
 const repairStaleUnitMotion = async () => {
-  if (motionRepaired) return;
+  if (motionRepaired || inSharedGame()) return;
   motionRepaired = true;
   busy = true;
   try {

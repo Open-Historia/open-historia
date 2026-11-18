@@ -53,14 +53,16 @@ export const planGameWrite = (held, wanted) => planDeviceWrite(DEVICE_GAME_KEYS,
 // Two fields are equal when they hold the same JSON, a missing one counting as
 // empty (null, [], {} or ""): a page fills in the empty defaults of fields its
 // view leaves out, and those are no change. In `chat`, a bubble the screen shows
-// of its own (role "error": a refusal, a failed reply) is the screen's.
+// of its own (role "error": a refusal, a failed reply) is the screen's, and so
+// is the place in the inbox such a bubble moves its thread to
+// (runtime/chatInboxOrder.js activityOrdinal): the host's view sets the order.
 const empty = (value) => value === undefined || value === null || value === ""
   || (Array.isArray(value) && value.length === 0)
   || (isRecord(value) && Object.keys(value).length === 0);
 const same = (left, right) => (empty(left) && empty(right)) || !differs(left, right);
 const ROUTED_KEYS = { world: new Set(DEVICE_WORLD_KEYS), game: new Set(DEVICE_GAME_KEYS) };
 const withoutOwnBubbles = (thread) => (isRecord(thread)
-  ? { ...thread, messages: list(thread.messages).filter((message) => message?.role !== "error") }
+  ? { ...thread, activityOrdinal: undefined, messages: list(thread.messages).filter((message) => message?.role !== "error") }
   : thread);
 export const unroutedChanges = (key, held, wanted) => {
   if (ROUTED_KEYS[key]) {
@@ -82,6 +84,20 @@ export const unroutedChanges = (key, held, wanted) => {
   }
   return same(held, wanted) ? [] : [key];
 };
+
+// What becomes of a save that holds such a change (client/sharedGame.js): it is
+// never passed for saved without a word. The player is told on the round bar
+// (UNROUTED_NOTICE) and the diagnostics log names the document and fields; in
+// development the save is refused outright (409, client/remoteRuntime.js), so
+// the screen that made it fails where its developer is looking, and the tests
+// that drive the game's writers through a shared page fail with it
+// (client/oneDoor.test.js). In a player's game it is answered with the
+// document the page holds, which is the truth: none of the change was kept.
+export const UNROUTED_NOTICE = "A change on this screen did not reach the host, and was not kept.";
+export const unroutedRefusal = (key, fields) => Object.assign(
+  new Error(`In a shared game, changes go to the host as requests; this save of ${key} changed ${list(fields).slice(0, 8).join(", ")}, which no request carries.`),
+  { refusal: true },
+);
 
 // The AI's suggestions are for the round they were asked in.
 export const suggestionsOutlived = (heldRound, viewRound) => {

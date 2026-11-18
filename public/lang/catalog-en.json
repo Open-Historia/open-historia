@@ -308,6 +308,7 @@
  "A captured region shows its new owner's flag, name and statistics, and its chat opens with the new owner.",
  "A change in relations was not recorded: both of its sides were the same country.",
  "A change in relations was not recorded: it did not name both of its sides.",
+ "A change on this screen did not reach the host, and was not kept.",
  "A change to a government, party or leader was not applied: the engine's political records refused it.",
  "A change to a project was not applied: it did not say which project.",
  "A change to an agreement was not recorded: it was incomplete.",

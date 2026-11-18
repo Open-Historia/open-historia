@@ -187,8 +187,12 @@ export const installRemoteRuntime = ({ target = globalThis, waitMs = 20_000 } = 
     let answer;
     try {
       answer = session.onWrite?.({ key, wanted: await bodyOf(input, init), held: heldDoc(session, key) });
-    } catch {
-      // a hook that fell over changes nothing: the page still holds its view
+    } catch (error) {
+      // A save the hook refuses (client/seatWrites.js unroutedRefusal: in
+      // development, one holding a change no request carries) fails as a save:
+      // its screen is told, never answered "saved".
+      if (error?.refusal && current === session) return refusal(String(error.message || "In a shared game, this change was not sent to the host."));
+      // a hook that fell over otherwise changes nothing: the page still holds its view
     }
     if (current !== session) return refusal("The shared game ended.");
     // A writer that asked for no echo caches what it sent, not this answer: it
