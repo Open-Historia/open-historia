@@ -7,14 +7,12 @@
 //   kept on this device   the AI's suggested orders. They are asked with the
 //                         player's own key, are nobody else's business, and are
 //                         for one round: the next round clears them.
-//   asked of the host     the player's own Projects board (request "board"):
-//                         what their advisor put on it, or the board's own
-//                         buttons changed. The host keeps one for each country.
-//
 // Everything else in the document stays as the host's view has it. What a
-// player does with forces, agents and their own approximately placed
-// structures never comes this way: those screens ask the host themselves
-// (requests "deploy", "disband", "order", "agent" and "settle").
+// player does to the world never comes this way: each screen asks the host
+// itself, by the request for what it does ("deploy", "disband", "order",
+// "agent", "settle", the Projects board's "projectOps", and the rest). The
+// board came this way, whole, until 2026-11-18: the host kept the page's
+// entries as they came, their progress and what their plans do included.
 //
 // Import-free: plain data in, a plan out, tested under bare node.
 
@@ -26,15 +24,13 @@ export const DEVICE_WORLD_KEYS = Object.freeze(["actionSuggestions"]);
 
 // What a world the page wants to save would change, against the one it holds:
 //   device   fields kept on this device (field → value)
-//   board    the player's Projects board to ask the host to keep, or null
 export const planWorldWrite = (held, wanted) => {
-  const plan = { device: {}, board: null };
+  const plan = { device: {} };
   if (!isRecord(wanted)) return plan;
   const before = isRecord(held) ? held : {};
   for (const key of DEVICE_WORLD_KEYS) {
     if (key in wanted && differs(before[key], wanted[key])) plan.device[key] = wanted[key];
   }
-  if (Array.isArray(wanted.projects) && differs(list(before.projects), wanted.projects)) plan.board = wanted.projects;
   return plan;
 };
 
@@ -54,7 +50,7 @@ const empty = (value) => value === undefined || value === null || value === ""
   || (Array.isArray(value) && value.length === 0)
   || (isRecord(value) && Object.keys(value).length === 0);
 const same = (left, right) => (empty(left) && empty(right)) || !differs(left, right);
-const ROUTED_WORLD_KEYS = new Set([...DEVICE_WORLD_KEYS, "projects"]);
+const ROUTED_WORLD_KEYS = new Set(DEVICE_WORLD_KEYS);
 const withoutOwnBubbles = (thread) => (isRecord(thread)
   ? { ...thread, messages: list(thread.messages).filter((message) => message?.role !== "error") }
   : thread);

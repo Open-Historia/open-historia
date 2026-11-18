@@ -2,7 +2,7 @@
 // A time skip advances ONE Projects board, the game's own: it reads it into its
 // prompt, its events move the entries on it, and its review brings it in step
 // with what happened. In a shared game the host's seat has that board and every
-// other player's is kept beside it (world.seatBoards, gameHost.js "board"),
+// other player's is kept beside it (world.seatBoards, gameHost.js "projectOps"),
 // where the skip never looks.
 //
 // So that the world moves their work forward as it moves the host's, each other

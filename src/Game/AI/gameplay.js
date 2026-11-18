@@ -263,6 +263,8 @@ import { STRIKES_PER_TURN_MOST, fliesAsAircraft, withTurnStrikes } from "../../r
 import { airStrikeVisuals } from "../../runtime/fronts/airStrike.js";
 import { answerPeaceProposal, offerPeace, playerDiplomacy, turnDays, turnWarAndPeace } from "./warAndPeace.js";
 import { holdPlayersWars } from "./playersWarsHold.js";
+// A person's land is theirs to give: a completed project cedes none they hold (runProjectsEngine).
+import { cessionsPeopleKeep } from "../../runtime/projectCessions.js";
 import { chatMessageTags } from "./chatTags.js";
 import { PEACE_BLOCK_HEADING, buildPeaceBlock } from "./peacePrompt.js";
 import { WAR_FIGURES_WANTED_MOST, buildWarFiguresBlock, readWarFigures } from "./warFiguresPrompt.js";
@@ -8789,7 +8791,7 @@ const projectsForecastText = (outcomes) => describeOutcomes(outcomes);
 //                  override) has its legal title settled from it, as an event's is
 //                  (gameState.js applyEventImpactsToWorld), and a region it does
 //                  not list is refused rather than guessed.
-const runProjectsEngine = async ({ baseWorld, world, colors, fromDate, toDate, host, round, regionCatalog = null }) => {
+const runProjectsEngine = async ({ baseWorld, world, colors, fromDate, toDate, host, round, regionCatalog = null, people = [] }) => {
   const advanced = advanceProjectsInWorld({ baseWorld, world, fromDate, toDate, host, round });
   if (!advanced.days) return { world, colors, renamedPolities: [] };
   const released = applyProjectOutcomesToWorld({ world: advanced.world, outcomes: advanced.outcomes, date: toDate, round, host });
@@ -8806,6 +8808,17 @@ const runProjectsEngine = async ({ baseWorld, world, colors, fromDate, toDate, h
       const unresolved = await resolveRegionTransfers(containers, nextWorld, { renderedRegions: createRenderedRegionsReader() });
       for (const entry of normalizeArray(unresolved)) {
         console.warn(`[projects] "${normalizeString(entry?.label)}" was not found on the map; that part of a project's completion was left out.`);
+      }
+      // A region a person holds is that person's to give (cessionsPeopleKeep).
+      if (normalizeArray(people).length) {
+        const peopleCatalog = regionCatalog ? await regionCatalog().catch(() => null) : null;
+        containers.forEach((container, index) => {
+          const { kept, refused } = cessionsPeopleKeep({ transfers: container.impacts.regionTransfers, owner: released.territory[index].owner, people, world: nextWorld, catalog: peopleCatalog });
+          container.impacts.regionTransfers = kept;
+          for (const entry of refused) {
+            logDebugEvent("turn", `"${released.territory[index].project}" would have taken ${normalizeString(entry.regionId)} from ${entry.holder}, which a person plays and did not give: that part of its completion was left out.`, undefined, { problem: true });
+          }
+        });
       }
       const events = released.territory.map((entry, index) => ({
         id: `project-done-${index}-${normalizeString(entry.date)}`,
@@ -9984,6 +9997,7 @@ const applySimulationResult = async ({
     host: projectsHost(baseGame),
     round: nextGame.round,
     regionCatalog: ensureStatsRegionCatalog,
+    people: humanCountriesOf(baseGame),
   });
   worldWithImpacts = projectsRun.world;
   nextColors = projectsRun.colors;

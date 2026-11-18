@@ -46,6 +46,7 @@ import { battlefieldsForViewer } from "../../runtime/fronts/view.js";
 import { polityMatches, spyAsSeenBy, viewerAudience } from "../../Game/AI/audience.js";
 import { eventNamesPolity } from "../../runtime/eventConcerns.js";
 import { formerNamesOf } from "./foundings.js";
+import { settleBoards } from "./seatBoards.js";
 import { interceptTableOf } from "../../runtime/spycraft.js";
 import { sealOf } from "../../runtime/spySeal.js";
 
@@ -190,9 +191,12 @@ const FILTERED_WORLD_KEYS = Object.freeze({
   // A government's Projects board is its own business: what it is working on,
   // and what its services have learned of anyone else's work. The host's seat
   // has the game's own board, as single player does; every other person's is
-  // kept beside it (world.seatBoards, gameHost.js "board").
+  // kept beside it (world.seatBoards, gameHost.js "projectOps"). While a round
+  // runs, the other players' open entries are lent to the game's board
+  // (seatBoards.js lendBoards): the host's view is that board without them, or
+  // a view sent mid-round gave the host every player's work, secret too.
   projects: (world, viewer, { host }) => {
-    if (same(host, viewer)) return list(world.projects);
+    if (same(host, viewer)) return list(settleBoards(world).projects);
     const boards = isRecord(world.seatBoards) ? world.seatBoards : {};
     const mine = Object.keys(boards).find((country) => same(country, viewer));
     return mine ? list(boards[mine]) : [];

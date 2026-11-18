@@ -80,8 +80,10 @@ The real desktop app's hidden engine window is not part of this run.
 - **A player's own saves:**
   - AI suggestions asked in a shared game are shown, and stay on the device
     that asked.
-  - A guest's Projects board is saved without an error, and the host keeps it
-    for that country alone.
+  - The host's screen opens a project from its own Projects panel (a plan
+    the stand-in model writes): the host applies it to its own board by the
+    game's project operations, and no other player sees it. A guest's agent
+    stands on the guest's own board, which goes to the skip and comes home.
 - **The round:** everyone readies, the host runs the round, and its events
   reach the guest.
   - The model is told who plays what, and whose each order is.

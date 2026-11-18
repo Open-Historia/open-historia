@@ -4,6 +4,8 @@ import {
   CHIEF_ADVISOR_THREAD,
   advisorRecipientType,
 } from "../../runtime/advisorThreads.js";
+import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { PROJECT_OPS_MAX } from "../../multiplayer/game/messages.js";
 
 // A typed minister contact may author Project operations during a conversation.
 // This is deliberately NOT proof of a political appointment or broader
@@ -23,6 +25,17 @@ export const canAdvisorApplyProjectOps = (threadId, recipient) => (
 // on any entry; the engine runs them (runtime/projectEngine.js), so nothing the
 // advisor writes completes one or moves its progress.
 const CLOSED = new Set(["complete", "failed", "cancelled"]);
+
+// In a shared game the board is the host's to change: what the advisor proposes
+// is worked out on the player's view (for its report) and asked of the host, by
+// the same operations (multiplayer/game/messages.js "projectOps"), never
+// written here. At most PROJECT_OPS_MAX in one request.
+const askHostForOps = async (ops) => {
+  for (let start = 0; start < ops.length; start += PROJECT_OPS_MAX) {
+    const answer = await requestFromHost("projectOps", { ops: ops.slice(start, start + PROJECT_OPS_MAX), by: "advisor" });
+    if (!answer?.ok) throw new Error(answer?.error || "The host did not take that.");
+  }
+};
 const projectOutcome = ({ world, proposal, gameDate, round, applyProjectOpsToWorld }) => {
   const before = Array.isArray(world.projects) ? world.projects : [];
   const previousById = new Map(before.map((project) => [project.id, project]));
@@ -51,11 +64,13 @@ export const applyAdvisorProjectProposal = async ({
 } = {}) => {
   if (!Array.isArray(proposal) || proposal.length === 0) return null;
   let items = [];
+  const shared = inSharedGame();
   await mutateWorldState((world) => {
     const result = projectOutcome({ world, proposal, gameDate, round, applyProjectOpsToWorld });
     items = result.changes;
-    return result.changed ? result.nextWorld : null;
+    return result.changed && !shared ? result.nextWorld : null;
   });
+  if (shared && items.length) await askHostForOps(proposal);
   return items.length ? items : null;
 };
 
@@ -70,6 +85,8 @@ export const applyAdvisorGroupProjectBatch = async ({
     Array.isArray(entry.proposal) && entry.proposal.length > 0);
   if (!pending.length) return new Map();
   const changesBySpeaker = new Map();
+  const shared = inSharedGame();
+  let anyChange = false;
   await mutateWorldState((world) => {
     let staged = world;
     let changed = false;
@@ -80,7 +97,11 @@ export const applyAdvisorGroupProjectBatch = async ({
       changesBySpeaker.set(entry.speakerId, result.changes);
       if (result.changed) { staged = result.nextWorld; changed = true; }
     }
-    return changed ? staged : null;
+    anyChange = changed;
+    return changed && !shared ? staged : null;
   });
+  // One request for the whole batch, in the speakers' order, as the one world
+  // mutation above is in single player.
+  if (shared && anyChange) await askHostForOps(pending.flatMap((entry) => entry.proposal));
   return changesBySpeaker;
 };

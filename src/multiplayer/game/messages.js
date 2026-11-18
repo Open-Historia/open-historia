@@ -108,6 +108,9 @@ export const INSTITUTION_CALLS = Object.freeze(["lifecycle", "governance", "prop
 
 // Orders are free text in single player; in a shared game one is held to this.
 export const ORDER_MAX_CHARS = 1500;
+// The project operations one request carries (an advisor's reply proposes at
+// most this many, advisorActionReview.js).
+export const PROJECT_OPS_MAX = 24;
 // An order's id and title (runtime/gameState.js normalizeActionEntry; an
 // advisor's proposal names ids and titles up to these, advisorActionReview.js).
 export const ORDER_ID_MAX = 150;
@@ -160,7 +163,11 @@ export const PLAYER_REQUESTS = Object.freeze({
   // The player's own Projects board, whole. The host puts it through the
   // game's own normalizer, which holds it to a board's shape and size, and the
   // session holds the message to its own size limit (session/host.js).
-  board: obj({ t: literal("board"), id: REQUEST_ID, projects: json(12) }),
+  // The player's own Projects board changed by the game's own project
+  // operations (runtime/gameState.js applyProjectOpsToWorld), as the panel's
+  // buttons or the player's advisor ask (`by`). Never the board itself: the
+  // host keeps every entry's progress and what its plan does.
+  projectOps: obj({ t: literal("projectOps"), id: REQUEST_ID, ops: list(json(10), PROJECT_OPS_MAX), by: str(8, { enum: ["panel", "advisor"] }) }, ["by"]),
   // The player's forces: raise a formation where the player put it (it waits
   // there for the next skip to confirm it), or stand one down. What a formation
   // is to DO is an order like any other, in words.

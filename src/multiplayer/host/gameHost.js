@@ -36,7 +36,7 @@ import { validate } from "../protocol/validate.js";
 import { digestText } from "../protocol/digest.js";
 import { withGoalProgress, withPlayerGoal } from "../../runtime/playerGoal.js";
 import { withPlayerPost } from "../../runtime/socialFeed.js";
-import { normalizeProjects } from "../../runtime/gameState.js";
+import { applyProjectOpsToWorld, normalizeProjects } from "../../runtime/gameState.js";
 import { deployFor, disbandFor, revertOrderFor } from "./forces.js";
 import { agentOrderFor } from "./agents.js";
 import { acceptStructure, canSettleStructure, moveStructure } from "../../runtime/structurePlacement.js";
@@ -1077,12 +1077,44 @@ export const createGameHost = ({
       round.touch(seat.country);
       return refusal;
     },
-    // The player's own Projects board, whole, as their screen has just changed
-    // it: their advisor's entries, or the board's own buttons. A board is a
-    // government's working papers, so it may be changed at any time.
-    board: async (connection, { projects }, seat) => {
-      if (!Array.isArray(projects)) return "A board is a list of projects.";
-      await store.updateWorld((world) => withSeatBoard(world, seat.country, projects, { host: hostCountry }));
+    // The player's own Projects board, changed as their screen asks: the
+    // board's own buttons, or their advisor's entries, through the game's own
+    // door (gameState.js applyProjectOpsToWorld: a government's own programmes
+    // only, and only what it does to them; every plan bounded), applied here to
+    // that seat's own board. A board is a government's working papers, so it
+    // may be changed at any time. It used to come whole from the page, and the
+    // host kept it: a page could write any entry's progress, or a plan that
+    // took another player's land, and a board saved while a round resolved
+    // replaced the progress the round had made (the gap audit of 2026-11-18).
+    projectOps: async (connection, { ops, by }, seat) => {
+      // A programme of another country's is no seat's to open or steer: the
+      // door leaves such a create out without a word, so it is refused here.
+      if (list(ops).some((op) => clean(op?.ownerCode) && !same(op.ownerCode, seat.country))) return "That is not one of your own programmes.";
+      const docs = await store.read();
+      const date = clean(docs?.game?.gameDate);
+      const turn = Number(docs?.game?.round) || 0;
+      let refusal = "";
+      await store.updateWorld((world) => {
+        const mine = same(seat.country, hostCountry);
+        const boards = isRecord(world?.seatBoards) ? world.seatBoards : {};
+        const key = Object.keys(boards).find((country) => same(country, seat.country));
+        const board = mine ? list(world?.projects) : list(key ? boards[key] : []);
+        const { refusedProjectIds, world: next } = applyProjectOpsToWorld({
+          actor: by === "advisor" ? "ai" : "player",
+          date,
+          ops: list(ops),
+          playerCountry: seat.country,
+          round: turn,
+          world: { ...world, projects: board },
+        });
+        const changed = JSON.stringify(next.projects) !== JSON.stringify(normalizeProjects(board));
+        if (!changed) {
+          refusal = refusedProjectIds.length ? "That is not one of your own programmes." : "";
+          return null;
+        }
+        return withSeatBoard(world, seat.country, next.projects, { host: hostCountry });
+      });
+      if (refusal) return refusal;
       round.touch(seat.country);
       return "";
     },

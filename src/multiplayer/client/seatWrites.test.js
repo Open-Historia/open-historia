@@ -17,31 +17,32 @@ const held = () => ({
 
 test("a save that changes nothing of the player's own plans nothing", () => {
   const wanted = { ...held(), polityOverrides: { France: { name: "Changed by a cheat" } }, lastJumpSummary: "", gmAudit: [] };
-  assert.deepEqual(planWorldWrite(held(), wanted), { device: {}, board: null });
-  assert.deepEqual(planWorldWrite(held(), null), { device: {}, board: null });
+  assert.deepEqual(planWorldWrite(held(), wanted), { device: {} });
+  assert.deepEqual(planWorldWrite(held(), null), { device: {} });
 });
 
 test("the AI's suggestions stay on this device", () => {
   const topics = [{ id: "topic-0", title: "Shore up the franc", actions: [] }];
   const plan = planWorldWrite(held(), { ...held(), actionSuggestions: topics });
-  assert.deepEqual(plan, { device: { actionSuggestions: topics }, board: null });
+  assert.deepEqual(plan, { device: { actionSuggestions: topics } });
   // Held already (this device's own, laid over the view): saved again, nothing to do.
   assert.deepEqual(planWorldWrite({ ...held(), actionSuggestions: topics }, { ...held(), actionSuggestions: topics }).device, {});
   // Cleared by the page itself.
   assert.deepEqual(planWorldWrite({ ...held(), actionSuggestions: topics }, { ...held(), actionSuggestions: [] }).device, { actionSuggestions: [] });
 });
 
-test("the player's own Projects board is asked of the host, whole", () => {
-  const board = [...held().projects, { id: "p2", name: "Naval yard", status: "proposed" }];
-  assert.deepEqual(planWorldWrite(held(), { ...held(), projects: board }).board, board);
-  assert.equal(planWorldWrite(held(), { ...held() }).board, null);
-  assert.deepEqual(planWorldWrite(held(), { ...held(), projects: [] }).board, [], "an emptied board is a change");
-  assert.equal(planWorldWrite(held(), { units: [] }).board, null, "a save that says nothing of the board changes none");
+// The board was asked of the host whole, and the host kept the page's entries as they came: their progress and
+// what their plans do (the gap audit of 2026-11-18). It is changed by the game's own project operations, asked of
+// the host by the screen that makes them ("projectOps"); a save that changes it is a change no door takes.
+test("the player's own Projects board never travels in a save: a change to it in one is said", () => {
+  const board = [...held().projects, { id: "p2", name: "Naval yard", status: "proposed", progress: 99 }];
+  assert.deepEqual(planWorldWrite(held(), { ...held(), projects: board }), { device: {} });
+  assert.deepEqual(unroutedChanges("world", held(), { ...held(), projects: board }), ["projects"]);
 });
 
 test("forces and agents never travel in a save: their own screens ask the host", () => {
   const moved = { ...held(), units: [unit("fr-1", 11, 50), held().units[1]], spies: [...held().spies, { id: "spy-2", status: "active" }] };
-  assert.deepEqual(planWorldWrite(held(), moved), { device: {}, board: null });
+  assert.deepEqual(planWorldWrite(held(), moved), { device: {} });
 });
 
 test("suggestions are for the round they were asked in", () => {
@@ -61,7 +62,8 @@ test("the newest turn is revealed event by event when it is a time skip", () => 
 // passing for saved (a thread deleted, a flag changed, a unit edited: each was found by a player).
 test("what a save changes that no door takes is named, and the empty defaults a page fills in are no change", () => {
   const held = { wars: [{ id: "w" }], projects: [], actionSuggestions: [] };
-  assert.deepEqual(unroutedChanges("world", held, { ...held, projects: [{ id: "p" }], actionSuggestions: [{ id: "s" }] }), []);
+  assert.deepEqual(unroutedChanges("world", held, { ...held, actionSuggestions: [{ id: "s" }] }), []);
+  assert.deepEqual(unroutedChanges("world", held, { ...held, projects: [{ id: "p" }] }), ["projects"], "the board is the host's to change");
   assert.deepEqual(unroutedChanges("world", held, { ...held, seatBoards: {}, interactiveOffer: null, notes: "" }), [], "defaults filled in");
   assert.deepEqual(unroutedChanges("world", held, { ...held, units: [{ id: "u", strength: 99 }], wars: [] }), ["units", "wars"]);
   const threads = [{ id: "t1", title: "Talks", messages: [{ id: "m1", role: "user", text: "Hello" }] }];
@@ -87,7 +89,7 @@ test("a page's save of a view it did not change is no change, once the view is i
   // (The run's third field, institutions, is reshaped per viewer by the projection, which this view skips.)
   for (const field of ["idlePulseTick", "politicalSimulation"]) assert.ok(raw.includes(field), `what the run flagged: ${field}`);
   assert.deepEqual(unroutedChanges("world", normalizeWorldState(view), saved), []);
-  assert.equal(planWorldWrite(normalizeWorldState(view), saved).board, null, "the board is not sent again by an unrelated save");
+  assert.deepEqual(planWorldWrite(normalizeWorldState(view), saved).device, { actionSuggestions: saved.actionSuggestions }, "only what is the device's own");
   // A field really changed is still named.
   assert.deepEqual(unroutedChanges("world", normalizeWorldState(view), { ...saved, idlePulseTick: 37 }), ["idlePulseTick"]);
   // A save that is not normalized (the run's own Projects board PUT: the view and a board) is put in the same shape:
@@ -95,8 +97,8 @@ test("a page's save of a view it did not change is no change, once the view is i
   const board = [{ id: "p1", name: "Rail programme", status: "active" }, { id: "p2", name: "Port works", status: "active" }];
   const rawSave = { ...view, projects: board };
   assert.ok(unroutedChanges("world", normalizeWorldState(view), rawSave).includes("idlePulseTick"), "one side shaped, the other not");
-  assert.deepEqual(unroutedChanges("world", normalizeWorldState(view), normalizeWorldState(rawSave)), []);
-  assert.equal(planWorldWrite(normalizeWorldState(view), normalizeWorldState(rawSave)).board.length, 2, "the board it changed is still sent");
+  assert.deepEqual(unroutedChanges("world", normalizeWorldState(view), normalizeWorldState({ ...view, actionSuggestions: [{ id: "s1" }] })), []);
+  assert.deepEqual(unroutedChanges("world", normalizeWorldState(view), normalizeWorldState(rawSave)), ["projects"], "a board changed in a save is said");
   const page = (await import("node:fs")).readFileSync(new URL("./sharedGame.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.match(page, /const before = asThePageSavesIt\(key, held\);\s*const after = asThePageSavesIt\(key, wanted\);[\s\S]*?unroutedChanges\(key, before, after\)[\s\S]*?planWorldWrite\(before, after\)/);
 });

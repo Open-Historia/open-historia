@@ -426,7 +426,7 @@ The **Projects & Operations board**: long-running efforts that span rounds — r
 
 Capped at **120 projects** and 12 `eventIds` each. Going over the cap evicts closed work first, oldest first. Not in `TEMPLATE_WORLD_OVERRIDE_KEYS`, deliberately: projects are play state.
 
-In a shared game each other player's open projects are lent to the game's board for the skip (`multiplayer/host/seatBoards.js`) under their country's name, so the engine runs them on that country's budget, and come home after.
+In a shared game each other player's open projects are lent to the game's board for the skip (`multiplayer/host/seatBoards.js`) under their country's name, so the engine runs them on that country's budget, and come home after; the host's view of the board leaves them out meanwhile (`projection.js`, `settleBoards`). A player's board changes only by the game's own project operations, which the host applies to that seat's board through the same door (`applyProjectOpsToWorld`; the `projectOps` request, from the Projects panel and the advisor): never the board whole, so no page writes an entry's progress or what its plan does. A completed project cedes no region a person holds unless the project is that person's own (`runtime/projectCessions.js` `cessionsPeopleKeep`, in `gameplay.js runProjectsEngine`): war still takes land, but a cession is signed by the side that gives it, in single player too.
 
 #### Espionage on the board
 

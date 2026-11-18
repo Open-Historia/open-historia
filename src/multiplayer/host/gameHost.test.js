@@ -20,6 +20,7 @@ import { syntheticMap } from "../../runtime/fronts/syntheticMap.js";
 import { battlefieldOn } from "../../runtime/fronts/testKit.js";
 import { HOST_MESSAGES, PLAYER_REQUESTS, REPLY_MAX_CHARS, REPLY_MAX_LINES, VIEW_KEYS } from "../game/messages.js";
 import { validate } from "../protocol/validate.js";
+import { projectForViewer } from "./projection.js";
 import { setActiveFeatures } from "../../runtime/gameFeatures.js";
 import { SOCIAL_POST_MAX_CHARS } from "../../runtime/socialFeed.js";
 import { ownReplyAsked } from "../client/ownReplies.js";
@@ -438,37 +439,49 @@ test("reconciled for a guest's institution business, the host's threads stay the
   assert.deepEqual(reconcileChatsForPlayer(stored.slice(0, 2), world, LATVIA).map((chat) => chat.id), ["lv-ru", "lv-est"]);
 });
 
-test("each player keeps a Projects board of its own: the host's is the game's, another person's is kept beside it", async () => {
+test("each player keeps a Projects board of its own, changed only by the game's own project operations, on the host", async () => {
+  // The board came whole from the page and the host kept it: a page could write any entry's progress, or a plan that
+  // took another player's land (the gap audit of 2026-11-18). The host applies the panel's and the advisor's
+  // operations itself, by the game's own door (gameState.js applyProjectOpsToWorld), to that seat's own board.
   const s = setup();
   s.host.join(s.hostPlayer);
   s.host.join(s.guest);
   await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
   await s.host.control.start();
   const names = (projects) => (projects ?? []).map((project) => project.name);
+  const plan = { durationDays: 200, monthlyCost: 1e8, milestones: [{ title: "Docks", atProgress: 50 }], effects: [{ type: "stat", stat: "military.sea", change: 5 }] };
 
-  // The guest's advisor put a project on its board; what is not a project is dropped.
-  await s.request(s.guest, { t: "board", id: id(2), projects: [{ name: "Northern Fleet refit", status: "active", summary: "Dry docks at Severodvinsk." }, { nonsense: true }, "text"] });
+  // The guest opens a project of its own; what it says of its progress is not taken.
+  await s.request(s.guest, { t: "projectOps", id: id(2), ops: [{ op: "create", name: "Northern Fleet refit", summary: "Dry docks at Severodvinsk.", plan, progress: 99.99, status: "complete" }] });
   assert.equal(s.ack(s.guest, id(2)).ok, true);
-  assert.deepEqual(Object.keys(s.store.docs.world.seatBoards), [RUSSIA]);
-  assert.deepEqual(names(s.store.docs.world.seatBoards[RUSSIA]), ["Northern Fleet refit"]);
+  const refit = () => s.store.docs.world.seatBoards[RUSSIA].find((project) => project.name === "Northern Fleet refit");
+  assert.equal(refit().progress, 0, "the host keeps every entry's progress");
+  assert.notEqual(refit().status, "complete");
   assert.deepEqual(names(s.store.docs.world.projects), [], "the game's own board is the host's, untouched");
   assert.deepEqual(names(s.shown(s.guest).world.projects), ["Northern Fleet refit"]);
-  assert.deepEqual(names(s.shown(s.hostPlayer).world.projects), []);
   assert.equal(JSON.stringify(s.shown(s.hostPlayer)).includes("Northern Fleet"), false, "nothing of it reaches the host's view");
+  // Its funding is its own to set.
+  await s.request(s.guest, { t: "projectOps", id: id(3), ops: [{ op: "update", name: "Northern Fleet refit", funding: "high" }] });
+  assert.equal(s.ack(s.guest, id(3)).ok, true);
+  assert.equal(refit().funding, "high");
 
   // The host's own board is the game's, as in single player.
-  await s.request(s.hostPlayer, { t: "board", id: id(3), projects: [{ name: "Riga port expansion" }] });
+  await s.request(s.hostPlayer, { t: "projectOps", id: id(4), ops: [{ op: "create", name: "Riga port expansion", plan }] });
   assert.deepEqual(names(s.store.docs.world.projects), ["Riga port expansion"]);
-  assert.deepEqual(names(s.shown(s.hostPlayer).world.projects), ["Riga port expansion"]);
   assert.deepEqual(names(s.shown(s.guest).world.projects), ["Northern Fleet refit"]);
   assert.equal(JSON.stringify(s.shown(s.guest)).includes("Riga port"), false);
+  // Nobody's operations reach another's board: the guest cannot fund the host's work, nor open one in its name.
+  await s.request(s.guest, { t: "projectOps", id: id(5), ops: [{ op: "update", name: "Riga port expansion", funding: "none" }] });
+  assert.equal(s.store.docs.world.projects[0].funding, "normal");
+  await s.request(s.guest, { t: "projectOps", id: id(6), ops: [{ op: "create", name: "Latvian collapse", ownerCode: LATVIA, plan }] });
+  assert.match(s.ack(s.guest, id(6)).error, /not one of your own programmes/);
+  assert.equal(JSON.stringify(s.store.docs.world).includes("Latvian collapse"), false);
 
-  // A board is a list; an emptied one is kept as nothing.
-  await s.request(s.guest, { t: "board", id: id(4), projects: { name: "not a list" } });
-  assert.match(s.ack(s.guest, id(4)).error, /list of projects/);
-  await s.request(s.guest, { t: "board", id: id(5), projects: [] });
-  assert.deepEqual(s.store.docs.world.seatBoards, {});
-  assert.deepEqual(names(s.shown(s.guest).world.projects), []);
+  // While a round runs the guest's entries are lent to the game's board (seatBoards.js): the host's view leaves them out.
+  s.store.docs.world.projects = [...s.store.docs.world.projects, { ...refit(), ownerCode: RUSSIA }];
+  assert.deepEqual(names(projectForViewer({ ...s.store.docs, game: { ...s.store.docs.game, country: LATVIA } }, LATVIA).world.projects), ["Riga port expansion"]);
+  // And no board travels whole any more.
+  assert.equal(PLAYER_REQUESTS.board, undefined);
 });
 
 test("a player's forces: raised and stood down by the host, for the player who asked, and undone with the order", async () => {

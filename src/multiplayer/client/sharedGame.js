@@ -135,22 +135,6 @@ const notify = (text, level = "warn") => {
 // The player's own Projects board, asked of the host. The page shows it at
 // once; the host's next view of the world then carries it, or the host's
 // reason for refusing puts the board back as it was.
-const sendBoard = (owner, projects) => {
-  owner.boardWrites = (owner.boardWrites ?? 0) + 1;
-  const mine = owner.boardWrites;
-  owner.boardKept = false;
-  owner.runtime.patch("world", { projects }, { quiet: true });
-  void owner.client.request("board", { projects }).then((answer) => {
-    // A later change to the board has taken this one's place.
-    if (current !== owner || owner.boardWrites !== mine) return;
-    if (answer.ok) {
-      owner.boardKept = true;
-      return;
-    }
-    owner.runtime.patch("world", { projects: undefined });
-    notify(`The Projects board was not changed: ${answer.error || "the host did not answer."}`);
-  });
-};
 
 // A document in the shape the page's own writers save it in, which is the
 // shape their caches expect back (runtime/assets.js writeJson).
@@ -185,7 +169,7 @@ const ownWrite = ({ key, wanted, held }) => {
       owner.suggestedInRound = Number(owner.round);
       owner.runtime.patch("world", plan.device, { quiet: true });
     }
-    if (plan.board) sendBoard(owner, plan.board);
+
   }
   return asThePageSavesIt(key, owner.runtime.held(key));
 };
@@ -224,11 +208,6 @@ const applyToRuntime = (view) => {
   }
   let landed = null;
   if (arriving) {
-    // The host has kept the board it was asked to: its own copy is the one shown.
-    if (owner.boardKept) {
-      owner.boardKept = false;
-      owner.runtime.patch("world", { projects: undefined }, { quiet: true });
-    }
     // A round the host resolved lands here as a new newest turn. It is shown
     // one event at a time, as a time skip this page ran itself is, so it is
     // marked before any screen can read it (runtime/unseenEvents.js). The turn

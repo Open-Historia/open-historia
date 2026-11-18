@@ -54,6 +54,7 @@ import { TAG_SEARCH_FROM, searchTags, stepTagFocus, tickedFirst } from "./projec
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { nameInitials } from "../../../server/nameKey.js";
 import { planProject } from "../AI/gameplayLazy.js";
+import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 
 // The card seeds are whole sentences, one per variant, handed over in the
 // interface's language (uiString): a kind or an owner glued in as a word would
@@ -1346,7 +1347,15 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
 
   // The board's player-authored writes, through the door that lets a government
   // touch its own programmes only (actor "player").
+  // In a shared game the host applies them to this player's own board, by the
+  // same door (multiplayer/game/messages.js "projectOps"); a refusal is thrown
+  // like any failed write.
   const writeOps = useCallback(async (ops) => {
+    if (inSharedGame()) {
+      const answer = await requestFromHost("projectOps", { ops, by: "panel" });
+      if (!answer?.ok) throw new Error(answer?.error || uiString("The host did not take that."));
+      return;
+    }
     const world = await readWorldState({ force: true });
     const { refusedProjectIds, world: nextWorld } = applyProjectOpsToWorld({
       actor: "player",
