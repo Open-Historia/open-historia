@@ -135,12 +135,18 @@ export const holdSeatRecords = ({ actions, chats, events, world } = {}, { host =
     history = history.map((entry) => {
       const theirs = list(entry?.plannedActions).filter(theirOrder);
       if (!theirs.length) return entry;
-      turns.push({ round: Number(entry.round) || 0, date: clean(entry.date), orders: theirs });
+      // (Those this turn's record holds already are held once.)
+      const turn = { round: Number(entry.round) || 0, date: clean(entry.date) };
+      const had = new Set(held.turns.filter((candidate) => sameTurn(candidate, turn)).flatMap((candidate) => candidate.orders).map(idOf).filter(Boolean));
+      const fresh = theirs.filter((action) => !idOf(action) || !had.has(idOf(action)));
+      if (fresh.length) turns.push({ ...turn, orders: fresh });
       return { ...entry, plannedActions: list(entry.plannedActions).filter((action) => !theirOrder(action)) };
     });
   }
 
-  const taken = list(actions).length - keptActions.length + list(chats).length - keptChats.length + list(events).length - keptEvents.length + turns.length;
+  // (A past turn whose record listed only what was held already is still cut down to the host's own.)
+  const stripped = Array.isArray(history) && history !== world?.simulationHistory;
+  const taken = list(actions).length - keptActions.length + list(chats).length - keptChats.length + list(events).length - keptEvents.length + turns.length + (stripped ? 1 : 0);
   if (!taken) return { changed: false, actions, chats, events, world, held: 0 };
   return {
     changed: true,
@@ -150,7 +156,7 @@ export const holdSeatRecords = ({ actions, chats, events, world } = {}, { host =
     events: keptEvents,
     world: {
       ...(isRecord(world) ? world : {}),
-      ...(turns.length ? { simulationHistory: history } : {}),
+      ...(stripped ? { simulationHistory: history } : {}),
       [SEATS_HELD_KEY]: {
         orders: [...held.orders, ...orders],
         threads: [...held.threads, ...threads],
@@ -158,6 +164,31 @@ export const holdSeatRecords = ({ actions, chats, events, world } = {}, { host =
         turns: [...held.turns, ...turns],
       },
     },
+  };
+};
+
+// Two records of what is held as one: `first`'s, and whatever of `second`'s it
+// does not hold already (by id; a past turn's orders by its round and date).
+// A restore point put back keeps what the game holds now beside what the
+// restore point held (runtime/seatsLeftBehind.js restoredAlone).
+export const mergedSeatsHeld = (first, second) => {
+  const a = seatsHeldOf({ [SEATS_HELD_KEY]: first });
+  const b = seatsHeldOf({ [SEATS_HELD_KEY]: second });
+  const fresh = (rows, have, idOfRow) => {
+    const ids = new Set(have.map(idOfRow).filter(Boolean));
+    return rows.filter((row) => !idOfRow(row) || !ids.has(idOfRow(row)));
+  };
+  const turns = [...a.turns];
+  for (const turn of b.turns) {
+    const at = turns.findIndex((candidate) => sameTurn(candidate, turn));
+    if (at < 0) turns.push(turn);
+    else turns[at] = { ...turns[at], orders: [...turns[at].orders, ...fresh(turn.orders, turns[at].orders, idOf)] };
+  }
+  return {
+    orders: [...a.orders, ...fresh(b.orders, a.orders, idOf)],
+    threads: [...a.threads, ...fresh(b.threads, a.threads, idOf)],
+    events: [...a.events, ...fresh(b.events, a.events, (entry) => idOf(entry?.event))],
+    turns,
   };
 };
 

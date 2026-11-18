@@ -533,6 +533,7 @@ import { isDebugLogVerbose, logDebugEvent } from "../../runtime/debugLog.js";
 import { isFallbackListConfigured } from "./providerConfig.js";
 import { assertCampaignUnchanged, campaignChanged } from "../../runtime/campaignGuard.js";
 import { HELD_TURN_STALE_NOTE, heldTurnOutdated, mergeActionsAtCommit, restorePointProblem, restorePointsFor, storedActionsForMerge } from "../../runtime/turnCommit.js";
+import { restoredAlone } from "../../runtime/seatsLeftBehind.js";
 import { getLibraryState, readGameParkedTurn, removeGameParkedTurn, writeGameParkedTurn } from "../../runtime/library.js";
 import { getActivePlayerFocus, getActiveWorldDirection, idleDiplomacyChancePerMinute, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js";
@@ -8561,15 +8562,19 @@ export const rollBackToSnapshot = async (index = 0) => {
     const worldToRestore = liveWorld && typeof liveWorld === "object" && liveWorld.playerGoals !== undefined
       ? { ...(s.world ?? {}), playerGoals: liveWorld.playerGoals }
       : (s.world ?? {});
+    // What is held for the other players of a game once shared stays held, and
+    // a restore point that names them is held as Stop holds a game
+    // (runtime/seatsLeftBehind.js restoredAlone).
+    const restored = restoredAlone({ game: s.game ?? {}, world: worldToRestore, events: s.events ?? [], actions: s.actions ?? [], chats: s.chat ?? [] }, { live: liveWorld });
     // Rollback uses the same whole-generation publication seam as a forward
     // turn. A restore must never expose restored history with pre-rollback
     // world/actions if one underlying desktop file replacement is interrupted.
     await writeCanonicalTurnState({
-      game: s.game ?? {},
-      world: worldToRestore,
-      events: s.events ?? [],
-      actions: s.actions ?? [],
-      chats: s.chat ?? [],
+      game: restored.game,
+      world: restored.world,
+      events: restored.events,
+      actions: restored.actions,
+      chats: restored.chats,
       colors: s.colors ?? {},
     }, {
       expectedGameId: campaignId,

@@ -122,3 +122,31 @@ test("a game left while it was shared is held when it is opened alone, and its p
   assert.deepEqual(seatsHeldOf(patch.world).threads.map((row) => row.id), ["c-ru-est", "c-lv-ru", "c-lv-pl"]);
   assert.equal(seatsLeftBehindPatch({ ...docs(), game: { country: LATVIA } }), null);
 });
+
+// FOLLOWUPS A9: in single player, rolling back to a restore point taken while the game was shared put the guests'
+// records back into the host's game, and dropped what was held for them.
+test("a restore point put back alone keeps what is held, and one that names the people is held as Stop holds it", async () => {
+  const { restoredAlone } = await import("../../runtime/seatsLeftBehind.js");
+  // What Stop held for the guests, in the game as it stands.
+  const stopped = holdSeatRecords(docs(), { host: LATVIA, people: [RUSSIA, POLAND] });
+  const live = stopped.world;
+  // A restore point captured while the game was shared: every guest's record in the documents, its people named.
+  const shared = { ...docs(), game: { country: LATVIA, humanCountries: [LATVIA, RUSSIA] }, world: { ...docs().world, wars: [{ id: "old-war" }] } };
+  const back = restoredAlone(shared, { live });
+  assert.equal(back.game.humanCountries, undefined, "its people are forgotten");
+  assert.deepEqual(back.actions.map((row) => row.id), ["o-lv", "o-lv-named"], "the host's own orders alone");
+  assert.deepEqual(back.chats.map((row) => row.id), ["c-lv-est"]);
+  assert.deepEqual(back.events.map((row) => row.id), ["e1", "e4", "e5"]);
+  assert.deepEqual(back.world.wars, [{ id: "old-war" }], "the rest is the restore point's");
+  const held = seatsHeldOf(back.world);
+  assert.deepEqual(held.orders.map((row) => row.id), ["o-ru", "o-ru-done"], "each held once");
+  assert.deepEqual(held.threads.map((row) => row.id), ["c-ru-est", "c-lv-ru", "c-lv-pl"]);
+  assert.deepEqual(held.turns.map((turn) => [turn.round, turn.orders.map((row) => row.id)]), [[3, ["p-ru"]]]);
+  // A restore point of a solo turn, from before anything was held: what is held now stays held.
+  const solo = { actions: [{ id: "o-lv", status: "planned", text: "Talks" }], chats: [], events: [], game: { country: LATVIA }, world: { wars: [] } };
+  const kept = restoredAlone(solo, { live });
+  assert.deepEqual(seatsHeldOf(kept.world), seatsHeldOf(live));
+  assert.deepEqual(kept.actions, solo.actions);
+  // A game never shared: the restore point as it is.
+  assert.deepEqual(restoredAlone(solo, { live: { wars: [] } }), solo);
+});
