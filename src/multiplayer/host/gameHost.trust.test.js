@@ -114,13 +114,13 @@ test("the probe, through the host: a guest's project neither takes another board
   assert.deepEqual(s.docs.world.projects.map((row) => row.name), ["Host programme"], "the host's own board is untouched");
 });
 
-test("`by: advisor` lifts nothing: a guest's page cannot take up work the engine stalled", async () => {
+test("`by: advisor` lifts nothing: a guest's page does not give its service's verdict on its intelligence", async () => {
   const s = setup();
   await s.seated();
-  s.docs.world.seatBoards = { [RUSSIA]: [{ id: "op-1", name: "Blocked op", status: "stalled", stallReason: "blocked", verification: "doubted", plan: { durationDays: 100, monthlyCost: 1 } }] };
+  s.docs.world.seatBoards = { [RUSSIA]: [{ id: "op-1", name: "Blocked op", status: "active", verification: "doubted", plan: { durationDays: 100, monthlyCost: 1 } }] };
   await s.request(s.guest, { t: "projectOps", id: id(2), by: "advisor", ops: [{ op: "update", name: "Blocked op", verification: "confirmed" }] });
   assert.equal(s.ack(s.guest, 2).error, PROJECT_REFUSALS.story);
-  assert.equal(s.docs.world.seatBoards[RUSSIA][0].status, "stalled");
+  assert.equal(s.docs.world.seatBoards[RUSSIA][0].verification, "doubted");
 });
 
 // --- S2: one guest's requests in the host's one queue ---------------------------------------

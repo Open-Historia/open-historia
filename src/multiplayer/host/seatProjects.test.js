@@ -9,7 +9,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { PROJECT_REFUSALS, SEAT_OPEN_PROJECTS_MOST, seatPlanOf, seatProjectOps } from "./seatProjects.js";
-import { lendBoards } from "./seatBoards.js";
+import { lendBoards } from "../../runtime/seatBoards.js";
 import { advanceProjectsInWorld, applyProjectOpsToWorld, applyProjectOutcomesToWorld } from "../../runtime/gameState.js";
 import { COST_SHARE_OF_BUDGET_MOST, monthlyProjectBudget } from "../../runtime/projectEngine.js";
 
@@ -134,9 +134,10 @@ test("a page's update funds its own work and plans one still planning; what beco
   assert.deepEqual(ops[1].patch.plan.effects, [], "another country's army is not a plan's to move");
   assert.equal(ops[2].note.length, 240);
   assert.equal(refusal, PROJECT_REFUSALS.story, "the verdict that took up work the engine had stalled was the page's word (S10)");
-  // By the game's own door, as the player's, whatever the page said wrote it: the stalled entry stays stalled.
+  // By the game's own door, as the player's, whatever the page said wrote it: the service's verdict is not the
+  // page's to give (a doubt is what a service knows, runtime/seatBoards.js).
   const { world: next } = applyProjectOpsToWorld({ actor: "player", date: "1900-01-01", ops: seatProjectOps([{ op: "update", name: "Blocked op", verification: "confirmed" }], { board, world: world(), country: guest }).ops, playerCountry: guest, world: { projects: board } });
-  assert.equal(next.projects.find((row) => row.name === "Blocked op").status, "stalled");
+  assert.equal(next.projects.find((row) => row.name === "Blocked op").verification, "doubted");
 });
 
 test("a seat runs a bounded number of projects at once, and none of another country's", () => {

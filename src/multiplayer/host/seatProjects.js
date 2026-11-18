@@ -38,7 +38,7 @@
 // (runtime/projectEngine.js pricePlanForOwner), so the seat's own project
 // budget bounds how much it does. A seat runs at most SEAT_OPEN_PROJECTS_MOST
 // open projects at once: every one stands on the game's board through the
-// round's skip (host/seatBoards.js), which holds a fixed number.
+// round's skip (runtime/seatBoards.js), which holds a fixed number.
 //
 // Single player is untouched: its board's ops are the player's own device's,
 // whose AI is the world there.
@@ -52,7 +52,7 @@ import { sameName } from "../../../server/nameKey.js";
 
 // How many open projects of its own one seat may run at once. Eight seats of
 // eight, with the countries nobody plays at theirs, fit the game's board
-// through a skip (host/seatBoards.js BOARD_LIMIT).
+// through a skip (runtime/seatBoards.js BOARD_LIMIT).
 export const SEAT_OPEN_PROJECTS_MOST = 8;
 // The longest note a page's "cancel" keeps.
 const NOTE_MOST = 240;
