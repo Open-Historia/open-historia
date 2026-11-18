@@ -125,6 +125,32 @@ test("a dropped entry does not shift the surviving draft's quote", () => {
   assert.equal(drafts[0].text, "To Spain.");
 });
 
+test("legacy adjacent quotes with no letter boundary cannot silently target separate recipients", () => {
+  const problems = [];
+  const drafts = buildMessageDrafts([{ country: "British Empire" }, { country: "Kingdom of Spain" }],
+    "> First paragraph of an unknown letter.\n\n> Second paragraph or another letter.", problems);
+  assert.deepEqual(drafts, []);
+  assert.match(problems.join(" "), /ambiguous/);
+});
+
+test("legacy quoted letters separated by actual prose remain available", () => {
+  const problems = [];
+  const drafts = buildMessageDrafts([{ country: "British Empire" }, { country: "Kingdom of Spain" }],
+    "> British note.\n\nSecond letter:\n\n> Spanish note.", problems);
+  assert.deepEqual(drafts.map((entry) => [entry.country, entry.text]), [
+    ["British Empire", "British note."], ["Kingdom of Spain", "Spanish note."],
+  ]);
+  assert.deepEqual(problems, []);
+});
+
+test("one quoted body for two recipient entries fails closed", () => {
+  const problems = [];
+  const drafts = buildMessageDrafts([{ country: "British Empire" }, { country: "Kingdom of Spain" }],
+    "> Only one note.", problems);
+  assert.deepEqual(drafts, []);
+  assert.match(problems.join(" "), /fewer/);
+});
+
 test("an explicit text field still wins, as older saved messages rely on", () => {
   const drafts = buildMessageDrafts([{ country: "France", text: "Saved letter." }], "no quotes here");
   assert.equal(drafts[0].text, "Saved letter.");
@@ -149,7 +175,7 @@ test("typed private drafts preserve deterministic bilateral destination metadata
 });
 
 test("typed institution Council and lifecycle drafts preserve exact thread identity", () => {
-  const reply = "> Council note.\n\n> Hearing note.";
+  const reply = "> Council note.\n\nNext letter:\n\n> Hearing note.";
   const drafts = buildMessageDrafts([
     { targetType: "institution-council", institutionId: "mitteleuropa" },
     { targetType: "institution-lifecycle", institutionId: "mitteleuropa", caseId: "case-1", country: "Austria-Hungary" },

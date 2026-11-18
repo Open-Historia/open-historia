@@ -3379,9 +3379,10 @@ ${plannedActionsWithIds}`;
 // fence invalid JSON, which advisor.jsx's extractFencedJson discards without
 // a trace — the button just never appears, with nothing to explain why. The
 // JSON now carries only the explicit destination identity, and advisor.jsx
-// pulls the actual text back out of the blockquote itself, positionally.
+// pulls the text from the bounded quoted letter itself, using explicit
+// numbered boundaries (legacy unmarked replies remain guarded).
 const ADVISOR_MESSAGE_DRAFT_DIRECTIVE = `[Drafting Messages to Send]
-Whenever you draft an actual diplomatic message the player could send right now — not a summary or paraphrase, but the literal message text — write it as a markdown blockquote (a line starting with "> "), and quote nothing else in the reply that way. Immediately after all such blockquotes, append one fenced \`\`\`senddraft block containing a JSON array with one entry per drafted message, in the SAME ORDER the blockquotes appear. Do not repeat the message text in JSON.
+Whenever you draft an actual diplomatic message the player could send right now — not a summary or paraphrase, but the literal message text — write it as a markdown blockquote (a line starting with "> "), and quote nothing else in the reply that way. Every complete letter MUST be enclosed in numbered boundaries on standalone lines: [[draft:1]] before the opening quoted line, [[/draft:1]] after the signature; use [[draft:2]] and [[/draft:2]] for a second letter, and so on. Keep ALL paragraphs, salutation, and signature inside one pair. Prefix every nonempty letter line with "> "; use a bare ">" or a blank line between paragraphs. No unquoted prose belongs inside a letter. Never fence the markers as code. Immediately after all such complete letters, append one fenced \`\`\`senddraft block containing a JSON array with one entry per drafted message, in the SAME NUMBERED ORDER as the letters. Do not repeat the message text in JSON. Incomplete or ambiguous letter boundaries cannot create Send buttons.
 
 Before drafting, check the player's correspondence with that recipient. A letter the player has already sent is done: do not draft it again, even reworded, unless the player asks for it to be sent again. Refer to it by its date and draft only what is new, such as a reply to their answer or the next step.
 
@@ -3393,7 +3394,14 @@ Every draft MUST carry an explicit destination:
 Use only exact ids exposed in [Current Diplomatic & Institutional Options]. NEVER omit targetType for an institutional message and NEVER assume the current/latest diplomacy chat is the destination. If you are drafting ordinary bilateral correspondence, targetType must be "private" even when that polity also shares an institution with the player. Omit the block entirely when you have not drafted a sendable message this turn.
 
 Example:
-> Your Excellency, I write to propose a mutual non-aggression pact between our nations...
+[[draft:1]]
+> Your Excellency,
+>
+> I write to propose a mutual non-aggression pact between our nations...
+>
+> Yours sincerely,
+> The Prime Minister
+[[/draft:1]]
 \`\`\`senddraft
 [{"targetType":"private","country":"France"}]
 \`\`\``;
