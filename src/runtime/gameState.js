@@ -4344,14 +4344,22 @@ export const normalizeWorldState = (world) => {
           .slice(0, 64),
       ),
     } : {}),
-    // And what a shared game's other players have seen of each fleet's posture
-    // since the last skip (multiplayer/host/gameHost.js withFleetPosturesSeen):
-    // what is only ordered stays private. Only a world that has the key keeps it.
+    // And what a shared game's other players still see of each fleet a player
+    // ordered since the last skip (multiplayer/host/onlyOrdered.js
+    // withFleetOrdered): as it stood before, on the date it was ordered, and
+    // what the order made of it. What is only ordered stays private. Only a
+    // world that has the key keeps it.
     ...(Object.prototype.hasOwnProperty.call(nextWorld, "seenFleetPostures") && nextWorld.seenFleetPostures && typeof nextWorld.seenFleetPostures === "object" && !Array.isArray(nextWorld.seenFleetPostures) ? {
       seenFleetPostures: Object.fromEntries(Object.entries(nextWorld.seenFleetPostures)
         .filter(([id, seen]) => normalizeOptionalString(id) && seen && typeof seen === "object")
         .slice(0, 2000)
-        .map(([id, seen]) => [normalizeOptionalString(id), { posture: seen.posture ?? null, status: seen.status ?? null }])),
+        .map(([id, seen]) => [normalizeOptionalString(id), {
+          posture: normalizeOptionalString(seen.posture),
+          status: normalizeOptionalString(seen.status),
+          updatedAt: normalizeOptionalString(seen.updatedAt),
+          since: normalizeOptionalString(seen.since),
+          ordered: { posture: normalizeOptionalString(seen.ordered?.posture), status: normalizeOptionalString(seen.ordered?.status) },
+        }])),
     } : {}),
     // And what those players left waiting while nobody shares the game
     // (multiplayer/host/heldSeats.js): their orders, threads and secret

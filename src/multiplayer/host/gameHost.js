@@ -42,7 +42,8 @@ import { withGoalProgress, withPlayerGoal } from "../../runtime/playerGoal.js";
 import { normalizeSocialFeed, withPlayerPost } from "../../runtime/socialFeed.js";
 import { applyProjectOpsToWorld, normalizeProjects } from "../../runtime/gameState.js";
 import { deployFor, disbandFor, revertOrderFor } from "./forces.js";
-import { ordersThisRound } from "./orderCap.js";
+import { orderCapRefusal } from "./orderCap.js";
+import { huntSeenBy, opaqueId, withFleetOrdered, withLineGivenUp, withOrdersSeen, withRenamed } from "./onlyOrdered.js";
 import { agentOrderFor } from "./agents.js";
 import { institutionThreadRefusal } from "./institutions.js";
 import { acceptStructure, canSettleStructure, moveStructure, structureMoveRefusal } from "../../runtime/structurePlacement.js";
@@ -165,17 +166,6 @@ const demandEventFor = (chat, { demand, seat, owner, members, world, message, ga
 // kept beside it by country (world.seatBoards), where no time skip, no rollback
 // and no other player's view mistakes it for the host's. The game's normalizer
 // holds it to a board's shape and size, whatever was sent.
-// Every fleet's posture and status as the world has seen them (decision 6:
-// what is only ordered stays private until the skip), kept by the host for
-// the views (projection.js units): a fleet ordered to blockade is seen by
-// others as it stood until the skip carries the order out.
-export const withFleetPosturesSeen = (world) => {
-  const seen = Object.fromEntries(list(world?.units)
-    .filter((unit) => clean(unit?.type).toLowerCase() === "naval" && clean(unit?.id))
-    .map((unit) => [clean(unit.id), { posture: unit.posture ?? null, status: unit.status ?? null }]));
-  return JSON.stringify(seen) === JSON.stringify(world?.seenFleetPostures ?? {}) ? null : { ...world, seenFleetPostures: seen };
-};
-
 export const withSeatBoard = (world, country, projects, { host = "" } = {}) => {
   const board = normalizeProjects(projects);
   if (same(country, host)) return { ...world, projects: board };
@@ -780,7 +770,8 @@ export const createGameHost = ({
         sessionChanged();
       }
       await followSeats(before).catch((error) => log("warn", "a seat did not follow its country", { error: String(error?.message || error) }));
-      await store.updateWorld(withFleetPosturesSeen);
+      // What was only ordered before the round is the world's now (host/onlyOrdered.js).
+      await store.updateWorld(withOrdersSeen);
       // The campaign's round the skip wrote: the round machine names it from
       // here on (host/round.js, one round number).
       return { round: Number((await store.read())?.game?.round) || 0 };
@@ -1186,11 +1177,10 @@ export const createGameHost = ({
           else if (clean(held.text) !== body) refusal = "That order is queued already, in other words.";
           return null;
         }
-        // This round's own: one carried over unanswered is not (host/orderCap.js).
-        if (ordersThisRound(all, seat.country).length >= MAX_ORDERS_PER_ROUND) {
-          refusal = `At most ${MAX_ORDERS_PER_ROUND} orders a round.`;
-          return null;
-        }
+        // This round's own, and the whole queue at twice that: one carried over
+        // unanswered is not this round's, but it waits (host/orderCap.js).
+        refusal = orderCapRefusal(all, seat.country, MAX_ORDERS_PER_ROUND);
+        if (refusal) return null;
         const named = clean(title).slice(0, ORDER_TITLE_MAX);
         return [...all, {
           id: id || mintId("order", now),
@@ -1250,6 +1240,8 @@ export const createGameHost = ({
     // request rides with the next skip (host/forces.js).
     deploy: async (connection, request, seat) => {
       if (!started()) return "Formations are raised while a round is being planned.";
+      // Its place is held to the host's own map (host/forces.js deployPlaceRefusal).
+      const chart = await Promise.resolve().then(readChart).catch(() => null);
       let refusal = "";
       await store.updateForces(({ world, actions }) => {
         const result = deployFor({ world, actions }, seat.country, request, {
@@ -1257,6 +1249,7 @@ export const createGameHost = ({
           unitId: mintId("unit", now),
           at: new Date(now()).toISOString(),
           maxOrders: MAX_ORDERS_PER_ROUND,
+          chart,
         });
         if (result.error) {
           refusal = result.error;
@@ -1316,12 +1309,19 @@ export const createGameHost = ({
       if (!sent) return "Nothing was asked.";
       let refusal = "";
       await store.updateForces(({ world, game }) => {
-        const result = applyWarRoomOp(world?.battlefields, sent, { player: seat.country, date: clean(game?.gameDate), transports: world?.transports, era: eraSettingOf(world), media: activeTransportMedia(), military: transportFiguresOf(world, seat.country) });
+        // A hunt is for a convoy the hunter can see (host/onlyOrdered.js).
+        const asked = huntSeenBy(sent, world?.transports, seat.country);
+        const result = applyWarRoomOp(world?.battlefields, asked, { player: seat.country, date: clean(game?.gameDate), transports: world?.transports, era: eraSettingOf(world), media: activeTransportMedia(), military: transportFiguresOf(world, seat.country) });
         if (result.error) {
           refusal = result.error;
           return null;
         }
-        return { world: { ...world, battlefields: result.battlefields, ...(result.transports ? { transports: result.transports } : null) } };
+        // A convoy the player sent (the last of the list, transports.js
+        // orderTransport) has an id of the host's that tells nothing of anyone
+        // else's (host/onlyOrdered.js opaqueId).
+        const made = sent.op === "transport" ? clean(list(result.transports).at(-1)?.id) : "";
+        const transports = made && result.transports ? withRenamed(result.transports, made, opaqueId("t", result.transports.map((entry) => entry?.id))) : result.transports;
+        return { world: { ...world, battlefields: result.battlefields, ...(transports ? { transports } : null) } };
       });
       round.touch(seat.country);
       return refusal;
@@ -1337,12 +1337,19 @@ export const createGameHost = ({
       const chart = sent.op === "fortify" ? await Promise.resolve().then(readChart).catch(() => null) : null;
       let refusal = "";
       await store.updateForces(({ world, game }) => {
-        const result = applyFortifyOp(world, sent, { player: seat.country, date: clean(game?.gameDate), chart });
+        const date = clean(game?.gameDate);
+        const result = applyFortifyOp(world, sent, { player: seat.country, date, chart });
         if (result.error) {
           refusal = result.error;
           return null;
         }
-        return { world: result.world };
+        // A line given up that the others had seen stays theirs to see until
+        // the skip; a new one has an id that tells nothing of anyone else's
+        // (host/onlyOrdered.js).
+        if (sent.op === "unfortify") return { world: withLineGivenUp(result.world, result.line, date) };
+        const made = clean(result.line?.id);
+        const lines = list(result.world?.fortifications);
+        return { world: made ? { ...result.world, fortifications: withRenamed(lines, made, opaqueId("line-", lines.map((line) => line?.id))) } : result.world };
       });
       round.touch(seat.country);
       return refusal;
@@ -1358,7 +1365,8 @@ export const createGameHost = ({
           refusal = result.error;
           return null;
         }
-        return { world: result.world };
+        // The others see the fleet as it stood until the skip (host/onlyOrdered.js).
+        return { world: withFleetOrdered(world, result.world, sent.unit, clean(game?.gameDate)) };
       });
       round.touch(seat.country);
       return refusal;
@@ -2227,10 +2235,9 @@ export const createGameHost = ({
       async start() {
         if (seats.started) return;
         seats.start();
-        await queue.run("start", async () => {
-          await recordHumans();
-          await store.updateWorld(withFleetPosturesSeen);
-        });
+        // (What was ordered in the lobby stays its owner's until the first
+        // skip: host/onlyOrdered.js keeps it by its date, not by this moment.)
+        await queue.run("start", recordHumans);
         // The campaign's own round: one number on every screen (host/round.js).
         round.start(Number((await store.read())?.game?.round) || 0);
         broadcastLobby();

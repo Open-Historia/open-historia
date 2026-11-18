@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createGameHost, MAX_ORDERS_PER_ROUND, VIEW_ACK_MS, withFleetPosturesSeen } from "./gameHost.js";
+import { createGameHost, MAX_ORDERS_PER_ROUND, VIEW_ACK_MS } from "./gameHost.js";
 import { digestText } from "../protocol/digest.js";
 import { startRemoteRuntime, stopRemoteRuntime } from "../client/remoteRuntime.js";
 import { normalizeSettings } from "./settings.js";
@@ -320,6 +320,28 @@ test("orders the last skip left unanswered are not this round's: they do not cou
   assert.equal(s.store.docs.actions.some((action) => action.id === "order-ru-old-0"), false);
 });
 
+// Every queued order rides in the round's one request, overdue ones first, and none lapses: a player whose orders
+// the AI kept leaving unanswered put twelve more in every round's request on top of all of them (the review of
+// 2026-11-18, wars 3). The whole queue is held to twice a round's.
+test("a player's whole queue, carried-over orders and all, is held to twice a round's orders, and the player is told why", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  s.store.docs.actions.push(...Array.from({ length: 2 * MAX_ORDERS_PER_ROUND - 3 }, (_, n) => ({
+    id: `order-ru-old-${n}`, status: "planned", overdue: true, title: `Old ${n}`, text: `Old order ${n}`, ownerCode: RUSSIA,
+  })));
+  for (let n = 0; n < 3; n += 1) await s.request(s.guest, { t: "order", id: id(100 + n), text: `New order ${n}` });
+  assert.ok([0, 1, 2].every((n) => s.ack(s.guest, id(100 + n)).ok), "within the queue's bound, a round's own are given");
+  await s.request(s.guest, { t: "order", id: id(103), text: "One more" });
+  assert.match(s.ack(s.guest, id(103)).error, /At most 24 of your orders wait at once, those carried over unanswered among them: withdraw one/);
+  await s.request(s.guest, { t: "unorder", id: id(104), order: "order-ru-old-0" });
+  await s.request(s.guest, { t: "order", id: id(105), text: "One more" });
+  assert.equal(s.ack(s.guest, id(105)).ok, true, "one withdrawn makes room");
+  assert.equal(s.store.docs.actions.filter((action) => action.ownerCode === RUSSIA && action.status === "planned").length, 2 * MAX_ORDERS_PER_ROUND);
+});
+
 test("diplomacy: a thread belongs to whoever opened it, the AI answers, and no one writes into another's thread", async () => {
   const s = setup();
   s.host.join(s.hostPlayer);
@@ -544,7 +566,8 @@ test("each player keeps a Projects board of its own, changed only by the game's 
 });
 
 test("a player's forces: raised and stood down by the host, for the player who asked, and undone with the order", async () => {
-  const s = setup();
+  // The host's map: Russia's ground east of 27°E, Latvia's west of it.
+  const s = setup({ readChart: async () => ({ holds: (country, lng) => country === (lng >= 27 ? RUSSIA : LATVIA), sea: () => false }) });
   s.host.join(s.hostPlayer);
   s.host.join(s.guest);
   await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
@@ -553,6 +576,9 @@ test("a player's forces: raised and stood down by the host, for the player who a
   assert.match(s.ack(s.guest, id(2)).error, /while a round is being planned/);
   await s.host.control.start();
 
+  // Raised in Riga, the host's capital, it was taken (the review of 2026-11-18, wars 11): held to the host's map.
+  await s.request(s.guest, { t: "deploy", id: id(20), ...brigade, lng: 24.1, lat: 56.9 });
+  assert.match(s.ack(s.guest, id(20)).error, /on land your country holds, or at sea off it/);
   await s.request(s.guest, { t: "deploy", id: id(3), ...brigade });
   assert.equal(s.ack(s.guest, id(3)).ok, true);
   const raised = s.store.docs.world.units.at(-1);
@@ -2514,14 +2540,77 @@ test("a seat the host takes back leaves the next player of that country none of 
   assert.equal(projectForViewer({ ...s.store.docs, game: { ...s.store.docs.game, country: LATVIA } }, LATVIA).chat.some((chat) => chat.id === letter.id), true, "the other person keeps it, closed");
 });
 
-test("the host keeps each fleet's posture as the world last saw it, and writes nothing when none changed", () => {
-  const world = { units: [
-    { id: "f1", type: "naval", ownerCode: "Russia", posture: "patrol", status: "idle" },
-    { id: "a1", type: "infantry", ownerCode: "Russia", status: "idle" },
-  ] };
-  const seen = withFleetPosturesSeen(world);
-  assert.deepEqual(seen.seenFleetPostures, { f1: { posture: "patrol", status: "idle" } }, "fleets only");
-  assert.equal(withFleetPosturesSeen(seen), null, "the same postures: no write");
+// What is only ordered stays private until the skip (decision 6), as a property of the order and its date, not of a
+// snapshot taken when a round landed or sharing began (the review of 2026-11-18, wars 5, 6; views 10).
+test("a fleet ordered, in the lobby or in a round, and a line given up are seen by the others as they stood until the skip", async () => {
+  const chart = { sea: (lng, lat) => lat > 55, joins: () => true, holds: (country, lng, lat) => (lat > 55 ? null : country === RUSSIA), coastOff: () => null };
+  const s = setup({
+    readChart: async () => chart,
+    // The skip carries the orders out, and moves the date on.
+    roundWrites: (docs) => {
+      docs.game = { ...docs.game, gameDate: "2014-05-01" };
+    },
+  });
+  s.store.docs.world.units = [{ id: "ru-fleet", name: "Baltic Fleet", type: "naval", ownerCode: RUSSIA, strength: 90, lng: 20.5, lat: 56.5, status: "idle", posture: "patrol" }];
+  s.store.docs.world.fortifications = [{ id: "built-1", name: "The Old Line", owner: RUSSIA, level: 5, points: [[20, 50], [20.6, 50.4]], building: { since: "2014-03-01", days: 90 } }];
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  // In the lobby: a fleet's order was counted seen the moment the game started.
+  await s.request(s.guest, { t: "fleet", id: id(2), op: { op: "posture", unit: "ru-fleet", posture: "holding" } });
+  assert.equal(s.ack(s.guest, id(2)).ok, true);
+  await s.host.control.start();
+  await s.request(s.guest, { t: "fortify", id: id(3), op: { op: "unfortify", id: "built-1" } });
+  assert.equal(s.ack(s.guest, id(3)).ok, true);
+  await s.request(s.hostPlayer, { t: "order", id: id(4), text: "Watch the coast" });
+  const hostSees = () => s.shown(s.hostPlayer).world;
+  assert.equal(hostSees().units.find((unit) => unit.id === "ru-fleet").posture, "patrol", "the host sees the fleet as it stood");
+  assert.deepEqual(hostSees().fortifications.map((line) => line.id), ["built-1"], "and the line it had seen being built");
+  assert.deepEqual(s.shown(s.guest).world.fortifications, [], "its owner gave it up");
+  assert.equal(s.store.docs.world.fortifications.length, 0, "gone from the world at once, as in single player");
+  // The round lands: everyone sees the world as it is.
+  s.host.control.resolveNow();
+  await s.clock.flush();
+  await s.request(s.hostPlayer, { t: "order", id: id(5), text: "Watch the coast again" });
+  assert.equal(hostSees().units.find((unit) => unit.id === "ru-fleet").posture, "holding");
+  assert.deepEqual(hostSees().fortifications, []);
+  assert.deepEqual([s.store.docs.world.seenFleetPostures, s.store.docs.world.linesGivenUp], [{}, []], "nothing kept once seen");
+});
+
+// A hunt could name a convoy only ordered, which the hunter's view did not hold, and the smallest-number ids of the
+// engine told a player how many hidden convoys and lines held the numbers below its own (the review of 2026-11-18,
+// wars 4).
+test("a hunt finds only a convoy its hunter sees, refused in the same words as one that is not there; what a player sends has an id that tells nothing", async () => {
+  const sheet = syntheticMap({ layout: ["ABBBBB", "ABBBBB", "ABBBBB"], legend: { A: RUSSIA, B: LATVIA, "~": null }, west: 20, north: 51, step: 1, stepLat: 0.65, cities: [] });
+  const row = (lng, count) => Array.from({ length: count }, (_, index) => ({ lng, lat: 49.1 + ((index + 0.5) * 1.8) / count }));
+  const field = battlefieldOn(sheet, { name: "The Baltic Front", sides: [[RUSSIA], [LATVIA]], troops: [row(20.9, 20), row(21.1, 12)] });
+  const s = setup({ readChart: async () => ({ holds: (country) => country === LATVIA, sea: () => false, joins: () => true }) });
+  const convoy = (cid, status) => ({ id: cid, medium: "sea", kind: "troop convoy", owner: RUSSIA, warId: field.warId, to: { lng: 24, lat: 57, name: "city: Riga" }, from: { lng: 20, lat: 57 }, speed: 700, capacity: 6, raise: 6, status, way: [[20, 57], [24, 57]], km: 240, by: RUSSIA });
+  s.store.docs.world.battlefields = [field];
+  s.store.docs.world.transports = [convoy("t1", "ordered"), convoy("t2", "moving")];
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  const hunt = (n, tid) => s.request(s.hostPlayer, { t: "warroom", id: id(n), op: { op: "hunt", battlefield: "The Baltic Front", id: tid } });
+  await hunt(2, "t1");
+  await hunt(3, "t9");
+  assert.equal(s.ack(s.hostPlayer, id(2)).error, s.ack(s.hostPlayer, id(3)).error, "a hidden convoy and none at all are answered alike");
+  assert.match(s.ack(s.hostPlayer, id(2)).error, /not a transporter of a side you are fighting/);
+  assert.deepEqual(s.store.docs.world.transports.find((entry) => entry.id === "t1").hunters ?? [], []);
+  await hunt(4, "t2");
+  assert.equal(s.ack(s.hostPlayer, id(4)).ok, true, "one under way, which every view holds, is hunted");
+  assert.deepEqual(s.store.docs.world.transports.find((entry) => entry.id === "t2").hunters, [LATVIA]);
+  // The host's own convoy, sent: an id of the host's, not the smallest number free.
+  await s.request(s.hostPlayer, { t: "warroom", id: id(5), op: { op: "transport", battlefield: "The Baltic Front", troops: [0, 1], medium: "sea", to: [24, 57.5], name: "city: Pärnu" } });
+  assert.equal(s.ack(s.hostPlayer, id(5)).ok, true);
+  const sentOne = s.store.docs.world.transports.at(-1);
+  assert.equal(sentOne.owner, LATVIA);
+  assert.match(sentOne.id, /^t[0-9a-z]{8}$/);
+  // And a line built: an id of the host's too.
+  await s.request(s.hostPlayer, { t: "fortify", id: id(6), op: { op: "fortify", points: [[24, 50], [24.6, 50.4]], level: 4 } });
+  assert.equal(s.ack(s.hostPlayer, id(6)).ok, true);
+  assert.match(s.store.docs.world.fortifications.at(-1).id, /^line-[0-9a-z]{8}$/);
 });
 
 // --- WHO PAYS, AND THE GAME MASTER ---------------------------------------------------------

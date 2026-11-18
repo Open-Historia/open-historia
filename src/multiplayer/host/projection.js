@@ -52,6 +52,7 @@ import { sealOf } from "../../runtime/spySeal.js";
 import { advisorOfSeat } from "../../runtime/seatAdvisors.js";
 import { sharedLetterOf } from "../../Game/AI/sharedLetters.js";
 import { VIEW_PARTS } from "../game/messages.js";
+import { fleetAsSeen, isOwnOrder, linesGivenUpSeenBy, transportSeenBy } from "./onlyOrdered.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLocaleLowerCase();
@@ -128,6 +129,9 @@ export const HOST_ONLY_WORLD_KEYS = Object.freeze([
   // What a seat's person left waiting while nobody shared the game (heldSeats.js):
   // given back to the game before anything is sent, and never in a view.
   "seatsHeld",
+  // The lines players gave up since the last skip, as the others still see
+  // them until it (host/onlyOrdered.js withLineGivenUp).
+  "linesGivenUp",
   // What the last time skip's prompt read (runtime/promptSnapshot.js).
   "promptSnapshot", "promptReference",
   // The campaign's canon, kept beside the history document (runtime/historyTiers.js).
@@ -186,9 +190,10 @@ const estimatedRating = (rating) => (Number.isFinite(Number(rating)) && rating !
 // 2026-11-18). Each filter below keeps another country's as it stood at the
 // last skip.
 // A planned stand-down's order carries the formation as it was (host/forces.js
-// disbandFor): until the skip, another sees it there.
-const standingDown = (actions, viewer) => list(actions)
-  .filter((action) => !same(action?.ownerCode, viewer) && clean(action?.status || "planned") === "planned")
+// disbandFor): until the skip, another sees it there. Whose the order is, is
+// one rule with the queue's (host/onlyOrdered.js isOwnOrder: none is the host's).
+const standingDown = (actions, viewer, host) => list(actions)
+  .filter((action) => !isOwnOrder(action, viewer, host) && clean(action?.status || "planned") === "planned")
   .map((action) => action?.unitRevert?.restore)
   .filter((unit) => isRecord(unit) && clean(unit.id));
 
@@ -222,31 +227,34 @@ const unidentifiedAgentIds = (spies, viewer) => new Map(list(spies)
 const FILTERED_WORLD_KEYS = Object.freeze({
   // Units are seen, their orders are not. Another country's formation raised
   // this round (pending) is not seen yet, one it stood down still is, and a
-  // fleet's posture is as it was at the last skip (world.seenFleetPostures).
-  units: (world, viewer, { actions = [] } = {}) => {
-    const seen = isRecord(world.seenFleetPostures) ? world.seenFleetPostures : {};
-    const asSeen = (unit) => {
-      const was = seen[clean(unit?.id)];
-      return isRecord(was) ? { ...unit, posture: was.posture ?? unit.posture, status: was.status ?? unit.status } : unit;
-    };
+  // fleet a player ordered today is as it stood before the order
+  // (host/onlyOrdered.js fleetAsSeen).
+  units: (world, viewer, { actions = [], host = "", date = "" } = {}) => {
+    const asSeen = (unit) => fleetAsSeen(unit, world, date);
     const standing = list(world.units)
       .filter((unit) => same(unit?.ownerCode, viewer) || clean(unit?.status) !== "pending")
       .map((unit) => (same(unit?.ownerCode, viewer) ? unit : { ...asSeen(unit), orderId: "" }));
     const ids = new Set(standing.map((unit) => clean(unit?.id)));
-    const stoodDown = standingDown(actions, viewer).filter((unit) => !ids.has(clean(unit.id))).map((unit) => ({ ...asSeen(unit), orderId: "" }));
+    const stoodDown = standingDown(actions, viewer, host).filter((unit) => !ids.has(clean(unit.id))).map((unit) => ({ ...asSeen(unit), orderId: "" }));
     return [...standing, ...stoodDown];
   },
   // Transporters are seen as fleets are, once under way: a convoy only ordered
-  // is its owner's, and whom a country's ships hunt is that country's own.
+  // is its owner's (host/onlyOrdered.js transportSeenBy, the rule a hunt is
+  // held to as well), and whom a country's ships hunt is that country's own.
   transports: (world, viewer) => list(world.transports)
-    .filter((entry) => same(entry?.owner, viewer) || clean(entry?.status) !== "ordered")
+    .filter((entry) => transportSeenBy(entry, viewer))
     .map((entry) => (Array.isArray(entry?.hunters) ? { ...entry, hunters: entry.hunters.filter((name) => same(name, viewer)) } : entry)),
   // A line ordered since the last skip is its owner's; once time has passed
   // it is seen by everyone, built or still being built. (`building` stays on a
   // line for good, fronts/walls.js standsOn: it is the order's DATE that says
-  // it was only ordered. A skip always moves the date on.)
-  fortifications: (world, viewer, { date = "" } = {}) => list(world.fortifications)
-    .filter((line) => same(line?.owner, viewer) || !(clean(date) && clean(line?.building?.since) === clean(date))),
+  // it was only ordered. A skip always moves the date on.) One its owner gave
+  // up since is still seen by the others until the skip, as it stood.
+  fortifications: (world, viewer, { date = "" } = {}) => {
+    const lines = list(world.fortifications)
+      .filter((line) => same(line?.owner, viewer) || !(clean(date) && clean(line?.building?.since) === clean(date)));
+    const ids = new Set(lines.map((line) => clean(line?.id)));
+    return [...lines, ...linesGivenUpSeenBy(world, viewer, date).filter((line) => !ids.has(clean(line.id)))];
+  },
   pendingUnitOrders: (world, viewer) => list(world.pendingUnitOrders).filter((order) => ownsUnit(world, order?.unitId, viewer)),
   // The air strikes a country has ordered and not yet flown are its own.
   airStrikeOrders: (world, viewer) => list(world.airStrikeOrders).filter((order) => same(order?.owner, viewer)),
@@ -286,9 +294,7 @@ const FILTERED_WORLD_KEYS = Object.freeze({
   // summary of the turn, the model's raw answer, the engine's receipt and
   // everyone else's orders stay with the host.
   simulationHistory: (world, viewer, { host, hiddenEventIds = new Set() }) => list(world.simulationHistory).filter(isRecord).map((entry) => {
-    const plannedActions = list(entry.plannedActions).filter((action) => (clean(action?.ownerCode)
-      ? same(action.ownerCode, viewer)
-      : same(host, viewer)));
+    const plannedActions = list(entry.plannedActions).filter((action) => isOwnOrder(action, viewer, host));
     const filed = filedOrderCards(entry.filedEvents, plannedActions);
     return {
       date: clean(entry.date),
@@ -649,8 +655,7 @@ const authorFields = (author, line) => ("by" in line || "kind" in line
 
 // --- The rest -------------------------------------------------------------------
 
-export const projectActions = (actions, viewer, { host = "" } = {}) => list(actions).filter((action) =>
-  (clean(action?.ownerCode) ? same(action.ownerCode, viewer) : same(host, viewer)));
+export const projectActions = (actions, viewer, { host = "" } = {}) => list(actions).filter((action) => isOwnOrder(action, viewer, host));
 
 // Every document of one player's view, in the single-player shape.
 export const projectForViewer = ({ world, game, events, chat, actions, intercepts, colors, flags, advisor } = {}, viewer) => {

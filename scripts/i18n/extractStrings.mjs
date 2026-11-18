@@ -733,6 +733,7 @@ const PROSE_FILES = [
   "src/multiplayer/client/sharedGameBridge.js", "src/multiplayer/host/gameHost.js",
   "src/multiplayer/host/institutions.js", "src/multiplayer/host/agents.js", "src/multiplayer/host/forces.js",
   "src/multiplayer/host/featureGates.js",
+  "src/multiplayer/host/orderCap.js",
   "src/multiplayer/host/engineMain.js", "src/multiplayer/host/settings.js", "src/multiplayer/host/advisorDesk.js",
   "src/multiplayer/signaling/publicServers.js",
   // Who pays for what, the host's answers a round, the Game Master and the round's payer.

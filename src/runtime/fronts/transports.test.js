@@ -13,6 +13,7 @@ import {
   HUNT_BASE,
   INTERCEPT_CHANCE_MOST,
   MAX_TRANSPORTS,
+  TRANSPORTS_OUT_MOST,
   TRANSPORT_LOAD_MOST,
   airliftIntercepts,
   airliftMost,
@@ -88,9 +89,23 @@ test("a transporter is a medium, a speed and a load: what it is called is free, 
   // What is kept is what a transporter is: anything else is not one.
   assert.equal(normalizeTransport({ id: "x", medium: "sea", owner: "Aland" }), null);
   assert.equal(normalizeTransport(null), null);
-  assert.equal(normalizeTransports(Array.from({ length: 60 }, (_, index) => ({ ...transport, id: `t${index}` }))).length, MAX_TRANSPORTS);
+  assert.equal(normalizeTransports(Array.from({ length: MAX_TRANSPORTS + 30 }, (_, index) => ({ ...transport, id: `t${index}` }))).length, MAX_TRANSPORTS);
   assert.equal(normalizeTransports([transport, transport]).length, 1);
   assert.deepEqual(normalizeTransport({ ...transport, load: [[250, 1], [0, 0], { strength: 60, kind: 2 }, [40, 9]] }).load, [[100, 1], [60, 2], [40, 0]]);
+});
+
+// "Too many are out" counted every country's: one country's convoys, or the story's, left another none to send,
+// and in a shared game it counted convoys only ordered, which the asker cannot see (the review of 2026-11-18,
+// wars 4). Each country has its own.
+test("how many transporters a country has out is its own: another's never stop it sending one", () => {
+  const out = (owner, count) => Array.from({ length: count }, (_, index) => ({ ...convoy().transport, id: `${owner}-${index}`, owner, status: index % 2 ? "moving" : "ordered" }));
+  const busy = [...out("Borduria", TRANSPORTS_OUT_MOST), ...out("Cisland", TRANSPORTS_OUT_MOST)];
+  assert.equal(orderTransport(busy, { medium: "sea", owner: "Aland", to: { name: "city: Port" }, raise: 4 }, { year: 2024 }).error, undefined);
+  assert.equal(orderTransport(busy, { medium: "sea", owner: "Borduria", to: { name: "city: Port" }, raise: 4 }, { year: 2024 }).error, "too-many");
+  // Those ended are not out.
+  const ended = out("Aland", TRANSPORTS_OUT_MOST).map((entry) => ({ ...entry, status: "landed" }));
+  assert.equal(orderTransport(ended, { medium: "sea", owner: "Aland", to: { name: "city: Port" }, raise: 4 }, { year: 2024 }).error, undefined);
+  assert.ok(MAX_TRANSPORTS >= 8 * TRANSPORTS_OUT_MOST, "the world keeps every country's that are out");
 });
 
 test("a sea drawn as regions: ships sail it, no army marches across it, and it is nobody's front", () => {

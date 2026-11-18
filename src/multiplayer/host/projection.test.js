@@ -605,10 +605,11 @@ test("another country's formation raised this round is not seen until the skip; 
   assert.equal(projectForViewer(docs, LATVIA).world.units.some((entry) => entry.id === "ru-gone"), false);
 });
 
-test("a fleet's new posture is seen by others only as it stood at the last skip", () => {
+test("a fleet's new posture is seen by others only as it stood before it was ordered, until the skip", () => {
   const docs = state();
   docs.world.units = [unit("ru-fleet", RUSSIA, { type: "naval", posture: "blockade", status: "idle" })];
-  docs.world.seenFleetPostures = { "ru-fleet": { posture: "patrol", status: "idle" } };
+  // Ordered on the game's date (host/onlyOrdered.js withFleetOrdered).
+  docs.world.seenFleetPostures = { "ru-fleet": { posture: "patrol", status: "idle", since: "2014-04-01", ordered: { posture: "blockade", status: "idle" } } };
   assert.equal(projectForViewer(docs, LATVIA).world.units[0].posture, "patrol");
   assert.equal(projectForViewer(docs, RUSSIA).world.units[0].posture, "blockade", "its own as ordered");
   assert.equal("seenFleetPostures" in projectForViewer(docs, LATVIA).world, false, "the host's bookkeeping");
