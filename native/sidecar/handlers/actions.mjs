@@ -94,7 +94,7 @@ export const register = (ctx) => {
       goalProgress: plain(engine.playerGoal.playerGoalEntryOf(world, game.country)?.progress ?? null),
       busy: engine.simulationStatus.isSimulationBusy(),
       loggingOn: Boolean(debugLog?.isDebugLogEnabled?.()),
-      projectCount: list(world?.projects).length,
+      projectCount: list(world?.projects).filter((project) => engine.projects.isProjectOpen(project) && engine.projects.isKnownToPlayer(project, game.country)).length,
       submitted,
       queuedIds: [...queued],
       fellBack: engine.actionSuggestions.suggestionsFellBack(suggestions),
@@ -176,7 +176,7 @@ export const register = (ctx) => {
         gameState.readActionsState({ force: false }),
         gameState.readWorldStateView({ force: false }),
       ]);
-      return { busy: engine.simulationStatus.isSimulationBusy(), round: game.round, stamp: stampOf(game, actions, world), projectCount: list(world?.projects).length };
+      return { busy: engine.simulationStatus.isSimulationBusy(), round: game.round, stamp: stampOf(game, actions, world), projectCount: list(world?.projects).filter((project) => engine.projects.isProjectOpen(project) && engine.projects.isKnownToPlayer(project, game.country)).length };
     },
     "actions.add": async ({ text = "" } = {}) => {
       const trimmed = String(text ?? "").trim();

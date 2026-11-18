@@ -402,7 +402,7 @@ func _actions_checks() -> void:
 	await _wait(0.6)
 	_check(hud.active_panel == "actions" and actions.current_tab() == "projects", "the advisor's board card opens the Projects tab of Actions")
 	_check(_has_text(actions, "Actions") and _has_text(actions, "Projects") and not actions.header_title.visible, "the panel's header is the Actions / Projects tab strip")
-	_check(actions.board().is_visible_in_tree() and _has_text(actions.board(), "Nothing on the board yet"), "the Projects tab holds the board")
+	_check(actions.board().is_visible_in_tree() and _has_text(actions.board(), "New project"), "the Projects tab holds the board")
 	await _shoot("r-16-projects-tab")
 	var seeded: Dictionary = await main.engine.request("projects.testSeed", {"ops": [{"op": "create", "name": "Grand Paris Rail Link", "kind": "project", "status": "active", "summary": "A new line.", "progress": 35}]})
 	_check(seeded.get("ok", false), "a board entry is seeded")

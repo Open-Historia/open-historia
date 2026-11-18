@@ -249,22 +249,22 @@ func _projects(hud: Hud) -> void:
 	await _shoot("p-projects")
 	_bottom_box(panel, "the Projects board")
 	var board := panel.board()
-	_check(board != null and _find_label(board, "Nothing on the board yet") != null, "the empty board shows its card")
-	var ask := _find_button(board, "🧭 Ask your advisor to populate this")
-	_check(ask != null and _rect(ask).size.y >= 43.5, "the advisor button is finger-sized")
-	if board:
-		var empty_card := ask.get_parent() as Control if ask else null
-		while empty_card and not (empty_card is PanelContainer):
-			empty_card = empty_card.get_parent() as Control
+	var start := _find_button(board, "＋ New project")
+	_check(board != null and start != null, "the empty board offers New project")
+	_check(start != null and _rect(start).size.y >= 43.5, "New project is finger-sized")
+	if start:
+		start.pressed.emit()
+		await _wait(0.4)
 		var pr := _rect(panel)
-		var cr := _rect(empty_card)
-		_check(empty_card != null and cr.position.x >= pr.position.x + 15.0 and cr.end.x <= pr.end.x - 15.0, "the empty card fits inside the board's padding (%.1f to %.1f)" % [cr.position.x, cr.end.x])
-	var view: Dictionary = (await main.engine.request("game.view")).get("result", {})
-	var today := str(view.get("gameDate", ""))
+		var field := _rect(board._np_name)
+		_check(field.position.x >= pr.position.x + 15.0 and field.end.x <= pr.end.x - 15.0, "the new project form fits inside the board's padding (%.1f to %.1f)" % [field.position.x, field.end.x])
+		await _shoot("p-projects-new")
+		_find_button(board, "Cancel").pressed.emit()
+		await _wait(0.2)
 	var ops := [
-		{"op": "create", "name": "Grand Paris Rail Link", "kind": "project", "status": "active", "priority": "high", "summary": "A new high-speed line tying the capital to the northern ports.", "tags": ["infrastructure", "economy"], "progress": 35, "startedAt": _shift(today, -200), "targetDate": _shift(today, 400), "milestones": [{"title": "Tunnel boring complete", "date": _shift(today, 20), "status": "pending"}], "lastUpdate": "Boring machines reached the Seine crossing.", "focus": {"lng": 2.35, "lat": 48.85}},
-		{"op": "create", "name": "Operation Mistral", "kind": "operation", "status": "stalled", "secrecy": "covert", "summary": "Covert support for a friendly faction abroad.", "tags": ["covert", "military"], "progress": 60, "startedAt": _shift(today, -300), "targetDate": _shift(today, -12)},
-		{"op": "create", "name": "Baltic Shipyard Expansion", "kind": "project", "ownerCode": "Germany", "status": "active", "verification": "doubted", "summary": "Germany is said to be doubling the yards at Kiel.", "tags": ["naval", "military"], "progress": 20, "ongoing": true, "startedAt": _shift(today, -90)},
+		{"op": "create", "name": "Grand Paris Rail Link", "kind": "project", "secrecy": "public", "summary": "A new high-speed line tying the capital to the northern ports.", "tags": ["infrastructure", "economy"], "focus": {"lng": 2.35, "lat": 48.85}, "plan": {"durationDays": 400, "monthlyCost": 900000000, "milestones": [{"title": "Tunnel boring complete", "atProgress": 30}, {"title": "Tracks laid", "atProgress": 70}], "effects": [{"type": "stat", "stat": "economy.gdpGrowth", "change": 0.4}, {"type": "structure", "name": "Paris-Lille high-speed line"}]}},
+		{"op": "create", "name": "Operation Mistral", "kind": "operation", "secrecy": "covert", "summary": "Covert support for a friendly faction abroad.", "tags": ["covert", "military"], "plan": {"durationDays": 180, "monthlyCost": 150000000}},
+		{"op": "create", "name": "Baltic Shipyard Expansion", "kind": "project", "ownerCode": "Germany", "secrecy": "public", "summary": "Germany is said to be doubling the yards at Kiel.", "tags": ["naval", "military"], "plan": {"durationDays": 300, "monthlyCost": 400000000, "ongoing": true, "yields": [{"type": "stat", "stat": "military.sea", "change": 0.5}]}},
 	]
 	await main.engine.request("projects.testSeed", {"ops": ops})
 	if board:
@@ -279,8 +279,24 @@ func _projects(hud: Hud) -> void:
 			if c.is_visible_in_tree() and _rect(c).end.x > widest:
 				widest = _rect(c).end.x
 		_check(widest <= pr.end.x + 0.5, "nothing on the board is wider than the phone (%.1f of %.1f)" % [widest, pr.end.x])
+		board._cards_scroll.scroll_vertical = 700
+		await _wait(0.4)
+		await _shoot("p-projects-board-2")
 	hud.set_active_panel("")
 	await _wait(0.6)
+	var dialog: Control = (load("res://scripts/ui/project_recovery_dialog.gd") as GDScript).new()
+	dialog.call("setup", main.engine, {"id": str(main.get("game_id")), "name": str(main.get("game_name"))})
+	var layer := CanvasLayer.new()
+	layer.layer = 100
+	main.add_child(layer)
+	layer.add_child(dialog)
+	await _until(func() -> bool: return not bool(dialog.get("loading")), 20.0)
+	await _wait(0.5)
+	var close_button := _find_button(dialog, "Close")
+	_check(close_button != null and _rect(close_button).size.y >= 43.5, "the Projects recovery dialog's Close is finger-sized")
+	await _shoot("p-projects-recovery")
+	layer.queue_free()
+	await _wait(0.1)
 
 
 func _shift(date: String, days: int) -> String:
