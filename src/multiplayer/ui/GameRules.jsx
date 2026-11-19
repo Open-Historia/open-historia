@@ -1,5 +1,5 @@
 /*! Open Historia — a shared game's rules, as every player reads them, and the host's hand on them © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// In the lobby, and under Players in the round bar (ui/SharedGameOverlay.jsx):
+// In the lobby, and in the round bar's dropdowns (ui/SharedGameOverlay.jsx):
 //   - everything the Game Master has changed in this game (host/gameMaster.js),
 //     where the host may use it (decision 8, "behind a visible notice": the
 //     round bar's mark);
@@ -17,18 +17,20 @@ import { gameMasterAllowed } from "../host/settings.js";
 import { GAME_MASTER_COMMAND_MAX, gameMasterChangeLines } from "../host/gameMaster.js";
 import { latestNoticeAbout } from "../client/threadNotes.js";
 
-const small = { color: "rgba(255,255,255,0.6)", fontSize: "0.76rem", lineHeight: 1.45 };
+// The theme's colours (runtime/uiTheme.js), Default's as the fallbacks.
+const small = { color: "var(--oh-ui-muted, rgba(255,255,255,0.6))", fontSize: "0.76rem", lineHeight: 1.45 };
 const heading = { ...small, marginBottom: "0.25rem", marginTop: "0.7rem", textTransform: "uppercase" };
 const isolate = { unicodeBidi: "isolate" };
 const button = {
-  alignItems: "center", background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "999px",
-  color: "rgba(246,246,248,0.94)", cursor: "pointer", display: "inline-flex", fontSize: "0.8rem", fontWeight: 650, gap: "0.35rem",
+  alignItems: "center", background: "var(--oh-ui-glass-chip, rgba(255,255,255,0.07))", border: "1px solid var(--oh-ui-glass-line, rgba(255,255,255,0.12))", borderRadius: "999px",
+  color: "var(--oh-ui-text, rgba(246,246,248,0.94))", cursor: "pointer", display: "inline-flex", fontFamily: "inherit", fontSize: "0.8rem", fontWeight: 650, gap: "0.35rem",
   justifyContent: "center", minHeight: "2rem", padding: "0 0.9rem",
 };
-const primary = { ...button, background: "rgba(43,193,243,0.2)", borderColor: "rgba(43,193,243,0.6)", color: "#e6f8ff" };
+const primary = { ...button, background: "var(--oh-ui-glass-active, rgba(43,193,243,0.2))", border: "1px solid var(--oh-ui-glass-active-line, rgba(43,193,243,0.6))", color: "var(--oh-ui-glass-active-text, #e6f8ff)" };
 
-// The host's number of answers a round, while the game runs.
-const HostAnswersSetting = ({ settings }) => {
+// The host's number of answers a round, while the game runs: in the lobby
+// under GameRules, and in the round bar's Host dropdown.
+export const HostAnswersSetting = ({ settings }) => {
   const value = Number(settings.hostAnswers) || 0;
   const choices = HOST_ANSWER_CHOICES.includes(value) ? HOST_ANSWER_CHOICES : [...HOST_ANSWER_CHOICES, value].sort((a, b) => a - b);
   return (
@@ -44,13 +46,26 @@ const HostAnswersSetting = ({ settings }) => {
 // What the Game Master has changed in this game, newest first: the AI's own
 // words for it, then what it touched, each in a whole sentence of this
 // screen's language (host/gameMaster.js gameMasterChangeLines).
-const GameMasterLog = ({ entries }) => (entries ?? []).slice().reverse().map((entry, index) => (
+export const GameMasterLog = ({ entries }) => (entries ?? []).slice().reverse().map((entry, index) => (
   <div key={`${entry.round}:${index}`} style={{ ...small, marginTop: "0.25rem" }}>
     <span>{entry.date ? `Round ${entry.round}, ${entry.date}:` : `Round ${entry.round}:`}</span>{" "}
     <span style={isolate}>{entry.summary}</span>
     {gameMasterChangeLines(entry).map((line) => <React.Fragment key={line}>{" "}<span style={isolate}>{line}</span></React.Fragment>)}
   </div>
 ));
+
+// What the Game Master has changed, under its heading, for every player: the
+// round bar's Players dropdown.
+export const GameMasterChanges = ({ shared }) => {
+  const changes = shared.lobby?.gameMaster ?? [];
+  if (!changes.length) return null;
+  return (
+    <div>
+      <div style={heading}>Game Master changes</div>
+      <GameMasterLog entries={changes} />
+    </div>
+  );
+};
 
 export const GameRules = ({ shared }) => {
   const settings = shared.lobby?.settings;
@@ -96,7 +111,7 @@ export const GameMasterBox = ({ shared }) => {
         onChange={(event) => setCommand(event.target.value)}
         placeholder="What should change in the world?"
         rows={3}
-        style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "10px", color: "inherit", fontSize: "0.82rem", padding: "0.5rem 0.6rem", resize: "vertical" }}
+        style={{ background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.05))", border: "1px solid var(--oh-ui-glass-line, rgba(255,255,255,0.12))", borderRadius: "10px", color: "inherit", fontFamily: "inherit", fontSize: "0.82rem", padding: "0.5rem 0.6rem", resize: "vertical" }}
       />
       <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
         <button type="button" style={primary} disabled={!command.trim() || busy || resolving} onClick={send}>{busy ? "The Game Master is at work…" : "Change it"}</button>
@@ -110,24 +125,25 @@ export const GameMasterBox = ({ shared }) => {
 
 // A standing mark on every player's round bar, in a game whose host may use
 // the Game Master: "behind a visible notice" (decision 8). Its changes are
-// listed under Players.
-export const GameMasterMark = ({ shared }) => {
+// listed under Players. `compact`: the bar's own, its count in its title.
+export const GameMasterMark = ({ shared, compact = false }) => {
   if (!gameMasterAllowed(shared.lobby?.settings)) return null;
   const changes = shared.lobby?.gameMaster?.length ?? 0;
+  const text = !changes ? "Game Master on" : changes === 1 ? "Game Master on: 1 change" : `Game Master on: ${changes} changes`;
   return (
-    <span style={{ ...small, border: "1px solid rgba(255,255,255,0.18)", borderRadius: "999px", padding: "0.1rem 0.5rem" }}>
-      {!changes ? "Game Master on" : changes === 1 ? "Game Master on: 1 change" : `Game Master on: ${changes} changes`}
+    <span title={compact ? text : undefined} style={{ ...small, border: "1px solid var(--oh-ui-glass-line, rgba(255,255,255,0.18))", borderRadius: "999px", flexShrink: 0, lineHeight: 1.3, padding: "0.1rem 0.5rem", whiteSpace: "nowrap" }}>
+      {compact ? "Game Master on" : text}
     </span>
   );
 };
 
 // Whose device pays the round, with the host's taking it on itself when that
 // device failed or is away (settings.payment "cycle").
-export const PayerLine = ({ shared, me }) => {
+export const PayerLine = ({ shared, me, style = null }) => {
   const round = shared.round;
   const text = payerLineOf({ payer: round?.payer ?? "", me, phase: round?.phase ?? "" });
   if (!text) return null;
-  return <span style={{ ...small, ...isolate, flexBasis: "100%", textAlign: "center" }}>{text}</span>;
+  return <span style={{ ...small, ...isolate, flexBasis: "100%", textAlign: "center", ...style }}>{text}</span>;
 };
 
 // For the host, beside "Try again now" on a round that could not be resolved.

@@ -57,7 +57,8 @@ const NEW_UPDATES = [
     // After beta 0.0.147 (2026-11-18): the owner's reports of that evening (Start that did nothing, Current that did
     // nothing, a guest left in a closed game) and his asks (a name to join with, a star on played countries, a
     // Players menu, the lobby's standing text gone); and the stat sheet refresh moved to Advanced statistics. The
-    // shipped cards keep their words: what changed since is said here.
+    // shipped cards keep their words: what changed since is said here. Then the round bar made one slim line with the
+    // host's controls in a dropdown ("make this whole overlay thing not always be on screen"), in the player's theme.
     id: "2026-11-shared-games-fixes",
     kind: "minor",
     date: "2026-11-19",
@@ -66,8 +67,8 @@ const NEW_UPDATES = [
       {
         title: "Shared games, smoother",
         items: [
-          "Pick the name other players see you by when you join a shared game.",
-          "A star marks every country a person plays; click it to see who, and the game menu has a Players list.",
+          "Pick the name other players see you by when you join a shared game; a star marks every country a person plays (click it to see who), and the game menu has a Players list.",
+          "In a shared game the round bar is one slim line at the top, in your interface theme: the round, its clock, I'm ready and Players. Everything the host can do is under Host, and nothing else stays open over the map.",
           "If the host's game is busy when Start is pressed, the lobby says what Start waits for; if the game cannot start, the host is told why and can press Start again.",
           "When a shared game ends for you (the host stops it, can no longer be reached, or sends you away), you are taken straight back to the main menu, which tells you why.",
           "Current on your open shared game takes you back into it, and the lobby shows only what you can do in it.",
