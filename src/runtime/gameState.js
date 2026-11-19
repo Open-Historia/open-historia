@@ -5090,17 +5090,29 @@ export const writeCanonicalTurnState = (state = {}, {
   return enqueueCanonicalGenerationWrite(() => commitCanonicalTurnPayload(payload, { emitEvents, startedAt }));
 };
 
+// A write made for an entry of the queue of a shared game's host (`fence`,
+// multiplayer/host/worldQueue.js): refused once that entry has been let go,
+// when it is asked, and again when its turn in this write queue comes, where
+// its mutator writes nothing (null) once the entry is gone. Rejects with the
+// fence's refusal when the entry was let go before the write came back. A
+// write with no fence is any other, as ever.
+const underFence = (fence, mutator, write) => {
+  if (!fence) return write(mutator);
+  return fence.through(fence.live ? fence.write(write, mutator) : undefined);
+};
+
 // Deterministic native read-modify-write against the latest canonical
 // generation. Provider/model calls do not belong in this seam: do any slow
 // reasoning first, then publish the small native mutation here. The read occurs
 // only after prior canonical/chat writes drain, which is what prevents an
 // institutional vote or player message queued during an AI call from being
-// overwritten by an older snapshot.
+// overwritten by an older snapshot. `fence`: see underFence.
 export const mutateCanonicalTurnState = (mutator, {
   expectedGameId = "",
   emitEvents = true,
   guardRuntimeGeneration = true,
   preserveApprovedEvents = false,
+  fence = null,
 } = {}) => {
   if (typeof mutator !== "function") {
     return Promise.reject(new TypeError("mutateCanonicalTurnState requires a mutator function."));
@@ -5114,7 +5126,7 @@ export const mutateCanonicalTurnState = (mutator, {
     }
   };
 
-  return enqueueCanonicalGenerationWrite(async () => {
+  return underFence(fence, mutator, (apply) => enqueueCanonicalGenerationWrite(async () => {
     assertRuntimeGeneration();
     const [actions, chats, events, game, world, colors] = await Promise.all([
       readActionsState({ force: true }),
@@ -5125,7 +5137,7 @@ export const mutateCanonicalTurnState = (mutator, {
       readJson(JSON_URLS.colors, { defaultValue: {}, force: true }),
     ]);
     const current = { actions, chats, events, game, world, colors };
-    const patch = await mutator(current);
+    const patch = await apply(current);
     assertRuntimeGeneration();
     if (!patch || typeof patch !== "object") {
       return { skipped: true, ...current, chat: current.chats, transactionId: "" };
@@ -5140,7 +5152,7 @@ export const mutateCanonicalTurnState = (mutator, {
     };
     const payload = buildCanonicalTurnPayload(next, { expectedGameId, preserveApprovedEvents });
     return commitCanonicalTurnPayload(payload, { emitEvents, startedAt });
-  });
+  }));
 };
 
 // One document's read-modify-write, on the same queue as the canonical
@@ -5156,7 +5168,7 @@ export const mutateCanonicalTurnState = (mutator, {
 // must stay native and quick: nothing it awaits may queue another canonical
 // write, or the queue waits on itself. Resolves to the saved value, or null
 // when nothing was written. Rejects, writing nothing, if the active campaign
-// changed after the call was made.
+// changed after the call was made. `fence`: see underFence.
 const RUNTIME_DOCUMENTS = {
   world: {
     read: () => readWorldState({ force: true }),
@@ -5190,6 +5202,15 @@ const RUNTIME_DOCUMENTS = {
     read: () => readJson(JSON_URLS.shared, { defaultValue: {}, force: true }),
     write: (value, options) => writeJson(JSON_URLS.shared, value && typeof value === "object" && !Array.isArray(value) ? value : {}, options),
   },
+  // The game's flags (runtime/polityFlags.js setPolityFlag, the Game Master's
+  // renames): written in this one order, so a flag set for an entry of a
+  // shared game's host is never written beside another's. Read with no
+  // default: the whole map is written back, so a read that failed must stop
+  // the write rather than pass for an empty file and erase every other flag.
+  flags: {
+    read: () => readJson(JSON_URLS.flags, { force: true }),
+    write: (value, options) => writeJson(JSON_URLS.flags, value && typeof value === "object" && !Array.isArray(value) ? value : {}, options),
+  },
   // The advisor's conversation: written by its panel, by document notices and
   // by a rollback, so all three meet here too.
   advisor: {
@@ -5202,6 +5223,7 @@ const RUNTIME_DOCUMENTS = {
 
 export const mutateRuntimeDocument = (key, mutator, {
   guardRuntimeGeneration = true,
+  fence = null,
   ...writeOptions
 } = {}) => {
   const document = RUNTIME_DOCUMENTS[key];
@@ -5215,14 +5237,14 @@ export const mutateRuntimeDocument = (key, mutator, {
       throw new Error(`Active campaign changed before the ${key} write could commit.`);
     }
   };
-  return enqueueCanonicalGenerationWrite(async () => {
+  return underFence(fence, mutator, (apply) => enqueueCanonicalGenerationWrite(async () => {
     assertRuntimeGeneration();
     const current = await document.read();
-    const next = await mutator(current);
+    const next = await apply(current);
     assertRuntimeGeneration();
     if (next === null || next === undefined) return null;
     return document.write(next, writeOptions);
-  });
+  }));
 };
 
 export const mutateWorldState = (mutator, options) => mutateRuntimeDocument("world", mutator, options);
@@ -5233,6 +5255,7 @@ export const mutateGameData = (mutator, options) => mutateRuntimeDocument("game"
 export const mutateInterceptsState = (mutator, options) => mutateRuntimeDocument("intercepts", mutator, options);
 export const mutateAdvisorState = (mutator, options) => mutateRuntimeDocument("advisor", mutator, options);
 export const mutateSharedSessionState = (mutator, options) => mutateRuntimeDocument("shared", mutator, options);
+export const mutateFlagsState = (mutator, options) => mutateRuntimeDocument("flags", mutator, options);
 
 // A write another thread performs, run while this page's write queue is held.
 // The country-stats worker reads world.json, merges one sheet in and PUTs the

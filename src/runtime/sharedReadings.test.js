@@ -89,34 +89,43 @@ test("every reading the game makes out of turn writes in the host's order; the h
   // The one door: inside an entry the queue is the lock, taken at once; anywhere else waited for and taken in one step.
   const door = between("const statsWrite = ", "const inReadingOrder = ");
   assert.match(door, /if \(entered\) beginSimulation\(\);\n\s*else await enterSimulation\(\{ signal \}\);/);
-  assert.match(door, /if \(inEntry\) return locked\(true\);\n\s*if \(inOrder\) return writeInHostOrder\(inOrder, \(\{ inEntry: entered \}\) => locked\(entered\)\);\n\s*return locked\(false\);/);
-  assert.match(door, /\} finally \{\n\s*endSimulation\(\);\n\s*\}/, "the lock is let go however the write ends");
+  assert.match(door, /if \(inEntry\) return locked\(true, fence\);\n\s*if \(inOrder\) return writeInHostOrder\(inOrder, \(\{ inEntry: entered, fence: given = null \}\) => locked\(entered, given\)\);\n\s*return locked\(false, null\);/);
+  // And every write it makes is handed the entry's fence (host/worldQueue.js): nothing of an entry the host's queue let go lands.
+  assert.match(door, /return await write\(\{ inEntry: entered, fence: entryFence \}\);/);
+  assert.match(door, /\} finally \{\n\s*giveBack\(\);\n\s*\}/, "the lock is let go however the write ends");
+  assert.match(door, /entryFence\?\.onClose\?\.\(giveBack\);/, "and when the host's queue lets the entry go, whether or not its write comes back");
   assert.equal((gameplay.match(/beginStatsWrite|readingEntry/g) ?? []).length, 0, "no entry is ever held open");
-  assert.match(between("export const ensureConflictBackends = ", "export const takeMilitaryRatings"), /statsWrite\(campaign, null, \{ inOrder: "conflict-figures" \}, async \(\) => \{/);
+  assert.match(between("export const ensureConflictBackends = ", "export const takeMilitaryRatings"), /statsWrite\(campaign, null, \{ inOrder: "conflict-figures" \}, async \(\{ fence \}\) => \{[\s\S]*\}, \{ emitEvents: false, fence \}\);/);
   assert.match(between("export const ensureMilitaryFigures = ", "// `rateIntelligence`"), /takeMilitaryRatings\(read, \{ campaign, inOrder: "ratings" \}\)/, "the figures it rated by itself");
-  assert.match(between("export const takeMilitaryRatings = ", "export const ensureMilitaryFigures = "), /await statsWrite\(campaign, null, \{ inOrder, inEntry \}, async \(\) => \{/);
-  assert.match(between("export const refreshStaleStatSheets = ", "export const assessPoliticalLandscape = "), /statsWrite\(campaign, null, \{ inOrder: "stats-refresh" \}, async \(\{ inEntry \}\) => \{[\s\S]*persistStatSheet\(\{[\s\S]*inEntry,\n/);
+  assert.match(between("export const takeMilitaryRatings = ", "export const ensureMilitaryFigures = "), /await statsWrite\(campaign, null, \{ inOrder, inEntry, fence \}, async \(\{ fence: given \}\) => \{[\s\S]*\}, \{ emitEvents: false, fence: given \}\);/);
+  assert.match(between("export const refreshStaleStatSheets = ", "export const assessPoliticalLandscape = "), /statsWrite\(campaign, null, \{ inOrder: "stats-refresh" \}, async \(\{ inEntry, fence \}\) => \{[\s\S]*persistStatSheet\(\{[\s\S]*inEntry,\n\s*fence,\n/);
   for (const [from, to] of [["const generateScenarioCustomStatSheet = ", "// Structured national stat sheet"], ["export const generateCountryStatSheet = ", "export const refinePlayerAction = "]]) {
     const body = between(from, to);
     assert.ok((body.match(/statsWrite\(campaign, signal, \{ inOrder: "stat-sheet" \}/g) ?? []).length >= 1, from);
     assert.equal((body.match(/statsWrite\(/g) ?? []).length, (body.match(/statsWrite\(campaign, signal, \{ inOrder: "stat-sheet" \}/g) ?? []).length, `${from}: every write in the host's order`);
+    // Each with the entry's fence.
+    assert.equal((body.match(/statsWrite\(campaign, signal, \{ inOrder: "stat-sheet" \}, (?:async )?\(\{ (?:inEntry, )?fence \}\) =>/g) ?? []).length, (body.match(/statsWrite\(/g) ?? []).length, `${from}: every write with its entry's fence`);
   }
   // In the host's entry a sheet is the main thread's commit: the Stats worker's minute held Start behind it.
-  assert.match(between("const persistStatSheet = ", "// What a scenario's own sheet rests on"), /source = "country-stats", inEntry = false \} = \{\}\) => \{\n\s*if \(!inEntry\) try \{/);
+  const persist = between("const persistStatSheet = ", "// What a scenario's own sheet rests on");
+  assert.match(persist, /source = "country-stats", inEntry = false, fence = null \} = \{\}\) => \{\n\s*if \(!inEntry\) try \{/);
+  assert.match(persist, /\}, \{ emitEvents: false, fence \}\);/, "and carries the entry's fence");
   const rating = between("const storeFirstIntelligenceRating = ", "const intelligenceRatingInstruction");
   assert.match(rating, /if \(!inEntry\) await waitForSimulationIdle\(\{ signal \}\);/);
-  assert.match(rating, /inEntry \? write\(\) : inReadingOrder\("intelligence-rating", write\)/);
-  assert.match(between("export const assessPoliticalLandscape = ", "const politicalActorOf = "), /await inReadingOrder\("parties", \(\) => mutateWorldState\(/);
+  assert.match(rating, /inEntry \? write\(\{ fence \}\) : inReadingOrder\("intelligence-rating", write\)/);
+  assert.match(rating, /\}, \{ fence: given \}\);/);
+  assert.match(between("export const assessPoliticalLandscape = ", "const politicalActorOf = "), /await inReadingOrder\("parties", \(\{ fence \}\) => mutateWorldState\([\s\S]*\}, \{ fence \}\)\);/);
   // The host taking a device's sheet is a request's own entry: no second one, and no wait for a lock.
   const take = between("export const takeCountryStatSheet = ", "export const pendingCountryStatSheet");
-  assert.match(take, /await statsWrite\(campaign, null, \{ inEntry \}, async \(\) => \{/);
-  assert.match(take, /storeFirstIntelligenceRating\(name, \{ intelligence: rating \}, \{ campaign, inEntry \}\)/);
+  assert.match(take, /await statsWrite\(campaign, null, \{ inEntry, fence \}, async \(\{ fence: given \}\) => \{/);
+  assert.match(take, /storeFirstIntelligenceRating\(name, \{ intelligence: rating \}, \{ campaign, inEntry, fence \}\)/);
+  assert.match(between("export const takePoliticalLandscape = ", "// which is handed only this one sheet"), /\}, \{ fence \}\);/);
   const engine = source("../multiplayer/host/engineMain.js");
-  assert.match(engine, /writeInOrder = \(label, write\) => hosting\.write\(label, write\);\n\s*setReadingsOrder\(\(label, write\) => hosting\.write\(`reading:\$\{label\}`, write\)\);/, "set as sharing begins: the write is the entry");
-  assert.match(engine, /writeInOrder = \(label, write\) => write\(\);\n\s*setReadingsOrder\(null\);/, "and cleared as it stops");
+  assert.match(engine, /writeInOrder = \(label, write, options\) => hosting\.write\(label, write, options\);\n\s*setReadingsOrder\(\(label, write, options\) => hosting\.write\(`reading:\$\{label\}`, write, options\)\);/, "set as sharing begins: the write is the entry");
+  assert.match(engine, /writeInOrder = \(label, write\) => write\(\{ fence: null \}\);\n\s*setReadingsOrder\(null\);/, "and cleared as it stops");
   // Every entry of the engine's that takes the lock takes it at once: the round, and what the host takes in a request's entry.
   assert.equal((engine.match(/enterSimulation/g) ?? []).length, 0, "no entry waits on the lock");
-  assert.match(engine, /takeCountryStatSheet\(\{ name: await countryOfGame\(country\), sheet, continuity, rating, inEntry: true \}\)/);
-  assert.match(engine, /writeInOrder\("ratings", \(\) => takeMilitaryRatings\(read, \{ inEntry: true \}\)\)/);
-  assert.match(engine, /takeRatings: \(ratings\) => takeMilitaryRatings\(ratings, \{ inEntry: true \}\)/);
+  assert.match(engine, /takeCountryStatSheet\(\{ name: await countryOfGame\(country\), sheet, continuity, rating, inEntry: true, fence \}\)/);
+  assert.match(engine, /writeInOrder\("ratings", \(\{ fence \}\) => takeMilitaryRatings\(read, \{ inEntry: true, fence \}\), \{ fenced: true \}\)/);
+  assert.match(engine, /takeRatings: \(ratings, \{ fence = null \} = \{\}\) => takeMilitaryRatings\(ratings, \{ inEntry: true, fence \}\)/);
 });

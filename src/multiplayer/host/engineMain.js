@@ -215,8 +215,11 @@ const rotateInvite = (campaign, identity) => {
 
 // Every change the engine makes to the shared game is an entry in the host's
 // one queue (host/worldQueue.js), the round's skip among them. Set while a game
-// is shared; written at once otherwise.
-let writeInOrder = (label, write) => write();
+// is shared; written at once otherwise. `write({ fence })`: every write it makes
+// carries the entry's fence (gameState.js mutate* `fence`), which `fenced: true`
+// says, so the queue can let it go at its bound and go on (gameHost.js write);
+// `fence` is null when it is written at once.
+let writeInOrder = (label, write) => write({ fence: null });
 
 // What the host's game writes into the world itself (a peace or a treaty
 // between players, host/landings.js), in the world's language
@@ -241,10 +244,12 @@ const loadWorldWords = async (code) => {
 // timeline with the borders it moved. `landed` gathers the events, for the
 // host to tell every player. Read only when the decisions are written: the
 // world before them, and after. `entry`: the host's queue entry it is written
-// in (gameHost.js write), told of the landings so the seats follow them there.
+// in (gameHost.js write), told of the landings so the seats follow them there;
+// its fence goes with every write (runChatActionBatch's `write({ fence })`).
 const decidedAndTold = async (write, landed, entry = null) => {
+  const fence = entry?.fence ?? null;
   const before = await readWorldState({ force: true });
-  const out = await write();
+  const out = await write({ fence });
   const after = await readWorldState({ force: true });
   if (!landingEvents(before, after).length) return out;
   const regions = await loadRegionCatalog().then((catalog) => filterToRenderedRegions(catalog, after)).catch(() => []);
@@ -255,7 +260,7 @@ const decidedAndTold = async (write, landed, entry = null) => {
     if (!told) return null;
     fresh.push(...told.landed);
     return { world: told.world, events: told.events };
-  });
+  }, { fence });
   landed.push(...fresh);
   entry?.told?.(fresh);
   return out;
@@ -273,14 +278,14 @@ const tableTurn = async ({ chat, seat, ...flags }) => {
     chat,
     playerCountry: seat,
     useCanonicalState: true,
-    commit: (write) => writeInOrder("table-decided", (entry) => decidedAndTold(write, landed, entry)),
+    commit: (write) => writeInOrder("table-decided", (entry) => decidedAndTold(write, landed, entry), { fenced: true }),
     ...flags,
   });
   if (landed.length && outcome && typeof outcome === "object") outcome.landed = landed;
   if (!turnWritesThread(outcome)) return outcome;
-  await writeInOrder("table-said", () => mutateChatsState((current) => list(current).map((entry) => (clean(entry?.id) === clean(chatId)
+  await writeInOrder("table-said", ({ fence }) => mutateChatsState((current) => list(current).map((entry) => (clean(entry?.id) === clean(chatId)
     ? threadAfterTurn(entry, outcome)
-    : entry))));
+    : entry)), { fence }), { fenced: true });
   return outcome;
 };
 
@@ -311,11 +316,11 @@ const checkDemandsAfter = async ({ chatId, seat, lastLine }) => {
   if (!chat || from < 0 || !reply) return;
   const events = await checkDemandReply({ chat, speaker: clean(reply.speaker || reply.code), reply: clean(reply.text), answering: clean(lastLine.text), messageId: clean(reply.id), time: clean(reply.time), player: seat }).catch(() => []);
   if (!events.length) return;
-  await writeInOrder("demand-checked", () => mutateChatsState((current) => list(current).map((entry) => {
+  await writeInOrder("demand-checked", ({ fence }) => mutateChatsState((current) => list(current).map((entry) => {
     if (clean(entry?.id) !== clean(chatId)) return entry;
     const log = [...(list(entry.events).length ? list(entry.events) : eventsFromLegacyChat(entry)), ...events];
     return { ...entry, events: log, demands: projectChatThread(log).demands };
-  })));
+  }), { fence }), { fenced: true });
 };
 
 const boot = async () => {
@@ -591,8 +596,9 @@ const boot = async () => {
       },
       hasSheet: async (country) => hasCountryStatSheet(await countryOfGame(country)),
       // The sheet a player's own device wrote, on its own AI key.
-      // (In the request's own entry of the host's queue: the queue is the lock.)
-      takeSheet: async ({ country, sheet, continuity, rating }) => takeCountryStatSheet({ name: await countryOfGame(country), sheet, continuity, rating, inEntry: true }),
+      // (In the request's own entry of the host's queue: the queue is the lock,
+      // and every write goes through the entry's fence.)
+      takeSheet: async ({ country, sheet, continuity, rating, fence }) => takeCountryStatSheet({ name: await countryOfGame(country), sheet, continuity, rating, inEntry: true, fence }),
       // Countries' military figures a player's Stats pane wants, rated on the
       // host's AI: each request's figures written in the host's one order, so
       // every view follows as they come. And those a player's own device
@@ -605,11 +611,11 @@ const boot = async () => {
         if (declined()) return declined();
         await ensureMilitaryFigures(countries, {
           reason: "a player's Stats pane",
-          commit: (read) => writeInOrder("ratings", () => takeMilitaryRatings(read, { inEntry: true })),
+          commit: (read) => writeInOrder("ratings", ({ fence }) => takeMilitaryRatings(read, { inEntry: true, fence }), { fenced: true }),
         });
         return declined();
       },
-      takeRatings: (ratings) => takeMilitaryRatings(ratings, { inEntry: true }),
+      takeRatings: (ratings, { fence = null } = {}) => takeMilitaryRatings(ratings, { inEntry: true, fence }),
       // The map as this game's own engine reads it, for the war room's lines and fleets.
       readChart: () => warRoomChart(),
       // Its cities, for a city struck from the air: the host's own, never a page's.
@@ -619,11 +625,11 @@ const boot = async () => {
         if (!(await hasCompiledParties(country))) await assessPoliticalLandscape(country);
       },
       hasParties: (country) => hasCompiledParties(country),
-      takeParties: ({ country, landscape }) => takePoliticalLandscape({ name: country, landscape }),
-      // A country's flag, as the game sets one.
-      setFlag: async ({ country, image }) => {
+      takeParties: ({ country, landscape, fence }) => takePoliticalLandscape({ name: country, landscape, fence }),
+      // A country's flag, as the game sets one (in the request's entry, through its fence).
+      setFlag: async ({ country, image, fence }) => {
         const docs = await store.read();
-        await setPolityFlag({ polity: country, world: docs.world, dataUrl: image });
+        await setPolityFlag({ polity: country, world: docs.world, dataUrl: image, fence });
       },
       replyTo,
       worldWords,
@@ -634,15 +640,16 @@ const boot = async () => {
       // reads what it changed in the notice every player is sent.
       gameMaster: async ({ command, write }) => {
         const preview = await previewGameMasterCommand(command);
-        return write(() => applyGameMasterPreview(preview));
+        return write(({ fence }) => applyGameMasterPreview(preview, { fence }));
       },
       // A player's institution business, run here for their country. Each
       // thing it writes is an entry in the queue, for the seat as it is when
       // the entry runs (host/institutions.js); a Council's or a hearing's
       // turn asks the AI outside it (tableTurn).
+      // Each call is handed the entry's `fence`, which its one commit carries.
       institution: createInstitutionDesk({
         host: () => host,
-        write: (label, fn) => writeInOrder(label, fn),
+        write: (label, fn, options) => writeInOrder(label, fn, options),
         game: {
           lifecycle: (args) => commitInstitutionLifecycleCommand(args),
           negotiation: (args) => ensureInstitutionLifecycleNegotiationChat(args),
@@ -650,13 +657,13 @@ const boot = async () => {
           proposal: (args) => commitInstitutionalPlayerProposal(args),
           voteRequest: (args) => commitWithVotingRuleBackfill(
             () => commitInstitutionalPlayerVoteRequest(args),
-            { institutionId: args.institutionId, proposalId: args.proposalId },
+            { institutionId: args.institutionId, proposalId: args.proposalId, fence: args.fence },
           ),
           governance: (args) => commitInstitutionGovernanceCommand(args),
           message: (args) => commitInstitutionalPlayerMessage(args),
           chatTurn: (args) => tableTurn(args),
           readChats: () => readChatsState({ force: true }),
-          updateChats: (fn) => mutateChatsState(fn),
+          updateChats: (fn, { fence = null } = {}) => mutateChatsState(fn, { fence }),
         },
       }),
       onStatus: (status) => {
@@ -676,7 +683,9 @@ const boot = async () => {
           logDebugEvent("shared game", `a change of the game (${busy.label}) has been applied for ${busy.seconds} s; ${busy.waiting} wait behind it`, undefined, { problem: true });
         }
         if (busy?.overdue && !said?.overdue) {
-          logDebugEvent("shared game", `a change of the game (${busy.label}) ran past its bound after ${busy.seconds} s and was failed; the ${busy.waiting} behind it wait until it has ended`, undefined, { problem: true });
+          logDebugEvent("shared game", busy.passed
+            ? `a change of the game (${busy.label}) ran past its bound after ${busy.seconds} s and was stopped: nothing more of it is applied, and the ${busy.waiting} behind it go on`
+            : `a change of the game (${busy.label}) ran past its bound after ${busy.seconds} s and was failed; the ${busy.waiting} behind it wait until it has ended`, undefined, { problem: true });
         }
         report();
       },
@@ -734,8 +743,8 @@ const boot = async () => {
     // readings the game makes by itself too, each write one entry, which is
     // the write itself and ends with it (runtime/sharedReadings.js).
     const hosting = gameHost;
-    writeInOrder = (label, write) => hosting.write(label, write);
-    setReadingsOrder((label, write) => hosting.write(`reading:${label}`, write));
+    writeInOrder = (label, write, options) => hosting.write(label, write, options);
+    setReadingsOrder((label, write, options) => hosting.write(`reading:${label}`, write, options));
     const rulesChanged = () => hosting.control.setRules(readRules());
     window.addEventListener("storage", rulesChanged);
     forgetRules = () => window.removeEventListener("storage", rulesChanged);
@@ -819,7 +828,7 @@ const boot = async () => {
         session?.stop();
         session = null;
         await stopping.stop();
-        writeInOrder = (label, write) => write();
+        writeInOrder = (label, write) => write({ fence: null });
         setReadingsOrder(null);
         setHostingSharedGame(false);
         setWorldLanguage("");

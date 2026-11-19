@@ -46,16 +46,20 @@ export const hostReadsFigures = () => hostReads;
 // left open until the reading said it was done, and one never let go held
 // Start and every request behind it for good (2026-11-18). A function the
 // queue runs ends when its work ends, and is bounded there (host/worldQueue.js).
+// Every write of it carries the entry's fence (gameplay.js statsWrite hands it
+// to each: gameState.js mutate* `fence`), so the queue may let it go at its
+// bound and go on, and nothing of it lands after.
 let order = null;
 
 export const setReadingsOrder = (run) => {
   order = typeof run === "function" ? run : null;
 };
 
-// Runs a reading's `write({ inEntry })`: as one entry of the host's queue while
-// this engine shares a game (`inEntry` true: inside it, the queue is the
-// game's lock, host/worldQueue.js), at once anywhere else (`inEntry` false).
-// Resolves or rejects with what the write did.
+// Runs a reading's `write({ inEntry, fence })`: as one entry of the host's
+// queue while this engine shares a game (`inEntry` true: inside it, the queue
+// is the game's lock, host/worldQueue.js; `fence` the entry's, for every write
+// it makes), at once anywhere else (`inEntry` false, and no fence). Resolves or
+// rejects with what the write did.
 export const writeInHostOrder = (label, write) => (order
-  ? order(String(label || "reading"), () => write({ inEntry: true }))
+  ? order(String(label || "reading"), (entry) => write({ inEntry: true, fence: entry?.fence ?? null }), { fenced: true })
   : (async () => write({ inEntry: false }))());

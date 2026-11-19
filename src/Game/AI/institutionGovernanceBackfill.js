@@ -60,6 +60,8 @@ export const ensureLegacyInstitutionGovernanceForBallot = async ({
   proposalId = "",
   expectedGameId = "",
   callModel,
+  // The entry of a shared game's host queue it is written in, which its commit carries.
+  fence = null,
 } = {}) => {
   const targetInstitutionId = clean(institutionId);
   const targetProposalId = clean(proposalId);
@@ -127,7 +129,7 @@ export const ensureLegacyInstitutionGovernanceForBallot = async ({
     });
     appliedInfo = { migrated: applied.appliedInstitutionIds.length > 0, warnings: applied.warnings };
     return { world: applied.world };
-  }, { expectedGameId: activeGameId });
+  }, { expectedGameId: activeGameId, fence });
 
   const finalWorld = committed?.world || world;
   const final = effectiveRule(finalWorld, targetInstitutionId, targetProposalId);

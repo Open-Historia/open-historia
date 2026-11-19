@@ -166,7 +166,7 @@ test("a shared game: only the host's engine, and only while its own AI answers f
   const gameplay = withoutComments(source("./gameplay.js"));
   const refresh = gameplay.slice(gameplay.indexOf("export const refreshStaleStatSheets"), gameplay.indexOf("export const assessPoliticalLandscape"));
   assert.match(refresh, /if \(!months \|\| inSharedGame\(\) \|\| !hostReadsFigures\(\)\) return Promise\.resolve\(null\);/);
-  assert.match(refresh, /statsWrite\(campaign, null, \{ inOrder: "stats-refresh" \}, async \(\{ inEntry \}\) => \{/, "the write is one entry of the host's order");
+  assert.match(refresh, /statsWrite\(campaign, null, \{ inOrder: "stats-refresh" \}, async \(\{ inEntry, fence \}\) => \{/, "the write is one entry of the host's order, through its fence");
 });
 
 test("it writes through the stat sheet's own write, the one the Stats pane's Refresh uses, held to the same continuity guard", () => {

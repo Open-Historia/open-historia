@@ -89,7 +89,7 @@ test("GM exact approved events bypass ordinary prose-only write de-dup", async (
   // One journaled generation, all of it or none: there is no restore write
   // left that could itself half-fail.
   assert.match(apply, /mutateCanonicalTurnState\(/);
-  assert.match(apply, /\}, \{ preserveApprovedEvents: true \}\)/);
+  assert.match(apply, /\}, \{ preserveApprovedEvents: true, fence \}\)/);
   assert.doesNotMatch(apply, /writeEventsState\(/);
   const state = await sourceText(gameStatePath);
   const mutate = state.slice(state.indexOf("export const mutateCanonicalTurnState"), state.indexOf("const RUNTIME_DOCUMENTS"));

@@ -177,10 +177,10 @@ test("the seam: the host in a shared game, the write queue otherwise, never whil
   // The host: the seat's own country, its own map, and not in a scenario without
   // air units; in the host's one order, so a strike given while a round is
   // resolved waits behind it and is the next round's (host/worldQueue.js).
-  assert.match(host, /airstrike: async \(connection, \{ op \}, seat\) => \{\s*const sent = cleanAirStrikeOp\(op\);/);
+  assert.match(host, /airstrike: async \(connection, \{ op \}, seat, \{ store, hold \}\) => \{\s*const sent = cleanAirStrikeOp\(op\);/);
   assert.doesNotMatch(host, /const (?:AT_ONCE|THINKING) = new Set\(\[[^\]]*"airstrike"/, "applied in the queue, as every change to the world is");
   // (The queue's entry names the device it came from, so a player's waiting entries are bounded: host/seatBounds.js.)
-  assert.match(host, /queue\.run\(message\.t, apply(?:, \{ owner: connection\.device \})?\)/);
+  assert.match(host, /queue\.run\(message\.t, \(entry\) => apply\(entry\)(?:, \{ owner: connection\.device \})?\)/);
   assert.match(host, /applyAirStrikeOp\(world, sent, \{ player: seat\.country, date: clean\(game\?\.gameDate\), round: game\?\.round, chart, cities, air: activeWars\(\)\.air \}\)/);
 });
 

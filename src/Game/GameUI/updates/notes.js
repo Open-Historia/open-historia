@@ -70,6 +70,7 @@ const NEW_UPDATES = [
           "Pick the name other players see you by when you join a shared game; a star marks every country a person plays (click it to see who), and the game menu has a Players list.",
           "In a shared game the round bar is one slim line at the top, in your interface theme: the round, its clock, I'm ready and Players. Everything the host can do is under Host, and nothing else stays open over the map.",
           "If the host's game is busy when Start is pressed, the lobby says what Start waits for; if the game cannot start, the host is told why and can press Start again.",
+          "A change the host's game takes more than two minutes over is stopped, and Start and every player's request go on without it, instead of waiting behind it for good.",
           "When a shared game ends for you (the host stops it, can no longer be reached, or sends you away), you are taken straight back to the main menu, which tells you why.",
           "Current on your open shared game takes you back into it, and the lobby shows only what you can do in it.",
           "The stat sheet refresh is set in a country's Advanced statistics: every 6 months of game time by default, or Off.",
