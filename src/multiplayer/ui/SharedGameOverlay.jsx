@@ -589,8 +589,8 @@ export function SharedGameView({ shared }) {
   }
   const started = Boolean(shared.lobby?.started);
   // Cut off from the host: said at once, over whatever the guest is doing
-  // (client/hostGone.js). Nothing it does is taken until the host is back.
-  const cutOff = shared.role === "guest" && shared.connection === "reconnecting" ? (
+  // (client/hostGone.js), until it is back in the game: a reconnection passes through "joining". Nothing it does is taken meanwhile.
+  const cutOff = shared.role === "guest" && shared.cutOff ? (
     <div role="status" style={{ ...glass, ...small, ...problemText, boxSizing: "border-box", left: 0, marginInline: "auto", maxWidth: "calc(100vw - 2rem)", padding: "0.45rem 0.9rem", position: "fixed", right: 0, top: "calc(0.5rem + env(safe-area-inset-top, 0px))", width: "fit-content", zIndex: 4100 }}>
       {RECONNECTING}
     </div>

@@ -40,8 +40,23 @@ export const BANNED = "The host banned you from this game.";
 
 const ENDED_KEY = "oh_shared_game_ended_v1";
 
+// Whether a guest is cut off from its host, after its session's state is
+// `connection` (session/client.js onState) and it was cut off before or not.
+// Cut off from the drop ("reconnecting") until it is back in the game
+// ("connected") or its session has ended. A reconnection passes through
+// "connecting" and "joining" on its way back: the guest is still cut off
+// there. Read from the state alone, the banner and the refusal dropped during
+// "joining", and a page that came back never saw itself come back from
+// "reconnecting", so what it had asked before the drop was never sent again
+// (the review of 2026-11-19, F13).
+export const cutOffAfter = (wasCutOff, connection) => {
+  if (connection === "reconnecting") return true;
+  if (connection === "connected" || ["rejected", "lost", "invalid", "left"].includes(connection)) return false;
+  return Boolean(wasCutOff);
+};
+
 // Whether a guest's request is refused now, and with what words ("" for none).
-export const cutOffRefusal = ({ role = "", connection = "" } = {}) => (role === "guest" && connection === "reconnecting" ? CUT_OFF_REFUSAL : "");
+export const cutOffRefusal = ({ role = "", cutOff = false } = {}) => (role === "guest" && cutOff === true ? CUT_OFF_REFUSAL : "");
 
 // Why a shared game ended for this page, by how its session ended
 // (session/client.js onState: rejected, lost or invalid, and its reason).

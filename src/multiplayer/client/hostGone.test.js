@@ -9,7 +9,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-import { BANNED, CUT_OFF_REFUSAL, HOST_CLOSED, HOST_GONE, REMOVED, cutOffRefusal, endedWords, keepEndedNotice, takeEndedNotice } from "./hostGone.js";
+import { BANNED, CUT_OFF_REFUSAL, HOST_CLOSED, HOST_GONE, REMOVED, cutOffAfter, cutOffRefusal, endedWords, keepEndedNotice, takeEndedNotice } from "./hostGone.js";
 import { joinFailure } from "./joinProgress.js";
 
 const memoryStorage = () => {
@@ -23,9 +23,35 @@ const memoryStorage = () => {
 };
 
 test("a guest cut off from the host has its requests refused, with why; the host and a connected guest do not", () => {
-  assert.equal(cutOffRefusal({ role: "guest", connection: "reconnecting" }), CUT_OFF_REFUSAL);
-  assert.equal(cutOffRefusal({ role: "guest", connection: "connected" }), "");
-  assert.equal(cutOffRefusal({ role: "host", connection: "loopback" }), "");
+  assert.equal(cutOffRefusal({ role: "guest", cutOff: true }), CUT_OFF_REFUSAL);
+  assert.equal(cutOffRefusal({ role: "guest", cutOff: false }), "");
+  assert.equal(cutOffRefusal({ role: "host", cutOff: false }), "");
+});
+
+// The review of 2026-11-19, F13: a reconnection passes through "connecting" and "joining" before "connected"
+// (session/client.js), so a page that read "back" as "connected right after reconnecting" never saw itself come back:
+// what it had asked before the drop was never sent again, and the banner and the refusal dropped during "joining".
+test("a guest is cut off from the drop until it is back in or its session has ended, through every step of coming back", () => {
+  const walk = (states) => {
+    let cutOff = false;
+    return states.map((connection) => {
+      const was = cutOff;
+      cutOff = cutOffAfter(cutOff, connection);
+      return { connection, cutOff, back: was && connection === "connected" };
+    });
+  };
+  const steps = walk(["joining", "connected", "reconnecting", "connecting", "reconnecting", "joining", "connected"]);
+  assert.deepEqual(steps.map((step) => step.cutOff), [false, false, true, true, true, true, false]);
+  assert.deepEqual(steps.filter((step) => step.back).length, 1, "back once, when it is in again");
+  assert.equal(steps.at(-1).back, true);
+  assert.equal(steps[1].back, false, "the first welcome is no coming back");
+  for (const end of ["rejected", "lost", "invalid", "left"]) assert.equal(cutOffAfter(true, end), false, end);
+  // The page reads it so (client/sharedGame.js): what was asked goes again when it is back, and the banner follows it.
+  const onState = between(page, "    onState: (connection, detail = {}) => {", "    onProblem:");
+  assert.match(onState, /const cutOff = cutOffAfter\(state\.cutOff, connection\);\n\s*const back = state\.cutOff && connection === "connected";/);
+  assert.match(onState, /if \(back\) \{\n[^]*?current\.client\?\.resend\(\)/);
+  const overlay = fs.readFileSync(new URL("../ui/SharedGameOverlay.jsx", import.meta.url), "utf8");
+  assert.match(overlay, /const cutOff = shared\.role === "guest" && shared\.cutOff \?/);
 });
 
 test("why a shared game ended for a player who was in it, by how its session ended", () => {

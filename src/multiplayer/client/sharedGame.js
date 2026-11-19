@@ -44,7 +44,7 @@ import { loadDeviceIdentity } from "../identity.js";
 import { parseInvite } from "../invite.js";
 import { HOST_MESSAGES, SHARED_GAME_VERSION } from "../game/messages.js";
 import { advisorChangesOf } from "../game/advisorChanges.js";
-import { cutOffRefusal, endedWords, keepEndedNotice, takeEndedNotice } from "./hostGone.js";
+import { cutOffAfter, cutOffRefusal, endedWords, keepEndedNotice, takeEndedNotice } from "./hostGone.js";
 
 const IDLE = Object.freeze({
   mode: "off", // off | opening | lobby | playing | ended
@@ -54,6 +54,9 @@ const IDLE = Object.freeze({
   round: null,
   notices: [],
   connection: "", // the session's state, or "loopback"
+  // A guest cut off from its host, from the drop until it is back in the game
+  // (client/hostGone.js cutOffAfter): its banner, and its requests refused.
+  cutOff: false,
   // What a guest's session knows while it joins (session/client.js onState):
   // { heard, failures }. The lobby says which step it is on (joinProgress.js).
   detail: null,
@@ -618,8 +621,9 @@ export const joinSharedGame = async ({ token, name } = {}) => {
     log: (text) => logDebugEvent("shared game", text),
     onState: (connection, detail = {}) => {
       if (current !== joining) return;
-      const back = connection === "connected" && state.connection === "reconnecting";
-      set({ connection, detail: { heard: Boolean(detail.heard), failures: Number(detail.failures) || 0, clock: Boolean(detail.clock) } });
+      const cutOff = cutOffAfter(state.cutOff, connection);
+      const back = state.cutOff && connection === "connected";
+      set({ connection, cutOff, detail: { heard: Boolean(detail.heard), failures: Number(detail.failures) || 0, clock: Boolean(detail.clock) } });
       // Back after a drop: what was asked and not yet answered goes again, with
       // its own id, and the host answers it once.
       if (back) {
