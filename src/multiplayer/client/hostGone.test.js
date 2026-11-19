@@ -92,10 +92,12 @@ test("every end of a guest's session takes the page out of the shared game, at o
   assert.doesNotMatch(ends, /set\(/, "no end is only said, with the game left open");
 });
 
-test("the host's screen whose engine window stopped answering is taken out too, back to its own game", () => {
+// A window that is only busy (a long time skip can block it well over the loopback's 20 s) must never end the game for
+// every player: the host's screen is told, keeps its game open, and leaves itself.
+test("the host's screen whose engine window stopped answering is told, and is never taken out for it", () => {
   const onGone = between(page, "    onGone: () => {", "\n    },");
-  assert.match(onGone, /void endForThisPage\(ENGINE_GONE\);/);
-  assert.doesNotMatch(onGone, /set\(/);
+  assert.doesNotMatch(onGone, /endForThisPage|leaveSharedGame|engine\/close/);
+  assert.match(onGone, /set\(\{ mode: "ended", error: "The shared game's window stopped answering\. Leave to play your game on your own again\." \}\);/);
 });
 
 test("the way out: the menu's word kept, the game left as Leave leaves it, and the page back at the menu", () => {
@@ -103,15 +105,18 @@ test("the way out: the menu's word kept, the game left as Leave leaves it, and t
   assert.match(door, /if \(wasIn\) keepEndedNotice\(/);
   assert.match(door, /await leaveSharedGame\(\{ endedWith: words, reloading: wasIn \}\);/);
   assert.match(door, /finally \{\n\s+if \(wasIn && typeof window !== "undefined"\) window\.location\.reload\(\);/);
-  // A game is said ended only on the way out of it (or on the menu, after): never with its screens left open.
+  // A game is said ended only on the way out of it (or on the menu, after), never with its screens left open; but for
+  // the host's screen whose engine window stopped answering, which keeps its game open for the host to leave.
   const leave = between(page, "export const leaveSharedGame = async", "\n};\n");
+  const onGone = between(page, "    onGone: () => {", "\n    },");
   const ended = [...page.matchAll(/mode: "ended"/g)].map((match) => match.index);
   const leaveAt = page.indexOf(leave);
+  const goneAt = page.indexOf(onGone);
   const before = page.indexOf("let state = endedBefore ?");
   assert.ok(ended.length >= 1);
-  const onTheWayOut = (at) => at > leaveAt && at < leaveAt + leave.length;
+  const within = (at, from, text) => at > from && at < from + text.length;
   const onTheMenu = (at) => at > before && !page.slice(before, at).includes("\n");
-  for (const at of ended) assert.ok(onTheWayOut(at) || onTheMenu(at), `"ended" set outside the way out, at ${at}`);
+  for (const at of ended) assert.ok(within(at, leaveAt, leave) || within(at, goneAt, onGone) || onTheMenu(at), `"ended" set outside the way out, at ${at}`);
   // Taken out at once: no request goes on, and the round bar and screens give way to the box before anything is awaited.
   assert.ok(leave.indexOf("current = null;") < leave.indexOf("if (endedWith) set({ mode: \"ended\", error: endedWith, leaving: true });"));
   assert.ok(leave.indexOf("if (endedWith) set(") < leave.indexOf("await "));
@@ -119,9 +124,14 @@ test("the way out: the menu's word kept, the game left as Leave leaves it, and t
   assert.ok(leave.indexOf("await leaving.preparing;") >= 0 && leave.indexOf("await leaving.preparing;") < leave.indexOf("await closeStandInOf(leaving);"));
 });
 
-test("the box that says a shared game ended has nothing to press to leave it", () => {
+test("the box that says a shared game ended leaves nothing to press to leave it, but the host's own open game", () => {
   const overlay = fs.readFileSync(new URL("../ui/SharedGameOverlay.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const box = between(overlay, 'if (shared.mode === "ended") {', "\n  }\n");
-  assert.doesNotMatch(box, /\bleave\b\(|leaveSharedGame/, "the page is out of the game already, or being taken out");
-  assert.match(box, /shared\.leaving \? null : <button type="button" style=\{button\} onClick=\{dismissEndedNotice\}>OK<\/button>/);
+  assert.doesNotMatch(box, /dismissEndedNotice\(\)|leaveSharedGame/, "OK never leaves a game in passing");
+  // Nothing while the page is taken out; Leave only for a page whose game is still open (it has a role: leaveSharedGame
+  // and every way out set the role back to none); OK, which only puts the word away, for every other.
+  assert.match(box, /shared\.leaving \? null : shared\.role \? \(\s*<button type="button" style=\{button\} onClick=\{leave\}>Leave<\/button>\s*\) : \(\s*<button type="button" style=\{button\} onClick=\{dismissEndedNotice\}>OK<\/button>\s*\)/);
+  const leave = between(page, "export const leaveSharedGame = async", "\n};\n");
+  assert.match(leave, /set\(endedWith \? \{ \.\.\.IDLE, mode: "ended", error: endedWith, leaving: reloading \} : \{ \.\.\.IDLE \}\);/);
+  assert.match(page, /role: "", \/\/ host \| guest/);
 });

@@ -4,9 +4,9 @@
 // in the shared game's screens with no word that the host was gone, tried to
 // reconnect for as long as it was open, and was never taken out.
 // "When the game ends, it should actually kick the player from the game" (the
-// owner, 2026-11-18): a guest the host banned, one whose window was replaced by
-// another, and a host whose engine window stopped answering were left in the
-// dead game's screens under a box that said it had ended, until they pressed it.
+// owner, 2026-11-18): a guest the host banned, or one whose window was replaced
+// by another, was left in the dead game's screens under a box that said it had
+// ended, until they pressed it.
 //
 // Now (client/sharedGame.js, session/client.js):
 //   - cut off, the guest's screen says so at once, and nothing it does is
@@ -15,14 +15,18 @@
 //   - the session tries for a bounded time; when the host is gone for good (it
 //     said it closed the game, its lobby left the relays, or the time ran out)
 //     the shared game ends;
-//   - however a shared game this page was in ends for it (the host closed it or
-//     is gone, the host removed or banned this player, this device took its
-//     place from another window, the host's engine window stopped answering),
-//     the player is taken out at once, as Leave takes them out: the stand-in is
-//     closed and the page goes back to the menu, which says why (endedWords,
-//     keepEndedNotice), once. Nothing of the game is kept to reopen it: a page
-//     reloaded meanwhile opens the menu, never the dead game. A joining that
-//     never got in is told why it failed (joinProgress.js joinFailure).
+//   - however a guest's session ends for a page that was in the game (the host
+//     closed it or is gone, the host removed or banned this player, this device
+//     took its place from another window), the player is taken out at once, as
+//     Leave takes them out: the stand-in is closed and the page goes back to the
+//     menu, which says why (endedWords, keepEndedNotice), once. Nothing of the
+//     game is kept to reopen it: a page reloaded meanwhile opens the menu, never
+//     the dead game. A joining that never got in is told why it failed
+//     (joinProgress.js joinFailure).
+//   - not so the host's own screen whose engine window stopped answering: a
+//     window that is only busy (a long time skip can block it well over the
+//     loopback's 20 s) must never end the game for every player. The host is
+//     told, and leaves itself (client/sharedGame.js onGone).
 // Runtime-free: the storage is the page's sessionStorage, given.
 
 import { joinFailure } from "./joinProgress.js";
@@ -33,8 +37,6 @@ export const HOST_CLOSED = "The host closed the game.";
 export const HOST_GONE = "The host can no longer be reached.";
 export const REMOVED = "The host removed you from the game.";
 export const BANNED = "The host banned you from this game.";
-// The host's own screen, whose engine window (host/engineMain.js) stopped answering.
-export const ENGINE_GONE = "The shared game's window stopped answering, and the shared game was closed.";
 
 const ENDED_KEY = "oh_shared_game_ended_v1";
 

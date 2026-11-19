@@ -44,7 +44,7 @@ import { loadDeviceIdentity } from "../identity.js";
 import { parseInvite } from "../invite.js";
 import { HOST_MESSAGES, SHARED_GAME_VERSION } from "../game/messages.js";
 import { advisorChangesOf } from "../game/advisorChanges.js";
-import { ENGINE_GONE, cutOffRefusal, endedWords, keepEndedNotice, takeEndedNotice } from "./hostGone.js";
+import { cutOffRefusal, endedWords, keepEndedNotice, takeEndedNotice } from "./hostGone.js";
 
 const IDLE = Object.freeze({
   mode: "off", // off | opening | lobby | playing | ended
@@ -398,15 +398,16 @@ export const hostSharedGame = async ({ settings, name, resuming = false } = {}) 
     onLog: (entries) => {
       for (const entry of entries) logDebugEvent(entry.category, `(host's engine) ${entry.message}`, entry.detail || undefined, { problem: entry.problem });
     },
-    // The engine window crashed or froze: the shared game is over for the
-    // host, who is taken out of it at once and back to their own game, the
-    // engine window closed from here since it cannot close itself
-    // (leaveSharedGame). It was said on a box the host had to press Leave on.
+    // The engine window crashed or froze: said, and Leave closes it, since it
+    // cannot close itself. The host is never taken out for it (endForThisPage
+    // is for a game that has ended): a window that is only busy (a long time
+    // skip can block it well over the loopback's 20 s) must not end the game
+    // for every player.
     onGone: () => {
       if (!current || current.screen !== screen) return;
       current.engineGone = true;
       logDebugEvent("shared game", "the shared game's engine window stopped answering", undefined, { problem: true });
-      void endForThisPage(ENGINE_GONE);
+      set({ mode: "ended", error: "The shared game's window stopped answering. Leave to play your game on your own again." });
     },
   });
   current.screen = screen;
@@ -680,7 +681,8 @@ export const sharedRequest = (t, fields = {}) => {
 };
 
 // The menu's word on a shared game that ended for this page, put away; false
-// while the page is still being taken out of it.
+// while the page is still being taken out of it, or while its game is still
+// open (the host's screen whose engine window stopped answering: Leave).
 export const dismissEndedNotice = () => {
   if (current || state.mode !== "ended" || state.leaving) return false;
   set({ ...IDLE });

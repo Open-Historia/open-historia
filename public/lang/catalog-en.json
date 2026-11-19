@@ -14044,7 +14044,7 @@
  "The shared game ended.",
  "The shared game was stopped.",
  "The shared game's queue could not be reached.",
- "The shared game's window stopped answering, and the shared game was closed.",
+ "The shared game's window stopped answering. Leave to play your game on your own again.",
  "The simulator neither helps nor targets the player; outcomes follow capability, leverage, information, and causality.",
  "The simulator's role",
  "The speech model could not be downloaded or loaded.",
