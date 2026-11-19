@@ -985,18 +985,19 @@ try {
     localStorage.removeItem("ai_fallback_states");
     return true;
   })()`);
+  // The host's control under Players, "AI countries answer with" (ui/SharedGameOverlay.jsx RepliesSetting).
   const repliesSelect = `[...document.querySelectorAll('select')].find((s) => [...s.options].some((o) => o.value === 'own'))`;
   await host.eval("window.__e2e.clickPlayers()");
   await until(host, `Boolean(${repliesSelect})`, 10000);
   await host.eval(`(() => { window.__e2e.choose(${repliesSelect}, 'own'); return true; })()`);
-  await guest.eval("window.__e2e.clickPlayers()");
-  // Under Players, "Who pays" (ui/GameRules.jsx, multiplayer/costRules.js) says it as it now is.
-  const guestTold = await until(guest, "document.body.textContent.includes('Your own AI answers your messages to countries the AI plays')", 15000);
-  const hostShows = await until(host, `(() => { const select = ${repliesSelect}; return Boolean(select) && select.value === 'own'; })()`, 10000);
+  // The select reads the lobby the engine sends back, so "own" there is the engine's setting, not the click's; and
+  // with each player's own AI the host is given its number of answers a round (ui/GameRules.jsx HostAnswersSetting).
+  const hostShows = await until(host, `(() => { const select = ${repliesSelect}; return Boolean(select) && select.value === 'own' && document.body.textContent.includes("Your AI's answers per player a round"); })()`, 10000);
   await shoot(host, "3-host-whose-ai-answers");
   await host.eval("window.__e2e.clickPlayers()");
-  await guest.eval("window.__e2e.clickPlayers()");
-  check("the host changes whose AI answers while the game runs, and the guest is told it is now its own", guestTold && hostShows, JSON.stringify({ guestTold, hostShows }));
+  // The guest is no longer told in words (the owner had the lobby's standing text removed): what it is told is the
+  // behaviour, checked next: its own AI answers its next message to a country the AI plays, and the host's is asked nothing.
+  check("the host changes whose AI answers while the game runs: its control shows each player's own, as the engine applied it", hostShows, JSON.stringify({ hostShows }));
 
   const engineAskedBefore = (engine.asked ?? []).length;
   const guestAskedBefore = (guest.asked ?? []).length;
@@ -1018,7 +1019,7 @@ try {
   const guestBody = (guest.chatBodies ?? []).at(-1) ?? "";
   const guestRoster = rosterOf(guestBody);
   const hostScreenHolds = await host.eval(holds(LINE_FROM_GUESTS_AI));
-  check("with each player's own AI, the guest's own page writes the AI government's reply with its own key: the host's engine is asked nothing, and keeps the words",
+  check("so the guest's own AI answers next: its own page writes the AI government's reply with its own key, the host's engine is asked nothing, and keeps the words",
     ownReplyShown
       && (guest.asked ?? []).slice(guestAskedBefore).filter((tool) => tool === "submit_chat_actions").length === 1
       && (engine.asked ?? []).length === engineAskedBefore
