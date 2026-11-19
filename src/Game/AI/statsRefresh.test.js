@@ -57,6 +57,9 @@ test("the schedule in game time: never while Off; once the interval has passed s
   assert.equal(statsRefreshRunDue({ months: 6, date: "1806-03-01", lastDate: "1805-10-01", startDate: start }), false);
   assert.equal(statsRefreshRunDue({ months: 6, date: "1806-04-01", lastDate: "1805-10-01", startDate: start }), true);
   assert.equal(statsRefreshRunDue({ months: 12, date: "1805-03-01", lastDate: "1808-01-01", startDate: start }), true, "the record is from a future the player undid");
+  assert.equal(statsRefreshRunDue({ months: 6, date: "1805-03-01", lastDate: "1805-03-20", startDate: start }), true, "undone within the same month");
+  assert.equal(statsRefreshRunDue({ months: 6, date: "1805-03-20", lastDate: "1805-04-10", startDate: start }), true, "undone across a month's end by less than a month");
+  assert.equal(statsRefreshRunDue({ months: 6, date: "1805-03-20", lastDate: "1805-03-20", startDate: start }), false, "the run's own date is not a future");
   assert.equal(statsRefreshRunDue({ months: 6, date: "", lastDate: null, startDate: start }), false, "no date, no run");
 });
 

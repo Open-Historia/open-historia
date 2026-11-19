@@ -33,6 +33,7 @@
 // same stat-sheet write the Stats pane's Refresh uses (persistStatSheet).
 
 import { countryStatsTrackingMonthsElapsed } from "../../runtime/countryStats.js";
+import { diffGameDays } from "../../runtime/gameDates.js";
 
 // How often, in game months. 0 is Off. The old cadence's choices, so its
 // words are the ones the language packs already carry.
@@ -136,7 +137,9 @@ export const statsRefreshRunDue = ({ months = STATS_REFRESH_DEFAULT_MONTHS, date
   const now = clean(date);
   if (!step || !now) return false;
   const last = clean(lastDate);
-  if (last && countryStatsTrackingMonthsElapsed(now, last) > 0) return true;
+  // By the day: an undo within the month (or across a month's end by less
+  // than a whole month) leaves a record that whole months would not see.
+  if (last && (diffGameDays(now, last) ?? 0) > 0) return true;
   const from = last || clean(startDate);
   if (!from) return false;
   return countryStatsTrackingMonthsElapsed(from, now) >= step;
