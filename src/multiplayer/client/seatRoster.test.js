@@ -9,7 +9,7 @@ import { setSharedGameSeats, sharedGamePeople, sharedGameSeats, subscribeSharedG
 
 // The lobby's seats as host/gameHost.js lobbyFor sends them.
 const lobbySeats = [
-  { country: "France", name: "Ana", status: "human", held: true, you: true, host: true },
+  { country: "France", name: "Ana", status: "human", held: true, you: true },
   { country: "German Reich", name: "Ben", status: "away", held: true, you: false },
   { country: "Italy", name: "", status: "ai", held: false, you: false },
   { country: "Poland", name: "Cy", status: "watching", held: true, you: false },
@@ -20,8 +20,6 @@ const lobbySeats = [
 test("the roster keeps every seat with a country, in the host's order", () => {
   const roster = rosterOf(lobbySeats);
   assert.deepEqual(roster.map((seat) => seat.country), ["France", "German Reich", "Italy", "Poland"]);
-  assert.equal(roster[0].host, true);
-  assert.equal(roster[1].host, false);
   assert.ok(Object.isFrozen(roster) && Object.isFrozen(roster[0]));
   assert.equal(rosterOf(undefined).length, 0);
   assert.ok(sameRoster(rosterOf(lobbySeats), roster));

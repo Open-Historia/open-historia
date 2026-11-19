@@ -1020,7 +1020,6 @@ const Main = ({
       <GameMenuDropdown
         open={isGameMenuDropOpen && !isSettingsOpen && !warRoomShown}
         seats={sharedSeats}
-        role={sharedRole}
         top={`calc(${TOP_BAR_OFFSET} + ${isMobile ? "3.2rem" : "2.85rem"} + 0.35rem)`}
         onClose={closeGameMenuDrop}
         onOpenGameMenu={() => {

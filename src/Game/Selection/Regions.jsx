@@ -842,7 +842,6 @@ const RegionPopup = () => {
                 ? <span data-no-translate style={{ color: "rgba(255,255,255,0.92)", fontWeight: 700, minWidth: 0, overflowWrap: "anywhere", unicodeBidi: "isolate" }}>{playerSeat.name}</span>
                 : <span style={{ color: "rgba(255,255,255,0.92)", fontWeight: 700 }}>a player</span>}
             {playerSeat.you && <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0 }}>(you)</span>}
-            {playerSeat.host && <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0 }}>(host)</span>}
             </div>
         )}
 

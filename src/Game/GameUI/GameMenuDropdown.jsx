@@ -53,8 +53,8 @@ const isolate = { unicodeBidi: "isolate" };
 const dropStyle = { animation: "ohGameMenuDrop 140ms ease-out both" };
 
 // Who plays what, one row a seat.
-export const PlayerList = ({ seats, role }) => {
-  const rows = playerListRows(seats, { role });
+export const PlayerList = ({ seats }) => {
+  const rows = playerListRows(seats);
   if (!rows.length) return <div style={{ ...soft, padding: "0.4rem 0.6rem" }}>No one has taken a country yet.</div>;
   return (
     <div role="list" style={{ maxHeight: "min(50dvh, 22rem)", overflowY: "auto", padding: "0.15rem 0.6rem 0.35rem" }}>
@@ -65,7 +65,6 @@ export const PlayerList = ({ seats, role }) => {
             {row.name ? <span data-no-translate>{row.name}</span> : null}
             {row.you ? <span> (you)</span> : null}
           </span>
-          {row.host ? <span style={{ border: "1px solid rgba(43,193,243,0.5)", borderRadius: "999px", color: "#8adcf7", fontSize: "0.68rem", fontWeight: 700, padding: "0 0.4rem" }}>Host</span> : null}
           {row.state ? <span style={soft}>{row.state}</span> : null}
         </div>
       ))}
@@ -75,7 +74,7 @@ export const PlayerList = ({ seats, role }) => {
 
 // Mounted only while open, so the list folds back up whenever the menu closes
 // and it opens on its items.
-const OpenMenu = ({ items, seats, role, top, onOpenGameMenu, onClose }) => {
+const OpenMenu = ({ items, seats, top, onOpenGameMenu, onClose }) => {
   const [showPlayers, setShowPlayers] = useState(false);
   const ref = useRef(null);
 
@@ -122,7 +121,7 @@ const OpenMenu = ({ items, seats, role, top, onOpenGameMenu, onClose }) => {
                 <span data-no-translate style={soft}>{seats.filter(playedByAPerson).length}</span>
                 <span aria-hidden="true" style={{ ...soft, display: "inline-block", transform: showPlayers ? "rotate(180deg)" : "none" }}>{"▾"}</span>
               </button>
-              {showPlayers ? <PlayerList seats={seats} role={role} /> : null}
+              {showPlayers ? <PlayerList seats={seats} /> : null}
             </React.Fragment>
           );
         }
@@ -137,8 +136,8 @@ const OpenMenu = ({ items, seats, role, top, onOpenGameMenu, onClose }) => {
   );
 };
 
-export default function GameMenuDropdown({ open, seats, role = "", top, onOpenGameMenu, onClose }) {
+export default function GameMenuDropdown({ open, seats, top, onOpenGameMenu, onClose }) {
   const items = gameMenuItems({ seats });
   if (!open || !items.length) return null;
-  return <OpenMenu items={items} seats={seats} role={role} top={top} onOpenGameMenu={onOpenGameMenu} onClose={onClose} />;
+  return <OpenMenu items={items} seats={seats} top={top} onOpenGameMenu={onOpenGameMenu} onClose={onClose} />;
 }

@@ -1,6 +1,6 @@
 /*! Open Historia — who plays which country in a shared game, for the game's own screens © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The host's lobby lists every seat (host/gameHost.js lobbyFor: country, name,
-// status, held, you, and `host` once the host's own seat is marked). The
+// status, held, you). The
 // game's screens outside the round bar read it too: the map stars the label of
 // a country a person plays, the region card says who plays it, and the game
 // menu's Players lists them all. They read it through sharedGameBridge.js, so
@@ -28,7 +28,6 @@ export const rosterOf = (seats) => {
       status: clean(seat.status, 20),
       held: seat.held === true,
       you: seat.you === true,
-      host: seat.host === true,
     }));
   return rows.length ? Object.freeze(rows) : NOBODY;
 };
@@ -36,7 +35,7 @@ export const rosterOf = (seats) => {
 export const sameRoster = (a, b) => a.length === b.length && a.every((row, at) => {
   const other = b[at];
   return row.country === other.country && row.name === other.name && row.status === other.status
-    && row.held === other.held && row.you === other.you && row.host === other.host;
+    && row.held === other.held && row.you === other.you;
 });
 
 // A seat a person plays: one their device holds, whoever minds it now (the AI

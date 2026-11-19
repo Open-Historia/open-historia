@@ -20,15 +20,14 @@ export const gameMenuItems = ({ seats = [] } = {}) => (
 );
 
 // Who plays what, as the round bar's Players panel lists it: every seat in the
-// host's order, the player's own marked "(you)", the host's seat marked, and
-// what an absent player is doing ("Away", the AI minding it). The host's seat
-// is known by the seat's own `host` mark, or, on the host's own page, by being
-// this page's seat.
-export const playerListRows = (seats = [], { role = "" } = {}) => (Array.isArray(seats) ? seats : []).map((seat) => ({
+// host's order, the player's own marked "(you)", and what an absent player is
+// doing ("Away", the AI minding it). (No seat says it is the host's: the
+// lobby's seats carry no such mark, game/messages.js SEAT, and a "Host" badge
+// that could only ever show on the host's own row was taken out.)
+export const playerListRows = (seats = []) => (Array.isArray(seats) ? seats : []).map((seat) => ({
   key: `${seat.status}:${seat.country}`,
   country: seat.country,
   name: seat.name,
   you: Boolean(seat.you),
-  host: Boolean(seat.host) || (role === "host" && Boolean(seat.you)),
   state: seatStateText(seat),
 }));

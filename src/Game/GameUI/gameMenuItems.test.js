@@ -22,14 +22,13 @@ test("a shared game: the game menu, then Players", () => {
   assert.deepEqual(gameMenuItems({ seats }).map((item) => item.id), ["menu", "players"]);
 });
 
-test("the player list marks you, the host and who is away, as the Players panel does", () => {
-  const rows = playerListRows(seats, { role: "host" });
-  assert.deepEqual(rows.map((row) => [row.country, row.name, row.you, row.host, row.state]), [
-    ["France", "Ana", true, true, ""],
-    ["German Reich", "Ben", false, false, "Away"],
-    ["Italy", "", false, false, "AI player"],
+test("the player list marks you and who is away, as the Players panel does", () => {
+  const rows = playerListRows(seats);
+  assert.deepEqual(rows.map((row) => [row.country, row.name, row.you, row.state]), [
+    ["France", "Ana", true, ""],
+    ["German Reich", "Ben", false, "Away"],
+    ["Italy", "", false, "AI player"],
   ]);
-  // A guest's page knows the host by the seat's own mark only.
-  const guest = playerListRows(rosterOf([{ country: "France", name: "Ana", status: "human", held: true, host: true }, { country: "Spain", name: "Me", status: "human", held: true, you: true }]), { role: "guest" });
-  assert.deepEqual(guest.map((row) => row.host), [true, false]);
+  // No seat is marked the host's: the lobby's seats carry no such mark (the review of 2026-11-19, F9).
+  assert.ok(rows.every((row) => !("host" in row)));
 });
