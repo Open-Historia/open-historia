@@ -950,6 +950,42 @@ test("the host can take a country back from a player, never its own", async () =
   assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA]);
 });
 
+// "When the game ends, it should actually kick the player from the game" (the owner, 2026-11-18). A release ends
+// nothing: its player stays in, told why, and may take a free country. A ban ends the game for that player: the
+// engine window sends its device away (host/engineMain.js "kick" with `ban`), its page takes it out to the menu
+// with why (client/sharedGame.js endForThisPage), and the game keeps it out.
+test("a player the host releases stays in the game; one the host bans is kept out of it for good", async () => {
+  const s = setup();
+  const third = { id: "p-third", device: "device-third", name: "Third" };
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  s.host.join(third);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.request(third, { t: "pick", id: id(2), country: ESTONIA });
+  await s.host.control.start();
+
+  const lobbies = s.to(s.guest, "lobby").length;
+  assert.equal(s.host.control.kick(RUSSIA), s.guest.device);
+  await s.clock.flush();
+  assert.match(s.to(s.guest, "notice").at(-1).text, /^The host released you from Russian Federation\./);
+  assert.equal(s.host.isBanned(s.guest.device), false);
+  assert.ok(s.to(s.guest, "lobby").length > lobbies, "still sent the game, its seat let go");
+  await s.request(s.guest, { t: "ready", id: id(3), value: true });
+  assert.ok(s.ack(s.guest, id(3)), "and still answered");
+
+  const toldBefore = s.to(third, "notice").length;
+  assert.equal(s.host.control.kick(ESTONIA, { ban: true }), third.device);
+  await s.clock.flush();
+  assert.equal(s.to(third, "notice").length, toldBefore, "told by its own page, as it is taken out, not by a notice in the game");
+  assert.equal(s.host.isBanned(third.device), true);
+  assert.equal(s.host.isMember(third.device), false);
+  assert.equal(s.host.roomFor(third.device), false);
+  const again = { ...third, id: "p-third-2" };
+  s.host.join(again);
+  await s.clock.flush();
+  assert.deepEqual(s.to(again, "lobby"), [], "a new connection of its device is given nothing of the game");
+});
+
 test("what a player does in the war room is written for its own side, and its war room is kept from the other side", async () => {
   const s = setup();
   // Russia in the west, Latvia in the east, and their troops along the line.

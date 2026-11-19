@@ -1140,6 +1140,14 @@ try {
   const ended = await until(guest, "document.body.textContent.includes('The shared game ended')", 30000);
   check("when the host stops, the guest is told", ended);
   check("and told why: the host closed the game", await until(guest, "document.body.textContent.includes('The host closed the game')", 5000));
+  // And taken out at once, with nothing to press: the page goes back to the
+  // menu (a reload, as Leave does), and the menu says why; the shared game's
+  // round bar and screens are gone (client/sharedGame.js endForThisPage).
+  const takenOut = await until(guest, "!window.__e2e", 30000);
+  await until(guest, `location.origin === ${JSON.stringify(GUEST)} && document.readyState === 'complete'`, 30000);
+  await withHelpers(guest);
+  const atMenu = await until(guest, "window.__e2e.buttons('Lobbies').length > 0 && window.__e2e.buttons('Players').length === 0 && window.__e2e.buttons('OK').length > 0 && document.body.textContent.includes('The host closed the game')", 60000);
+  check("and taken out at once, with nothing to press: back at the menu, which says why", takenOut && atMenu, JSON.stringify({ takenOut, atMenu }));
 
   // The session is part of the game (host/sessionRecord.js): it is in the
   // campaign, with the guest's seat bound to its device.
@@ -1176,10 +1184,9 @@ try {
   await until(host, "window.__e2e.buttons('Lobbies').length === 0", 60000);
   await shoot(host, "5-host-shared-again-paused");
 
-  await guest.eval("window.__e2e.click('Back to my games')");
-  await sleep(1000);
-  await until(guest, `location.origin === ${JSON.stringify(GUEST)} && document.readyState === 'complete'`, 30000);
-  await withHelpers(guest);
+  // The menu's word on the ended game, put away: the page is out of the game already.
+  await guest.eval("window.__e2e.click('OK')");
+  await until(guest, "!document.body.textContent.includes('The shared game ended')", 10000);
   await until(guest, "window.__e2e.buttons('Lobbies').length > 0", 60000);
   await openVaultDoor(guest);
   await guest.eval("window.__e2e.click('Lobbies')");

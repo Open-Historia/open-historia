@@ -565,7 +565,8 @@ export function SharedGameView({ shared }) {
       <div style={{ ...glass, boxSizing: "border-box", left: 0, marginInline: "auto", maxWidth: "min(30rem, calc(100vw - 2rem))", padding: "1rem 1.2rem", position: "fixed", right: 0, top: "15vh", width: "fit-content", zIndex: 4000 }}>
         <div style={{ fontWeight: 750 }}>The shared game ended</div>
         <div style={{ ...small, margin: "0.4rem 0 0.8rem" }}>{shared.error || "The connection closed."}</div>
-        <button type="button" style={button} onClick={() => { if (!dismissEndedNotice()) void leave(); }}>Back to my games</button>
+        {/* Nothing to press to leave: the page is out of the game already, or being taken out (client/sharedGame.js endForThisPage). */}
+        {shared.leaving ? null : <button type="button" style={button} onClick={dismissEndedNotice}>OK</button>}
       </div>
     );
   }

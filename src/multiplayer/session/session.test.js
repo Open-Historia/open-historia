@@ -228,11 +228,31 @@ test("a removed and banned player cannot come back; a kicked one can", async () 
   assert.ok(await until(() => banned.client.state === "rejected" && kicked.client.state === "rejected"));
   assert.equal(banned.log.states.at(-1).reason, "banned");
   assert.equal(kicked.log.states.at(-1).reason, "kicked");
+  assert.ok(banned.client.player && kicked.client.player, "each was in the game: its page takes it out, with why");
   const again = setup.join("Mallory", { device: banned.device });
   assert.ok(await until(() => again.client.state === "rejected"));
   assert.equal(again.log.states.at(-1).reason, "banned");
   const back = setup.join("Ben", { device: kicked.device });
   assert.ok(await until(() => back.client.state === "connected"));
+  setup.host.stop();
+});
+
+// The page that was in the game is taken out of it on any end of its session (client/sharedGame.js endForThisPage),
+// and tells why by the reason: a player the host banned while its connection was down is told it was banned when it
+// comes back, still as the player it was, never let back in nor left reconnecting.
+test("a player banned while its connection is down is told it was banned when it tries to come back", async () => {
+  const setup = world();
+  setup.host.start();
+  const player = setup.join("Mallory");
+  assert.ok(await until(() => player.client.state === "connected"));
+  const id = player.client.player;
+  setup.rtc.drop();
+  assert.ok(await until(() => setup.host.players()[0]?.status === "away"));
+  setup.host.kick(id, { ban: true });
+  assert.ok(await until(() => player.client.state === "rejected", 10_000), JSON.stringify(player.log.states.map((entry) => entry.state)));
+  assert.equal(player.log.states.at(-1).reason, "banned");
+  assert.equal(player.client.player, id, "it was in the game: its page takes it out, with why");
+  assert.equal(setup.events.joins.length, 1, "never let back in");
   setup.host.stop();
 });
 
@@ -314,6 +334,7 @@ test("when the host closes the game, players are told", async () => {
   setup.host.stop();
   assert.ok(await until(() => player.client.state === "lost"));
   assert.equal(player.log.states.at(-1).reason, "host-closed");
+  assert.ok(player.client.player, "still as the player it was: its page takes it out of the game (client/sharedGame.js)");
 });
 
 // --- Joining says where it stopped ------------------------------------------------
