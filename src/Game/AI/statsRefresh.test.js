@@ -166,7 +166,7 @@ test("a shared game: only the host's engine, and only while its own AI answers f
   const gameplay = withoutComments(source("./gameplay.js"));
   const refresh = gameplay.slice(gameplay.indexOf("export const refreshStaleStatSheets"), gameplay.indexOf("export const assessPoliticalLandscape"));
   assert.match(refresh, /if \(!months \|\| inSharedGame\(\) \|\| !hostReadsFigures\(\)\) return Promise\.resolve\(null\);/);
-  assert.match(refresh, /beginStatsWrite\(campaign, null, \{ inOrder: "stats-refresh" \}\)/, "the write is one entry of the host's order");
+  assert.match(refresh, /statsWrite\(campaign, null, \{ inOrder: "stats-refresh" \}, async \(\{ inEntry \}\) => \{/, "the write is one entry of the host's order");
 });
 
 test("it writes through the stat sheet's own write, the one the Stats pane's Refresh uses, held to the same continuity guard", () => {
@@ -176,9 +176,9 @@ test("it writes through the stat sheet's own write, the one the Stats pane's Ref
   assert.match(refresh, /guardCountryStatContinuity\(previous, merged/);
   assert.doesNotMatch(refresh, /mutateWorldState|persistCountryStatsBackground/, "no writer of its own");
   const generate = gameplay.slice(gameplay.indexOf("export const generateCountryStatSheet"), gameplay.indexOf("export const refinePlayerAction"));
-  assert.match(generate, /return await persistStatSheet\(\{/, "the standard sheet's Refresh");
+  assert.match(generate, /persisted = await persistStatSheet\(\{/, "the standard sheet's Refresh");
   const custom = gameplay.slice(gameplay.indexOf("const generateScenarioCustomStatSheet"), gameplay.indexOf("export const generateCountryStatSheet"));
-  assert.match(custom, /return await persistStatSheet\(\{/, "a scenario's own sheet's Refresh");
+  assert.match(custom, /=> persistStatSheet\(\{ code: statCode, sheet, continuity,/, "a scenario's own sheet's Refresh");
   assert.match(custom, /customStatEvidenceOf\(/, "and the same test of what changed");
 });
 

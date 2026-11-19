@@ -32,28 +32,42 @@
 // (the review of 2026-11-18, security S2).
 export const DROPPED = "dropped";
 
-// An entry that never ends held every entry behind it, silently: the owner's
-// "Start the game" waited behind one and nothing happened, with nothing said
-// (2026-11-18). An entry is a write, and a write takes seconds; the AI's
-// thinking is done outside. So an entry that runs long is said (`onSlow`,
-// every SLOW_MS while it runs: what it is and for how long, for the host's log
-// and the host's screen), and one that has run GIVE_UP_MS no longer holds the
-// queue: what waits behind it is applied (`onGaveUp`), and it settles when it
-// settles. Whatever left it open (a write that waits on an entry queued behind
-// itself, a lock whose holder waits on the queue, a held entry never let go)
-// then costs minutes, said, and never the game. The round is a long entry by
-// nature (`long` labels): it is said, never passed over; it has its own
-// cancel and its own bounds on a silent AI (host/round.js).
+// One entry at a time, always. An entry that runs long held every entry behind
+// it, silently: the owner's "Start the game" waited behind one and nothing
+// happened, with nothing said (2026-11-18). For a while the queue then passed
+// over an entry after three minutes and applied what waited behind it; the
+// entry passed over still held the game's lock and its place in the game's
+// write chain, and two entries wrote at once (a request's write was marked as
+// another's: the review of 2026-11-19, F1 and F2). Never again: the next entry
+// begins when the one before it has ended, whatever happens.
+//
+// What makes an entry run long is removed where it is (an entry never waits on
+// the game's lock, the queue is the lock; slow work is done before the entry,
+// and only its commit is in it: gameplay.js statsWrite, engineMain.js). What
+// is left is said and bounded:
+//   - an entry that has run SLOW_MS is said (`onSlow`, every SLOW_MS while it
+//     runs: what it is, for how long, and how many wait behind it), for the
+//     host's log and the host's screen; the round, long by nature (`long`
+//     labels), is said as `long`, which is no problem: the round bar says what
+//     it does, and it has its own cancel and its own bounds on a silent AI
+//     (host/round.js);
+//   - an entry that has run ENTRY_MOST_MS fails: its promise rejects with
+//     OVERDUE (the requester is answered with that reason), `onOverdue` tells
+//     the host, and the entry's `signal` is aborted, so whatever it would still
+//     write is refused (guardedStore). What waits behind it still waits until
+//     it has ended: nothing is ever written beside it.
 export const SLOW_MS = 20_000;
-export const GIVE_UP_MS = 180_000;
+export const ENTRY_MOST_MS = 120_000;
+export const OVERDUE = "overdue";
+export const OVERDUE_WORDS = "The host's game took too long to apply this, and stopped: it was not applied.";
 const LONG_LABELS = Object.freeze(["round"]);
 
 export const createWorldQueue = ({
   onSettled = () => {},
   onSlow = () => {},
-  onGaveUp = () => {},
+  onOverdue = () => {},
   slowMs = SLOW_MS,
-  giveUpMs = GIVE_UP_MS,
+  mostMs = ENTRY_MOST_MS,
   long = LONG_LABELS,
   timers = globalThis,
   now = () => Date.now(),
@@ -61,15 +75,17 @@ export const createWorldQueue = ({
   let tail = Promise.resolve();
   let running = "";
   let runningSince = 0;
+  let overdue = false;
   let waiting = 0;
   // owner → the entries of theirs still waiting, each { dropped }.
   const owned = new Map();
   const longLabels = new Set(long);
 
-  // Applies `fn` when its turn comes; resolves or rejects with what it did.
-  // An entry that fails does not stop the ones after it. One dropped while it
-  // waited rejects, its error's `code` DROPPED and its message the reason,
-  // without being applied.
+  // Applies `fn({ signal })` when its turn comes; resolves or rejects with what
+  // it did. An entry that fails does not stop the ones after it. One dropped
+  // while it waited rejects, its error's `code` DROPPED and its message the
+  // reason, without being applied. One that runs past ENTRY_MOST_MS rejects
+  // with `code` OVERDUE, and `signal` is aborted with that error.
   const run = (label, fn, { owner = "" } = {}) => {
     waiting += 1;
     const ticket = { dropped: "" };
@@ -77,47 +93,52 @@ export const createWorldQueue = ({
       if (!owned.has(owner)) owned.set(owner, new Set());
       owned.get(owner).add(ticket);
     }
-    // The queue moves on when the entry settles, or when it is given up on.
+    // The queue moves on when the entry's work has ended: never before.
     let release = () => {};
     const released = new Promise((resolve) => { release = resolve; });
-    const entry = tail.then(async () => {
+    const entry = tail.then(() => {
       waiting -= 1;
       if (owner) {
         owned.get(owner)?.delete(ticket);
         if (!owned.get(owner)?.size) owned.delete(owner);
       }
-      if (ticket.dropped) throw Object.assign(new Error(ticket.dropped), { code: DROPPED });
+      if (ticket.dropped) {
+        release();
+        throw Object.assign(new Error(ticket.dropped), { code: DROPPED });
+      }
       const name = String(label || "a change");
+      const isLong = longLabels.has(name);
       const started = now();
-      let current = true;
+      const controller = new AbortController();
+      let ended = false;
+      let late = () => {};
+      const lateness = new Promise((_resolve, reject) => { late = reject; });
       running = name;
       runningSince = started;
-      const slow = timers.setInterval(() => {
+      overdue = false;
+      const watch = timers.setInterval(() => {
+        if (ended) return;
         const ms = now() - started;
-        try { onSlow({ label: name, ms, waiting }); } catch { /* the watch never breaks the queue */ }
-        if (current && !longLabels.has(name) && ms >= giveUpMs) {
-          current = false;
-          running = "";
-          runningSince = 0;
-          try { onGaveUp({ label: name, ms, waiting }); } catch { /* as above */ }
-          // Said once: what runs now is the entries behind it.
-          timers.clearInterval(slow);
-          release();
-        }
+        try { onSlow({ label: name, ms, waiting, long: isLong }); } catch { /* the watch never breaks the queue */ }
+        if (isLong || overdue || ms < mostMs) return;
+        overdue = true;
+        const reason = Object.assign(new Error(OVERDUE_WORDS), { code: OVERDUE });
+        try { onOverdue({ label: name, ms, waiting }); } catch { /* as above */ }
+        controller.abort(reason);
+        late(reason);
       }, slowMs);
-      try {
-        return await fn();
-      } finally {
-        timers.clearInterval(slow);
-        if (current) {
-          running = "";
-          runningSince = 0;
-        }
-        onSettled(label);
+      const work = Promise.resolve().then(() => fn({ signal: controller.signal }));
+      void work.then(() => {}, () => {}).then(() => {
+        ended = true;
+        timers.clearInterval(watch);
+        running = "";
+        runningSince = 0;
+        overdue = false;
+        try { onSettled(name); } catch { /* as above */ }
         release();
-      }
+      });
+      return Promise.race([work, lateness]);
     });
-    entry.then(release, release);
     tail = released;
     return entry;
   };
@@ -138,6 +159,10 @@ export const createWorldQueue = ({
     get running() {
       return running;
     },
+    // Whether the entry being applied has run past its bound (and been failed).
+    get overdue() {
+      return overdue;
+    },
     // How long the entry being applied has run, in ms (0 for none).
     runningFor: () => (running ? Math.max(0, now() - runningSince) : 0),
     get waiting() {
@@ -146,4 +171,20 @@ export const createWorldQueue = ({
     // Settles once everything asked so far has been applied.
     settled: () => tail,
   };
+};
+
+// The store an entry writes through, refusing a write while the entry being
+// applied is overdue: it was failed, its requester told it was not applied,
+// and nothing of it may land after that. Reads, and the session's own record
+// (no document of the game, written outside the entries), pass as ever.
+const UNGUARDED = new Set(["read", "readShared", "writeShared"]);
+export const guardedStore = (store, isOverdue) => {
+  const guarded = { ...store };
+  for (const [key, value] of Object.entries(store ?? {})) {
+    if (typeof value !== "function" || UNGUARDED.has(key)) continue;
+    guarded[key] = (...args) => (isOverdue()
+      ? Promise.reject(Object.assign(new Error(OVERDUE_WORDS), { code: OVERDUE }))
+      : value(...args));
+  }
+  return guarded;
 };

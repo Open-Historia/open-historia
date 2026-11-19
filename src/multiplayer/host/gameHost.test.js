@@ -11,7 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createGameHost, MAX_ORDERS_PER_ROUND, VIEW_ACK_MS } from "./gameHost.js";
-import { GIVE_UP_MS, SLOW_MS } from "./worldQueue.js";
+import { ENTRY_MOST_MS, SLOW_MS } from "./worldQueue.js";
 import { digestText } from "../protocol/digest.js";
 import { startRemoteRuntime, stopRemoteRuntime } from "../client/remoteRuntime.js";
 import { normalizeSettings } from "./settings.js";
@@ -3748,27 +3748,106 @@ test("the host whose country is gone may take a free one, and plays it from then
 
 // "Start the game does nothing" (the owner, 2026-11-18, two guests in): Start is an entry of the host's queue, and a
 // reading the engine made by itself had its write's entry held open (engineMain.js setReadingsOrder) and never let
-// go. Start waited behind it for good, and the host was told nothing. The reading here is in flight when Start is
-// pressed, as on the owner's computer (the two-browser run presses Start before any reading is made).
-test("Start pressed while a reading's write is held open is said on the host's screen, and the game starts", async () => {
+// go. A reading's write is now a function the entry runs, never a hold; the lock is taken at once inside it (the
+// queue is the lock); and a write that still runs long is said, and failed at its bound. Here: a reading's write in
+// flight when Start is pressed, which ends in seconds, as every write does now.
+test("Start pressed while a reading's write is in flight starts the game as soon as the write has ended, and is not marked started before", async () => {
   const busy = [];
   const s = setup({ onBusy: (entry) => busy.push(entry) });
   s.host.join(s.hostPlayer);
   s.host.join(s.guest);
   await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
-  // The engine's reading: its write entered, never ended.
-  void s.host.write("reading:stat-sheet", () => new Promise(() => {}));
+  let written = () => {};
+  void s.host.write("reading:stat-sheet", () => new Promise((resolve) => { written = resolve; }));
   const starting = s.host.control.start();
   await s.clock.flush();
-  assert.equal(s.to(s.guest, "lobby").at(-1).started, false, "behind the reading");
-  await s.clock.advance(SLOW_MS);
-  assert.equal(busy.at(-1)?.label, "reading:stat-sheet", "the host is told what it waits for");
-  assert.equal(busy.at(-1)?.gaveUp, false);
-  await s.clock.advance(GIVE_UP_MS);
+  assert.equal(s.host.status().starting, true, "the host's screen says Start is under way");
+  assert.equal(s.host.status().lobby.started, false, "not started before its entry runs: no screen shows a round that has not begun");
+  // Someone coming in meanwhile is sent a lobby that has not started.
+  s.host.join({ id: "p-third", device: "device-third", name: "Third" });
+  assert.equal(s.to({ id: "p-third" }, "lobby").at(-1).started, false);
+  written();
   await starting;
   await s.clock.flush();
-  assert.equal(busy.some((entry) => entry?.gaveUp === true), true);
   assert.equal(s.to(s.guest, "lobby").at(-1).started, true, "the game started");
-  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA, RUSSIA]);
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA, RUSSIA], "who plays what, as its entry found it");
+  assert.equal(s.host.status().starting, false);
+  assert.equal(busy.length, 0, "a write of seconds is never said");
+});
+
+test("Start that fails starts nothing, says why, and can be pressed again; a second press joins the first", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  const updateGame = s.store.updateGame;
+  s.store.updateGame = async () => { throw new Error("Active campaign changed before the game write could commit."); };
+  const first = s.host.control.start();
+  const second = s.host.control.start();
+  assert.equal(first, second, "pressed twice: one start");
+  await assert.rejects(first, /Active campaign changed/);
+  await s.clock.flush();
+  assert.equal(s.host.status().lobby.started, false, "nothing was started");
+  assert.equal(s.host.status().starting, false);
+  assert.equal(s.to(s.guest, "lobby").at(-1).started, false);
+  assert.equal(s.host.status().round.phase, "lobby");
+  s.store.updateGame = updateGame;
+  // Picks are still taken as in the lobby.
+  await s.request(s.guest, { t: "pick", id: id(2), country: ESTONIA });
+  assert.equal(s.ack(s.guest, id(2))?.ok, true);
+  await s.host.control.start();
+  await s.clock.flush();
+  assert.equal(s.to(s.guest, "lobby").at(-1).started, true, "pressed again, it starts");
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA, ESTONIA]);
+});
+
+test("a change that runs long is said on the host's screen; one past its bound fails with why, and Start waits for it to end, never beside it", async () => {
+  const busy = [];
+  const s = setup({ onBusy: (entry) => busy.push(entry) });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  let ended = () => {};
+  const stuck = s.host.write("reading:stat-sheet", () => new Promise((resolve) => { ended = resolve; }));
+  stuck.catch(() => {});
+  const starting = s.host.control.start();
+  await s.clock.flush();
+  await s.clock.advance(SLOW_MS);
+  assert.equal(busy.at(-1)?.label, "reading:stat-sheet", "the host is told what Start waits for");
+  assert.equal(busy.at(-1)?.overdue, false);
+  await s.clock.advance(ENTRY_MOST_MS);
+  await assert.rejects(stuck, (error) => error.code === "overdue");
+  assert.equal(busy.at(-1)?.overdue, true, "and that it was failed");
+  assert.equal(s.host.status().lobby.started, false, "nothing runs beside it");
+  ended();
+  await starting;
+  await s.clock.flush();
+  assert.equal(s.to(s.guest, "lobby").at(-1).started, true);
   assert.equal(busy.at(-1), null, "and the host's screen is told the queue moves again");
+});
+
+test("a request whose entry runs past its bound is answered with why, and the next request waits for it to end", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.clock.flush();
+  // The guest's goal: its write never comes back (a save the game's server never answered).
+  const updateGameDocs = s.store.updateGameDocs;
+  let ended = () => {};
+  s.store.updateGameDocs = () => new Promise((resolve) => { ended = resolve; });
+  const goal = s.host.receive(s.guest, { t: "goal", id: id(2), text: "Hold the Baltic coast" });
+  const next = s.host.receive(s.hostPlayer, { t: "goal", id: id(3), text: "Hold Riga" });
+  await s.clock.flush();
+  await s.clock.advance(ENTRY_MOST_MS + SLOW_MS);
+  await goal;
+  assert.equal(s.ack(s.guest, id(2))?.ok, false);
+  assert.match(s.ack(s.guest, id(2))?.error, /took too long to apply this, and stopped: it was not applied/, "the requester is told why");
+  assert.equal(s.ack(s.hostPlayer, id(3)), undefined, "the next waits: nothing is applied beside it");
+  s.store.updateGameDocs = updateGameDocs;
+  ended();
+  await next;
+  await s.clock.flush();
+  assert.equal(s.ack(s.hostPlayer, id(3))?.ok, true, "and is applied once it has ended");
 });

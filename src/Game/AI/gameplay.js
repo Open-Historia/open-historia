@@ -22,7 +22,7 @@ import { describeBasisAction, describeUnknownBasis, sameRegionChange, screenTerr
 import { GROUP_OP_KINDS, PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, findGroupKey, groupOpKind, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import { hostingSharedGame, humanCountriesOf, humanCountriesWith, orderOwner } from "../../runtime/humanPolities.js";
-import { hostReadsFigures, readingEntry } from "../../runtime/sharedReadings.js";
+import { hostReadsFigures, writeInHostOrder } from "../../runtime/sharedReadings.js";
 import { uiString } from "../../runtime/translator.js";
 import { withTurnSeaBattles } from "../../runtime/naval/record.js";
 import { withFrontFortifications } from "../../runtime/warGeography.js";
@@ -13846,59 +13846,45 @@ const waitForSimulationIdle = async ({ signal, timeoutMs = 10 * 60 * 1000 } = {}
 // minutes later: a skip that started meanwhile owns the world until it lands,
 // so wait for it and take the lock before the first await of the write (#724);
 // and a sheet read from a campaign the player has since left belongs to
-// nobody, since the world endpoint follows the open campaign. Returns holding
-// the lock, with the function that ends the write's entry (`inOrder`, below);
-// the caller ends both once the write is done: endSimulation(), then that.
+// nobody, since the world endpoint follows the open campaign. Runs
+// `write({ inEntry })` holding the lock, lets it go when the write ends, and
+// resolves with what the write resolved.
 //
 // `inOrder`: a reading the game makes by itself out of turn, named. While this
 // engine hosts a shared game its write is one entry of the host's queue
-// (runtime/sharedReadings.js readingEntry), and inside it the queue is the
-// lock: no turn and no other write runs beside it, and the Game Master
-// thinking under the lock is not waited for with every player's request
-// behind it. Never given by a write already inside an entry (the host taking a
-// device's reading: takeCountryStatSheet, takeMilitaryRatings for the host).
-const beginStatsWrite = async (campaign, signal, { inOrder = "" } = {}) => {
-  const entry = inOrder ? readingEntry(inOrder) : null;
-  if (entry) {
-    const leave = await entry;
-    beginSimulation();
+// (runtime/sharedReadings.js writeInHostOrder): the entry is this write, and
+// ends when it ends. `inEntry`: the caller is an entry of the host's queue
+// already (the host taking a device's reading: takeCountryStatSheet,
+// takeMilitaryRatings for the host); never given with `inOrder`, whose entry
+// would wait behind the one asking for it.
+//
+// Inside an entry of the host's queue the queue is the lock, taken at once: no
+// turn and no other write runs beside it, and a lock held outside the queue
+// (the Game Master thinking under it, a turn held for a Retry nobody can press
+// in the engine) is never waited for with every player's request and Start
+// behind it (the review of 2026-11-19). Anywhere else it is waited for and
+// taken in one step (simulationStatus.js enterSimulation), as ever.
+const statsWrite = async (campaign, signal, { inOrder = "", inEntry = false } = {}, write) => {
+  const locked = async (entered) => {
+    if (entered) beginSimulation();
+    else await enterSimulation({ signal });
     try {
       throwIfAborted(signal);
       assertCampaignUnchanged(campaign, activeCampaignId(), "stat sheet");
-    } catch (error) {
+      return await write({ inEntry: entered });
+    } finally {
       endSimulation();
-      leave();
-      throw error;
     }
-    return leave;
-  }
-  // Waited for and taken in one step (simulationStatus.js enterSimulation): a
-  // turn, or a shared game's round, that began meanwhile is waited out, and
-  // two sheets do not both find the world free at once.
-  await enterSimulation({ signal });
-  try {
-    throwIfAborted(signal);
-    assertCampaignUnchanged(campaign, activeCampaignId(), "stat sheet");
-  } catch (error) {
-    endSimulation();
-    throw error;
-  }
-  return () => {};
+  };
+  if (inEntry) return locked(true);
+  if (inOrder) return writeInHostOrder(inOrder, ({ inEntry: entered }) => locked(entered));
+  return locked(false);
 };
 
 // A reading's write that takes no lock (it waited for the simulation to be
 // idle first), named: one entry of the host's queue while this engine hosts a
-// shared game (beginStatsWrite `inOrder`), at once anywhere else.
-const inReadingOrder = async (label, write) => {
-  const entry = readingEntry(label);
-  if (!entry) return write();
-  const leave = await entry;
-  try {
-    return await write();
-  } finally {
-    leave();
-  }
-};
+// shared game (statsWrite `inOrder`), at once anywhere else.
+const inReadingOrder = (label, write) => writeInHostOrder(label, () => write());
 
 // One in-flight promise per (campaign, kind, polity), so the pane re-opening
 // on the same polity, or a deploy right after the tab opened, does not ask
@@ -13966,12 +13952,13 @@ export const assessIntelligenceService = async (target, { signal, requestKind } 
 // again: a turn may have rated the service meanwhile (its number wins), and the
 // campaign in front of the player may have changed (then this belongs to
 // nobody).
-// `inOrder`: false for the host taking a device's sheet, whose write is in its
-// request's own entry already (beginStatsWrite).
-const storeFirstIntelligenceRating = async (name, assessment, { campaign, signal = null, inOrder = true } = {}) => {
+// `inEntry`: the host taking a device's sheet, whose write is in its request's
+// own entry already: the queue is the lock there (statsWrite), and nothing is
+// waited for.
+const storeFirstIntelligenceRating = async (name, assessment, { campaign, signal = null, inEntry = false } = {}) => {
   const rating = normalizeIntelligenceRating(assessment?.intelligence);
   if (rating === null) throw new Error("The assessment carried no rating.");
-  await waitForSimulationIdle({ signal });
+  if (!inEntry) await waitForSimulationIdle({ signal });
   throwIfAborted(signal);
   if (activeCampaignId() !== campaign) throw new Error("The campaign changed while the service was being assessed.");
   // Applied to the world as it is inside the write queue: a turn may have
@@ -13984,7 +13971,7 @@ const storeFirstIntelligenceRating = async (name, assessment, { campaign, signal
     }
     return { ...latest, intelligence: { ...(latest.intelligence ?? {}), [name]: rating } };
   });
-  await (inOrder ? inReadingOrder("intelligence-rating", write) : write());
+  await (inEntry ? write() : inReadingOrder("intelligence-rating", write));
   if (ratedMeanwhile !== null) return ratedMeanwhile;
   const service = normalizeString(assessment?.service);
   logDebugEvent("espionage", `${name}'s intelligence service rated ${rating}/100 on first inspection${service ? ` (${service})` : ""}.`, {
@@ -14062,8 +14049,7 @@ export const ensureConflictBackends = (targets, { reason = "" } = {}) => {
     const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
     const read = readConflictBackends(response?.toolInput ?? extractJsonPayload(rawText), asked);
     if (read.length === 0) return null;
-    const leave = await beginStatsWrite(campaign, null, { inOrder: "conflict-figures" });
-    try {
+    return statsWrite(campaign, null, { inOrder: "conflict-figures" }, async () => {
       const kept = [];
       await mutateWorldState((latest) => {
         for (const { name, backend, customStats, military } of read) {
@@ -14083,10 +14069,7 @@ export const ensureConflictBackends = (targets, { reason = "" } = {}) => {
       }, { emitEvents: false });
       if (kept.length > 0) logDebugEvent("turn", `Backends for ${kept.length} countr${kept.length === 1 ? "y" : "ies"} in conflict with the player were worked out in one request.`, { countries: kept });
       return kept;
-    } finally {
-      endSimulation();
-      leave();
-    }
+    });
   });
 };
 
@@ -14113,8 +14096,9 @@ const triedKey = (name) => `${activeCampaignId()}|${name.toLowerCase()}`;
 // The figures a rating brought, kept on each one's sheet: only those it had none of, field by field, and its people
 // where nobody knew them, so a rating never writes over figures that stand (the host takes a device's this way too).
 // Resolves the sheets' keys it wrote. `inOrder`: a rating the game made by itself, written as one entry of
-// the host's queue while it hosts a shared game (beginStatsWrite); never for the host taking a device's, in its own.
-export const takeMilitaryRatings = async (read, { campaign = activeCampaignId(), inOrder = "" } = {}) => {
+// the host's queue while it hosts a shared game (statsWrite); `inEntry`: the host taking a rating in an entry of
+// its queue already (a device's, or its own AI's for a player's Stats pane), where the queue is the lock.
+export const takeMilitaryRatings = async (read, { campaign = activeCampaignId(), inOrder = "", inEntry = false } = {}) => {
   const kept = [];
   const rows = normalizeArray(read).map((entry) => ({
     name: normalizeString(entry?.name),
@@ -14122,8 +14106,7 @@ export const takeMilitaryRatings = async (read, { campaign = activeCampaignId(),
     population: Math.max(0, Math.round(Number(entry?.population) || 0)),
   })).filter((entry) => entry.name && (entry.military || entry.population > 0));
   if (rows.length === 0) return kept;
-  const leave = await beginStatsWrite(campaign, null, { inOrder });
-  try {
+  await statsWrite(campaign, null, { inOrder, inEntry }, async () => {
     await mutateWorldState((latest) => {
       const own = militaryLookup(latest);
       let changed = false;
@@ -14139,10 +14122,7 @@ export const takeMilitaryRatings = async (read, { campaign = activeCampaignId(),
       }
       return changed ? latest : null;
     }, { emitEvents: false });
-  } finally {
-    endSimulation();
-    leave();
-  }
+  });
   return kept;
 };
 export const ensureMilitaryFigures = (targets, { reason = "", commit = null } = {}) => {
@@ -14319,8 +14299,9 @@ export const hasCountryStatSheet = async (target) => {
 // assessed as of the host's own date and round, and the rating of its service
 // that came in the same request where nothing has rated it. The first sheet to
 // come is the sheet: one already there stands, and { taken: false } says so.
-// Rejects with the reason when what came is no whole sheet.
-export const takeCountryStatSheet = async ({ name: target, sheet, continuity = null, rating = null } = {}) => {
+// Rejects with the reason when what came is no whole sheet. `inEntry`: taken in
+// the request's own entry of the host's queue, where the queue is the lock.
+export const takeCountryStatSheet = async ({ name: target, sheet, continuity = null, rating = null, inEntry = false } = {}) => {
   const name = normalizeString(target);
   if (!name) throw new Error("There is no country to read.");
   const [world, definition] = await readStatSheetBasis();
@@ -14332,8 +14313,7 @@ export const takeCountryStatSheet = async ({ name: target, sheet, continuity = n
   }
   const campaign = activeCampaignId();
   let taken = false;
-  await beginStatsWrite(campaign);
-  try {
+  await statsWrite(campaign, null, { inEntry }, async () => {
     const game = await readGameData();
     const date = normalizeString(game?.gameDate || game?.startDate);
     const round = Math.max(0, Math.trunc(Number(game?.round) || 0));
@@ -14348,11 +14328,9 @@ export const takeCountryStatSheet = async ({ name: target, sheet, continuity = n
       taken = true;
       return latest;
     }, { emitEvents: false });
-  } finally {
-    endSimulation();
-  }
+  });
   if (taken && normalizeIntelligenceRating(rating) !== null) {
-    await storeFirstIntelligenceRating(name, { intelligence: rating }, { campaign, inOrder: false }).catch((error) => {
+    await storeFirstIntelligenceRating(name, { intelligence: rating }, { campaign, inEntry }).catch((error) => {
       logDebugEvent("espionage", `${name}: the rating that came with a player's stat sheet was not kept: ${error?.message || error}`);
     });
   }
@@ -14478,9 +14456,8 @@ export const refreshStaleStatSheets = ({ reason = "after a time skip" } = {}) =>
     const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
     const read = readStatsRefreshUpdates(response?.toolInput ?? extractJsonPayload(rawText), asked);
     if (read.length === 0) return null;
-    const leave = await beginStatsWrite(campaign, null, { inOrder: "stats-refresh" });
     const kept = [];
-    try {
+    const landed = await statsWrite(campaign, null, { inOrder: "stats-refresh" }, async ({ inEntry }) => {
       // A skip that landed meanwhile wrote a world this answer never saw: it
       // is let go, and the refresh is due again on its own schedule.
       const latest = await readGameStateBundle({ force: true });
@@ -14522,13 +14499,13 @@ export const refreshStaleStatSheets = ({ reason = "after a time skip" } = {}) =>
           round,
           replaceComponents: !definition.custom,
           source: "stats-refresh",
+          inEntry,
         });
         kept.push(name);
       }
-    } finally {
-      endSimulation();
-      leave();
-    }
+      return kept;
+    });
+    if (landed === null) return null;
     if (kept.length > 0) logDebugEvent("turn", `Stat sheets kept up to date: ${kept.length} countr${kept.length === 1 ? "y" : "ies"} refreshed in one background request.`, { countries: kept });
     return kept;
   });
@@ -14669,17 +14646,22 @@ export const assessGoalProgress = async ({ signal, commit = null } = {}) => {
 // The write of a stat sheet, made by the Stats pane's Refresh (both the
 // standard sheet and a scenario's own) and by the background refresh after
 // skips (refreshStaleStatSheets): one writer. The caller holds the write
-// (beginStatsWrite). R2.40: the full-world save runs in the Stats worker,
+// (statsWrite). R2.40: the full-world save runs in the Stats worker,
 // which is handed only this one sheet, and the same-tab caches are patched
 // narrowly so nothing else on the page wakes; the main thread writes it when
 // the worker fails. Says so to the Stats pane (oh:country-stats-updated).
 // `replaceComponents`: the sheet carries the whole territorial ledger.
+// `inEntry`: written in an entry of the host's queue (the engine hosting a
+// shared game): the main thread's commit, at once. The worker's own read and
+// PUT took up to a minute when it was slow (COUNTRY_STATS_PERSIST_TIMEOUT_MS),
+// held the entry all that time, and Start and every player's request with it
+// (the review of 2026-11-19); the engine's window has no page to keep smooth.
 const announceStatSheet = (country, sheet, source) => {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent("oh:country-stats-updated", { detail: { country, sheet, source } }));
 };
-const persistStatSheet = async ({ code, sheet, continuity, date, round, signal = null, replaceComponents = false, source = "country-stats" } = {}) => {
-  try {
+const persistStatSheet = async ({ code, sheet, continuity, date, round, signal = null, replaceComponents = false, source = "country-stats", inEntry = false } = {}) => {
+  if (!inEntry) try {
     const persisted = await persistCountryStatsBackground({ code, sheet, continuity, date, round, signal });
     if (persisted?.sheet && typeof persisted.sheet === "object") {
       await primeCountryStatsWorkerCommit({ country: code, sheet: persisted.sheet, historySeries: persisted.historySeries });
@@ -14789,16 +14771,10 @@ const generateScenarioCustomStatSheet = async ({
     // Existing saves have no custom fingerprint. Seal the current evidence
     // without silently revisiting three years of already-assessed history.
     if (decision.migrate && statCode) {
-      const leave = await beginStatsWrite(campaign, signal, { inOrder: "stat-sheet" });
-      try {
-        await mutateWorldState((world) => {
-          applyCountryStatPatchToWorld(world, statCode, {}, { continuity });
-          return world;
-        }, { emitEvents: false });
-      } finally {
-        endSimulation();
-        leave();
-      }
+      await statsWrite(campaign, signal, { inOrder: "stat-sheet" }, () => mutateWorldState((world) => {
+        applyCountryStatPatchToWorld(world, statCode, {}, { continuity });
+        return world;
+      }, { emitEvents: false }));
     }
     console.info(`[stats custom] ${target}: reused persistent baseline (${decision.reason}); no AI request.`);
     return previous;
@@ -14861,13 +14837,7 @@ Reassess existing values only as a response to newly changed canonical evidence.
   if (!statCode || !sheet) return sheet;
   if (commit) return commit({ code: statCode, sheet, continuity });
 
-  const leave = await beginStatsWrite(campaign, signal, { inOrder: "stat-sheet" });
-  try {
-    return await persistStatSheet({ code: statCode, sheet, continuity, date: currentDate, round: currentRound, signal, source: "scenario-custom-stats" });
-  } finally {
-    endSimulation();
-    leave();
-  }
+  return statsWrite(campaign, signal, { inOrder: "stat-sheet" }, ({ inEntry }) => persistStatSheet({ code: statCode, sheet, continuity, date: currentDate, round: currentRound, signal, source: "scenario-custom-stats", inEntry }));
 };
 
 // Structured national stat sheet for the Stats tab, grounded in the same
@@ -14887,7 +14857,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
   // canon. Ahead of the perf timer, so waiting is not reported as preparation.
   await waitForSimulationIdle({ signal });
   // The campaign the sheet is read from; every write below checks it again
-  // (beginStatsWrite).
+  // (statsWrite).
   const campaign = activeCampaignId();
   const statsStartedAt = typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
   // Stats is a read-mostly panel. Use the already-canonical runtime bundle cache
@@ -15446,27 +15416,30 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
     };
     if (commit) return commit({ code: statCode, sheet: guarded.sheet, continuity });
 
-    const leave = await beginStatsWrite(campaign, signal, { inOrder: "stat-sheet" });
-    try {
-      // The same write as a scenario's own sheet and the refresh after skips
-      // (persistStatSheet): the Stats worker's, or the main thread's when it fails.
-      return await persistStatSheet({
-        code: statCode,
-        sheet: guarded.sheet,
-        continuity,
-        date: currentDate,
-        round: currentRound,
-        signal,
-        replaceComponents: true,
-        source: "native-country-stats",
-      });
-    } catch (error) {
-      if (signal?.aborted || error?.name === "AbortError") throw error;
-      console.warn("[ai] failed to persist native country stats:", error);
-    } finally {
-      endSimulation();
-      leave();
-    }
+    let persisted = null;
+    let written = false;
+    await statsWrite(campaign, signal, { inOrder: "stat-sheet" }, async ({ inEntry }) => {
+      try {
+        // The same write as a scenario's own sheet and the refresh after skips
+        // (persistStatSheet): the Stats worker's, or the main thread's when it fails.
+        persisted = await persistStatSheet({
+          code: statCode,
+          sheet: guarded.sheet,
+          continuity,
+          date: currentDate,
+          round: currentRound,
+          signal,
+          replaceComponents: true,
+          source: "native-country-stats",
+          inEntry,
+        });
+        written = true;
+      } catch (error) {
+        if (signal?.aborted || error?.name === "AbortError") throw error;
+        console.warn("[ai] failed to persist native country stats:", error);
+      }
+    });
+    if (written) return persisted;
   }
 
   return guarded.sheet || finalized;

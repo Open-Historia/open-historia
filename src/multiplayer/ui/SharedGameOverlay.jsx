@@ -304,18 +304,29 @@ const Lobby = ({ shared, me }) => {
   useEffect(() => {
     if (shared.notices?.length) markNoticesRead();
   }, [shared.notices]);
-  // Start pressed: said until the lobby says the game has started.
-  const [starting, setStarting] = useState(false);
+  // Start pressed: said for as long as the engine says the start is under way
+  // (its entry waits for whatever the host's game is applying: busyLine says
+  // what), until the lobby says the game has started; one that failed says why
+  // (`error`) and can be pressed again. Until the engine's first word, the
+  // press itself, for a while.
+  const engineStarting = shared.engine?.starting === true;
+  const [pressed, setPressed] = useState(false);
   const start = () => {
-    setStarting(true);
+    setPressed(true);
     hostControl("start");
   };
+  // Once the engine has said it, the engine's word is the one followed.
+  const [saidStarting, setSaidStarting] = useState(engineStarting);
+  if (saidStarting !== engineStarting) {
+    setSaidStarting(engineStarting);
+    if (engineStarting) setPressed(false);
+  }
   useEffect(() => {
-    if (!starting) return undefined;
-    // Pressed again possible after a while if nothing came of it (the engine says why: busyLine).
-    const timer = setTimeout(() => setStarting(false), 15000);
+    if (!pressed) return undefined;
+    const timer = setTimeout(() => setPressed(false), 15000);
     return () => clearTimeout(timer);
-  }, [starting]);
+  }, [pressed]);
+  const starting = pressed || engineStarting;
   const busyLine = role === "host" ? hostBusyLine(shared.engine?.busy) : "";
 
   return (

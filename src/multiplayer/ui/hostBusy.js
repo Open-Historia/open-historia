@@ -11,7 +11,9 @@ export const hostBusyLine = (busy) => {
   if (!busy || typeof busy !== "object") return "";
   const seconds = Math.max(0, Math.round(Number(busy.seconds) || 0));
   const label = String(busy.label || "");
-  if (busy.gaveUp) return `An earlier change never finished (${seconds} s): the game went on without waiting for it. The diagnostics log has the details.`;
+  // Failed at its bound (host/worldQueue.js): nothing is applied beside it, so
+  // the rest waits until it has ended; the host can stop the game if it never does.
+  if (busy.overdue) return `An earlier change took too long (${seconds} s) and was stopped; starting and every request wait until it has ended. If this stays, stop sharing and share the game again.`;
   // The round is long by nature: the round bar says what it is doing.
   if (label === "round") return "";
   if (label.startsWith("reading:") || label === "ratings") return `Your game is still writing figures the AI read (${seconds} s); starting and every request wait for it.`;

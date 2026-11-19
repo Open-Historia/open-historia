@@ -37,7 +37,7 @@ import { regionOwnerNow } from "../../runtime/gmAnnex.js";
 import { landingEvents, tellLandings } from "./landings.js";
 import { ENGLISH_WORDS, worldWordsOf } from "./worldWords.js";
 import { setHostingSharedGame } from "../../runtime/humanPolities.js";
-import { discardHeldTurns, endSimulation, enterSimulation } from "../../Game/AI/simulationStatus.js";
+import { beginSimulation, discardHeldTurns, endSimulation } from "../../Game/AI/simulationStatus.js";
 import { getDebugLogEntries, logDebugEvent, setDebugLogPersistence, subscribeToDebugLog } from "../../runtime/debugLog.js";
 import { GENERATION_COMPLETE_EVENT } from "../../Game/AI/telemetry.js";
 import { applyGameMasterPreview, assessPoliticalLandscape, checkDemandReply, declineInteractiveOffer, ensureMilitaryFigures, hasCompiledParties, hasCountryStatSheet, maybeGeneratePregameHistory, maybeOpenScenarioFronts, previewGameMasterCommand, readCountryForPlayer, runChatActionBatch, setAsideActiveInteractive, simulateTimelineJump, takeCountryStatSheet, takeMilitaryRatings, takePoliticalLandscape, warRoomChart } from "../../Game/AI/gameplay.js";
@@ -336,6 +336,8 @@ const boot = async () => {
   let network = "";
   let hostStatus = null;
   let failure = "";
+  // Why the last Start did not start the game, said until Start is pressed again.
+  let startRefused = "";
   // Finishing the game's start before anyone joins (host/gameStart.js): its
   // backstory may be a request to the host's AI, which takes a while.
   let preparing = false;
@@ -421,6 +423,8 @@ const boot = async () => {
       gameMasterBusy,
       // What the host's queue has been applying for a long while (gameHost.js onBusy).
       busy: hostBusy,
+      // Start pressed, waiting for its entry (gameHost.js control.start).
+      starting: gameHost?.status().starting === true,
     });
   };
 
@@ -541,10 +545,12 @@ const boot = async () => {
       resolveRound: async ({ daysPerRound, signal, onProgress, carry = null, payer = null }) => {
         // Fronts the game began with that could not be built when it opened.
         await openPendingFronts();
-        // The game's own lock, waited for and taken in one step: a stat sheet
-        // being written is waited out, and none is written until the round has
-        // landed (it is an entry in the queue already, so nothing else is).
-        await enterSimulation({ signal });
+        // The game's own lock, taken at once: the round is an entry of the
+        // host's queue, and the queue is the lock (gameplay.js statsWrite).
+        // Nothing else writes beside it, and a lock held outside the queue
+        // (the Game Master thinking, a turn held for a Retry nobody can press
+        // here) is never waited for with every player's request behind it.
+        beginSimulation();
         try {
           // Every other player's own open projects are moved by the skip as the
           // host's are: lent to the game's board in the skip's own copy of the
@@ -585,7 +591,8 @@ const boot = async () => {
       },
       hasSheet: async (country) => hasCountryStatSheet(await countryOfGame(country)),
       // The sheet a player's own device wrote, on its own AI key.
-      takeSheet: async ({ country, sheet, continuity, rating }) => takeCountryStatSheet({ name: await countryOfGame(country), sheet, continuity, rating }),
+      // (In the request's own entry of the host's queue: the queue is the lock.)
+      takeSheet: async ({ country, sheet, continuity, rating }) => takeCountryStatSheet({ name: await countryOfGame(country), sheet, continuity, rating, inEntry: true }),
       // Countries' military figures a player's Stats pane wants, rated on the
       // host's AI: each request's figures written in the host's one order, so
       // every view follows as they come. And those a player's own device
@@ -598,11 +605,11 @@ const boot = async () => {
         if (declined()) return declined();
         await ensureMilitaryFigures(countries, {
           reason: "a player's Stats pane",
-          commit: (read) => writeInOrder("ratings", () => takeMilitaryRatings(read)),
+          commit: (read) => writeInOrder("ratings", () => takeMilitaryRatings(read, { inEntry: true })),
         });
         return declined();
       },
-      takeRatings: (ratings) => takeMilitaryRatings(ratings),
+      takeRatings: (ratings) => takeMilitaryRatings(ratings, { inEntry: true }),
       // The map as this game's own engine reads it, for the war room's lines and fleets.
       readChart: () => warRoomChart(),
       // Its cities, for a city struck from the air: the host's own, never a page's.
@@ -660,12 +667,16 @@ const boot = async () => {
       },
       // A change the queue has applied for long, in the host's diagnostics log
       // and on the host's screen; null once the queue moves again.
+      // Logged as a problem once for each change that runs long, and once when
+      // one runs past its bound; the screen follows every report.
       onBusy: (busy) => {
+        const said = hostBusy;
         hostBusy = busy;
-        if (busy) {
-          logDebugEvent("shared game", busy.gaveUp
-            ? `a change of the game (${busy.label}) never ended after ${busy.seconds} s: the changes waiting behind it are applied`
-            : `a change of the game (${busy.label}) has been applied for ${busy.seconds} s; ${busy.waiting} wait behind it`, undefined, { problem: true });
+        if (busy && (!said || said.label !== busy.label)) {
+          logDebugEvent("shared game", `a change of the game (${busy.label}) has been applied for ${busy.seconds} s; ${busy.waiting} wait behind it`, undefined, { problem: true });
+        }
+        if (busy?.overdue && !said?.overdue) {
+          logDebugEvent("shared game", `a change of the game (${busy.label}) ran past its bound after ${busy.seconds} s and was failed; the ${busy.waiting} behind it wait until it has ended`, undefined, { problem: true });
         }
         report();
       },
@@ -720,14 +731,11 @@ const boot = async () => {
     // play from the game (runtime/humanPolities.js), and nowhere else does.
     setHostingSharedGame(true, { host });
     // And every change it makes is applied in the host's one order: the
-    // readings the game makes by itself too, each write one entry, held open
-    // until it ends (runtime/sharedReadings.js).
+    // readings the game makes by itself too, each write one entry, which is
+    // the write itself and ends with it (runtime/sharedReadings.js).
     const hosting = gameHost;
     writeInOrder = (label, write) => hosting.write(label, write);
-    setReadingsOrder((label) => new Promise((entered) => {
-      void hosting.write(`reading:${label}`, () => new Promise((leave) => entered(leave)))
-        .catch((error) => logDebugEvent("shared game", `a reading's write did not run: ${String(error?.message || error)}`, undefined, { problem: true }));
-    }));
+    setReadingsOrder((label, write) => hosting.write(`reading:${label}`, write));
     const rulesChanged = () => hosting.control.setRules(readRules());
     window.addEventListener("storage", rulesChanged);
     forgetRules = () => window.removeEventListener("storage", rulesChanged);
@@ -747,7 +755,21 @@ const boot = async () => {
     if (action === "open") return open(args ?? {});
     if (!gameHost) return undefined;
     switch (action) {
-      case "start": return gameHost.control.start();
+      // Under way until its entry has run (gameHost.js control.start), which the
+      // host's screen shows; one that fails is said (`failure`) and can be pressed again.
+      case "start": {
+        if (failure && failure === startRefused) failure = "";
+        const going = gameHost.control.start();
+        report();
+        try {
+          return await going;
+        } catch (error) {
+          startRefused = String(error?.message || error);
+          throw error;
+        } finally {
+          report();
+        }
+      }
       case "pause": return gameHost.control.pause();
       case "resume": return gameHost.control.resume();
       case "resolveNow": return gameHost.control.resolveNow();

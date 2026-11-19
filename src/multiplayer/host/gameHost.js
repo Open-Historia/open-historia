@@ -22,7 +22,7 @@
 // in node and the same code runs in the host's engine window.
 
 import { cancelledRound, createRoundMachine } from "./round.js";
-import { DROPPED, createWorldQueue } from "./worldQueue.js";
+import { DROPPED, OVERDUE, createWorldQueue, guardedStore } from "./worldQueue.js";
 import { BOUND_REFUSALS, SEAT_WAITING_MOST, advisorPastBound, createSeatBounds } from "./seatBounds.js";
 import { failureWords, guestFailureWords } from "./failureWords.js";
 import { stakeIn } from "./ownReadings.js";
@@ -295,7 +295,7 @@ export const createGameHost = ({
   worldWords = null,
   onStatus = () => {},
   // What the host's queue is still applying when it has run long ({ label,
-  // seconds, waiting, gaveUp }), and null once it is not: for the host's log
+  // seconds, waiting, overdue }), and null once it is not: for the host's log
   // and the host's screen (host/worldQueue.js onSlow).
   onBusy = () => {},
   // Seats that followed their people to a country they founded
@@ -309,7 +309,10 @@ export const createGameHost = ({
   // Every write goes through the store; a player's request's first one marks
   // the request as applied in the same commit (host/requestLedger.js).
   const ledger = createRequestLedger(givenStore);
-  const store = ledger.store;
+  // And a write made while the queue's entry is overdue is refused: that entry
+  // was failed, and its requester told it was not applied (host/worldQueue.js).
+  let entryOverdue = () => false;
+  const store = guardedStore(ledger.store, () => entryOverdue());
   const seats = createSeatBook({
     countries,
     maxPlayers: settings.seats,
@@ -432,6 +435,8 @@ export const createGameHost = ({
   let roundAbort = null;
   // Set when the host calls the round off (control.cancelRound).
   let roundCancelled = false;
+  // The game's start, pressed and waiting for its entry (control.start).
+  let starting = null;
   // Every player's view after anything is applied: one push for however many
   // changes landed together.
   let pushWanted = null;
@@ -444,31 +449,39 @@ export const createGameHost = ({
     }
     return pushWanted;
   };
-  // An entry that runs long is said, and one that never ends no longer holds
-  // the queue (host/worldQueue.js): Start waited silently behind one.
+  // An entry that runs long is said, and one past its bound fails, with why
+  // (host/worldQueue.js): Start waited silently behind one. The round is long
+  // by nature: it is logged, and its own bar says what it does.
   let busy = null;
   const queue = createWorldQueue({
-    onSettled: () => {
-      if (busy) {
+    onSettled: (label) => {
+      if (busy && busy.label === label) {
         log("info", "the host's queue is applying changes again", { after: busy.label, seconds: busy.seconds });
         busy = null;
         onBusy(null);
       }
       void schedulePush();
     },
-    onSlow: ({ label, ms, waiting }) => {
-      busy = { label, seconds: Math.round(ms / 1000), waiting, gaveUp: false };
-      log("warn", `a change has been applied for ${busy.seconds} s: ${label}`, { waiting });
+    onSlow: ({ label, ms, waiting, long }) => {
+      const seconds = Math.round(ms / 1000);
+      if (long) {
+        log("info", `the ${label} has run ${seconds} s`, { waiting });
+        return;
+      }
+      // Said in the log once an entry is slow, and when it fails; the host's screen follows every report.
+      if (!busy || busy.label !== label) log("warn", `a change has been applied for ${seconds} s: ${label}`, { waiting });
+      busy = { label, seconds, waiting, overdue: queue.overdue };
       onBusy(busy);
     },
-    onGaveUp: ({ label, ms, waiting }) => {
-      busy = { label, seconds: Math.round(ms / 1000), waiting, gaveUp: true };
-      log("warn", `a change never ended and no longer holds the queue: ${label}`, { seconds: busy.seconds, waiting });
+    onOverdue: ({ label, ms, waiting }) => {
+      busy = { label, seconds: Math.round(ms / 1000), waiting, overdue: true };
+      log("warn", `a change ran past its bound and was failed: ${label}; what waits behind it waits until it has ended`, { seconds: busy.seconds, waiting });
       onBusy(busy);
     },
     timers,
     now,
   });
+  entryOverdue = () => queue.overdue;
   // A request that waits for the round being resolved is said to at once, and
   // its page waits for its answer (host/requestWaits.js).
   const waits = createRequestWaits({ tell: (device, message) => answerDevice(device, message), thinking: THINKING });
@@ -2458,7 +2471,8 @@ export const createGameHost = ({
         } else error = clean(outcome).slice(0, 300);
       } catch (failure) {
         // One the host let go of while it waited was never applied, and says why.
-        if (failure?.code === DROPPED) error = clean(failure.message).slice(0, 300);
+        // And one that ran past its bound was failed and wrote nothing more (host/worldQueue.js OVERDUE).
+        if (failure?.code === DROPPED || failure?.code === OVERDUE) error = clean(failure.message).slice(0, 300);
         // One applied before (its answer lost with the engine) is done: answered so, and applied once.
         else if (failure?.code === APPLIED_BEFORE) log("info", "a request sent again had been applied already", { t: message.t });
         else {
@@ -2526,15 +2540,39 @@ export const createGameHost = ({
     receive,
     // The host's own controls, from the host's own screen only.
     control: {
-      async start() {
-        if (seats.started) return;
-        seats.start();
-        // (What was ordered in the lobby stays its owner's until the first
-        // skip: host/onlyOrdered.js keeps it by its date, not by this moment.)
-        await queue.run("start", recordHumans);
-        // The campaign's own round: one number on every screen (host/round.js).
-        round.start(Number((await store.read())?.game?.round) || 0);
-        broadcastLobby();
+      // The game starts when its entry runs, not when Start is pressed: the
+      // game records who people are, and only once that is written is it
+      // started, its round begun, and every screen told. Before, it was
+      // marked started at the press, ahead of an entry that could wait: every
+      // screen showed a round that had not begun, picks were refused, and an
+      // entry that failed left it marked started for good, so Start could
+      // never be pressed again (the review of 2026-11-19, F3). A second press
+      // while it waits is the same start; one that fails starts nothing, and
+      // the host is told why (the engine's status) and can press it again.
+      start() {
+        if (seats.started) return Promise.resolve();
+        starting ??= queue.run("start", async () => {
+          if (seats.started || stopped) return false;
+          // (What was ordered in the lobby stays its owner's until the first
+          // skip: host/onlyOrdered.js keeps it by its date, not by this moment.)
+          await recordHumans();
+          // The campaign's own round: one number on every screen (host/round.js).
+          const campaignRound = Number((await store.read())?.game?.round) || 0;
+          seats.start();
+          round.start(campaignRound);
+          return true;
+        }).then((began) => {
+          if (began) {
+            broadcastLobby();
+            sessionChanged();
+          }
+        }, (failure) => {
+          log("warn", "the game did not start", { error: String(failure?.message || failure) });
+          throw failure;
+        }).finally(() => {
+          starting = null;
+        });
+        return starting;
       },
       pause: () => round.pause(),
       resume: () => round.resume(),
@@ -2813,6 +2851,6 @@ export const createGameHost = ({
       if (!stopped) await followLandings(landed);
       return out;
     }),
-    status: () => ({ lobby: lobbyFor(null), round: round.status(), players: [...connections.values()].map((entry) => ({ id: entry.id, name: entry.name, seat: seatOf(entry)?.country ?? "" })) }),
+    status: () => ({ lobby: lobbyFor(null), round: round.status(), starting: Boolean(starting), players: [...connections.values()].map((entry) => ({ id: entry.id, name: entry.name, seat: seatOf(entry)?.country ?? "" })) }),
   };
 };
