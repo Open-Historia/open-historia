@@ -1380,7 +1380,8 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const abroad = useMemo(() => visible.filter((project) => !isPlayerProject(project, playerCountry)), [visible, playerCountry]);
 
   const closedCount = useMemo(() => known.filter(isProjectClosed).length, [known]);
-  const hasClosedBoardRecords = useMemo(() => projects.some(isProjectClosed), [projects]);
+  // Only what the player knows of: the button never betrays a foreign power's closed covert work.
+  const hasClosedBoardRecords = useMemo(() => known.some(isProjectClosed), [known]);
   const visibleArchive = useMemo(() => projectArchive.filter((entry) =>
     entry?.board === "world" && entry?.project && isKnownToPlayer(entry.project, playerCountry)),
   [projectArchive, playerCountry]);
@@ -1492,7 +1493,9 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
       let moved = 0;
       await mutateWorldState((world) => {
         const next = archiveClosedProjectsInWorld(world, { date: gameDate });
-        moved = (world.projects?.length || 0) - next.projects.length;
+        // Counted as the player knows the board: a foreign power's covert work is archived too, never told.
+        const kept = new Set(next.projects.map((project) => project?.id));
+        moved = (world.projects ?? []).filter((project) => !kept.has(project?.id) && isKnownToPlayer(project, playerCountry)).length;
         return next;
       });
       await refreshRuntimeState(["world"]);
@@ -1502,7 +1505,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
     } finally {
       setArchiveBusy(false);
     }
-  }, [archiveBusy, gameDate]);
+  }, [archiveBusy, gameDate, playerCountry]);
 
   const restoreArchived = useCallback(async () => {
     if (inSharedGame() || archiveBusy || !archiveSelection) return;

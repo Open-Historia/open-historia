@@ -19,4 +19,7 @@ test("archival controls stay outside shared games and never expose the host-only
   assert.match(source, /!inSharedGame\(\) && archiveOpen && visibleArchive\.length > 0/);
   assert.match(source, /entry\?\.board === "world" && entry\?\.project && isKnownToPlayer\(entry\.project, playerCountry\)/);
   assert.match(source, /disabled=\{archiveBusy \|\| !archiveSelection \|\| projects\.length >= PROJECT_BOARD_LIMIT\}/);
+  // A foreign power's closed covert work is archived with the rest but never shown or counted.
+  assert.match(source, /const hasClosedBoardRecords = useMemo\(\(\) => known\.some\(isProjectClosed\), \[known\]\);/);
+  assert.match(source, /moved = \(world\.projects \?\? \[\]\)\.filter\(\(project\) => !kept\.has\(project\?\.id\) && isKnownToPlayer\(project, playerCountry\)\)\.length;/);
 });
