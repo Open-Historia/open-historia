@@ -434,7 +434,7 @@ try {
   await until(twin, "(window.__e2e || false) && window.__e2e.buttons('Lobbies').length > 0", 60000);
   await twin.eval("window.__e2e.click('Lobbies')");
   await until(twin, "Boolean(document.querySelector('input[placeholder=\"oh1-…\"]'))", 15000);
-  await twin.eval(`(() => { window.__e2e.type(document.querySelector('input[placeholder="oh1-…"]'), ${JSON.stringify(token)}); return true; })()`);
+  await twin.eval(`(() => { window.__e2e.type(document.querySelector('input[placeholder="oh1-…"]'), ${JSON.stringify(token)}); const name = document.querySelector('input[placeholder="Pick a name"]'); if (name) window.__e2e.type(name, "Twin"); return true; })()`);
   await sleep(300);
   await twin.eval("window.__e2e.click('Join')");
   const toldWhy = await until(twin, "document.body.textContent.includes('This computer is hosting a shared game')", 15000);
@@ -470,7 +470,7 @@ try {
   })()`);
   check("the Lobbies tab: an invite code at the top, the public lobbies under \"Coming soon\"", layout?.codeFirst && layout?.soon, JSON.stringify(layout));
   await shoot(guest, "0-lobbies-tab");
-  await guest.eval(`(() => { const e = window.__e2e; e.type(document.querySelector('input[placeholder="oh1-…"]'), ${JSON.stringify(token)}); const name = [...document.querySelectorAll('input[placeholder="Player"]')][0]; if (name) e.type(name, "Guest"); return true; })()`);
+  await guest.eval(`(() => { const e = window.__e2e; e.type(document.querySelector('input[placeholder="oh1-…"]'), ${JSON.stringify(token)}); const name = [...document.querySelectorAll('input[placeholder="Pick a name"]')][0]; if (name) e.type(name, "Guest"); return true; })()`);
   await sleep(300);
   await guest.eval(`(() => {
     window.__seen = { loading: [], apiPrompt: false, apiPromptText: "", steps: [] };
@@ -1191,7 +1191,7 @@ try {
   await openVaultDoor(guest);
   await guest.eval("window.__e2e.click('Lobbies')");
   await until(guest, "Boolean(document.querySelector('input[placeholder=\"oh1-…\"]'))", 15000);
-  await guest.eval(`(() => { const e = window.__e2e; e.type(document.querySelector('input[placeholder="oh1-…"]'), ${JSON.stringify(token)}); const name = [...document.querySelectorAll('input[placeholder="Player"]')][0]; if (name) e.type(name, "Guest"); return true; })()`);
+  await guest.eval(`(() => { const e = window.__e2e; e.type(document.querySelector('input[placeholder="oh1-…"]'), ${JSON.stringify(token)}); const name = [...document.querySelectorAll('input[placeholder="Pick a name"]')][0]; if (name) e.type(name, "Guest"); return true; })()`);
   await sleep(300);
   await guest.eval("window.__e2e.click('Join')");
   const backInBar = await until(guest, `document.body.textContent.includes(${JSON.stringify(`Round ${roundAtStop} · `)}) && window.__e2e.buttons('Players').length > 0`, 120000);
