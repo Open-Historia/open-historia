@@ -1,10 +1,12 @@
 /*! Open Historia — the bunker door over the landing page © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The top of the page is a blast door. Its two leaves meet at a toothed seam
-// (the idea of the owner's sketch, drawn as machined lugs: straight runs of one
-// length joined by 45-degree flanks, so one leaf's tooth sits in the other's notch) and the four ages are painted across both of them.
-// "Demo in your browser" opens it: the locking bars and the frame's pins draw
-// back, the leaves pop out of their teeth, slide apart into the walls, and the
-// view walks into the bunker behind before the demo opens.
+// (the idea of the owner's sketch, drawn as machined lugs: straight runs of
+// one length joined by 45-degree flanks, so one leaf's tooth sits in the
+// other's notch) and the four ages are painted across both of them. Every
+// link into the demo opens it, once the page has glided up to it: the locking
+// bars and the frame's pins draw back, the leaves pop out of their teeth,
+// slide apart into the walls, and the view walks into the bunker behind
+// before the demo opens.
 //
 // Built in layers in real CSS 3D (door.css): the painted armour plate, the
 // plate's thickness along the toothed edge (a strip per straight piece of the
@@ -118,10 +120,8 @@
     return paint(size, size, function (col, row) { return shade(base, light[row * size + col]); });
   }
   // A domed rivet head lit from the upper left.
-  // `width` wider than `size` leaves bare room beside it, for a row of rivets as a tile.
-  function rivet(size, width) {
-    width = width || size;
-    var base = [150, 156, 164], middle = size / 2, radius = size / 2 - 1, dome = radius * 0.8;
+  function rivet(size) {
+    var width = size, base = [150, 156, 164], middle = size / 2, radius = size / 2 - 1, dome = radius * 0.8;
     return paint(width, size, function (col, row) {
       var dx = col + 0.5 - width / 2, dy = row + 0.5 - middle, out = Math.sqrt(dx * dx + dy * dy);
       if (out > radius) return [0, 0, 0, 0];
@@ -173,11 +173,10 @@
       dark: steel(256, [42, 45, 50], 9, 1.2),
       grain: steel(256, [128, 128, 128], 13, 1.4),
       rivet: rivet(24),
-      rivets: rivet(24, 120),
       edge: edgeSection(128, 64),
       grate: grating(128),
     };
-    var vars = { "--bk-steel": textures.steel, "--bk-dark": textures.dark, "--bk-grain": textures.grain, "--bk-rivet": textures.rivet, "--bk-rivets": textures.rivets,"--bk-edge": textures.edge, "--bk-grate": textures.grate };
+    var vars = { "--bk-steel": textures.steel, "--bk-dark": textures.dark, "--bk-grain": textures.grain, "--bk-rivet": textures.rivet, "--bk-edge": textures.edge, "--bk-grate": textures.grate };
     for (var name in vars) if (vars[name]) hero.style.setProperty(name, "url(" + vars[name] + ")");
   }
 
@@ -316,12 +315,12 @@
     var heroBox = hero.getBoundingClientRect(), plateBox = plate.getBoundingClientRect();
     var keepOut = { l: plateBox.left - heroBox.left - 16, r: plateBox.right - heroBox.left + 16, t: plateBox.top - heroBox.top - 20, b: plateBox.bottom - heroBox.top + 20 };
     var cue = hero.querySelector(".scroll-cue");
-    var lintel = W < 700 ? 18 : 26;
+    var lintel = W < 700 ? 3 : 5;
     var bars = [];
     for (var j = 0; j < pts.length - 1; j += 1) {
       if (Math.abs(pts[j + 1][0] - pts[j][0]) > A * 0.4) continue;
       var y = (pts[j][1] + pts[j + 1][1]) / 2, sx = (pts[j][0] + pts[j + 1][0]) / 2;
-      if (y < lintel + 26 || y > H - lintel - 26) continue;
+      if (y < lintel + 64 || y > H - lintel - 40) continue;
       var x1 = sx - band - 80, x2 = sx + band + 40;
       if (x2 > keepOut.l && x1 < keepOut.r && y + 20 > keepOut.t && y - 20 < keepOut.b) continue;
       bars.push({ y: y, sx: sx });
@@ -460,20 +459,50 @@
   }
 
   function wire() {
+    // Every way into the demo on the page opens the door, and the door is at the top: the page
+    // first glides up to it ("it should bring you to the top of the page then open the door so it
+    // doesnt open when you arent there": the owner), and the door opens once the page is there.
+    var climbing = false;
+    function atTop() { return (window.scrollY || window.pageYOffset || 0) < 2; }
+    function climbThen(done) {
+      if (atTop()) { done(); return; }
+      climbing = true;
+      var finished = false, started = Date.now(), still = 0, last = -1;
+      var finish = function () {
+        if (finished) return;
+        finished = true;
+        climbing = false;
+        window.removeEventListener("scrollend", onEnd);
+        if (!atTop()) window.scrollTo({ top: 0, behavior: "instant" });
+        done();
+      };
+      var onEnd = function () { if (atTop()) finish(); };
+      window.addEventListener("scrollend", onEnd);
+      // Where there is no scrollend: watch until the page is at the top and has stopped, or give up
+      // waiting after a while and jump the rest of the way.
+      var watch = function () {
+        if (finished) return;
+        var y = window.scrollY || window.pageYOffset || 0;
+        still = y === last ? still + 1 : 0;
+        last = y;
+        if ((y < 2 && still >= 2) || Date.now() - started > 2500) { finish(); return; }
+        requestAnimationFrame(watch);
+      };
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      requestAnimationFrame(watch);
+    }
     var trigger = function (event) {
       var link = event.currentTarget;
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       if (calm && calm.matches) return;
-      if (link.classList.contains("nav-play")) {
-        // The header's Play opens the door only while the door is in view.
-        var box = hero.getBoundingClientRect();
-        if (box.bottom < window.innerHeight * 0.6) return;
-        if (box.top < -40) { window.scrollTo({ top: 0, behavior: "instant" }); }
-      }
       event.preventDefault();
-      open(link.href);
+      if (opening || climbing) return;
+      var href = link.href;
+      climbThen(function () { open(href); });
     };
-    Array.prototype.forEach.call(document.querySelectorAll(".hero [data-door-open], .site-head .nav-play"), function (link) { link.addEventListener("click", trigger); });
+    Array.prototype.forEach.call(document.querySelectorAll('a[href="/play/"], a[href="/play"], [data-door-open]'), function (link) {
+      if (!link.closest(".bk-plate-copy")) link.addEventListener("click", trigger);
+    });
     var pending = 0;
     window.addEventListener("resize", function () {
       if (opening) return;
