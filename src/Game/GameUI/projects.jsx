@@ -33,6 +33,7 @@ import {
   readWorldState,
 } from "../../runtime/gameState.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
+import { archiveClosedProjectsInWorld, restoreArchivedProjectInWorld } from "../../runtime/projectRecovery.js";
 import { refreshRuntimeState } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import {
@@ -1234,6 +1235,7 @@ const TagMenu = ({ maxHeight, onClear, onOpenChange, onToggle, open, selected, t
 // Store slices, so a world write that touched neither the board nor the polity
 // registry never reaches this panel.
 const selectProjects = (world) => (Array.isArray(world?.projects) ? world.projects : []);
+const selectArchivedProjects = (world) => (Array.isArray(world?.projectRecoveryArchive) ? world.projectRecoveryArchive : []);
 const selectPolities = (world) => world?.polityOverrides ?? {};
 const selectCountryStats = (world) => world?.countryStats ?? {};
 const selectProjectFundingMode = (world) => world?.projectFundingMode === "nonmonetary" ? "nonmonetary" : "gdp-proxy";
@@ -1253,6 +1255,8 @@ const SectionTitle = ({ children, count }) => (
 // `isOpen`: the Actions panel is open on this tab. Closing either is closing the board.
 const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const projects = useRuntimeState("world", selectProjects);
+  // Save-owner archive; never exposed by multiplayer guest-world projections.
+  const projectArchive = useRuntimeState("world", selectArchivedProjects);
   const polityOverrides = useRuntimeState("world", selectPolities);
   const countryStats = useRuntimeState("world", selectCountryStats);
   const projectFundingMode = useRuntimeState("world", selectProjectFundingMode);
@@ -1289,6 +1293,10 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const [pendingId, setPendingId] = useState("");
   const [planningId, setPlanningId] = useState("");
   const [planError, setPlanError] = useState("");
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveSelection, setArchiveSelection] = useState("");
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [archiveMessage, setArchiveMessage] = useState({ text: "", error: false });
   // A change of funding or an abandon that did not happen, on its own card:
   // { id, text }. It was swallowed, and the card simply stayed as it was, the
   // host's reason unsaid (the review of 2026-11-18, door 7).
@@ -1348,6 +1356,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
     if (isOpen) return;
     setExpandedId(null);
     setShowClosed(false);
+    setArchiveOpen(false);
     setTagMenuOpen(false);
   }, [isOpen]);
 
@@ -1371,6 +1380,10 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const abroad = useMemo(() => visible.filter((project) => !isPlayerProject(project, playerCountry)), [visible, playerCountry]);
 
   const closedCount = useMemo(() => known.filter(isProjectClosed).length, [known]);
+  const hasClosedBoardRecords = useMemo(() => projects.some(isProjectClosed), [projects]);
+  const visibleArchive = useMemo(() => projectArchive.filter((entry) =>
+    entry?.board === "world" && entry?.project && isKnownToPlayer(entry.project, playerCountry)),
+  [projectArchive, playerCountry]);
   const openCount = known.length - closedCount;
   useEffect(() => {
     if (closedCount === 0) setShowClosed(false);
@@ -1464,6 +1477,50 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
       setPendingId("");
     }
   }, [writeOps, failedOn]);
+
+  // Explicit save maintenance, never a project operation or an AI decision.
+  // Keep the complete closed records in the existing bounded archive. The
+  // canonical queue reads the CURRENT world so a time skip or another writer
+  // cannot be overwritten with a stale snapshot. Shared games use the owner
+  // recovery tool instead: this panel has no authority over guest seat boards.
+  const archiveClosed = useCallback(async () => {
+    if (inSharedGame() || archiveBusy) return;
+    if (!window.confirm(uiString("Archive all closed projects to free board slots? Their history will be preserved, and no running project will be affected."))) return;
+    setArchiveBusy(true);
+    setArchiveMessage({ text: "", error: false });
+    try {
+      let moved = 0;
+      await mutateWorldState((world) => {
+        const next = archiveClosedProjectsInWorld(world, { date: gameDate });
+        moved = (world.projects?.length || 0) - next.projects.length;
+        return next;
+      });
+      await refreshRuntimeState(["world"]);
+      setArchiveMessage({ text: uiString("Archived {{count}} closed project records.", { count: moved }), error: false });
+    } catch (failure) {
+      setArchiveMessage({ text: String(failure?.message || failure), error: true });
+    } finally {
+      setArchiveBusy(false);
+    }
+  }, [archiveBusy, gameDate]);
+
+  const restoreArchived = useCallback(async () => {
+    if (inSharedGame() || archiveBusy || !archiveSelection) return;
+    setArchiveBusy(true);
+    setArchiveMessage({ text: "", error: false });
+    try {
+      await mutateWorldState((world) => restoreArchivedProjectInWorld(world, {
+        projectId: archiveSelection, date: gameDate,
+      }));
+      await refreshRuntimeState(["world"]);
+      setArchiveSelection("");
+      setArchiveMessage({ text: uiString("Archived project restored to the live board."), error: false });
+    } catch (failure) {
+      setArchiveMessage({ text: String(failure?.message || failure), error: true });
+    } finally {
+      setArchiveBusy(false);
+    }
+  }, [archiveBusy, archiveSelection, gameDate]);
 
   // A project the advisor opened without a plan: one request plans it, and it starts.
   const planEntry = useCallback(async (project) => {
@@ -1590,6 +1647,42 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
           </>
         )}
       </div>
+
+      {!inSharedGame() && (hasClosedBoardRecords || visibleArchive.length > 0) && (
+        <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", flexWrap: "wrap", gap: "0.45rem", padding: "0.45rem 1rem" }}>
+          {hasClosedBoardRecords && (
+            <button type="button" disabled={archiveBusy} onClick={archiveClosed} style={{ ...selectStyle, cursor: archiveBusy ? "wait" : "pointer" }}>
+              {uiString("Archive closed projects")}
+            </button>
+          )}
+          {visibleArchive.length > 0 && (
+            <button type="button" disabled={archiveBusy} onClick={() => setArchiveOpen((value) => !value)} style={{ ...selectStyle, cursor: "pointer" }}>
+              {uiString("Archived projects ({{count}})", { count: visibleArchive.length })}
+            </button>
+          )}
+        </div>
+      )}
+      {!inSharedGame() && archiveOpen && visibleArchive.length > 0 && (
+        <div style={{ borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.45rem", padding: "0.5rem 1rem" }}>
+          <select aria-label={uiString("Archived project to restore")} value={archiveSelection} onChange={(event) => setArchiveSelection(event.target.value)} style={{ ...selectStyle, flex: 1, minWidth: "10rem" }}>
+            <option value="">{uiString("Select archived project...")}</option>
+            {visibleArchive.map((entry) => (
+              <option key={entry.id} value={entry.id}>{entry.project.name} ({entry.priorStatus || entry.project.status})</option>
+            ))}
+          </select>
+          <button type="button" disabled={archiveBusy || !archiveSelection || projects.length >= PROJECT_BOARD_LIMIT} onClick={restoreArchived} style={{ ...selectStyle, cursor: "pointer" }}>
+            {uiString("Restore selected")}
+          </button>
+          <span style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.65rem" }}>
+            {uiString("Restoration requires a free slot and does not replay missed progress.")}
+          </span>
+        </div>
+      )}
+      {archiveMessage.text && (
+        <div role={archiveMessage.error ? "alert" : "status"} style={{ color: archiveMessage.error ? "#fca5a5" : "#a7f3d0", fontSize: "0.7rem", padding: "0.4rem 1rem" }}>
+          {archiveMessage.text}
+        </div>
+      )}
 
       {nearLimit && (
         <div style={{
