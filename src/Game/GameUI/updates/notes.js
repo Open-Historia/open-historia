@@ -68,8 +68,8 @@ const NEW_UPDATES = [
         items: [
           "Pick the name other players see you by when you join a shared game.",
           "A star marks every country a person plays; click it to see who, and the game menu has a Players list.",
-          "Start the game works again, and if the host's game is busy the host is told what it waits for.",
-          "Cut off from the host, you see that it is reconnecting; if the host has closed the game, you are taken back to the menu and told why.",
+          "If the host's game is busy when Start is pressed, the lobby says what Start waits for; if the game cannot start, the host is told why and can press Start again.",
+          "When a shared game ends for you (the host stops it, can no longer be reached, or sends you away), you are taken straight back to the main menu, which tells you why.",
           "Current on your open shared game takes you back into it, and the lobby shows only what you can do in it.",
           "The stat sheet refresh is set in a country's Advanced statistics: every 6 months of game time by default, or Off.",
         ],
@@ -280,7 +280,9 @@ const NEW_UPDATES = [
   {
     // "readd the background ai for refreshing the stats where you could set how often it runs" and "there should be
     // an off choise in the thing where you pick how often it refreshes" (the owner, 2026-11-18): removed on
-    // 2026-11-09 with the Background AI switch (bb37bd1e6); back as one picker, Off by default.
+    // 2026-11-09 with the Background AI switch (bb37bd1e6); back with no setting of its own: "JUST IN THE ADVANCED
+    // STATS MENU YOU CAN CHOOSE WHAT INTERVAL IT CHECKS AT AND YOU CAN SET THE INTERVAL TO OFF. BY DEFAULT ITS 6 MONTHS".
+    // (Its card keeps the words it shipped with; the card above says how it is now.)
     id: "2026-11-stats-refresh",
     kind: "minor",
     date: "2026-11-18",
