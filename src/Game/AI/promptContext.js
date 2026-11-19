@@ -1575,7 +1575,7 @@ export const buildProjectsSummaryText = (world, game, { compact = false, closedL
     const newest = [...closed].sort((a, b) => normalizeString(b.updatedAt).localeCompare(normalizeString(a.updatedAt)));
     const listed = newest.slice(0, Math.max(0, closedLimit));
     const more = closed.length - listed.length;
-    sections.push(`Finished or abandoned — never open these again: ${listed.map((project) => `"${project.name}" (${ownerOf(project)}, ${normalizeString(project.status)})`).join("; ")}`
+    sections.push(`Finished or abandoned. Do not open these again unless the player asks for it or the story calls for it: ${listed.map((project) => `"${project.name}" (${ownerOf(project)}, ${normalizeString(project.status)})`).join("; ")}`
       + (more > 0 ? `; and ${more} more` : "")
       + ".");
   }
