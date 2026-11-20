@@ -3835,6 +3835,113 @@ export const withSocialPosts = (tool, on = true, { polls = false } = {}) => {
   };
 };
 
+// The player's own person (runtime/characters.js). One flat operation with an op
+// enum, not an anyOf: the same reason as the board's projectOpSchema. Only the
+// fields an op needs are sent; the apply step refuses the rest with a reason.
+const characterOpSchema = {
+  type: "object",
+  description:
+    "One change to the player's character. Set op and polity; send only the fields that op needs. "
+    + "create opens the character (character holds the whole sheet); patch changes sheet fields; "
+    + "injure and heal change health; gain and lose change the inventory; earn and spend change the purse.",
+  properties: {
+    op: {
+      type: "string",
+      enum: ["create", "patch", "injure", "heal", "gain", "lose", "earn", "spend"],
+      description: "What the change does.",
+    },
+    polity: textSchema("The player's polity, copied exactly from the task's Player line."),
+    character: {
+      type: "object",
+      description: "Only for create: the whole character sheet.",
+      properties: {
+        name: textSchema("Full name."),
+        birthdate: textSchema("YYYY-MM-DD, the date the age is computed from."),
+        sex: textSchema("Sex as the sheet states it."),
+        culture: textSchema("Culture."),
+        faith: textSchema("Faith."),
+        titles: stringArraySchema("Titles held; empty when none."),
+        location: textSchema("Where the character is now."),
+        traits: stringArraySchema("Up to four traits."),
+        skills: {
+          type: "object",
+          description: "Each skill at one of Poor, Average, Good, Excellent, Exceptional.",
+          properties: {
+            diplomacy: textSchema("Diplomacy level."),
+            martial: textSchema("Martial level."),
+            stewardship: textSchema("Stewardship level."),
+            intrigue: textSchema("Intrigue level."),
+            learning: textSchema("Learning level."),
+            prowess: textSchema("Prowess level."),
+          },
+        },
+        reputation: {
+          type: "object",
+          description: "Piety, renown and honour in a few words each.",
+          properties: {
+            piety: textSchema("Piety."),
+            renown: textSchema("Renown."),
+            honour: textSchema("Honour."),
+          },
+        },
+        purse: {
+          type: "object",
+          description: "Personal money at the start.",
+          properties: {
+            currency: textSchema("Local currency name."),
+            amount: { type: "integer", description: "Starting amount." },
+          },
+        },
+      },
+    },
+    fields: {
+      type: "object",
+      description: "Only for patch: the sheet fields that changed, by name. Health, purse and inventory are not patched here.",
+    },
+    injury: {
+      type: "object",
+      description: "Only for injure: the injury.",
+      properties: {
+        id: textSchema("A short stable id, used later by heal."),
+        type: { type: "string", enum: ["Minor", "Moderate", "Severe", "Critical"] },
+        location: textSchema("Where on the body or the person."),
+        effects: textSchema("What it does now."),
+        recoveryRounds: { type: "integer", description: "Rounds until recovery, 0 when unknown." },
+      },
+    },
+    injuryId: textSchema("Only for heal: the id of the injury that healed."),
+    item: {
+      type: "object",
+      description: "Only for gain: the item.",
+      properties: {
+        id: textSchema("A short stable id, used later by lose."),
+        name: textSchema("What it is."),
+        rarity: { type: "string", enum: ["Common", "Rare", "Epic", "Illustrious"] },
+        note: textSchema("Where it came from, in a few words."),
+      },
+    },
+    itemId: textSchema("Only for lose: the id of the item."),
+    qty: { type: "integer", description: "How many, for gain or lose. Defaults to 1." },
+    amount: { type: "integer", description: "Only for earn or spend: the amount in the purse's currency." },
+    note: textSchema("Why, in one short sentence."),
+  },
+  required: ["op", "polity"],
+};
+
+export const CHARACTER_SCHEMA = {
+  type: "object",
+  description: "Changes to the player's character that follow from the events just simulated.",
+  properties: {
+    characterOps: {
+      type: "array",
+      description:
+        "One entry per change. An empty array is the right answer when the events did not touch the character.",
+      items: characterOpSchema,
+    },
+  },
+  required: ["characterOps"],
+};
+
 export const GAMEPLAY_SCHEMAS = Object.freeze({
   spyIntercept: SPY_INTERCEPT_SCHEMA,
   intelligenceAssessment: INTELLIGENCE_ASSESSMENT_SCHEMA,
@@ -3864,6 +3971,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   idleDiplomacy: IDLE_DIPLOMACY_SCHEMA,
   pregameHistory: PREGAME_HISTORY_SCHEMA,
   projects: PROJECTS_SCHEMA,
+  character: CHARACTER_SCHEMA,
 });
 
 const makeTool = (name, description, schema) => Object.freeze({ name, description, schema });
@@ -4011,6 +4119,12 @@ export const INTERACTIVE_SUMMARY_TOOL = makeTool(
   INTERACTIVE_SUMMARY_SCHEMA,
 );
 
+export const CHARACTER_TOOL = makeTool(
+  "submit_character_ops",
+  "Submit the changes to the player's character that follow from the events just simulated.",
+  CHARACTER_SCHEMA,
+);
+
 export const PROJECTS_TOOL = makeTool(
   "submit_project_ops",
   "Submit the Projects & Operations board changes that follow from the events just simulated.",
@@ -4150,6 +4264,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   idleDiplomacy: IDLE_DIPLOMACY_TOOL,
   pregameHistory: PREGAME_HISTORY_TOOL,
   projects: PROJECTS_TOOL,
+  character: CHARACTER_TOOL,
 });
 
 

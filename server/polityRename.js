@@ -264,6 +264,12 @@ export const renamePolityInWorld = (world, fromName, toName) => {
   put("storylines", mapRows(world?.storylines, (storyline) => ({ ...storyline, participants: mapList(storyline.participants, fromKey, to) })));
   put("puppets", mapRows(world?.puppets, (row) => renamePuppetRow(row, fromKey, to)));
   put("projects", mapRows(world?.projects, (project) => ({ ...project, ownerCode: one(project.ownerCode) })));
+  // The player's person is keyed by the polity it plays for (characters.js), so the key moves.
+  if (world?.characters?.byPolity) {
+    const byPolity = {};
+    for (const [polity, character] of Object.entries(world.characters.byPolity)) byPolity[one(polity)] = character;
+    put("characters", { ...world.characters, byPolity });
+  }
   // The fortified lines it holds (runtime/warGeography.js): a wall keeps its owner.
   put("fortifications", mapRows(world?.fortifications, (line) => ({ ...line, owner: one(line.owner) })));
   // How weary of war it is, and what it has left to fight with (runtime/warWeariness.js, warResources.js).

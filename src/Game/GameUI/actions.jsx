@@ -26,6 +26,7 @@ import { uiString } from "../../runtime/translator.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { queuedActionIds, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
 import { ProjectsBoard, ProjectsTabIcon } from "./projects.jsx";
+import { CharacterPanel, CharacterTabIcon } from "./character.jsx";
 import {
     PANEL_HEIGHT_VAR,
     actionsLayoutReducer,
@@ -659,6 +660,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen, open = true, onToggle 
 const ACTIONS_TABS = [
     ["actions", "Actions"],
     ["projects", "Projects"],
+    ["character", "My character"],
 ];
 
 const selectProjectCount = (world) => (Array.isArray(world?.projects) ? world.projects.length : 0);
@@ -1125,7 +1127,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
                 onClick={() => setTab(key)}
                 style={{ alignItems: "center", background: active ? "var(--oh-ui-active, var(--oh-grey-selected))" : "rgba(255,255,255,.025)", border: "1px solid " + (active ? "var(--oh-ui-accent, var(--oh-grey-border-strong))" : "rgba(255,255,255,.07)"), borderRadius: "8px", color: active ? "white" : "rgba(255,255,255,0.48)", cursor: "pointer", display: "flex", flex: "0 0 auto", fontFamily: "sans-serif", fontSize: ".8rem", fontWeight: 750, gap: ".38rem", padding: isTouch ? ".3rem .62rem" : ".36rem .74rem", whiteSpace: "nowrap" }}
                 >
-                <span aria-hidden="true" style={{ display: "inline-flex", opacity: .8 }}>{key === "projects" ? <ProjectsTabIcon /> : <OrdersTabIcon />}</span>
+                <span aria-hidden="true" style={{ display: "inline-flex", opacity: .8 }}>{key === "projects" ? <ProjectsTabIcon /> : key === "character" ? <CharacterTabIcon /> : <OrdersTabIcon />}</span>
                 <span>{label}</span>
                 {key === "projects" && projectCount > 0 && (
                     <span data-no-translate style={{ alignItems: "center", background: active ? "rgba(255,255,255,.14)" : "rgba(255,255,255,.08)", borderRadius: 999, color: active ? "#fff" : "rgba(255,255,255,0.6)", display: "inline-flex", fontSize: ".57rem", fontWeight: 800, height: "1.05rem", justifyContent: "center", minWidth: "1.05rem", padding: "0 .25rem" }}>{projectCount}</span>
@@ -1162,6 +1164,13 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         {"\u2715"}
         </button>
         </div>
+
+        {/* The player's character sheet, a readout under the same header (character.jsx). */}
+        {tab === "character" && (
+            <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
+            <CharacterPanel />
+            </div>
+        )}
 
         {/* The Projects & Operations board, under the same header (projects.jsx). */}
         {boardOpened && (
