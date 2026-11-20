@@ -54,6 +54,26 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Four player reports (2026-11-19), each a whole Game Master request failed over one change inside one event: board ops the
+    // projects rework had removed, still in its prompt; a building with no family, refused for the landmark the game itself
+    // writes; a building half nested. One change that cannot be made is now left out and said (answerImpactOps.js).
+    id: "2026-11-gm-one-change",
+    kind: "minor",
+    date: "2026-11-19",
+    channel: "beta",
+    banners: [
+      {
+        title: "Game Master requests that go through",
+        items: [
+          "When one change in a Game Master request is written wrong, only that change is left out, and the preview says so. The rest of the request still goes through.",
+          "Game Master requests that put up a building on the map work again.",
+          "The Game Master now opens, sets back, speeds up and ends projects the way the Projects board works today.",
+          "A building a time skip puts up keeps the kind of icon it was given, and stays under construction when it is still being built.",
+        ],
+      },
+    ],
+  },
+  {
     // "build C and D, and the host can choose, but no sending api keys" (the owner, 2026-11-15): who answers a player's message to a
     // country the AI plays is the host's choice (multiplayer/host/settings.js `replies`): the host's AI, or each player's own device.
     // "any issues should not be roughly patched or whackamoled, the core of the issue should be fixed archetecturally" (the owner,
