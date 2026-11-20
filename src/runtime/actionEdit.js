@@ -91,3 +91,53 @@ export const orderEditBlock = (action, { turnRunning = false, sharedGame = false
   if (sharedGame) return roundTakesOrderChanges(roundPhase) ? "" : ORDER_EDIT_ROUND_NOTE;
   return turnRunning ? ORDER_EDIT_TURN_NOTE : "";
 };
+
+// --- Changes to the stored queue -------------------------------------------
+//
+// The Actions panel changes the queue on this device through these, run
+// inside the game's one write order (gameState.js mutateActionsState) on the
+// list as it is stored at that moment, never on the list the panel last drew.
+// The panel's list can be behind: the advisor, a unit move, a time skip marking
+// orders carried out, may all have written since. A whole list saved from that
+// snapshot put back an order the advisor had removed, dropped one it had
+// queued, and made a carried-out order planned again (the review of
+// 2026-11-19). So each change names its order by id and is decided against
+// what is stored, at the moment it is written.
+//
+// Each returns { next, outcome }: `next` the list to write, or null to write
+// nothing; `outcome` "" when done, or why not, in the player's words.
+const idOf = (action) => String(action?.id ?? "");
+export const ORDER_GONE_NOTE = "This order is no longer queued.";
+
+// Queues `order` at the end, unless an order with its id is queued already.
+export const queueOrderIn = (stored, order) => {
+  const list = Array.isArray(stored) ? stored : [];
+  const id = idOf(order);
+  if (id && list.some((action) => idOf(action) === id)) return { next: null, outcome: "" };
+  return { next: [...list, order], outcome: "" };
+};
+
+// Takes the order `id` out of the queue. `removed` is it as stored, so what
+// follows the removal (a troop order's way back on the map) is decided on what
+// it is now, not on what the panel showed.
+export const removeOrderFrom = (stored, id) => {
+  const list = Array.isArray(stored) ? stored : [];
+  const key = String(id ?? "");
+  const removed = key ? list.find((action) => idOf(action) === key) : undefined;
+  if (!removed) return { next: null, outcome: ORDER_GONE_NOTE, removed: null };
+  return { next: list.filter((action) => action !== removed), outcome: "", removed };
+};
+
+// Gives the order `id` other words, in its place, if it may still be changed
+// now (orderEditBlock, on the order as stored and the state at write time).
+export const rewordOrderIn = (stored, id, fields, editState = {}) => {
+  const list = Array.isArray(stored) ? stored : [];
+  const key = String(id ?? "");
+  const current = key ? list.find((action) => idOf(action) === key) : undefined;
+  if (!current) return { next: null, outcome: ORDER_GONE_NOTE };
+  const block = orderEditBlock(current, editState);
+  if (block) return { next: null, outcome: block };
+  const edited = rewordAction(current, fields);
+  if (edited === current) return { next: null, outcome: "" };
+  return { next: list.map((action) => (action === current ? edited : action)), outcome: "", edited };
+};

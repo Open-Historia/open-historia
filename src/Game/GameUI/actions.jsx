@@ -12,8 +12,8 @@ import { revertUnitOrder } from "../Map/unitsController.js";
 import {
     buildActionDisplayText,
     normalizeActionEntry,
+    mutateActionsState,
     readWorldState,
-    writeActionsState,
     writeWorldState,
 } from "../../runtime/gameState.js";
 import { PLAYER_GOAL_MAX_CHARS, playerGoalEntryOf, playerGoalOf, withPlayerGoal } from "../../runtime/playerGoal.js";
@@ -24,7 +24,7 @@ import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStor
 import { inSharedGame, requestFromHost, sharedRoundPhase, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 import { orderRequestFor, rewordRequestFor } from "../../multiplayer/client/sharedOrders.js";
 import { ORDER_MAX_CHARS, ORDER_TITLE_MAX } from "../../multiplayer/game/messages.js";
-import { hasOwnTitle, orderEditBlock, rewordAction } from "../../runtime/actionEdit.js";
+import { ORDER_GONE_NOTE, hasOwnTitle, orderEditBlock, queueOrderIn, removeOrderFrom, rewordOrderIn } from "../../runtime/actionEdit.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { uiString } from "../../runtime/translator.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
@@ -121,7 +121,18 @@ const SpinnerRing = ({ size = 14, tone = "rgba(255,255,255,0.88)" }) => {
     );
 };
 
-const saveActions = async (actions) => writeActionsState(actions);
+// A change to the queue on this device, decided on the list as it is stored
+// when it is written, in the game's one write order (runtime/actionEdit.js:
+// never a whole list saved from what the panel last drew). `change(stored)`
+// returns { next, outcome, ... }; resolves to that once written.
+const commitActions = async (change) => {
+    let result = { next: null, outcome: "" };
+    await mutateActionsState((stored) => {
+        result = change(Array.isArray(stored) ? stored : []);
+        return result.next;
+    });
+    return result;
+};
 
 // Saves the diagnostics log with an AI failure attached at the top, or copies
 // the failure alone while logging is off (runtime/saveDebugLog.js), as the
@@ -166,7 +177,7 @@ const aiFailureIncident = (kind, title, { reason = "", rawResponse = "" } = {}) 
 const ORDER_NOT_SAVED = "Your order could not be saved, so the next time skip would not see it. Try again.";
 const ORDER_NOT_REMOVED = "The order could not be removed, so the next time skip would still carry it out. Try again.";
 const ORDER_NOT_CHANGED = "The order could not be changed, so the next time skip would carry out its old words. Try again.";
-const ORDER_GONE = "This order is no longer queued.";
+const ORDER_GONE = ORDER_GONE_NOTE;
 
 const createManualAction = (input) =>
 normalizeActionEntry({
@@ -1159,23 +1170,29 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         lastRoundRef.current = game.round;
     }, [isOpen, game.round]);
 
-    // Saves the list and says whether it was saved. The panel shows the new list
-    // only once it is: the time skip reads actions.json, not this panel, so an
-    // order shown as queued but never written would be dropped without a word.
-    // On a failure nothing is put back from this closure, because nothing was
-    // changed: the list on screen is still what the store holds, including
-    // anything the advisor or a unit move wrote meanwhile.
-    const persistActions = async (nextActions, failureNote = ORDER_NOT_SAVED) => {
+    // Makes one change to the stored queue (commitActions) and answers what it
+    // did, or null when it was not made (and why is said). The panel shows the
+    // new list only once it is written: the time skip reads actions.json, not
+    // this panel, so an order shown as queued but never written would be
+    // dropped without a word. Nothing is put back from this closure on a
+    // failure: the change was decided on what is stored, and the panel's list
+    // follows the store.
+    const persistChange = async (change, failureNote = ORDER_NOT_SAVED) => {
+        let result;
         try {
-            await saveActions(nextActions);
+            result = await commitActions(change);
         } catch (error) {
             console.error("Failed to save actions:", error);
             setSaveError(failureNote);
-            return false;
+            return null;
         }
-        setActions(nextActions);
+        if (result.outcome) {
+            setSaveError(result.outcome);
+            return null;
+        }
+        if (result.next) setActions(result.next);
         setSaveError("");
-        return true;
+        return result;
     };
 
     // A card's order already in the queue shows as queued, restored cards too.
@@ -1224,7 +1241,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
                 return;
             }
             // Not saved: the order stays in the box to try again.
-            if (!(await persistActions([...actions, nextAction]))) return;
+            if (!(await persistChange((stored) => queueOrderIn(stored, nextAction)))) return;
             // What the player told their country to do is half of "the series of
             // events they did" — a turn that goes wrong usually goes wrong
             // BECAUSE of an order, and the diagnostics log is unreadable without
@@ -1279,7 +1296,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     };
 
     const handleDelete = async (index) => {
-        const removed = actions[index];
+        let removed = actions[index];
         if (inSharedGame()) {
             const answer = await requestFromHost("unorder", { order: String(removed?.id || "") });
             setSaveError(answer.ok ? "" : answer.error || ORDER_NOT_REMOVED);
@@ -1288,8 +1305,16 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         if (movesUnit(removed) && isSimulationBusy()) return;
         // Removed from the queue first: undoing the unit's move while the order
         // stays in actions.json would leave the skip acting on a move the map no
-        // longer shows.
-        if (!(await persistActions(actions.filter((_, actionIndex) => actionIndex !== index), ORDER_NOT_REMOVED))) return;
+        // longer shows. By its id, and decided on the order as stored: whether
+        // its move is undone follows what it is now (a skip may have carried it
+        // out since the panel drew it).
+        const done = await persistChange((stored) => {
+            const taken = removeOrderFrom(stored, removed?.id);
+            if (taken.removed && movesUnit(taken.removed) && isSimulationBusy()) return { next: null, outcome: TURN_RUNNING_NOTE };
+            return taken;
+        }, ORDER_NOT_REMOVED);
+        if (!done) return;
+        removed = done.removed;
         // Deleting a queued troop order also undoes what it did to the map —
         // otherwise a manual move/deploy stays in place while the AI is never
         // told about it (#368). Only planned orders carry a revert; anything
@@ -1326,18 +1351,20 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
             logDebugEvent("action", `Order edit sent to the host: ${fields?.title || fields?.text || "(untitled)"}`);
             return "";
         }
-        const edited = rewordAction(current, fields);
-        if (edited === current) return "";
-        const next = actions.map((action) => (action === current ? edited : action));
+        // By its id, on the order as stored when it is written, and only if it
+        // may still be changed then (a skip may have begun, or carried it out).
+        let result;
         try {
-            await saveActions(next);
+            result = await commitActions((stored) => rewordOrderIn(stored, id, fields, { turnRunning: isSimulationBusy() }));
         } catch (error) {
             console.error("Failed to save the edited order:", error);
             return ORDER_NOT_CHANGED;
         }
-        setActions(next);
+        if (result.outcome) return result.outcome;
+        if (!result.next) return "";
+        setActions(result.next);
         setSaveError("");
-        logDebugEvent("action", `Order edited: ${edited.title || edited.text || "(untitled)"}`);
+        logDebugEvent("action", `Order edited: ${result.edited?.title || result.edited?.text || "(untitled)"}`);
         return "";
     };
 
@@ -1355,7 +1382,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
             const answer = await requestFromHost("order", orderRequestFor(queuedAction));
             setSaveError(answer.ok ? "" : answer.error || ORDER_NOT_SAVED);
             if (!answer.ok) return;
-        } else if (!(await persistActions([...actions, queuedAction]))) {
+        } else if (!(await persistChange((stored) => queueOrderIn(stored, queuedAction)))) {
             // Not saved: the card stays unqueued, so it can be tried again.
             return;
         }

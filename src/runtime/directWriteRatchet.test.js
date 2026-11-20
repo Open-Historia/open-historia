@@ -65,7 +65,7 @@ const ALLOWED = {
   // Keep both forbidden; Project edits now use the canonical world write queue.
   "Game/GameUI/chat.jsx": { "writeChatsState": 1, "writeWorldState": 1 },
   "Game/GameUI/stats.jsx": { "writeWorldState": 1 },
-  "Game/GameUI/actions.jsx": { "writeActionsState": 1, "writeWorldState": 1 },
+  "Game/GameUI/actions.jsx": { "writeWorldState": 1 },
   // Projects now use mutateWorldState. No direct write is allowed (default 0).
   // alpha: starting a game as a group gives it its colour and flag, as a faction's does.
   "Game/GameUI/libraryBar.jsx": { "writeJson(colors)": 2, "writeJson(flags)": 2 },
