@@ -375,6 +375,7 @@ import {
   advanceStandingOrders,
   standingOrdersAskWater,
   applyEventImpactsToWorld,
+  applyCharacterOpsToWorld,
   applyProjectOpsToWorld,
   confirmResolvedDeployments,
   lastUnitMoveDates,
@@ -490,6 +491,7 @@ import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../r
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline, runWithIdleDeadline } from "./idleDeadline.js";
 import { REPAIR_STOP_TIME_BUDGET, runBoundedRepairCall } from "./repairCall.js";
 import { isDebugLogVerbose, logDebugEvent } from "../../runtime/debugLog.js";
+import { eventsTouchCharacter, normalizeCharacters } from "../../runtime/characters.js";
 import { isFallbackListConfigured } from "./providerConfig.js";
 import { assertCampaignUnchanged, campaignChanged } from "../../runtime/campaignGuard.js";
 import { HELD_TURN_STALE_NOTE, heldTurnOutdated, mergeActionsAtCommit, restorePointProblem, restorePointsFor, storedActionsForMerge } from "../../runtime/turnCommit.js";
@@ -4922,6 +4924,27 @@ const reviewedProjectOps = ({ review, visibleEvents, hiddenEvents, idMap }) => {
   return { ops, skipped: false };
 };
 
+// The player's person, asked only when this turn's events touched them
+// (characters.js eventsTouchCharacter). It never holds the turn: a failed or empty
+// answer leaves the sheet as it was, and the caller logs the failure.
+const generateCharacterOps = async (bundle, events, { signal } = {}) => {
+  const polity = normalizeString(bundle.game?.country);
+  const character = normalizeCharacters(bundle.world?.characters).byPolity[polity] ?? null;
+  if (!eventsTouchCharacter(events, character)) return [];
+  const variables = await buildTemplateVariables(bundle, { taskKey: "character" });
+  const eventList = events
+    .map((event, index) => `[${index}] ${event.date || "undated"} — ${event.title}\n${event.description}`)
+    .join("\n\n");
+  const { payload } = await runJsonTask("character", {
+    signal,
+    userMessage:
+      "These events have just been simulated. Move the player's character to match them, "
+      + `and return {"characterOps":[]} if they did not touch this person.\n\n${eventList}`,
+    variables,
+  });
+  return normalizeArray(payload?.characterOps);
+};
+
 const generateProjectOps = async (bundle, events, { signal, hiddenEvents = [] } = {}) => {
   const board = normalizeArray(bundle.world?.projects);
   const hidden = normalizeArray(hiddenEvents);
@@ -9119,6 +9142,7 @@ export const interveneAfterEvent = async (keptCount) => {
       // events as written, and the board does not move — it moved when the
       // turn was first applied, and the kept events carry their own ops.
       projects: { bundle, signal: null, review: { parts: {}, agentReports: [] }, requests },
+      character: { bundle, signal: null },
     });
     logDebugEvent("turn", `Intervene: the round stopped after "${normalizeString(kept.at(-1)?.title)}" on ${closingDate}; ${dropped.length} event${dropped.length === 1 ? "" : "s"} discarded, no request made.`, {
       kept: kept.map((event) => event.title),
@@ -9267,6 +9291,7 @@ const applySimulationResult = async ({
   baseGame,
   campaignId = "",
   projects = null,
+  character = null,
   // The skip's phase tracker (skipPhases.js), when a time skip is applying: the
   // board and the history each announce themselves. Null everywhere else.
   phases = null,
@@ -10347,6 +10372,32 @@ const applySimulationResult = async ({
 
   // The structures this turn built for a Project, linked to it now that both
   // the map and the board are final (nativeStructureDirector.js).
+  // The player's person (characters.js). Asked only when this turn's events touched
+  // them, and never holds the turn: a failed answer is logged and the turn is written
+  // with the sheet as it was.
+  if (character?.bundle) {
+    try {
+      const characterOps = await generateCharacterOps(
+        { ...character.bundle, game: nextGame, world: worldWithImpacts },
+        freshEvents,
+        { signal: character.signal },
+      );
+      if (characterOps.length > 0) {
+        const applied = applyCharacterOpsToWorld({
+          date: nextGame.gameDate,
+          ops: characterOps,
+          world: worldWithImpacts,
+        });
+        worldWithImpacts = applied.world;
+        if (applied.rejected.length > 0) {
+          logDebugEvent("character", "Some character changes were refused", applied.rejected);
+        }
+      }
+    } catch (error) {
+      logDebugEvent("character", "The character task failed; the sheet is unchanged this turn", error);
+    }
+  }
+
   worldWithImpacts = linkStructuresToProjects(worldWithImpacts, result.structureLinks);
 
   // A milestone whose date this skip passed with nothing said about it is late,
@@ -16234,6 +16285,7 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
     },
     // The Board moves with a Scene too, from the review's answer.
     projects: withBoard ? { bundle, signal: null, review: scene.review, requests: null } : null,
+    character: { bundle, signal: null },
     result: {
       clearActions: false,
       events: sceneOutcome ? [sceneOutcome] : [],
@@ -18300,6 +18352,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // and the history (nothing, for a skip a provider refused folded), and
   // `requests` the skip's budget, for the little the apply may still ask.
   applyArgs.projects = { bundle, signal, review, requests: state.requests, checks };
+  applyArgs.character = { bundle, signal };
   applyArgs.phases = state.phases;
   // Held with the turn, so a retry of the board gets the curator's and the
   // breadth repair's answers back rather than asking for them again.

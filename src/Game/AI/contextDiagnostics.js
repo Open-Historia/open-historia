@@ -152,6 +152,7 @@ const TASK_PROFILE_MAP = Object.freeze({
   rostraFeed: CONTEXT_PROFILE_KEYS.WORLD_SIMULATION,
   warRoom: CONTEXT_PROFILE_KEYS.ADVISOR,
   projects: CONTEXT_PROFILE_KEYS.MECHANICAL,
+  character: CONTEXT_PROFILE_KEYS.MECHANICAL,
   worldMotionRepair: CONTEXT_PROFILE_KEYS.WORLD_SIMULATION,
   worldBreadthRepair: CONTEXT_PROFILE_KEYS.WORLD_SIMULATION,
   eventConsolidator: CONTEXT_PROFILE_KEYS.HISTORY,
@@ -447,6 +448,7 @@ const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
     "worldBeforeRoundOne",
   ]),
   projects: Object.freeze(["playerPolity", "projectsSummary", "plannedActions"]),
+  character: Object.freeze(["playerPolity", "charactersSummary", "simulationRules", "language"]),
   // buildPregameBootstrapDirective dates the bootstrap from date/dateReadable and
   // lists the canonical state already present, so the model does not repeat it.
   pregameHistory: Object.freeze(["date", "dateReadable", "canonicalWarContext", "canonicalDiplomaticContext"]),

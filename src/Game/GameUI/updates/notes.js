@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The player's own person, shown as a Character tab in the Actions panel
+    // (GameUI/character.jsx). A readout: the sheet is written by the game, not the player.
+    id: "2026-11-player-character",
+    kind: "minor",
+    date: "2026-11-20",
+    channel: "beta",
+    banners: [
+      {
+        title: "Your character has a sheet",
+        items: [
+          "The Actions panel has a Character tab with the person you play: name, skills, reputation and traits.",
+          "Health and injuries are listed, and they change when events touch you.",
+          "Your purse and inventory show what you carry, and the purse shows how it changed this period.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",

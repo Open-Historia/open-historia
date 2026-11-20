@@ -33,6 +33,7 @@ import { normalizeApplicationReceipt } from "./applicationReceipt.js";
 import { hasMalformedRelationSummary } from "./relationSummary.js";
 import { normalizeFiledEvents } from "./filedEvents.js";
 import { applyReportOps, normalizeReportOp, normalizeReports } from "./reports.js";
+import { applyCharacterOps, normalizeCharacters } from "./characters.js";
 import { normalizeGmChanges, normalizeReminders } from "./gmChanges.js";
 import { normalizePlayerGoals } from "./playerGoal.js";
 import { normalizeInteractiveOffer } from "./interactiveOffer.js";
@@ -236,6 +237,10 @@ export const WORLD_DEFAULTS = {
   // normalizeWorldState return too: this spread is overwritten by the incoming
   // world, so a field declared only here never survives a round trip.
   projects: [],
+  // The player's own person, per polity (characters.js). Written only by the
+  // character task through applyCharacterOpsToWorld; listed in the normalizeWorldState
+  // return below so it survives a round trip like projects does.
+  characters: { schemaVersion: 1, byPolity: {} },
   // Region id -> claimant polity names: the world-data way to mark a region
   // DISPUTED (striped in the administrator's + claimants' colors). Same effect
   // as a claimants list on the region's geojson feature, but declarable by a
@@ -4639,6 +4644,7 @@ export const normalizeWorldState = (world) => {
       const owner = resolveOwner(project.ownerCode);
       return owner === project.ownerCode ? project : { ...project, ownerCode: owner };
     }),
+    characters: normalizeCharacters(nextWorld.characters),
     // A shared game's other boards (multiplayer/host/gameHost.js): every country
     // a second person plays keeps a Projects board of its own here, by country
     // name. world.projects stays the host's, which is single player's. Only a
@@ -6338,6 +6344,14 @@ export const applyEventImpactsToWorld = ({
 // touch the player's own work — see canPlayerDirect. Anything refused for that
 // reason comes back in refusedProjectIds rather than being applied and rather than
 // throwing; the panel re-reads within five seconds either way.
+// The character door. Like the projects door, it returns the world it changed and
+// the operations refused with a reason; a refused operation changes nothing.
+export const applyCharacterOpsToWorld = ({ date = "", ops, world }) => {
+  const nextWorld = normalizeWorldState(world);
+  const { characters, rejected } = applyCharacterOps(nextWorld.characters, ops, { date });
+  return { world: { ...nextWorld, characters }, rejected };
+};
+
 export const applyProjectOpsToWorld = ({
   actor = "ai",
   date = "",

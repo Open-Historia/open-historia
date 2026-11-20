@@ -789,3 +789,15 @@ Author starting tags come from `getNationTags` (`assets.js`, the scenario's `tag
 | `isPolityLandless` | Territory check. |
 
 All reads/writes route through `src/runtime/assets.js` `readJson`/`writeJson`, which layer value-caching, request batching, Cache-Storage persistence with a HEAD freshness check, and derived-cache invalidation (`invalidateDerivedCachesForWrite`, `assets.js`) on top of the raw `/api/runtime/json/*` endpoints.
+
+## The player's character (`world.characters`)
+
+A country is not a person. `world.characters` keeps one named individual per polity that a scenario asks for: name, birthdate, skills, reputation, traits, health and injuries, a purse, and an inventory.
+
+- **Shape.** `{ schemaVersion: 1, byPolity: { [polity]: Character } }`. The key is the player's polity, as `playerGoals` is.
+- **Who writes it.** Only the narrator, through the `character` task, which runs when a turn's events touch the person (`eventsTouchCharacter`, `src/runtime/characters.js`). The task returns `characterOps` (`create`, `patch`, `injure`, `heal`, `gain`, `lose`, `earn`, `spend`); `applyCharacterOpsToWorld` applies them and returns the operations refused, each with a reason. A refused operation changes nothing.
+- **Money.** The purse is reconciled by the code, not by the model: start of period, plus income, minus expenses, equals the purse now. `purseReconciliation` reports a mismatch rather than patching it.
+- **Failure.** The character task never holds a turn. A failed answer is logged and the sheet stays as it was.
+- **Rename.** `renamePolityInWorld` moves the key when the polity is renamed (`server/polityRename.js`).
+- **Read.** The Character tab in the Actions panel (`src/Game/GameUI/character.jsx`) is a read-only sheet. The player does not write the sheet.
+- **Not in the scenario.** `characters` is play state, so it is not in `TEMPLATE_WORLD_OVERRIDE_KEYS`: a new game starts without a person, and the first events create one.

@@ -1,4 +1,5 @@
 import dayjs from "dayjs";
+import { purseReconciliation } from "../../runtime/characters.js";
 import { JSON_URLS, getNationTags, loadRegionCatalog, loadScenarioRegionCatalog, prepareWorkerFetchableUrl, readJson } from "../../runtime/assets.js";
 import { resolveAllCountryTags, resolveCountryTags } from "../../runtime/countryTags.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
@@ -95,6 +96,35 @@ const joinWithinCharBudget = (
 // The time skip's two tasks, whose templates state some of what other tasks
 // get only from these variables (the briefing, an order's id).
 const SKIP_TASKS = new Set(["jumpForward", "autoJumpForward"]);
+
+
+// The player's person as the character task reads it. Empty-state wording is
+// explicit, because the task creates the character only when the sheet says it
+// does not exist yet.
+export const buildCharactersSummaryText = (world, game) => {
+  const polity = normalizeString(game?.country);
+  const character = world?.characters?.byPolity?.[polity];
+  if (!character) {
+    return `There is no character yet for ${polity || "the player's polity"}. Create one (op create) from the rules.`;
+  }
+  const skills = Object.entries(character.skills).map(([name, level]) => `${name} ${level}`).join(", ");
+  const injuries = character.health.injuries.length
+    ? character.health.injuries.map((injury) => `${injury.id}: ${injury.type}, ${injury.location} (${injury.effects})`).join("; ")
+    : "none";
+  const items = character.inventory.length
+    ? character.inventory.map((item) => `${item.id}: ${item.name} x${item.qty} (${item.rarity})`).join("; ")
+    : "none";
+  const reconciliation = purseReconciliation(character);
+  return [
+    `Name: ${character.name} (born ${character.birthdate || "unknown"}), ${character.sex || "sex unknown"}, ${character.culture}, ${character.faith}.`,
+    `Titles: ${character.titles.join(", ") || "none"}. Location: ${character.location || "unknown"}.`,
+    `Traits: ${character.traits.join(", ") || "none"}.`,
+    `Skills: ${skills}.`,
+    `Health: ${character.health.status}. Injuries: ${injuries}.`,
+    `Purse: ${character.purse.amount} ${character.purse.currency} (start of period ${reconciliation.start}).`,
+    `Inventory: ${items}.`,
+  ].join("\n");
+};
 
 export const renderTemplate = (template, variables) =>
   String(template ?? "").replace(/\$\{([^}]+)\}/g, (_match, key) => {
@@ -3087,6 +3117,9 @@ export const buildPromptContext = async (bundle, {
   }
   if (wants("projectsSummary")) {
     result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game, { compact: SKIP_TASKS.has(taskKey) });
+  }
+  if (wants("charactersSummary")) {
+    result.charactersSummary = buildCharactersSummaryText(bundle.world, bundle.game);
   }
 
   const worldBeforeRoundOne =
