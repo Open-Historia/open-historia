@@ -12,7 +12,7 @@
 // against the geometry itself, so an edit cannot be missed, however it was made.
 //
 // Deliberately free of OpenLayers: the caller writes the features (it owns the
-// projection and the five-decimal rounding), and this decides what travels. The
+// projection and the seven-decimal rounding), and this decides what travels. The
 // other half, applying the result to the stored map, is server/regionDelta.js.
 
 import { regionDeltaKey } from "../../server/regionDelta.js";

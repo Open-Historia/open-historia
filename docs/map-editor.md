@@ -632,3 +632,15 @@ The diff that produced the changes (`src/runtime/scenarioChanges.js`, `diffScena
 When pasting copied regions into another map, confirm the overlapping-territory warning. A successful paste is **one native Undo/Redo action** for both its region geometry and the polity/type/group/flag/colour/tag records that were newly imported with it; existing target records always win. Undo does not discard separate later edits to an imported record. An empty or rejected paste makes no new document metadata changes.
 
 Under **Maps & appearance → Map layers**, turn on **Show OpenStreetMap street reference** to see a temporary, modern street/geographic reference while tracing. This changes only the editor's current map canvas, never the scenario's selected historical basemap or any region geometry. Internet access is required; uploaded custom backgrounds take priority. Modern administrative lines depend on the tile style and zoom—this is not an independent historical boundary layer or a replacement for authored scenario borders. The option resets on editor remount.
+
+### Close-up region drawing precision
+
+The native OpenLayers editing view allows zoom **1–24** (four extra close-up levels above the previous limit of 20). Use mouse wheel or the map's existing +/− controls. A live readout beside those controls shows the actual zoom level; it is the **view zoom**, not the maximum native resolution of the selected tile imagery. Zooming to a small region, group, polity or war shape will fit as close as level 20; continue manually to level 24 for detailed vertex positioning.
+
+Edited region boundaries are serialized using **seven-decimal WGS84 coordinates** in map saves, scenario authoring and the cross-map region clipboard, including incremental saves. This reduces coordinate rounding relative to the older five-decimal export without changing canonical region IDs or making up cartographic detail. City/unit point coordinates retain their own existing formats. Raster street/satellite tiles may look blurry above their native source zoom; region vectors and manually supplied high-resolution reference images remain editable at the full view zoom.
+
+#### Refined close-up zoom controls
+
+The Map Editor retains quick **one-level** +/− and mouse-wheel steps at zooms below 7. Starting at **Z 7**, the step becomes **0.7 levels** for finer boundary drawing without excessive scrolling. One close-up step changes linear magnification by about 62%, instead of doubling it; the hard limits remain 1–24. Mouse-wheel notches and +/− use the same speed, while precision trackpad gestures stay continuous.
+
+The compact top-left control places an easy-to-read **Z 7.1**-style indicator **between** the zoom buttons, with a small `ZOOM / 24` caption. It is an indicator of the actual map view, not a promise that the chosen raster imagery has native detail at level 24. Controls used in other OpenLayers panels retain their existing behavior.

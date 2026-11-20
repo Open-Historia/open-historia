@@ -492,3 +492,33 @@ OSM is **modern reference geography**. Street and available administrative bound
 Native code and pure regression tests were updated, preserving all existing P13/P12 tests and the backend field whitelist. Full Windows regression counts, desktop/web build outcomes, source ZIP hash and browser evidence must be recorded from the actual P14/P15 run in the QA checkpoint before claiming final verification. The test server remains the **existing localhost:3001 only**. Human Firefox pointer, real scenario Save/Reload/Undo author journeys, import/generator recovery, independent boundary source and true Scissors remain open N022 gates.
 
 **P14 follow-up integrity finding:** The legacy `d.setTags` path passes imported tags through `runtime/countryTags.js.normalizeTagList` (trim/collapse whitespace, case-insensitive dedupe, bounded tag count/length). The first atomic-history implementation was audited against that actual setter and corrected to use the **same native normalizer** in its pure planned-field additions and reversible comparison; a focused regression covers duplicates, excess entries, whitespace, and exact Undo. This prevents the new document command from bypassing existing tag invariants.
+
+---
+
+## P16 - High-precision close-up zoom and region-boundary export (Beta N022)
+
+**Base:** clean, user-authorized P13-P15 Beta commit `104040c3dbad05a26adac655c9d71c7e4e9d81c6`. The P16 edits are separate, uncommitted until authorized. P16 is a targeted response to the author's observation that they could not zoom sufficiently close to draw accurate boundaries.
+
+### Verified source-level root cause
+
+The editor's OpenLayers View was configured with `maxZoom: 20`, even though the native region-type presentation supports zoom bands through level 24. The map's "Zoom to region/selection/war shape" helpers also hard-clamped their focus to zoom 8 (owner/group helpers to 7, suggested bbox review to 8). Importantly, the three region geometry writers—working-map full-save, incremental-save and cross-map clipboard—previously exported WGS84 at **five decimal places**, coarsening sub-metre boundary movements regardless of canvas magnification.
+
+### Implemented narrow native behavior
+
+- `editorZoomPrecision.js` establishes one contract: editor zoom **1–24**, region/group/selection/war/suggestion focus ceiling **20**, WGS84 region polygon serialization **7 decimal places**. View `maxZoom` is native OpenLayers, not an overlay scale hack; mousewheel, existing +/- controls, vertex modify, snapping, and region drawing continue through the established map interactions and source.
+- The existing +/− zoom control now carries a tiny **live numeric view-level readout** (e.g., `Z 22.0 / 24`). The view's native `change:resolution` event updates the DOM without React canvas rerenders. Unsubscription and element removal occur in the map lifecycle cleanup. Editor-specific stylesheet rules use existing UI theme tokens.
+- Automatic navigation to small regions, groups, owners and war shapes can fit as close as zoom 20, but remains bounded to avoid unexpected extreme jumps; the author can zoom manually through 24.
+- The **same** seven-decimal `GeoJSON` writer contract is used by full export, incremental `regionChanges.js` persistence and cross-map Clipboard export. Existing Delta IDs, hash comparison, server `regionDelta.js` merge, geometry storage and reference integrity remain unchanged. City/unit point coordinate contracts are not modified.
+- Region rendering and editing still use full-resolution canonical polygon geometry. More view zoom does **not** claim new detail from raster basemaps: their native tile providers often stop well before zoom 24 and the imagery will be upscaled. Uploaded high-resolution reference backgrounds can still help when tracing detail. This pass does not implement native line Scissors or redefine historical boundaries.
+- `editorZoomPrecision.test.js` exercises OpenLayers View zoom reach/clamping, exact 7-decimal WGS84 export/rehydration, unchanged delta detection and changed delta persistence, and demonstrates that five-decimal rounding would collapse two nearby coordinates the new contract preserves.
+
+### Validation still required
+Desktop/web builds, full regression suite and live Chrome `localhost:3001` zoom-to-24 test against a rebuilt bundle must be recorded before declaring this checkpoint verified. Real Firefox physical-pointer drawing and destructive Save/Reload authoring on a disposable QA scenario remain independent acceptance gates.
+
+### P16 follow-up: progressive zoom and integrated zoom control (2026-11-21)
+
+The user validated that zoom 24 is reachable but noted that **one full zoom level per click/wheel notch** is too abrupt when editing a region close up. Because Web Mercator view zoom is logarithmic, each whole level doubles the linear screen magnification; a fine **0.7-level** step instead multiplies screen scale by about **1.625**, allowing finer positioning without doubling the number of clicks. The final behavior is **1.0-level steps below zoom 7** and **0.7 above zoom 7**. A monotonic step-coordinate mapping keeps + followed by - reversible even when crossing the threshold, while maintaining the unchanged hard zoom-1/24 bounds. From zoom 7 to 24 is 25 fine steps, versus 34 for 0.5.
+
+The OL default Zoom control only accepts a constant `delta` and would diverge from the mouse wheel. Editor-only `createEditorZoomControl` replaces **only this map's** stock Zoom control with a standard OL `Control` using accessible keyboard-activatable +/- buttons and native view animation. The existing `MouseWheelZoom` remains responsible for wheel accumulation, trackpad/pinch distinction, mouse anchoring and animation; its already-used `deltaPerZoom_` compatibility seam is updated from the current native view zoom so ordinary wheel notches use the same 1.0/0.7 speed. Trackpad fractional input is not discretized. This intentionally does not change other game/map selectors.
+
+The prior tiny, trailing zoom-level footer becomes a **single vertically integrated zoom unit** with +/- separated by a legible central `Z n.n` value and a muted `ZOOM / 24` caption, clear disabled limits, keyboard focus styling and existing theme tokens. A single view-resolution listener synchronizes the new value and wheel sensitivity; it is removed during map cleanup and the custom control disposes its click handlers. Only the editor-specific class is styled, leaving other OpenLayers controls unchanged. Pure regressions cover step math, threshold reversibility, maximum reach, view limits and native ownership. Browser acceptance must explicitly confirm both buttons and wheel around zoom 7 and the final DOM/CSS presentation.

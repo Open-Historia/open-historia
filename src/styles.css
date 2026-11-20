@@ -708,3 +708,62 @@ button:active:not(:disabled) {
   background: rgba(255, 255, 255, 0.22) !important;
 }
 
+
+/* Purpose-built editor zoom unit. Other OpenLayers pickers stay untouched. */
+.ol-zoom.oh-editor-zoom-control {
+  width: 60px !important;
+  padding: 4px !important;
+  gap: 0 !important;
+  align-items: stretch !important;
+  border-radius: 11px !important;
+  border: 1px solid var(--oh-ui-line, rgba(255, 255, 255, 0.15)) !important;
+  background: var(--oh-ui-panel, rgba(16, 23, 34, 0.96)) !important;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(10px);
+}
+.ol-zoom.oh-editor-zoom-control button {
+  width: 50px !important;
+  height: 34px !important;
+  background: transparent !important;
+  border-radius: 7px !important;
+  color: var(--oh-ui-text, #f5f6f8) !important;
+  font-size: 19px !important;
+  font-weight: 500 !important;
+  transition: background 120ms ease, color 120ms ease !important;
+}
+.ol-zoom.oh-editor-zoom-control button:hover:not(:disabled) {
+  background: var(--oh-ui-tint, rgba(255, 255, 255, 0.12)) !important;
+}
+.ol-zoom.oh-editor-zoom-control button:focus-visible {
+  outline: 2px solid var(--oh-ui-focus, #a7c4ff) !important;
+  outline-offset: -2px !important;
+}
+.ol-zoom.oh-editor-zoom-control button:disabled {
+  opacity: 0.35;
+  cursor: default !important;
+}
+.ol-zoom.oh-editor-zoom-control .oh-editor-zoom-readout {
+  display: flex;
+  width: 50px;
+  min-height: 40px;
+  padding: 5px 1px 4px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 2px;
+  border-top: 1px solid var(--oh-ui-line, rgba(255, 255, 255, 0.1));
+  border-bottom: 1px solid var(--oh-ui-line, rgba(255, 255, 255, 0.1));
+  color: var(--oh-ui-text, #f5f6f8);
+  text-align: center;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.oh-editor-zoom-value {
+  font: 700 13.5px/1.15 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.oh-editor-zoom-caption {
+  color: var(--oh-ui-muted, rgba(240, 240, 240, 0.6));
+  font: 650 9px/1.15 system-ui, sans-serif;
+  letter-spacing: 0.15px;
+}

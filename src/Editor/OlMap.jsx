@@ -18,6 +18,10 @@ import OSM from "ol/source/OSM";
 import XYZ from "ol/source/XYZ";
 import { editorBasemapById, esriXyzUrl } from "./basemaps.js";
 import { streetReferenceActive } from "./editorStreetReference.js";
+import {
+  EDITOR_MAX_ZOOM, EDITOR_MIN_ZOOM, EDITOR_FOCUS_MAX_ZOOM,
+  EDITOR_REGION_GEOJSON_OPTIONS,
+} from "./editorZoomPrecision.js";
 import { regionsInRectangle } from "./regionSelectionTools.js";
 import { regionMoveInteractions } from "./regionMoveInteractions.js";
 import { restoreCarvedEdited } from "./regionCarveHistory.js";
@@ -67,6 +71,8 @@ import { readBackgroundPixels } from "./backgroundPixels.js";
 import { createEmpty as emptyExtent, extend as extendExtent } from "ol/extent";
 import { defaults as defaultInteractions } from "ol/interaction/defaults";
 import MouseWheelZoom from "ol/interaction/MouseWheelZoom";
+import { createEditorZoomControl } from "./editorZoomControl.js";
+import { editorZoomStep, EDITOR_WHEEL_UNITS_PER_NOTCH } from "./editorZoomSteps.js";
 import ImageCanvasSource from "ol/source/ImageCanvas";
 import { buildPoliticalBoundaryTopology } from "../Game/Map/vnext/politicalBoundaryTopology.js";
 import { buildGroupAreaIndex, deriveGroupAreas } from "../Game/Map/vnext/groupAreas.js";
@@ -1118,22 +1124,32 @@ const OlMap = ({
       (region) => isWaterType(typesByIdRef.current[region.get("typeId") || "land"]),
     );
 
-    // OpenLayers zooms a third of a level per mouse-wheel notch (300 wheel units
-    // a level; a notch is 100), so getting from the world to a province took
-    // about seventeen notches. One level a notch, as most map apps do, and the
-    // same rate the game map's MapLibre uses for a trackpad.
-    // shortcut: deltaPerZoom_ is private (OpenLayers has no option for it); if a
-    // later OpenLayers renames it, the wheel falls back to its own rate.
+    // Progressive editor zoom. Stock OL +/- is hardwired to a fixed delta,
+    // so give this editor its own OL Control instead of intercepting clicks.
+    // OL's wheel keeps cursor anchoring and trackpad/pinch handling; its
+    // existing private deltaPerZoom_ compatibility seam follows our rate.
+    const zoomControl = createEditorZoomControl();
     const wheelZoom = new MouseWheelZoom({ maxDelta: 2, duration: 180 });
-    wheelZoom.deltaPerZoom_ = 100;
     const map = new Map({
       target: containerRef.current,
-      controls: defaultControls({ rotate: false }),
+      controls: defaultControls({ rotate: false, zoom: false }).extend([zoomControl.control]),
       interactions: defaultInteractions({ mouseWheelZoom: false }).extend([wheelZoom]),
       layers: [regionLayer, regionOverlayLayer, ...war.layers, groupOutlineLayer, labelLayer, pointLayer, unitLayer, importPreviewLayer, paintPreviewLayer, topologyLayer, borderAssistLayer, scale.layer],
-      view: new View({ center: fromLonLat([0, 20]), zoom: 2.1, minZoom: 1, maxZoom: 20 }),
+      view: new View({
+        center: fromLonLat([0, 20]), zoom: 2.1,
+        minZoom: EDITOR_MIN_ZOOM, maxZoom: EDITOR_MAX_ZOOM,
+      }),
     });
 
+    // View zoom (not tile detail): one listener updates both the compact
+    // indicator and OL wheel sensitivity. Trackpads keep fractional motion.
+    const updateZoomReadout = () => {
+      const level = map.getView().getZoom();
+      zoomControl.update(level);
+      wheelZoom.deltaPerZoom_ = EDITOR_WHEEL_UNITS_PER_NOTCH / editorZoomStep(level);
+    };
+    map.getView().on("change:resolution", updateZoomReadout);
+    updateZoomReadout();
     regionSourceRef.current = regionSource;
     regionLayerRef.current = regionLayer;
     if (regionDisplay) {
@@ -2239,7 +2255,7 @@ const OlMap = ({
       },
       zoomToRegion: (id) => {
         const f = regionSource.getFeatureById(id);
-        if (f) map.getView().fit(f.getGeometry().getExtent(), { padding: [80, 80, 80, 80], duration: 350, maxZoom: 8 });
+        if (f) map.getView().fit(f.getGeometry().getExtent(), { padding: [80, 80, 80, 80], duration: 350, maxZoom: EDITOR_FOCUS_MAX_ZOOM });
       },
       zoomToSelection: (ids) => {
         const feats = (ids || []).map((id) => regionSource.getFeatureById(id)).filter(Boolean);
@@ -2249,12 +2265,12 @@ const OlMap = ({
           const e = f.getGeometry().getExtent();
           ext = [Math.min(ext[0], e[0]), Math.min(ext[1], e[1]), Math.max(ext[2], e[2]), Math.max(ext[3], e[3])];
         }
-        map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 350, maxZoom: 8 });
+        map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 350, maxZoom: EDITOR_FOCUS_MAX_ZOOM });
       },
       // A terrain area, fortified line or climate zone, by its kind and id.
       zoomToWarShape: (kind, id) => {
         const extent = war.sources[kind]?.getFeatureById(String(id))?.getGeometry()?.getExtent();
-        if (extent && Number.isFinite(extent[0])) map.getView().fit(extent, { padding: [80, 80, 80, 80], duration: 350, maxZoom: 8 });
+        if (extent && Number.isFinite(extent[0])) map.getView().fit(extent, { padding: [80, 80, 80, 80], duration: 350, maxZoom: EDITOR_FOCUS_MAX_ZOOM });
       },
       // `patch.claimants` may be a function of the region's own list, so one
       // edit over a selection with differing claims keeps each region's rest.
@@ -2556,9 +2572,7 @@ const OlMap = ({
       exportRegions: (ids) => {
         const feats = (ids || []).map((id) => regionSource.getFeatureById(id)).filter(Boolean);
         const fc = new GeoJSON().writeFeaturesObject(feats, {
-          dataProjection: "EPSG:4326",
-          featureProjection: "EPSG:3857",
-          decimals: 5,
+          ...EDITOR_REGION_GEOJSON_OPTIONS,
         });
         for (const f of fc.features || []) {
           if (f.id != null) f.properties = { ...(f.properties || {}), id: String(f.id) };
@@ -2848,7 +2862,7 @@ const OlMap = ({
             const e = f.getGeometry().getExtent();
             ext = [Math.min(ext[0], e[0]), Math.min(ext[1], e[1]), Math.max(ext[2], e[2]), Math.max(ext[3], e[3])];
           }
-          map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 300, maxZoom: 7 });
+          map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 300, maxZoom: EDITOR_FOCUS_MAX_ZOOM });
         }
         return ids;
       },
@@ -2888,7 +2902,7 @@ const OlMap = ({
             const e = f.getGeometry().getExtent();
             ext = [Math.min(ext[0], e[0]), Math.min(ext[1], e[1]), Math.max(ext[2], e[2]), Math.max(ext[3], e[3])];
           }
-          map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 300, maxZoom: 7 });
+          map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 300, maxZoom: EDITOR_FOCUS_MAX_ZOOM });
         }
         return ids;
       },
@@ -3070,9 +3084,7 @@ const OlMap = ({
       // -> string. That churn is what ran the tab out of memory.
       serializeRegions: () =>
         new GeoJSON().writeFeaturesObject(regionSource.getFeatures(), {
-          dataProjection: "EPSG:4326",
-          featureProjection: "EPSG:3857",
-          decimals: 5,
+          ...EDITOR_REGION_GEOJSON_OPTIONS,
         }),
 
       // What a save actually has to carry (regionChanges.js). Each region is
@@ -3088,7 +3100,7 @@ const OlMap = ({
       // forgetting them.
       serializeRegionChanges: () => {
         const format = new GeoJSON();
-        const options = { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857", decimals: 5 };
+        const options = EDITOR_REGION_GEOJSON_OPTIONS;
         const features = regionSource.getFeatures();
         const writtenFeatures = (function* write() {
           for (const feature of features) yield format.writeFeatureObject(feature, options);
@@ -3244,6 +3256,8 @@ const OlMap = ({
       scaleLayerRef.current = null;
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKeyDown);
+      map.getView().un("change:resolution", updateZoomReadout);
+      zoomControl.dispose();
       map.setTarget(null);
       regionLayer.dispose();
       regionOverlayLayerRef.current = null;
