@@ -491,7 +491,7 @@ import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../r
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline, runWithIdleDeadline } from "./idleDeadline.js";
 import { REPAIR_STOP_TIME_BUDGET, runBoundedRepairCall } from "./repairCall.js";
 import { isDebugLogVerbose, logDebugEvent } from "../../runtime/debugLog.js";
-import { buildMasterReport, characterAfterReport, eventsTouchCharacter, normalizeCharacters } from "../../runtime/characters.js";
+import { eventsTouchCharacter, normalizeCharacters } from "../../runtime/characters.js";
 import { isFallbackListConfigured } from "./providerConfig.js";
 import { assertCampaignUnchanged, campaignChanged } from "../../runtime/campaignGuard.js";
 import { HELD_TURN_STALE_NOTE, heldTurnOutdated, mergeActionsAtCommit, restorePointProblem, restorePointsFor, storedActionsForMerge } from "../../runtime/turnCommit.js";
@@ -10658,43 +10658,6 @@ const applySimulationResult = async ({
     }
   } catch (error) {
     console.warn("[institution lifecycle] native lifecycle advance failed; the completed turn is preserved.", error);
-  }
-
-  // The MASTER REPORT (runtime/characters.js): the round's last event, for the
-  // player's person. Built from the sheet after this turn's changes, and the purse
-  // log is closed only once the report has been written.
-  const reportPolity = normalizeString(baseGame.country);
-  const reportCharacter = normalizeCharacters(nextWorld.characters).byPolity[reportPolity] ?? null;
-  if (reportCharacter) {
-    const report = buildMasterReport({
-      polity: reportPolity,
-      date: nextGame.gameDate,
-      character: reportCharacter,
-      roundEvents: freshEvents,
-    });
-    const reportEvent = normalizeEventEntry({
-      id: `master-report-${nextGame.round}`,
-      date: nextGame.gameDate,
-      title: report.title,
-      description: report.text,
-      playerRelated: true,
-    }, freshEvents.length);
-    const reportKnown = new Set(nextEvents.map((event) => event?.id));
-    if (reportEvent && !reportKnown.has(reportEvent.id)) {
-      freshEvents.push(reportEvent);
-      nextEvents.push(reportEvent);
-    }
-    const characters = normalizeCharacters(nextWorld.characters);
-    nextWorld = {
-      ...nextWorld,
-      characters: {
-        ...characters,
-        byPolity: {
-          ...characters.byPolity,
-          [reportPolity]: characterAfterReport(reportCharacter, { date: nextGame.gameDate, text: report.text }),
-        },
-      },
-    };
   }
 
   // Native PWv2 background motion: after the turn's canonical impacts and any

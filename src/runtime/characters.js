@@ -162,10 +162,6 @@ export const normalizeCharacter = (raw) => {
     // The purse at the last MASTER REPORT. The next report starts from here, so
     // its reconciliation is computed, not written by the model.
     lastReportAmount: asAmount(raw?.lastReportAmount),
-    // The last MASTER REPORT, kept for the sheet to show. Its text is capped, not its meaning.
-    lastReport: raw?.lastReport && typeof raw.lastReport === "object"
-      ? { date: asText(raw.lastReport.date), text: clip(asText(raw.lastReport.text), 6000) }
-      : null,
     updatedDate: asText(raw?.updatedDate),
   };
 };
@@ -384,64 +380,3 @@ export const eventsTouchCharacter = (events, character) => {
     return TOUCH_PATTERN.test(text);
   });
 };
-
-// The age on a given game date, from the birthdate. The game calendar is ISO-like
-// (YYYY-MM-DD). Returns null rather than a guess when either date does not parse.
-export const ageOn = (birthdate, date) => {
-  const from = /^(-?\d{1,4})-(\d{2})-(\d{2})/.exec(asText(birthdate));
-  const on = /^(-?\d{1,4})-(\d{2})-(\d{2})/.exec(asText(date));
-  if (!from || !on) return null;
-  let years = Number(on[1]) - Number(from[1]);
-  if (Number(on[2]) < Number(from[2]) || (Number(on[2]) === Number(from[2]) && Number(on[3]) < Number(from[3]))) years -= 1;
-  return years >= 0 ? years : null;
-};
-
-const labelled = (label, value) => `- ${label}: ${value}`;
-
-// The MASTER REPORT for one round, as the sheet and the timeline show it. Pure:
-// the caller decides when it is written and what it does to the purse.
-export const buildMasterReport = ({ polity, date, character, roundEvents = [] }) => {
-  const reconciliation = purseReconciliation(character);
-  const age = ageOn(character.birthdate, date);
-  const skills = CHARACTER_SKILLS.map((skill) => `${skill} ${character.skills[skill]}`).join(", ");
-  const injuries = character.health.injuries.length
-    ? character.health.injuries.map((injury) => `${injury.type}: ${injury.location}${injury.effects ? ` (${injury.effects})` : ""}`).join("; ")
-    : "None";
-  const items = character.inventory.length
-    ? character.inventory.map((item) => `${item.name}${item.qty > 1 ? ` x${item.qty}` : ""} (${item.rarity})`).join("; ")
-    : "None";
-  const money = reconciliation.balanced
-    ? `${reconciliation.start} + ${reconciliation.income} - ${reconciliation.expenses} = ${reconciliation.end}`
-    : `${reconciliation.start} + ${reconciliation.income} - ${reconciliation.expenses} = ${reconciliation.end} (DOES NOT RECONCILE)`;
-  const events = roundEvents.length
-    ? roundEvents.map((event) => `- ${event?.title ?? "Untitled"}`).join("\n")
-    : "- None";
-  const text = [
-    "CHARACTER",
-    labelled("Name", character.name),
-    labelled("Age", age === null ? "unknown" : `${age} (born ${character.birthdate})`),
-    labelled("Titles and offices", character.titles.join(", ") || "None"),
-    labelled("Culture and faith", [character.culture, character.faith].filter(Boolean).join(", ") || "Unknown"),
-    labelled("Health", character.health.status),
-    labelled("Injury record", injuries),
-    labelled("Skills", skills),
-    labelled("Traits", character.traits.join(", ") || "None"),
-    labelled("Reputation", `piety ${character.reputation.piety || "unknown"}, renown ${character.reputation.renown || "unknown"}, honour ${character.reputation.honour || "unknown"}`),
-    "",
-    "FINANCES",
-    labelled("Personal money", `${character.purse.amount} ${character.purse.currency}`),
-    labelled("Reconciliation", money),
-    labelled("Property and assets", items),
-    "",
-    "THIS ROUND - EVENT RECORD",
-    events,
-  ].join("\n");
-  return { title: `MASTER REPORT - ${polity} - ${date}`, text };
-};
-
-// The character after a report has been written: the period's purse log is closed,
-// and the report is kept for the sheet. Returns a new character.
-export const characterAfterReport = (character, { date, text }) => ({
-  ...closePurseLog(character),
-  lastReport: { date, text: clip(asText(text), 6000) },
-});

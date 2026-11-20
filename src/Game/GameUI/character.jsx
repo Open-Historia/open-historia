@@ -75,11 +75,6 @@ export const CharacterPanel = () => {
           </div>
         )}
       </Section>
-      {character.lastReport && (
-        <Section label="Last report">
-          <div style={{ whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.5 }}>{character.lastReport.text}</div>
-        </Section>
-      )}
       <Section label="Inventory">
         {character.inventory.length
           ? character.inventory.map((item) => (

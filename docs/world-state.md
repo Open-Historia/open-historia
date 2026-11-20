@@ -801,5 +801,3 @@ A country is not a person. `world.characters` keeps one named individual per pol
 - **Rename.** `renamePolityInWorld` moves the key when the polity is renamed (`server/polityRename.js`).
 - **Read.** The Character tab in the Actions panel (`src/Game/GameUI/character.jsx`) is a read-only sheet. The player does not write the sheet.
 - **Not in the scenario.** `characters` is play state, so it is not in `TEMPLATE_WORLD_OVERRIDE_KEYS`: a new game starts without a person, and the first events create one.
-- **MASTER REPORT.** Every round ends with one: a timeline event titled `MASTER REPORT - [polity] - [date]`, built by `buildMasterReport` from the sheet after the turn's changes and the round's event titles. The purse log is then closed (`characterAfterReport`), so the next report starts from this one's purse. The report is kept on the sheet as `lastReport` and shown there. Realm statistics are not in this report yet; the country stat sheet remains the place for them.
-
