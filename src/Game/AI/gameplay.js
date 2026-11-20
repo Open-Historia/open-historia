@@ -18352,6 +18352,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // and the history (nothing, for a skip a provider refused folded), and
   // `requests` the skip's budget, for the little the apply may still ask.
   applyArgs.projects = { bundle, signal, review, requests: state.requests, checks };
+  applyArgs.character = { bundle, signal };
   applyArgs.phases = state.phases;
   // Held with the turn, so a retry of the board gets the curator's and the
   // breadth repair's answers back rather than asking for them again.
