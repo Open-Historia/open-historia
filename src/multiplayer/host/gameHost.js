@@ -51,6 +51,7 @@ import { applyProjectOpsToWorld, normalizeProjects } from "../../runtime/gameSta
 import { opsPlaceStructures, seatProjectOps } from "./seatProjects.js";
 import { deployFor, disbandFor, revertOrderFor } from "./forces.js";
 import { orderCapRefusal } from "./orderCap.js";
+import { rewordAction } from "../../runtime/actionEdit.js";
 import { huntSeenBy, opaqueId, withFleetOrdered, withLineGivenUp, withOrdersSeen, withRenamed } from "./onlyOrdered.js";
 import { agentOrderFor } from "./agents.js";
 import { institutionThreadRefusal } from "./institutions.js";
@@ -1427,26 +1428,34 @@ export const createGameHost = ({
       round.touch(seat.country);
       return refusal;
     },
-    // A queued order of the seat's own, given other words; nothing else of it
-    // changes (advisorBlocks.js planAdvisorActionEdits, as single player edits it).
-    reword: async (connection, { order, title, text }, seat, { store }) => {
+    // A queued order of the seat's own, given other words, in its place in the
+    // queue, by its id: as single player changes one (runtime/actionEdit.js
+    // rewordAction), so what was derived from the old words follows the new
+    // ones and nothing else of it changes. Like every request, one sent while a
+    // round is resolved waits for the round, which carries the order out as
+    // it was: it is then refused, in words.
+    reword: async (connection, { order, title, text, chatStarter }, seat, { store }) => {
       if (!started()) return "Orders are changed while a round is being planned.";
       const named = clean(title).slice(0, ORDER_TITLE_MAX);
       const body = clean(text).slice(0, ORDER_MAX_CHARS);
-      if (!named && !body) return "An order needs words.";
-      let found = false;
+      const opening = clean(chatStarter).slice(0, ORDER_MAX_CHARS);
+      if (!named && !body && !opening) return "An order needs words.";
+      let refusal = "That is not one of your queued orders.";
       await store.updateActions((actions) => {
         const all = list(actions);
-        const index = all.findIndex((action) =>
-          clean(action?.id) === clean(order) && same(action?.ownerCode, seat.country) && clean(action?.status || "planned") === "planned");
+        const index = all.findIndex((action) => clean(action?.id) === clean(order) && same(action?.ownerCode, seat.country));
         if (index < 0) return null;
-        found = true;
+        if (clean(all[index]?.status || "planned") !== "planned") {
+          refusal = "That order was carried out already.";
+          return null;
+        }
+        refusal = "";
         const next = [...all];
-        next[index] = { ...all[index], ...(named ? { title: named } : {}), ...(body ? { text: body } : {}) };
+        next[index] = rewordAction(all[index], { title: named, text: body, chatStarter: opening });
         return next;
       });
       round.touch(seat.country);
-      return found ? "" : "That is not one of your queued orders.";
+      return refusal;
     },
     unorder: async (connection, { order }, seat, { store }) => {
       if (!started()) return "Orders can be withdrawn while a round is being planned.";

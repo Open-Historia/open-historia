@@ -72,6 +72,20 @@ export const setSharedRoundDays = (days) => {
   for (const listener of [...roleListeners]) listener();
 };
 
+// The phase of the host's round (host/round.js: planning, countdown,
+// resolving, revealing), which says whether a queued order can be edited now
+// (runtime/actionEdit.js orderEditBlock): the host takes a change at once
+// except while it resolves a round. "" in no shared game. For
+// useSyncExternalStore, with the role's subscription.
+let roundPhase = "";
+export const sharedRoundPhase = () => roundPhase;
+export const setSharedRoundPhase = (phase) => {
+  const next = typeof phase === "string" ? phase.trim() : "";
+  if (next === roundPhase) return;
+  roundPhase = next;
+  for (const listener of [...roleListeners]) listener();
+};
+
 // Every seat of the host's lobby, with its player's name (client/seatRoster.js
 // rosterOf): the map's stars, the region card's "Played by" and the game
 // menu's Players read it. Setting the seats sets the countries people play

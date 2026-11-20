@@ -27,7 +27,7 @@ import { GENERATION_COMPLETE_EVENT, adoptStoredAiRecord } from "../../Game/AI/te
 import { UNROUTED_NOTICE, planGameWrite, planWorldWrite, revealedTurnOf, suggestionsOutlived, unroutedChanges, unroutedRefusal } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
-import { setSharedAdvisorRefusal, setSharedGamePeople, setSharedGameRole, setSharedGameSeats, setSharedGameSettings, setSharedNotices, setSharedRequester, setSharedRequestsHeld, setSharedRoundBase, setSharedRoundDays, SHARED_ROUND_LANDED } from "./sharedGameBridge.js";
+import { setSharedAdvisorRefusal, setSharedGamePeople, setSharedGameRole, setSharedGameSeats, setSharedGameSettings, setSharedNotices, setSharedRequester, setSharedRequestsHeld, setSharedRoundBase, setSharedRoundDays, setSharedRoundPhase, SHARED_ROUND_LANDED } from "./sharedGameBridge.js";
 import { roundBaseOf } from "./roundBase.js";
 import { createRoundPayer } from "./roundPayer.js";
 import { createLoopbackScreenSide } from "../transport/loopback.js";
@@ -336,6 +336,8 @@ const makeClient = (send, { maxMessageChars = Infinity } = {}) => createGameClie
     if (lobby) setSharedGameSeats(lobby.seats);
     // And how far each round moves the world, which the Timeline panel shows in place of its skips.
     if (lobby?.settings) setSharedRoundDays(lobby.settings.daysPerRound);
+    // And the round's phase, which says whether a queued order can be edited (Actions panel).
+    setSharedRoundPhase(round?.phase);
     set({
       lobby,
       round,
@@ -787,6 +789,7 @@ export const leaveSharedGame = async ({ stopHosting = true, endedWith = "", relo
   setSharedNotices([]);
   setSharedRoundBase(null);
   setSharedRoundDays(0);
+  setSharedRoundPhase("");
   setSharedGameSettings(null);
   setSharedRequestsHeld([]);
   setSharedAdvisorRefusal("");

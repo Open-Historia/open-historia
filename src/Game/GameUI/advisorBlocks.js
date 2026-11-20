@@ -8,6 +8,9 @@
 // IMPORT-FREE, the same trick eventFocus.js uses, so its tests run in a bare
 // checkout — which is also why the repairs below are reimplemented here rather
 // than imported from gameplay.js's lenientJsonParse, whose behaviour they mirror.
+//
+// Its one import, actionEdit.js, is import-free itself.
+import { rewordAction } from "../../runtime/actionEdit.js";
 
 const maybeJsonParse = (value) => {
   try {
@@ -589,12 +592,12 @@ export const planAdvisorActionEdits = (current, proposal, normalize, { repeatOf 
     const existingIndex = id ? next.findIndex((action) => action.id === id) : -1;
     if (existingIndex !== -1) {
       const existing = next[existingIndex];
-      const updated = {
-        ...existing,
+      // Given other words as the player's own Edit gives them (runtime/actionEdit.js).
+      const reworded = rewordAction(existing, {
         ...(raw.title ? { title: String(raw.title) } : {}),
         ...(raw.text ? { text: String(raw.text) } : {}),
-        ...(raw.kind === "chat" || raw.kind === "action" ? { kind: raw.kind } : {}),
-      };
+      });
+      const updated = raw.kind === "chat" || raw.kind === "action" ? { ...reworded, kind: raw.kind } : reworded;
       next[existingIndex] = updated;
       items.push({ change: "updated", title: updated.title });
       continue;

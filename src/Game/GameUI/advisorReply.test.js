@@ -64,10 +64,16 @@ test("removing an order a skip already resolved keeps its outcome", () => {
   assert.deepEqual(reverts, []);
 });
 
-test("an update changes only the fields it names", () => {
+test("an update changes only the fields it names, and what the old words alone made follows the new", () => {
+  // "Raise taxes" was titled by its words: the new words title it, and are its
+  // raw input (runtime/actionEdit.js), as the player's own Edit does.
   const { next, items } = planAdvisorActionEdits(queue(), [{ id: "a1", text: "Raise taxes by 2%", kind: "chat" }], normalize);
-  assert.deepEqual(next[0], { id: "a1", title: "Raise taxes", text: "Raise taxes by 2%", kind: "chat", status: "planned" });
-  assert.deepEqual(items, [{ change: "updated", title: "Raise taxes" }]);
+  assert.deepEqual(next[0], { id: "a1", title: "Raise taxes by 2%", text: "Raise taxes by 2%", rawInput: "Raise taxes by 2%", kind: "chat", status: "planned" });
+  assert.deepEqual(items, [{ change: "updated", title: "Raise taxes by 2%" }]);
+  // A title of its own is kept when only the words change.
+  const titled = [{ id: "b1", title: "Fiscal plan", text: "Raise taxes", kind: "action", status: "planned" }];
+  const kept = planAdvisorActionEdits(titled, [{ id: "b1", text: "Cut spending" }], normalize);
+  assert.deepEqual(kept.next[0], { id: "b1", title: "Fiscal plan", text: "Cut spending", rawInput: "Cut spending", kind: "action", status: "planned" });
 });
 
 test("a stale id is queued as a new action, and the advisor is told", () => {

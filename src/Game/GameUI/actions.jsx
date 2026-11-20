@@ -21,9 +21,10 @@ import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
 import { useTurnRunning } from "./useTurnRunning.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
-import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
-import { orderRequestFor } from "../../multiplayer/client/sharedOrders.js";
-import { ORDER_MAX_CHARS } from "../../multiplayer/game/messages.js";
+import { inSharedGame, requestFromHost, sharedRoundPhase, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
+import { orderRequestFor, rewordRequestFor } from "../../multiplayer/client/sharedOrders.js";
+import { ORDER_MAX_CHARS, ORDER_TITLE_MAX } from "../../multiplayer/game/messages.js";
+import { hasOwnTitle, orderEditBlock, rewordAction } from "../../runtime/actionEdit.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { uiString } from "../../runtime/translator.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
@@ -164,6 +165,8 @@ const aiFailureIncident = (kind, title, { reason = "", rawResponse = "" } = {}) 
 // What the panel says when the queue could not be written.
 const ORDER_NOT_SAVED = "Your order could not be saved, so the next time skip would not see it. Try again.";
 const ORDER_NOT_REMOVED = "The order could not be removed, so the next time skip would still carry it out. Try again.";
+const ORDER_NOT_CHANGED = "The order could not be changed, so the next time skip would carry out its old words. Try again.";
+const ORDER_GONE = "This order is no longer queued.";
 
 const createManualAction = (input) =>
 normalizeActionEntry({
@@ -185,26 +188,219 @@ normalizeActionEntry({
 // A queued troop order whose deletion undoes what it did to the map (#368).
 const movesUnit = (action) => Boolean(action?.unitRevert) && (action.status ?? "planned") === "planned";
 
+const PencilIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+);
+
+// The order's fields as the editor shows them: its words always, a title of
+// its own (an AI suggestion's, the advisor's) when it has one, and the opening
+// line of a conversation it opens. A typed order's title is only its words cut
+// short, and follows them (runtime/actionEdit.js).
+const editDraftOf = (action) => ({
+    title: hasOwnTitle(action) ? action.title : "",
+    text: action.text || "",
+    chatStarter: action.kind === "chat" ? action.chatStarter || "" : "",
+});
+
+const EDIT_FIELD_STYLE = {
+    background: "var(--oh-ui-overlay-strong, rgba(0,0,0,0.2))",
+    border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.15))",
+    borderRadius: "8px",
+    boxSizing: "border-box",
+    color: "white",
+    fontFamily: "sans-serif",
+    fontSize: "0.82rem",
+    lineHeight: "1.45",
+    outline: "none",
+    padding: "0.5rem 0.65rem",
+    width: "100%",
+};
+
+const EDIT_LABEL_STYLE = { color: "rgba(255,255,255,0.5)", fontSize: "0.66rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" };
+
+const focusField = (event) => {
+    event.target.style.borderColor = "var(--oh-ui-focus, rgba(255,255,255,0.25))";
+};
+const blurField = (event) => {
+    event.target.style.borderColor = "var(--oh-ui-line, rgba(255,255,255,0.15))";
+};
+
+// The order, opened in place to be given other words: Save (or Enter, as in
+// the composer) keeps them in the same order, Cancel (or Esc) leaves it as it
+// was. `onSave(fields)` answers "" when it was kept, or why not.
+const ActionEditor = ({ action, blocked, sharedGame, onSave, onCancel }) => {
+    const [draft, setDraft] = React.useState(() => editDraftOf(action));
+    const [saving, setSaving] = React.useState(false);
+    const [error, setError] = React.useState("");
+    const textRef = React.useRef(null);
+    const isTouch = useTouchPrimary();
+    const original = React.useMemo(() => editDraftOf(action), [action]);
+    const hasTitle = Boolean(original.title);
+    const hasOpening = Boolean(original.chatStarter);
+
+    React.useEffect(() => {
+        const field = textRef.current;
+        if (!field) return;
+        field.focus();
+        const end = field.value.length;
+        field.setSelectionRange?.(end, end);
+    }, []);
+
+    const filled = draft.text.trim() && (!hasTitle || draft.title.trim()) && (!hasOpening || draft.chatStarter.trim());
+    const changed = ["title", "text", "chatStarter"].some((key) => draft[key].trim() !== original[key].trim());
+    const canSave = Boolean(filled) && !saving && !blocked;
+
+    const save = async () => {
+        if (!canSave) return;
+        if (!changed) {
+            onCancel();
+            return;
+        }
+        setSaving(true);
+        setError("");
+        let refusal = "";
+        try {
+            refusal = await onSave({
+                text: draft.text.trim(),
+                ...(hasTitle ? { title: draft.title.trim() } : {}),
+                ...(hasOpening ? { chatStarter: draft.chatStarter.trim() } : {}),
+            });
+        } catch (saveError) {
+            console.error("Failed to edit the order:", saveError);
+            refusal = ORDER_NOT_CHANGED;
+        } finally {
+            setSaving(false);
+        }
+        if (refusal) setError(refusal);
+        else onCancel();
+    };
+
+    const cancel = () => {
+        setError("");
+        onCancel();
+    };
+
+    // Enter saves as it sends in the composer (Shift+Enter, or any Enter on a
+    // touch screen, is a new line); a one-line field has no new line to make.
+    const handleKeyDown = (event, { multiline = true } = {}) => {
+        if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            cancel();
+            return;
+        }
+        if (isComposerSendKey(event, { touch: multiline && isTouch })) {
+            event.preventDefault();
+            void save();
+        }
+    };
+
+    const field = (key, label, { multiline = true, rows = 3, maxLength, ref } = {}) => {
+        const Tag = multiline ? "textarea" : "input";
+        return (
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            {(hasTitle || hasOpening) && <span style={EDIT_LABEL_STYLE}>{label}</span>}
+            <Tag
+            ref={ref}
+            className={multiline ? "actions-composer" : undefined}
+            aria-label={label}
+            {...(multiline ? { rows, enterKeyHint: "enter" } : { type: "text", enterKeyHint: "done" })}
+            maxLength={maxLength}
+            value={draft[key]}
+            disabled={saving}
+            onChange={(event) => setDraft((current) => ({ ...current, [key]: event.target.value }))}
+            onKeyDown={(event) => handleKeyDown(event, { multiline })}
+            onFocus={focusField}
+            onBlur={blurField}
+            style={{ ...EDIT_FIELD_STYLE, ...(multiline ? { minHeight: "3rem", resize: "vertical" } : {}) }}
+            />
+            </label>
+        );
+    };
+
+    const note = error || blocked;
+    return (
+        <div
+        data-action-editing="true"
+        style={{
+            background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.08))",
+            border: "1px solid var(--oh-ui-accent, rgba(255,255,255,0.18))",
+            borderRadius: "10px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.45rem",
+            padding: "0.6rem 0.75rem",
+        }}
+        >
+        {hasTitle && field("title", "Title", { multiline: false, maxLength: sharedGame ? ORDER_TITLE_MAX : undefined })}
+        {field("text", "Order", { ref: textRef, maxLength: sharedGame ? ORDER_MAX_CHARS : undefined })}
+        {hasOpening && field("chatStarter", "Opening line", { rows: 2, maxLength: sharedGame ? ORDER_MAX_CHARS : undefined })}
+        <div style={{ alignItems: "center", display: "flex", gap: "0.4rem", justifyContent: "flex-end" }}>
+        <button type="button" className="oh-tap-row" onClick={cancel} style={goalButtonStyle(true)}>
+        Cancel
+        </button>
+        <button type="button" className="oh-tap-row" disabled={!canSave} onClick={() => void save()} style={goalButtonStyle(canSave, "primary")}>
+        {saving ? "Saving…" : "Save"}
+        </button>
+        </div>
+        {note && (
+            <span role="status" style={{ color: "rgba(253,186,116,0.9)", fontSize: "0.72rem", lineHeight: "1.45" }}>{note}</span>
+        )}
+        </div>
+    );
+};
+
 // locked: an order that moved a unit on the map (unitRevert) cannot be deleted
 // while a turn runs, because deleting it moves the unit back, and the turn's
 // world write would put the unit where it was. Other orders can: the turn reads
 // the queue again before it writes it.
+// `editBlock`: why the order cannot be edited now (runtime/actionEdit.js
+// orderEditBlock), or "". Editing it changes the same order, by its id, in its
+// place (`onEdit(fields)`, which answers "" or why it was not kept).
 // `refusal`: { fate, note } when the last time skip wrote an event for this
 // order and the engine kept it off the timeline (overdueOrders.js).
-const ActionItem = ({ action, onDelete, locked = false, refusal = null }) => {
+const ActionItem = ({ action, onDelete, onEdit, editBlock = "", sharedGame = false, locked = false, refusal = null }) => {
     const [hovered, setHovered] = React.useState(false);
-    // The ✕ appears with the pointer over the row. Nothing hovers on a touch
-    // screen, so there it is always shown, or an order could never be deleted.
+    const [editing, setEditing] = React.useState(false);
+    // The ✎ and ✕ appear with the pointer over the row. Nothing hovers on a
+    // touch screen, so there they are always shown, or an order could never
+    // be edited or deleted.
     const canHover = useCanHover();
-    const showDelete = hovered || !canHover;
+    const showControls = hovered || !canHover;
     const normalized = normalizeActionEntry(action);
 
     if (!normalized) {
         return null;
     }
 
+    if (editing) {
+        return (
+            <ActionEditor
+            action={normalized}
+            blocked={editBlock}
+            sharedGame={sharedGame}
+            onSave={onEdit}
+            onCancel={() => setEditing(false)}
+            />
+        );
+    }
+
     const label = buildActionDisplayText(normalized);
     const showTitle = normalized.title && normalized.title !== label;
+    const controlStyle = {
+        alignItems: "center",
+        border: "none",
+        borderRadius: "6px",
+        display: "flex",
+        flexShrink: 0,
+        lineHeight: 1,
+        opacity: showControls ? 1 : 0,
+        pointerEvents: showControls ? "auto" : "none",
+        transition: "opacity 0.15s, color 0.15s, background 0.15s",
+    };
 
     return (
         <div
@@ -254,6 +450,27 @@ const ActionItem = ({ action, onDelete, locked = false, refusal = null }) => {
             </div>
         )}
         </div>
+        <div style={{ alignItems: "center", display: "flex", flexShrink: 0, gap: "0.15rem" }}>
+        <button
+        type="button"
+        className="oh-tap"
+        data-action-edit="true"
+        onClick={() => {
+            if (!editBlock) setEditing(true);
+        }}
+        disabled={Boolean(editBlock)}
+        title={editBlock || "Edit action"}
+        aria-label="Edit action"
+        style={{
+            ...controlStyle,
+            background: hovered && !editBlock ? "var(--oh-ui-hover, rgba(255,255,255,0.08))" : "none",
+            color: editBlock ? "rgba(255,255,255,0.18)" : hovered ? "var(--oh-ui-accent, #2bc1f3)" : "rgba(255,255,255,0.6)",
+            cursor: editBlock ? "not-allowed" : "pointer",
+            padding: "0.22rem 0.3rem",
+        }}
+        >
+        <PencilIcon />
+        </button>
         <button
         type="button"
         className="oh-tap"
@@ -262,24 +479,17 @@ const ActionItem = ({ action, onDelete, locked = false, refusal = null }) => {
         title={locked ? TURN_RUNNING_NOTE : "Delete action"}
         aria-label="Delete action"
         style={{
-            alignItems: "center",
+            ...controlStyle,
             background: hovered && !locked ? "rgba(239,68,68,0.1)" : "none",
-            border: "none",
-            borderRadius: "6px",
             color: locked ? "rgba(255,255,255,0.18)" : hovered ? "rgba(239,68,68,0.95)" : "rgba(239,68,68,0.8)",
             cursor: locked ? "not-allowed" : "pointer",
-            display: "flex",
-            flexShrink: 0,
             fontSize: "1rem",
-            lineHeight: 1,
-            opacity: showDelete ? 1 : 0,
             padding: "0.18rem 0.3rem",
-            pointerEvents: showDelete ? "auto" : "none",
-            transition: "opacity 0.15s, color 0.15s, background 0.15s",
         }}
         >
-        {"\u2715"}
+        {"✕"}
         </button>
+        </div>
         </div>
     );
 };
@@ -873,6 +1083,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     const [improveFailure, setImproveFailure] = React.useState(null);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
     const turnRunning = useTurnRunning(isOpen);
+    // The host's round's phase in a shared game, which says whether an order
+    // can be edited now (runtime/actionEdit.js orderEditBlock).
+    const roundPhase = React.useSyncExternalStore(subscribeSharedGameRole, sharedRoundPhase, sharedRoundPhase);
     // Why the last change to the queue was not saved, until one is.
     const [saveError, setSaveError] = React.useState("");
     const [isImproving, setIsImproving] = React.useState(false);
@@ -921,7 +1134,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         // republish with no real change doesn't reset hover state on every row.
         // (Overdue too: a skip that answers an order leaves the rest as they
         // were in every other way, and the mark is what changed.)
-        const actionsSignature = (list) => list.map((a) => `${a.id}:${a.title}:${a.text}:${a.status}:${a.overdue === true ? "overdue" : ""}`).join("|");
+        // (And an opening line, which an edit may change alone.)
+        const actionsSignature = (list) => list.map((a) => `${a.id}:${a.title}:${a.text}:${a.chatStarter || ""}:${a.status}:${a.overdue === true ? "overdue" : ""}`).join("|");
         const unsubscribe = subscribeRuntime("actions", (saved) => {
             if (cancelled || !Array.isArray(saved)) return;
             setActions((prev) => (actionsSignature(saved) === actionsSignature(prev) ? prev : saved));
@@ -1090,6 +1304,41 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         logDebugEvent("action", `Order removed: ${removed?.title || removed?.text || "(untitled)"}`, {
             reverted: Boolean(removed?.unitRevert && (removed.status ?? "planned") === "planned"),
         });
+    };
+
+    // An order given other words, in its place and by its id: never deleted and
+    // queued again, so it keeps its id, its place in the queue and whatever it
+    // carries (a troop order's way back on the map, whom a conversation it opens
+    // invites). In a shared game the host changes it, through the same door an
+    // order is queued by ("reword", as the advisor's approved edits go), and
+    // only while the round takes changes. Answers "" when kept, or why not.
+    const handleEdit = async (id, fields) => {
+        const current = actions.find((action) => String(action?.id || "") === String(id || ""));
+        if (!current) return ORDER_GONE;
+        const shared = inSharedGame();
+        const block = orderEditBlock(current, { turnRunning: isSimulationBusy(), sharedGame: shared, roundPhase: sharedRoundPhase() });
+        if (block) return block;
+        if (shared) {
+            const request = rewordRequestFor(current, fields);
+            if (!request) return ORDER_GONE;
+            const answer = await requestFromHost("reword", request);
+            if (!answer.ok) return answer.error || ORDER_NOT_CHANGED;
+            logDebugEvent("action", `Order edit sent to the host: ${fields?.title || fields?.text || "(untitled)"}`);
+            return "";
+        }
+        const edited = rewordAction(current, fields);
+        if (edited === current) return "";
+        const next = actions.map((action) => (action === current ? edited : action));
+        try {
+            await saveActions(next);
+        } catch (error) {
+            console.error("Failed to save the edited order:", error);
+            return ORDER_NOT_CHANGED;
+        }
+        setActions(next);
+        setSaveError("");
+        logDebugEvent("action", `Order edited: ${edited.title || edited.text || "(untitled)"}`);
+        return "";
     };
 
     const handleQueueSuggestion = async (action) => {
@@ -1399,7 +1648,16 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
                         </p>
                     )}
                     {submittedActions.map(({ normalized, originalIndex }) => (
-                        <ActionItem key={normalized.id || originalIndex} action={normalized} refusal={refusedOrders[normalized.id] ?? null} locked={turnRunning && movesUnit(normalized)} onDelete={() => handleDelete(originalIndex)} />
+                        <ActionItem
+                        key={normalized.id || originalIndex}
+                        action={normalized}
+                        refusal={refusedOrders[normalized.id] ?? null}
+                        locked={turnRunning && movesUnit(normalized)}
+                        editBlock={orderEditBlock(normalized, { turnRunning, sharedGame, roundPhase })}
+                        sharedGame={sharedGame}
+                        onEdit={(fields) => handleEdit(normalized.id, fields)}
+                        onDelete={() => handleDelete(originalIndex)}
+                        />
                     ))}
                     </div>
                 )}

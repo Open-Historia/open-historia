@@ -54,6 +54,23 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "add a button to edit your submitted actions instead of only being able to delete it" (the owner, 2026-11-19).
+    id: "2026-11-edit-orders",
+    kind: "minor",
+    date: "2026-11-19",
+    channel: "alpha",
+    banners: [
+      {
+        title: "Edit your orders",
+        items: [
+          "Every order waiting in Your Submitted Actions has an Edit button beside Delete: change its words in place, then Save (or press Enter), or Cancel (or press Esc).",
+          "An edited order keeps its place in the queue and everything it carries, such as a troop move already on the map or whom a conversation invites.",
+          "Orders a time skip has carried out, or is carrying out, cannot be edited. In a shared game, orders are edited while the round is open.",
+        ],
+      },
+    ],
+  },
+  {
     // After beta 0.0.147 (2026-11-18): the owner's reports of that evening (Start that did nothing, Current that did
     // nothing, a guest left in a closed game) and his asks (a name to join with, a star on played countries, a
     // Players menu, the lobby's standing text gone); and the stat sheet refresh moved to Advanced statistics. The

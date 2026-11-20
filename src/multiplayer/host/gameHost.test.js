@@ -1624,6 +1624,35 @@ test("an order keeps the id its screen gave it: queued once, never another's, gi
   assert.ok(s.store.docs.actions.find((action) => action.text === "Hold the line.").id.startsWith("order-"));
 });
 
+test("a typed order edited in the Actions panel keeps its id and place, and its title and raw words follow the new words", async () => {
+  // "add a button to edit your submitted actions instead of only being able to delete it" (the owner, 2026-11-19).
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "order", id: id(2), text: "Hold the line.", ref: "typed-1" });
+  await s.request(s.guest, { t: "order", id: id(3), text: "Open talks.", ref: "talks-1", title: "Talks", kind: "chat", invitees: [ESTONIA], chatStarter: "Shall we talk?" });
+  await s.request(s.guest, { t: "order", id: id(4), text: "Build roads.", ref: "typed-2" });
+  const ids = () => s.store.docs.actions.map((action) => action.id);
+  const before = ids();
+  await s.request(s.guest, { t: "reword", id: id(5), order: "typed-1", text: "Hold the line at the river." });
+  assert.equal(s.ack(s.guest, id(5)).ok, true);
+  const typed = s.store.docs.actions.find((action) => action.id === "typed-1");
+  assert.deepEqual([typed.title, typed.text, typed.rawInput, typed.status, typed.ownerCode], ["Hold the line at the river.", "Hold the line at the river.", "Hold the line at the river.", "planned", RUSSIA]);
+  // A conversation it opens: a new opening line, and whom it invites kept.
+  await s.request(s.guest, { t: "reword", id: id(6), order: "talks-1", text: "Open trade talks.", chatStarter: "Shall we trade?" });
+  assert.equal(s.ack(s.guest, id(6)).ok, true);
+  const talks = s.store.docs.actions.find((action) => action.id === "talks-1");
+  assert.deepEqual([talks.title, talks.text, talks.chatStarter, talks.invitees], ["Talks", "Open trade talks.", "Shall we trade?", [ESTONIA]]);
+  // Same ids, in the same order: edited in place, never withdrawn and queued again.
+  assert.deepEqual(ids(), before);
+  // One already carried out is refused, in words.
+  s.store.docs.actions = s.store.docs.actions.map((action) => (action.id === "typed-2" ? { ...action, status: "resolved" } : action));
+  await s.request(s.guest, { t: "reword", id: id(7), order: "typed-2", text: "Build bridges." });
+  assert.match(s.ack(s.guest, id(7)).error, /carried out already/);
+});
+
 test("a conversation is renamed, given countries and closed for everyone in it, by someone in it", async () => {
   // "All shared" (the owner, 2026-11-16): on the asker's screen alone these were dropped, the thread came back, the
   // name reverted, and an added country never heard a word.
