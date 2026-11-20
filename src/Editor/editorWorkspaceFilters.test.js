@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   WORKSPACE_PAGE_SIZE, filterRegionsForWorkspace, filterMapFeaturesForWorkspace,
-  filterUnitsForWorkspace, groupRowsForWorkspace, selectionAfterWorkspacePick, pageOf,
+  filterUnitsForWorkspace, groupRowsForWorkspace, selectionAfterWorkspacePick, pageOf, filterWarShapesForWorkspace,
 } from "./editorWorkspaceFilters.js";
 
 test("region browser queries all 4426 canonical rows instead of truncating the registry to 300", () => {
@@ -78,4 +78,18 @@ test("nonterritorial groups remain full actors and searchable by description and
   assert.deepEqual(groupRowsForWorkspace(groups, usage, { scope: "territorial" }).map((r) => r.key), ["Foreign Legion"]);
   assert.deepEqual(groupRowsForWorkspace(groups, usage, { query: "trade" }).map((r) => r.key), ["Labour Union"]);
   assert.deepEqual(groupRowsForWorkspace(groups, usage, { query: "fra" }).map((r) => r.key), ["Foreign Legion"]);
+});
+
+test("terrain and war geography browser filters canonical shapes without modifying them", () => {
+  const shapes = [
+    { id: "terrain-1", name: "Alpine heights", level: 8, description: "Mountain pass" },
+    { id: "wall-1", name: "Northern forts", owner: "RUS", level: 6 },
+    { id: "wall-2", name: "Western forts", owner: "DEU", level: 5 },
+    { id: "climate-1", name: "Arid interior", seasons: [{ kind: "summer" }] },
+  ];
+  assert.deepEqual(filterWarShapesForWorkspace(shapes, { query: "Mountain pass" }).map((x) => x.id), ["terrain-1"]);
+  assert.deepEqual(filterWarShapesForWorkspace(shapes, { owner: "DEU" }).map((x) => x.id), ["wall-2"]);
+  assert.deepEqual(filterWarShapesForWorkspace(shapes, { query: "Russian Empire", ownerName: (key) => key === "RUS" ? "Russian Empire" : key }).map((x) => x.id), ["wall-1"]);
+  assert.equal(filterWarShapesForWorkspace(shapes).length, shapes.length);
+  assert.equal(shapes[0].name, "Alpine heights");
 });

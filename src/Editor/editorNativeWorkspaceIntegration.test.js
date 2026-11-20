@@ -47,10 +47,19 @@ test("every previous native panel remains discoverable from the new task navigat
   }
   assert.equal(EDITOR_WORKSPACES.find(w=>w.id==="countries")?.panel,"polities");
   assert.equal(EDITOR_WORKSPACES.find(w=>w.id==="war")?.panel,"war");
+  assert.equal(EDITOR_WORKSPACES.find(w=>w.id==="appearance")?.panel,"layers",
+    "opening Maps & appearance must show native layers, not block the workspace behind the basemap modal");
   assert.equal(EDITOR_WORKSPACES.find(w=>w.id==="import")?.panel,"province-import");
+  assert.equal(workspaceOfPanel("clipboard")?.id, "territory",
+    "default panel routing remains backward compatible");
+  assert.equal(workspaceOfPanel("clipboard", "import")?.id, "import",
+    "a shared panel must remain in the workspace from which the user opened it");
+  assert.equal(workspaceOfPanel("clipboard", "territory")?.id, "territory");
   assert.ok(EDITOR_WORKSPACES.some(w=>w.items.some(i=>i.id==="generator" && i.action==="generator")));
   const nav=src("./EditorWorkspaceNav.jsx");
   assert.match(nav,/onSetPanel\?\.\(id\)/);
+  assert.match(nav, /if \(id != null\) onAfterNavigate\?\.\(\)/,
+    "sidebar-only Overview and Review must remain accessible on mobile");
   assert.match(nav,/onOpenBasemaps\?\.\(\)/);
   assert.match(nav,/onOpenGenerator\?\.\(\)/);
   const map=src("./MapEditor.jsx");
@@ -94,4 +103,93 @@ test("the real Apply & Play still calls the native game bridge and now uses them
   assert.match(map,/onClick=\{\(\) => persistScenario\(\{ play: false, closeAfter: false \}\)\}/);
   assert.match(src("./EditorSidebar.jsx"),/Working map saved/);
   assert.match(src("./EditorWorkspaceNav.jsx"),/working map and the playable scenario are saved separately/i);
+});
+
+test("Region Types use the native region-change epoch and never delete referenced type IDs", () => {
+  const map = src("./MapEditor.jsx");
+  const manager = src("./TypeManager.jsx");
+  assert.match(map, /\[api, d\.types, d\.selection, d\.regionCount, regionEpoch\]/);
+  assert.match(manager, /regionTypeDeletionReason\(types, usage, t\.id\)/);
+  assert.match(manager, /canCreateRegionType\(types\)/);
+  assert.match(manager, /<WorkspaceTabs/);
+});
+
+test("clipboard metadata participates in the same native region-paste Undo command", () => {
+  const map = src("./MapEditor.jsx");
+  const method = map.slice(map.indexOf("  const pasteClipboard = () => {"), map.indexOf("  const clipboardKeysRef ="));
+  const nativeMap = src("./OlMap.jsx");
+  assert.match(method, /documentStep: clipboardMetadataStep\(plan, d\.doc, d\.setDoc, d\.setSaveStatus\)/);
+  assert.match(method, /if \(!result\?\.added\?\.length\)/);
+  assert.match(method, /MAX_REGION_TYPES/);
+  assert.match(method, /window\.confirm/);
+  assert.match(nativeMap, /documentStep\?\.redo\(\);/);
+  assert.match(nativeMap, /documentStep\?\.undo\(\);/);
+  const pasteBlock = nativeMap.slice(nativeMap.indexOf("      pasteRegions: ("), nativeMap.indexOf("      applyRegionPatch: ("));
+  assert.ok(pasteBlock.indexOf("documentStep?.redo()") < pasteBlock.indexOf("pushCmd({"), "metadata commits before the same history entry");
+  assert.ok(pasteBlock.indexOf("if (!pasted.length) return") < pasteBlock.indexOf("documentStep?.redo()"), "empty paste cannot import metadata");
+});
+
+test("Review & Save routes buttons to the native save and apply actions", () => {
+  const map = src("./MapEditor.jsx");
+  const sidebar = src("./EditorSidebar.jsx");
+  const nav = src("./EditorWorkspaceNav.jsx");
+  assert.match(map, /onReviewSave=\{scenarioMode \? \(\) => persistScenario/);
+  assert.match(map, /onReviewPlay=\{scenarioMode \? \(\) => persistScenario/);
+  assert.match(sidebar, /onReviewSave=\{onReviewSave\}/);
+  assert.match(sidebar, /onReviewPlay=\{onReviewPlay\}/);
+  assert.match(nav, /onClick=\{onReviewSave\}/);
+  assert.match(nav, /onClick=\{onReviewPlay\}/);
+  assert.match(nav, /reviewBusy \|\| !onReviewSave/);
+});
+
+test("native geometry operations restore the pre-edit export flag through one tested contract", () => {
+  const map = src("./OlMap.jsx");
+  assert.match(map, /import \{ restoreCarvedEdited \} from "\.\/regionCarveHistory\.js"/);
+  assert.match(map, /restoreCarvedEdited\(c\.feature, c\.edited\)/,
+    "new region drawing restores flags on carved neighbours");
+  assert.match(map, /restoreCarvedEdited\(entry\.feature, entry\.edited\)/,
+    "clipboard paste restores the pre-existing region export flag");
+  assert.match(map, /restoreCarvedEdited\(existing, before\.edited\)/,
+    "suggestion patch restores previously unset/false export flags");
+  assert.equal((map.match(/restoreCarvedEdited\(change\.feature, change\.edited\)/g) || []).length, 2,
+    "simplification and contour edits must both restore unset/false flags");
+});
+test("world geography starter presets are undoable without a second map history", () => {
+  const map = src("./MapEditor.jsx");
+  assert.match(map, /const replaceWarPreset = \(kind, replacement\) =>/);
+  assert.match(map, /replaceRowsStep\(warListOf\(kind\), warSetters\[kind\], replacement\)/);
+  assert.match(map, /api\.pushStep\(step\)/);
+  assert.match(map, /onReplacePreset=\{replaceWarPreset\}/);
+  const war = src("./WarMapPanel.jsx");
+  assert.match(war, /onReplacePreset\?\.\(tab,/);
+});
+
+test("Polity presentation terminology does not rename canonical country IDs or draft contracts", () => {
+  const panel = src("./PolitiesPanel.jsx");
+  const form = src("./CountryCreationForm.jsx");
+  const nav = src("./EditorWorkspaceNav.jsx");
+  assert.match(panel, /<Panel title="Polities"/);
+  assert.match(panel, /Create polity/);
+  assert.match(form, /<Panel title="Create a polity"/);
+  assert.match(form, /Polity setup sections/);
+  assert.match(form, /Set polity relationships and territory/);
+  assert.match(nav, /\{polityCount\} polities/);
+  assert.match(panel, /<CountryCreationForm/);
+  assert.match(form, /planCountryDraft\(\{ draft, polities, occupiedKeys, puppets, polityChoices \}\)/);
+  assert.match(src("./editorWorkspaces.js"), /panel: "polities"/);
+});
+
+test("temporary OSM street reference is controlled by the editor session, never document persistence", () => {
+  const map = src("./MapEditor.jsx");
+  const native = src("./OlMap.jsx");
+  const layers = src("./LayersPanel.jsx");
+  assert.match(map, /const \[streetReference, setStreetReference\] = useState\(false\)/);
+  assert.match(map, /streetReference=\{streetReference\}/);
+  assert.match(map, /onStreetReferenceChange=\{setStreetReference\}/);
+  assert.match(native, /streetReferenceActive\(\{ enabled: streetReference, online, background: customBackground \}\)/);
+  assert.match(native, /source: new OSM\(\)/);
+  assert.match(native, /\[basemap, customBackground, online, streetReference\]/);
+  assert.match(layers, /aria-label="Show OpenStreetMap street reference"/);
+  assert.match(layers, /disabled=\{hasCustomBackground\}/);
+  assert.doesNotMatch(map, /patchMetadata\(\{ streetReference/);
 });

@@ -96,3 +96,15 @@ export const selectionAfterWorkspacePick = (selectedIds, shownIds, id, {
   else previous.add(id);
   return [...previous];
 };
+
+export const filterWarShapesForWorkspace = (rows = [], {
+  query = "", owner = "*", ownerName = (key) => key,
+} = {}) => {
+  const q = fold(query);
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    if (owner !== "*" && String(row.owner || "") !== owner) return false;
+    const searchable = [row.id, row.name, row.owner, ownerName(row.owner), row.description,
+      row.note, row.level, row.kind].map(clean).join(" ").toLocaleLowerCase();
+    return !q || searchable.includes(q);
+  }).sort((a, b) => alpha(a.name || a.id, b.name || b.id) || alpha(a.id, b.id));
+};

@@ -55,6 +55,10 @@ const EditorSidebar = ({
   onRetrySave = null,
   scenarioDirty = false,
   actions = null,
+  onReviewSave = null,
+  onReviewPlay = null,
+  reviewBusy = false,
+  reviewScenarioMode = false,
   isMobile = false,
   mobileOpen = false,
   onMobileOpenChange,
@@ -210,6 +214,10 @@ const EditorSidebar = ({
           generatorAvailable={generatorAvailable}
           saveLabel={save.label}
           scenarioDirty={scenarioDirty}
+          onReviewSave={onReviewSave}
+          onReviewPlay={onReviewPlay}
+          reviewBusy={reviewBusy}
+          reviewScenarioMode={reviewScenarioMode}
           onAfterNavigate={closeOnPhone}
         />
 

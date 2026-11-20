@@ -20,7 +20,8 @@
 // its regions never overlap, and it labels countries, not regions. Pure;
 // tested in regionTypes.test.js.
 
-const TYPE_LIMIT = 64;
+export const MAX_REGION_TYPES = 64;
+const TYPE_LIMIT = MAX_REGION_TYPES;
 
 // The Workshop's Land type (src/Editor/useMapDocument.js DEFAULT_TYPES).
 export const REGION_TYPE_DEFAULTS = Object.freeze({

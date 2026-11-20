@@ -17,8 +17,10 @@ import TileLayer from "ol/layer/Tile";
 import OSM from "ol/source/OSM";
 import XYZ from "ol/source/XYZ";
 import { editorBasemapById, esriXyzUrl } from "./basemaps.js";
+import { streetReferenceActive } from "./editorStreetReference.js";
 import { regionsInRectangle } from "./regionSelectionTools.js";
 import { regionMoveInteractions } from "./regionMoveInteractions.js";
+import { restoreCarvedEdited } from "./regionCarveHistory.js";
 import { toolForHotkey } from "./editorToolHotkeys.js";
 import { useBrowserOnline } from "../runtime/networkStatus.js";
 import VectorLayer from "ol/layer/Vector";
@@ -586,6 +588,9 @@ const interiorPoint = (geom) => {
 
 const OlMap = ({
   basemap = "dark",
+  // Modern OSM streets are an opt-in, session-only trace reference, never a
+  // replacement for the scenario's saved historical basemap or its geometry.
+  streetReference = false,
   types,
   colors,
   selectionIds,
@@ -2423,7 +2428,8 @@ const OlMap = ({
         const apply = (forward) => {
           for (const change of changes) {
             change.feature.setGeometry(forward ? change.after : change.before);
-            change.feature.set("edited", forward ? true : change.edited);
+            if (forward) change.feature.set("edited", true);
+          else restoreCarvedEdited(change.feature, change.edited);
           }
           restyleRegions();
           labelLayer.changed();
@@ -2501,7 +2507,8 @@ const OlMap = ({
             const apply = (forward) => {
               for (const change of changes) {
                 change.feature.setGeometry(forward ? change.after : change.before);
-                change.feature.set("edited", forward ? true : change.edited);
+                if (forward) change.feature.set("edited", true);
+          else restoreCarvedEdited(change.feature, change.edited);
               }
               restyleRegions();
               labelLayer.changed();
@@ -2566,7 +2573,10 @@ const OlMap = ({
       // linkage), otherwise it gets a fresh one; it is always marked edited,
       // since its shape is this map's own now whatever tiles it came from. The
       // whole paste is one undo step.
-      pasteRegions: (fc, { select = true, simplify = false } = {}) => {
+      pasteRegions: (fc, { select = true, simplify = false, documentStep = null } = {}) => {
+        if (documentStep && (typeof documentStep.undo !== "function" || typeof documentStep.redo !== "function")) {
+          throw new TypeError("Region paste document history must provide undo and redo");
+        }
         const incoming = fc && Array.isArray(fc.features)
           ? new GeoJSON().readFeatures(fc, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" })
           : [];
@@ -2651,8 +2661,7 @@ const OlMap = ({
         const entries = [...carved.values()];
         const restore = (entry) => {
           entry.feature.setGeometry(entry.before.clone());
-          if (entry.edited) entry.feature.set("edited", entry.edited);
-          else entry.feature.unset("edited");
+          restoreCarvedEdited(entry.feature, entry.edited);
           if (entry.removed) regionSource.addFeature(entry.feature);
         };
         const reapply = (entry) => {
@@ -2663,6 +2672,20 @@ const OlMap = ({
             entry.feature.set("edited", true);
           }
         };
+        // Commit the canonical document half only after usable polygons were
+        // added. Include it in THIS geometry command so one Undo reverses both.
+        // A failed document commit rolls geometry back instead of leaving an
+        // untracked map mutation.
+        try {
+          documentStep?.redo();
+        } catch (error) {
+          added.forEach((f) => regionSource.removeFeature(f));
+          entries.forEach(restore);
+          restyleRegions();
+          labelLayer.changed();
+          notifyRegions();
+          throw error;
+        }
         restyleRegions();
         labelLayer.changed();
         if (select) onSelectionRef.current?.(added.map((f) => f.getId()));
@@ -2671,10 +2694,12 @@ const OlMap = ({
           undo: () => {
             added.forEach((f) => regionSource.removeFeature(f));
             entries.forEach(restore);
+            documentStep?.undo();
             restyleRegions();
             labelLayer.changed();
           },
           redo: () => {
+            documentStep?.redo();
             entries.forEach(reapply);
             added.forEach((f) => regionSource.addFeature(f));
             restyleRegions();
@@ -2725,7 +2750,7 @@ const OlMap = ({
             steps.push({
               undo: () => {
                 existing.setGeometry(before.geometry.clone());
-                if (before.edited) existing.set("edited", before.edited); else existing.unset("edited");
+                restoreCarvedEdited(existing, before.edited);
                 for (const [field, value] of Object.entries(before.attrs)) existing.set(field, value);
               },
               redo: () => {
@@ -3520,17 +3545,18 @@ const OlMap = ({
           const geom = other.getGeometry();
           if (!geom || !overlaps(geom, cutter)) continue;
           const before = geom.clone();
+          const wasEdited = other.get("edited");
           const after = subtractFrom(geom, cutter);
           if (!after) {
             // Fully covered: nothing of it is left to own.
             source.removeFeature(other);
-            carved.push({ feature: other, before, after: null });
+            carved.push({ feature: other, before, after: null, edited: wasEdited });
           } else {
             other.setGeometry(after);
             // Mark it edited so the exporter ships this geometry rather than
             // assuming the stock GADM shape still describes it.
             other.set("edited", true);
-            carved.push({ feature: other, before, after: after.clone() });
+            carved.push({ feature: other, before, after: after.clone(), edited: wasEdited });
           }
         }
         if (carved.length) {
@@ -3545,6 +3571,7 @@ const OlMap = ({
             source.removeFeature(f);
             for (const c of carved) {
               c.feature.setGeometry(c.before.clone());
+              restoreCarvedEdited(c.feature, c.edited);
               if (!c.after) source.addFeature(c.feature);
             }
             restyleRegionsRef.current?.();
@@ -3553,7 +3580,10 @@ const OlMap = ({
             source.addFeature(f);
             for (const c of carved) {
               if (!c.after) source.removeFeature(c.feature);
-              else c.feature.setGeometry(c.after.clone());
+              else {
+                c.feature.setGeometry(c.after.clone());
+                c.feature.set("edited", true);
+              }
             }
             restyleRegionsRef.current?.();
           },
@@ -4003,13 +4033,14 @@ const OlMap = ({
     // A custom uploaded map (image or vector) replaces the basemap — don't load
     // any ESRI tiles at all while it's active, to save the requests.
     const customActive = customBackground?.kind === "image" || customBackground?.kind === "vector" || customBackground?.kind === "plain";
-    const esri = customActive ? null : editorBasemapById(basemap);
+    const usingStreetReference = streetReferenceActive({ enabled: streetReference, online, background: customBackground });
+    const esri = customActive || usingStreetReference ? null : editorBasemapById(basemap);
     let base = null;
     fitBackgroundsRef.current.tiles = esri && !online
       ? { kind: "tiles", template: "/offline-relief/{z}/{y}/{x}.jpg", maxZoom: 3 }
       : esri
         ? { kind: "tiles", template: esriXyzUrl(esri.service), maxZoom: esri.maxZoom }
-        : !customActive && basemap === "osm"
+        : !customActive && (usingStreetReference || basemap === "osm")
           ? { kind: "tiles", template: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", maxZoom: 19 }
           : null;
     if (esri && !online) {
@@ -4022,6 +4053,9 @@ const OlMap = ({
         source: new XYZ({ url: esriXyzUrl(esri.service), maxZoom: esri.maxZoom, crossOrigin: "anonymous" }),
         opacity: Number.isFinite(esri.editorOpacity) ? esri.editorOpacity : 1,
       });
+    } else if (usingStreetReference) {
+      // OL's OSM source supplies standard source attribution, unlike a raw XYZ.
+      base = new TileLayer({ source: new OSM() });
     } else if (!customActive && (basemap === "osm" || basemap === "light")) {
       base = new TileLayer({ source: new OSM(), opacity: basemap === "light" ? 0.85 : 1 });
     }
@@ -4034,9 +4068,9 @@ const OlMap = ({
     if (el) {
       el.style.background = customActive
         ? "#0b1a2b"
-        : esri?.editorBackground || BASEMAP_BG[basemap] || "#131315";
+        : usingStreetReference ? "#e5e8ea" : esri?.editorBackground || BASEMAP_BG[basemap] || "#131315";
     }
-  }, [basemap, customBackground, online]);
+  }, [basemap, customBackground, online, streetReference]);
 
   // Custom uploaded background: a georeferenced vector/raster layer beneath the
   // regions, or a plain image placed with a draggable/resizable frame.

@@ -37,10 +37,10 @@ test("destructive country deletion is visible only under Create & manage, never 
     "Country deletion must not depend on the Government & forces tab");
 });
 
-test("new country setup is accessible directly from Countries, even with a country selected", () => {
-  const createGuards = guardChainFor("+ Create country");
+test("new polity setup is accessible directly from Polities, even with a polity selected", () => {
+  const createGuards = guardChainFor("+ Create polity");
   assert.ok(!createGuards.some((guard) => guard.includes('detailsTab === "manage"')),
-    "Create should not be buried beneath the selected country's Manage tab");
+    "Create should not be buried beneath the selected polity's Manage tab");
   const rosterGuards = guardChainFor("Bulk polity roster");
   assert.ok(rosterGuards.some((guard) => guard.includes('detailsTab === "manage"')),
     "Existing roster management remains available in its native section");

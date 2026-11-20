@@ -106,7 +106,7 @@ export default function CountryCreationForm({
     const touched = draft.name.trim() || draft.aliases.length || draft.formerNames.length ||
       draft.note.trim() || draft.population.trim() || draft.military || draft.color || draft.flag ||
       draft.tags.length || draft.overlord || draft.assignSelectedRegions || draft.startingRelations.length;
-    if (touched && !window.confirm("Discard this unfinished country? No country has been created.")) return;
+    if (touched && !window.confirm("Discard this unfinished polity? No polity has been created.")) return;
     onCancel?.();
   };
   const create = () => {
@@ -118,16 +118,16 @@ export default function CountryCreationForm({
   const overlord = nameOf(draft.overlord);
   const chosenOverlord = polityChoices.find((choice) => choice.key === overlord);
   return (
-    <Panel title="Create a country" icon="flag" width={485} onClose={cancel}>
+    <Panel title="Create a polity" icon="flag" width={485} onClose={cancel}>
       <div style={{ ...section, gap: 5 }}>
         <span style={{ fontSize: 11, fontWeight: 800, color: "var(--oh-ui-accent, #e7e7ea)", letterSpacing: ".06em", textTransform: "uppercase" }}>
-          New country · Not yet created
+          New polity · Not yet created
         </span>
-        <strong style={{ fontSize: 18, overflowWrap: "anywhere" }}>{draft.name.trim() || "Untitled country"}</strong>
-        <span style={hint}>Set up its identity and starting conditions first. Optional fields may be left empty. The country is not registered until you confirm on the Review tab.</span>
+        <strong style={{ fontSize: 18, overflowWrap: "anywhere" }}>{draft.name.trim() || "Untitled polity"}</strong>
+        <span style={hint}>Set up its identity and starting conditions first. Optional fields may be left empty. The polity is not registered until you confirm on the Review tab.</span>
       </div>
 
-      <div role="tablist" aria-label="Country setup sections" style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+      <div role="tablist" aria-label="Polity setup sections" style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
         {TABS.map((item, position) => (
           <button type="button" key={item.id} role="tab" aria-selected={tab === item.id}
             onClick={() => { setTab(item.id); setError(""); }}
@@ -141,31 +141,31 @@ export default function CountryCreationForm({
       </div>
 
       {tab === "identity" && (
-        <section style={section} aria-label="Set country identity">
+        <section style={section} aria-label="Set polity identity">
           <strong style={{ fontSize: 14 }}>Name & identity</strong>
           <label style={label}>
-            Country name
+            Polity name
             <input autoFocus value={draft.name} onChange={(event) => patch("name", event.target.value)}
               placeholder="For example: Kingdom of Bulgaria" style={inputStyle} />
           </label>
-          <span style={hint}>This becomes the country's registered name. Renaming later will not automatically create an alternative name.</span>
+          <span style={hint}>This becomes the polity's registered name. Renaming later will not automatically create an alternative name.</span>
           <NameListEditor title="Alternative names" items={draft.aliases}
-            onChange={(next) => patch("aliases", next)} placeholder="Another name for the same country" />
-          <span style={hint}>Alternative names help the game recognize the same country. They do not change its government, history or ideology.</span>
+            onChange={(next) => patch("aliases", next)} placeholder="Another name for the same polity" />
+          <span style={hint}>Alternative names help the game recognize the same polity. They do not change its government, history or ideology.</span>
           <NameListEditor title="Former names" items={draft.formerNames}
             onChange={(next) => patch("formerNames", next)} placeholder="Older name, if applicable" />
           <span style={hint}>Only add former names supported by the scenario you're building. The editor does not invent historical transitions.</span>
           <label style={label}>
             Scenario note
             <textarea value={draft.note} onChange={(event) => patch("note", event.target.value)} rows={3}
-              placeholder="Context about this country's role when the scenario begins"
+              placeholder="Context about this polity's role when the scenario begins"
               style={{ ...inputStyle, resize: "vertical" }} />
           </label>
         </section>
       )}
 
       {tab === "appearance" && (
-        <section style={section} aria-label="Set country appearance">
+        <section style={section} aria-label="Set polity appearance">
           <strong style={{ fontSize: 14 }}>Flag, map colour & traits</strong>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ width: 58, height: 38, borderRadius: 7, flexShrink: 0,
@@ -179,7 +179,7 @@ export default function CountryCreationForm({
             {draft.color && <button type="button" style={pillButton(false)} onClick={() => patch("color", null)}>Reset</button>}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            {draft.flag ? <img src={bundledFlagUrl(draft.flag)} alt="Selected country flag"
+            {draft.flag ? <img src={bundledFlagUrl(draft.flag)} alt="Selected polity flag"
               style={{ width: 58, height: 38, objectFit: "contain", flexShrink: 0, borderRadius: 7,
                 border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.25))" }} />
               : <span style={{ ...hint, width: 58, flexShrink: 0 }}>No flag</span>}
@@ -193,11 +193,11 @@ export default function CountryCreationForm({
             })}>Choose flag</button>
             {draft.flag && <button type="button" style={pillButton(false)} onClick={() => patch("flag", null)}>Clear</button>}
           </div>
-          <span style={hint}>Uploading a new flag also stores it in My flags, even if you cancel this country setup.</span>
-          <NameListEditor title={`Country traits (max ${MAX_TAGS})`} items={draft.tags}
+          <span style={hint}>Uploading a new flag also stores it in My flags, even if you cancel this polity setup.</span>
+          <NameListEditor title={`Polity traits (max ${MAX_TAGS})`} items={draft.tags}
             onChange={(next) => patch("tags", next)} maxCount={MAX_TAGS}
             placeholder="e.g. democratic" suggestions={TAG_SUGGESTIONS} />
-          <span style={hint}>These tags describe the country's starting character. Its government and political actors are configured in the Scenario Editor.</span>
+          <span style={hint}>These tags describe the polity's starting character. Its government and political actors are configured in the Scenario Editor.</span>
         </section>
       )}
 
@@ -209,7 +209,7 @@ export default function CountryCreationForm({
             <input value={draft.population} onChange={(event) => patch("population", event.target.value)}
               inputMode="numeric" placeholder="Leave blank for scenario defaults" style={inputStyle} />
           </label>
-          <span style={hint}>A whole number of people, for example 4,600,000. Empty means no country-specific population was authored.</span>
+          <span style={hint}>A whole number of people, for example 4,600,000. Empty means no polity-specific population was authored.</span>
           <MilitaryFields recordKey="new-country-draft" value={draft.military}
             defaults={militaryDefaults} onChange={(value) => patch("military", value)} />
           <span style={hint}>Leave a military figure empty to inherit the scenario's normal behaviour. Zero is a deliberate value where allowed.</span>
@@ -217,18 +217,18 @@ export default function CountryCreationForm({
       )}
 
       {tab === "relations" && (
-        <section style={section} aria-label="Set country relationships and territory">
+        <section style={section} aria-label="Set polity relationships and territory">
           <strong style={{ fontSize: 14 }}>Relationships & starting territory</strong>
           <label style={label}>
             Overlord or dependency
             <select value={draft.overlord} onChange={(event) => patch("overlord", event.target.value)} style={inputStyle}>
-              <option value="">Independent country</option>
+              <option value="">Independent polity</option>
               {polityChoices.map((choice) => <option key={choice.key} value={choice.key}>{choice.name}</option>)}
             </select>
           </label>
           {overlord && (
             <>
-              <span style={hint}>This country will begin under {chosenOverlord?.name || overlord}.</span>
+              <span style={hint}>This polity will begin under {chosenOverlord?.name || overlord}.</span>
               <label style={label}>Relationship type
                 <select value={draft.dependencyKind} onChange={(event) => patch("dependencyKind", event.target.value)} style={inputStyle}>
                   {PUPPET_KIND_OPTIONS.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
@@ -266,18 +266,18 @@ export default function CountryCreationForm({
               <label style={{ display: "flex", alignItems: "start", gap: 9, fontSize: 12, cursor: "pointer" }}>
                 <input type="checkbox" checked={draft.assignSelectedRegions}
                   onChange={(event) => patch("assignSelectedRegions", event.target.checked)} />
-                <span>Give this new country the {selectionCount.toLocaleString()} regions currently selected on the map.</span>
+                <span>Give this new polity the {selectionCount.toLocaleString()} regions currently selected on the map.</span>
               </label>
-            ) : <span style={hint}>No regions selected. The new country can start without land. Assign or paint its territory afterwards.</span>}
-            <span style={hint}>Territory assignment may change other countries' borders and cannot always be undone with the map Undo button. It needs separate confirmation.</span>
+            ) : <span style={hint}>No regions selected. The new polity can start without land. Assign or paint its territory afterwards.</span>}
+            <span style={hint}>Territory assignment may change other polities' borders and cannot always be undone with the map Undo button. It needs separate confirmation.</span>
           </div>
         </section>
       )}
 
       {tab === "review" && (
-        <section style={section} aria-label="Review country before creation">
+        <section style={section} aria-label="Review polity before creation">
           <strong style={{ fontSize: 14 }}>Review before creating</strong>
-          <span style={hint}>This is what will be registered. You can go back and change anything. The country and its territory have not changed yet.</span>
+          <span style={hint}>This is what will be registered. You can go back and change anything. The polity and its territory have not changed yet.</span>
           <SummaryRow title="Name" value={draft.name.trim() || "Required"} />
           <SummaryRow title="Other names" value={draft.aliases.join(", ") || "None"} />
           <SummaryRow title="Former names" value={draft.formerNames.join(", ") || "None"} />
@@ -295,7 +295,7 @@ export default function CountryCreationForm({
             ? `Assign ${selectionCount.toLocaleString()} selected regions`
             : "Start with no territory"} />
           {!plan.ok && <span role="alert" style={{ fontSize: 12, color: "#fca5a5", lineHeight: 1.4 }}>{plan.reason}</span>}
-          {plan.ok && <span style={{ fontSize: 11.5, color: "var(--oh-ui-muted, rgba(255,255,255,0.74))" }}>Ready to create. Country identity and relationships have passed preflight checks.</span>}
+          {plan.ok && <span style={{ fontSize: 11.5, color: "var(--oh-ui-muted, rgba(255,255,255,0.74))" }}>Ready to create. Polity identity and relationships have passed preflight checks.</span>}
         </section>
       )}
 
@@ -313,7 +313,7 @@ export default function CountryCreationForm({
           onClick={() => { setTab(TABS[index - 1].id); setError(""); }}>Back</button>}
         {tab === "review" ? (
           <button type="button" style={pillButton(true)} onClick={create} disabled={!plan.ok}>
-            Create country
+            Create polity
           </button>
         ) : (
           <button type="button" style={pillButton(true)} onClick={() => { setTab(TABS[index + 1].id); setError(""); }}>

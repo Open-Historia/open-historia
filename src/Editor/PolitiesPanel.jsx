@@ -220,7 +220,7 @@ const PolitiesPanel = ({
       return { ok: false, reason: "Starting diplomatic scores cannot be saved here." };
     }
     if (typeof upsertPolity !== "function") {
-      return { ok: false, reason: "Country creation is unavailable in this editor." };
+      return { ok: false, reason: "Polity creation is unavailable in this editor." };
     }
     if (plan.color && typeof setColorOverride !== "function") {
       return { ok: false, reason: "Map colour editing is unavailable." };
@@ -229,10 +229,10 @@ const PolitiesPanel = ({
       return { ok: false, reason: "Flag editing is unavailable." };
     }
     if (plan.tags.length && typeof setTags !== "function") {
-      return { ok: false, reason: "Country traits cannot be saved here." };
+      return { ok: false, reason: "Polity traits cannot be saved here." };
     }
     if (plan.puppets && typeof setPuppets !== "function") {
-      return { ok: false, reason: "Country relationships cannot be saved here." };
+      return { ok: false, reason: "Polity relationships cannot be saved here." };
     }
     if (plan.assignSelectedRegions) {
       if (!selection.length || typeof api?.setRegionAttrs !== "function") {
@@ -247,7 +247,7 @@ const PolitiesPanel = ({
         oldOwnerText +
         "\n\nThese map ownership changes might not be reversible with the Undo button.",
       );
-      if (!ok) return { ok: false, reason: "Creation cancelled. The unfinished country has not been added." };
+      if (!ok) return { ok: false, reason: "Creation cancelled. The unfinished polity has not been added." };
     }
 
     // The preflight has passed. Commit the authored record and its independent
@@ -523,22 +523,22 @@ const PolitiesPanel = ({
   }
 
   return (
-    <Panel title="Countries" icon="flag" onClose={onClose} width={440}>
+    <Panel title="Polities" icon="flag" onClose={onClose} width={440}>
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        <strong style={{ fontSize: 12.5 }}>Find a country</strong>
+        <strong style={{ fontSize: 12.5 }}>Find a polity</strong>
         <button type="button" style={pillButton(true)} onClick={() => setCreating(true)}>
-          + Create country
+          + Create polity
         </button>
         {current && <button type="button" style={pillButton(false)} onClick={() => setCountryListOpen((open) => !open)}>
-          {countryListOpen ? "Hide list" : "Change country"}
+          {countryListOpen ? "Hide list" : "Change polity"}
         </button>}
       </div>
       {(!current || countryListOpen) && (<>
       <input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search country name…"
+        placeholder="Search polity name…"
         style={inputStyle}
       />
 
@@ -635,7 +635,7 @@ const PolitiesPanel = ({
               Names &amp; identity
             </div>
             <div style={{ fontSize: 10.5, color: "var(--oh-ui-muted, rgba(255,255,255,0.6))", marginBottom: 4 }}>
-              Country name
+              Polity name
             </div>
             <div style={{ display: "flex", gap: 6 }}>
               <input value={draftName} onChange={(e) => setDraftName(e.target.value)} style={inputStyle} />
@@ -643,7 +643,7 @@ const PolitiesPanel = ({
                 type="button"
                 style={pillButton(false)}
                 disabled={!clean(draftName) || clean(draftName) === current.key}
-                title="Renames the country everywhere on this map: its regions, claims, colour, flag, tags, map features, units and puppet ties. The old name is not kept."
+                title="Renames the polity everywhere on this map: its regions, claims, colour, flag, tags, map features, units and puppet ties. The old name is not kept."
                 onClick={() => {
                   const next = clean(draftName);
                   const previousKey = current.key;

@@ -40,12 +40,13 @@ import {
   subscribeRegionClipboard,
   writeRegionClipboard,
 } from "./regionClipboard.js";
+import { clipboardMetadataStep } from "./clipboardDocumentHistory.js";
 import SelectionInspector from "./SelectionInspector.jsx";
 import DocumentsMenu from "./DocumentsMenu.jsx";
 import CityPopup from "./CityPopup.jsx";
 import MarkerPopup from "./MarkerPopup.jsx";
 import { isMapFeature, markerToFeature, newMapFeature } from "./mapFeatures.js";
-import { addRowStep, membershipStep, patchRowStep, removeRowStep, removeRowsStep } from "./documentUndo.js";
+import { addRowStep, membershipStep, patchRowStep, removeRowStep, removeRowsStep, replaceRowsStep } from "./documentUndo.js";
 import WarMapPanel from "./WarMapPanel.jsx";
 import { WAR_LISTS, isWarTool, newClimateZone, newFortification, newTerrainArea, warGeographyOf } from "./warGeographyDoc.js";
 import SearchBar from "./SearchBar.jsx";
@@ -70,7 +71,7 @@ import { moveOwnBasemapsBetween, ownBasemapFromLibrary, ownBasemapIdOfLibrary } 
 import { addBuiltinMap, addOwnMap, makeStartingMap, removeMap, scenarioMaps, setShownOver } from "./scenarioMaps.js";
 import { DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE, buildGameSeed, gameCityToFeature } from "./exportPreset.js";
 import { normalizeGroups } from "../runtime/groups.js";
-import { isWaterType, normalizeRegionTypes } from "../runtime/regionTypes.js";
+import { isWaterType, MAX_REGION_TYPES, normalizeRegionTypes } from "../runtime/regionTypes.js";
 import { inputStyle, pillButton } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
 import SuggestionReviewPanel, { useSuggestionMarkup, useSuggestionReview } from "./SuggestionReviewPanel.jsx";
@@ -212,6 +213,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const [unitPopup, setUnitPopup] = useState(null); // {id, x, y, isNew} — inline unit editor
   const [featureSelection, setFeatureSelection] = useState([]); // feature ids ticked in the Features panel or box-selected on the map
   const [customBg, setCustomBg] = useState(null); // live background applied to the map
+  // This modern street reference exists only for the current editing session;
+  // scenario/document basemap choice and authored historical regions stay intact.
+  const [streetReference, setStreetReference] = useState(false);
   const [basemapPickerOpen, setBasemapPickerOpen] = useState(false);
   // Which country's flag we're picking, or null. Owned HERE, not in the inspector:
   // panelSurface used to carry backdrop-filter, which makes a containing block
@@ -336,23 +340,32 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     return true;
   };
   const pasteClipboard = () => {
-    if (!api || !clipboard) return false;
-    // The document's side first (countries, colours, flags, tags, types and
-    // groups this map lacks), then the map's: OlMap carves and adds, one undo step.
+    const count = clipboard?.regions?.features?.length || 0;
+    if (!api || !count) return false;
+    // Validate the cross-document type merge before any geometry is carved.
+    // The native game only accepts MAX_REGION_TYPES; silently overflowing here
+    // would strand freshly pasted regions with unresolved type references.
     const plan = planClipboardMerge(clipboard, { polities: d.polities, colors: d.colors, flags: d.flags, tags: d.tags, types: d.types, groups: d.groups });
-    if (plan.types.length) d.setTypes((list) => [...list, ...plan.types]);
-    if (Object.keys(plan.groups).length) d.setGroups((registry) => ({ ...plan.groups, ...registry }));
-    for (const [key, record] of Object.entries(plan.upserts)) d.upsertPolity(key, record);
-    for (const [key, rgb] of Object.entries(plan.colorOverrides)) d.setColorOverride(key, rgb);
-    for (const [key, flag] of Object.entries(plan.flags)) d.setFlag(key, flag);
-    for (const [key, list] of Object.entries(plan.tags)) d.setTags(key, list);
-    const result = api.pasteRegions(clipboard.regions, { simplify: pasteSimplified });
-    if (result.added.length) {
-      d.setSaveStatus("dirty");
-      api.zoomToSelection(result.added);
+    if (d.types.length + plan.types.length > MAX_REGION_TYPES) {
+      window.alert(`Cannot paste: this map would contain ${d.types.length + plan.types.length} region types, above the native limit of ${MAX_REGION_TYPES}. Remove unused types or import fewer types before pasting.`);
+      return false;
     }
+    if (!window.confirm(
+      `Paste ${count} region${count === 1 ? "" : "s"} into this map? Overlapping existing territory will be carved or replaced. One Undo reverses both pasted geometry and newly imported polity/type/group metadata.`,
+    )) return false;
+    // A paste can contain no usable polygon. Import document-side metadata
+    // only after the native map confirms that at least one region was added.
+    const result = api.pasteRegions(clipboard.regions, {
+      simplify: pasteSimplified,
+      documentStep: clipboardMetadataStep(plan, d.doc, d.setDoc, d.setSaveStatus),
+    });
+    if (!result?.added?.length) {
+      setClipboardResult({ kind: "pasted", added: [], trimmed: result?.trimmed || 0, removed: result?.removed || 0 });
+      return false;
+    }
+    api.zoomToSelection(result.added);
     setClipboardResult({ kind: "pasted", ...result });
-    return result.added.length > 0;
+    return true;
   };
   const clipboardKeysRef = useRef({ copy: copySelectionToClipboard, paste: pasteClipboard });
   clipboardKeysRef.current = { copy: copySelectionToClipboard, paste: pasteClipboard };
@@ -405,6 +418,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     const step = removeRowStep(warListOf(kind), warSetters[kind], id);
     setWarSelection((current) => (current?.kind === kind && current.id === id ? null : current));
     return step;
+  };
+  const replaceWarPreset = (kind, replacement) => {
+    if (!api || (kind !== "terrain" && kind !== "climate")) return false;
+    const step = replaceRowsStep(warListOf(kind), warSetters[kind], replacement);
+    if (!step) return false;
+    setWarSelection(null);
+    api.pushStep(step);
+    return true;
   };
   // A shape picked is gone once an undo or a delete takes it away.
   const warPickedRow = warSelection ? warListOf(warSelection.kind).find((row) => row.id === warSelection.id) : null;
@@ -1371,7 +1392,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const typeUsage = useMemo(
     () => (api ? api.countByType() : {}),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [api, d.types, d.selection, d.regionCount],
+    [api, d.types, d.selection, d.regionCount, regionEpoch],
   );
 
   // The polity registry keeps every country that was registered — created in
@@ -1586,6 +1607,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       <div style={{ position: "absolute", top: 0, right: dockRight, bottom: 0, left: dockLeft }}>
       <OlMap
         basemap={d.basemap}
+        streetReference={streetReference}
         types={d.types}
         colors={d.colors}
         selectionIds={d.selection}
@@ -1698,6 +1720,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           setTerrainAreas={d.setTerrainAreas}
           setFortifications={d.setFortifications}
           setClimateZones={d.setClimateZones}
+          onReplacePreset={replaceWarPreset}
           selection={warPickedRow ? warSelection : null}
           // A shape picked from the list is shown, and its tool is picked so it
           // can be reshaped at once.
@@ -1823,7 +1846,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           onClose={() => setOpenPanel(null)}
         />
       )}
-      {openPanel === "layers" && <LayersPanel api={api} onClose={() => setOpenPanel(null)} />}
+      {openPanel === "layers" && <LayersPanel streetReference={streetReference}
+          onStreetReferenceChange={setStreetReference}
+          hasCustomBackground={["image", "vector", "raster", "plain"].includes(customBg?.kind)} api={api} onClose={() => setOpenPanel(null)} />}
       {openPanel === "projection" && (
         <ProjectionPanel
           projection={d.metadata?.projection}
@@ -2109,6 +2134,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         }}
         scenarioDirty={scenarioMode ? scenarioDirty : false}
         actions={scenarioActions}
+        onReviewSave={scenarioMode ? () => persistScenario({ play: false, closeAfter: false }) : () => { void saveNow(); }}
+        onReviewPlay={scenarioMode ? () => persistScenario({ play: true }) : null}
+        reviewBusy={Boolean(scenarioAction) || !hydrated}
+        reviewScenarioMode={scenarioMode}
         isMobile={isMobile}
         mobileOpen={sidebarOpen}
         onMobileOpenChange={setSidebarOpen}

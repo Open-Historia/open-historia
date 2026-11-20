@@ -8,9 +8,9 @@
 export const EDITOR_WORKSPACES = Object.freeze([
   { id: "overview", icon: "map", label: "Overview", description: "Scenario and editing status", panel: null, items: [] },
   {
-    id: "countries", icon: "flag", label: "Countries", description: "Names, territory and identity", panel: "polities",
+    id: "countries", icon: "flag", label: "Polities", description: "Sovereign actors, territory and identity", panel: "polities",
     items: [
-      { id: "polities", icon: "flag", label: "Country details" },
+      { id: "polities", icon: "flag", label: "Polity details" },
     ],
   },
   {
@@ -29,7 +29,7 @@ export const EDITOR_WORKSPACES = Object.freeze([
     ],
   },
   {
-    id: "groups", icon: "users", label: "Groups", description: "Membership and controlled regions", panel: "groups",
+    id: "groups", icon: "users", label: "Groups", description: "Non-sovereign actors and territory", panel: "groups",
     items: [{ id: "groups", icon: "users", label: "Group details" }],
   },
   {
@@ -37,7 +37,7 @@ export const EDITOR_WORKSPACES = Object.freeze([
     items: [{ id: "war", icon: "mountain", label: "War geography" }],
   },
   {
-    id: "appearance", icon: "layers", label: "Maps & appearance", description: "Layers, flags and projection", panel: "basemap",
+    id: "appearance", icon: "layers", label: "Maps & appearance", description: "Layers, flags and projection", panel: "layers",
     items: [
       { id: "basemap", icon: "map", label: "Base and detailed maps", action: "basemap" },
       { id: "layers", icon: "layers", label: "Map layers" },
@@ -62,6 +62,9 @@ export const EDITOR_PANEL_IDS = Object.freeze([
   "layers", "reference", "projection", "province-import", "clipboard", "suggestions",
 ]);
 
-export function workspaceOfPanel(panelId) {
-  return EDITOR_WORKSPACES.find((workspace) => workspace.items.some((item) => item.id === panelId)) || null;
+export function workspaceOfPanel(panelId, preferredWorkspaceId = null) {
+  const matches = EDITOR_WORKSPACES.filter((workspace) =>
+    workspace.items.some((item) => item.id === panelId)
+  );
+  return matches.find((workspace) => workspace.id === preferredWorkspaceId) || matches[0] || null;
 }

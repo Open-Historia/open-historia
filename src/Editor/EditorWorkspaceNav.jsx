@@ -15,9 +15,10 @@ export default function EditorWorkspaceNav({
   counts, polityCount, groupCount, clipboardCount, suggestionCount,
   openPanel, onSetPanel, onOpenBasemaps, onOpenGenerator, generatorAvailable,
   saveLabel, scenarioDirty, onAfterNavigate,
+  onReviewSave, onReviewPlay, reviewBusy = false, reviewScenarioMode = false,
 }) {
   const [selectedWorkspace, setSelectedWorkspace] = useState("overview");
-  const activeWorkspaceId = openPanel ? workspaceOfPanel(openPanel)?.id || selectedWorkspace : selectedWorkspace;
+  const activeWorkspaceId = openPanel ? workspaceOfPanel(openPanel, selectedWorkspace)?.id || selectedWorkspace : selectedWorkspace;
   const nativeCounts = {
     regions: counts.regions, polities: polityCount, groups: groupCount,
     types: counts.types, features: counts.features, units: counts.units || 0,
@@ -27,7 +28,9 @@ export default function EditorWorkspaceNav({
     if (id === "basemap") { onSetPanel?.(null); onOpenBasemaps?.(); }
     else if (id === "generator") { onSetPanel?.(null); onOpenGenerator?.(); }
     else onSetPanel?.(id);
-    onAfterNavigate?.();
+    // Overview and Review have no external panel. Keep the mobile sidebar open
+    // so their content and native Save/Apply actions remain accessible.
+    if (id != null) onAfterNavigate?.();
   };
   const shownItems = (workspace) => workspace.items.filter((item) =>
     (item.id !== "suggestions" || suggestionCount !== null) &&
@@ -105,7 +108,7 @@ export default function EditorWorkspaceNav({
               <div style={{ ...panelSurface, boxShadow: "none", padding: 11, borderRadius: 10, marginTop: 6 }}>
                 <strong style={{ fontSize: 12 }}>Current map</strong>
                 <p style={{ color: "var(--oh-ui-muted, #b4c4d0)", fontSize: 11, lineHeight: 1.6, margin: "6px 0" }}>
-                  {(counts.regions ?? 0).toLocaleString()} regions · {polityCount} countries · {groupCount} groups
+                  {(counts.regions ?? 0).toLocaleString()} regions · {polityCount} polities · {groupCount} groups
                 </p>
                 <p style={{ color: "var(--oh-ui-muted, #b4c4d0)", fontSize: 11, lineHeight: 1.6, margin: "6px 0 0" }}>
                   Choose what to edit. The map's drawing tools remain in the compact icon toolbar.
@@ -114,11 +117,42 @@ export default function EditorWorkspaceNav({
             )}
             {active && workspace.id === "review" && (
               <div style={{ ...panelSurface, boxShadow: "none", padding: 11, borderRadius: 10, marginTop: 6 }}>
-                <strong style={{ fontSize: 12 }}>Working map: {saveLabel}</strong>
+                <strong style={{ fontSize: 12 }}>Review scenario authoring</strong>
+                <p style={{ color: "var(--oh-ui-muted, #b4c4d0)", fontSize: 11, lineHeight: 1.6, margin: "7px 0" }}>
+                  Confirm the authored data below, then use the native Save or Apply action. This is a review, not a second save state.
+                </p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 6 }}>
+                  {[
+                    ["Regions", counts.regions],
+                    ["Polities", polityCount],
+                    ["Groups", groupCount],
+                    ["Region types", counts.types],
+                    ["Places", counts.features],
+                    ["Starting units", counts.units || 0],
+                  ].map(([label, value]) =>
+                    <div key={label} style={{ padding: 7, borderRadius: 7, background: "var(--oh-ui-raised, rgba(255,255,255,0.05))" }}>
+                      <strong style={{ fontSize: 14 }}>{Number(value || 0).toLocaleString()}</strong>
+                      <div style={{ fontSize: 10, color: "var(--oh-ui-muted, #b4c4d0)" }}>{label}</div>
+                    </div>
+                  )}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--oh-ui-muted, #b4c4d0)", paddingTop: 8 }}>
+                  Working document: {saveLabel}
+                </div>
                 {scenarioDirty && <p style={{ color: "#fbbf24", fontSize: 11 }}>Changes have not yet been applied to the scenario.</p>}
                 <p style={{ color: "var(--oh-ui-muted, #b4c4d0)", fontSize: 11, lineHeight: 1.6, margin: "6px 0" }}>
-                  The working map and the playable scenario are saved separately. Use the actual Save or Apply &amp; Play controls below.
+                  The working map and the playable scenario are saved separately. These buttons use the existing native Save and Apply paths.
                 </p>
+                <div style={{ display: "grid", gap: 6 }}>
+                  <button type="button" disabled={reviewBusy || !onReviewSave} onClick={onReviewSave}
+                    style={{ ...navButton(true), justifyContent: "center", minHeight: 36, opacity: reviewBusy ? .5 : 1 }}>
+                    {reviewScenarioMode ? "Save changes to scenario" : "Save working map"}
+                  </button>
+                  {reviewScenarioMode && <button type="button" disabled={reviewBusy || !onReviewPlay} onClick={onReviewPlay}
+                    style={{ ...navButton(false), justifyContent: "center", minHeight: 36, opacity: reviewBusy ? .5 : 1 }}>
+                    Apply &amp; Play
+                  </button>}
+                </div>
               </div>
             )}
           </div>
