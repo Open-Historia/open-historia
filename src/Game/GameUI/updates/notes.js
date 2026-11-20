@@ -54,6 +54,22 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-11-project-currency-clarity",
+    kind: "minor",
+    date: "2026-11-20",
+    channel: "beta",
+    banners: [
+      {
+        title: "Clearer Project finances",
+        items: [
+          "Project allowances, planned costs and recorded spending now display in your selected GDP currency.",
+          "Project planners distinguish the game's accounting amounts from each country's domestic currency.",
+          "Changing your display currency never changes existing Project costs or funding.",
+        ],
+      },
+    ],
+  },
+  {
     // "build C and D, and the host can choose, but no sending api keys" (the owner, 2026-11-15): who answers a player's message to a
     // country the AI plays is the host's choice (multiplayer/host/settings.js `replies`): the host's AI, or each player's own device.
     // "any issues should not be roughly patched or whackamoled, the core of the issue should be fixed archetecturally" (the owner,

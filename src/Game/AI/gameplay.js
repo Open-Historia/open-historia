@@ -13122,10 +13122,13 @@ const projectMeansText = (world, owner) => {
   const lines = [`${owner}.`];
   const gdp = Number(sheet?.economy?.gdp);
   const currency = normalizeString(sheet?.economy?.currency);
-  if (gdp > 0) {
-    lines.push(`GDP ${readableFigure(gdp)}${currency ? ` ${currency}` : ""} a year. Project budget ${readableFigure(means.budget)} a month, of which its running projects take ${readableFigure(means.committed)}; one project may cost at most ${readableFigure(means.budget * COST_SHARE_OF_BUDGET_MOST)} a month.`);
+  if (currency) lines.push(`Domestic currency: ${currency}; not the accounting unit for GDP or Project costs.`);
+  if (means.mode === "nonmonetary") {
+    lines.push("This scenario uses non-monetary Project funding; set monthlyCost to 0. Work consumes time and capacity, with no recorded cash payments.");
+  } else if (gdp > 0) {
+    lines.push(`Canonical GDP ${readableFigure(gdp)} USD a year. Project budget ${readableFigure(means.budget)} USD a month, of which its running projects take ${readableFigure(means.committed)} USD; one project may cost at most ${readableFigure(means.budget * COST_SHARE_OF_BUDGET_MOST)} USD a month. All these amounts use constant 2026 USD accounting, not domestic currency.`);
   } else {
-    lines.push("Its economy is not on record: give the monthly cost in whatever unit this world counts money in; it is paid in full.");
+    lines.push("No native GDP baseline is assessed: paid Projects cannot claim funding. Give any proposed monthlyCost in constant 2026 USD, not an invented domestic-currency amount or a promise of available money.");
   }
   lines.push(`How fast it can work, from its economy and stability: ${means.capacity} (1 is an ordinary state).`);
   const figures = [];
@@ -13144,7 +13147,7 @@ const projectMeansText = (world, owner) => {
 
 const PROJECT_PLAN_RULES = [
   `durationDays: the days of work at normal funding (${DURATION_LEAST} to ${DURATION_MOST}), as long as this would really take in this era and this country. The engine runs it every day; the player may fund it low (half the cost, half the speed), high (one and a half of each) or not at all.`,
-  "monthlyCost: what it costs a month at normal funding, in the country's GDP currency: what this would really cost, within its project budget. A budget that cannot pay for everything slows every project it pays for.",
+  "monthlyCost: what a monetary Project costs a month at normal funding, in constant 2026 USD, not the country's domestic currency or the player's selected display currency. Match the owner's canonical Project budget; insufficient funds slow work. In non-monetary scenarios set monthlyCost to 0; that mode records no cash payments.",
   "milestones: two to five checkpoints on the way, each at the share of the work (atProgress, 1-99) when it is reached.",
   "effects: what it does to the world, once, when done. Set ongoing true for a programme that runs on once set up (a standing patrol, an intelligence service, a subsidy), and give it yields: small stat or relation changes it makes every month it is paid for.",
   PROJECT_EFFECTS_RULE,

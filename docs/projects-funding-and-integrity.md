@@ -92,3 +92,11 @@ For the future financial integration:
 `src/Game/GameUI/projects.jsx`: player controls, visibility, funding presentation.
 `src/Game/GameUI/libraryBar.jsx`: scenario-authoring funding basis.
 `server/libraryStore.js`: new-game scenario-world seed override.
+
+## Project money display and AI planning units (2026-11-20)
+
+All monetary `project.plan.monthlyCost`, `project.spent`, and GDP-proxy allowance values are **canonical constant-2026-USD accounting amounts**. They are not the owning country's historical domestic currency, even where `countryStats[owner].economy.currency` names one. The Projects panel now uses the same saved, active six-currency GDP display preference and fixed 2026 reference multipliers as Country National; that is presentation only, never a mutation of plan costs, spending, project progression, GDP, or debt. `nonmonetary` campaigns still show no project cash amounts.
+
+Both the Projects-panel planner (`gameplay.js`) and the Advisor-authored Project directive (`main.jsx`), including the shared JSON plan schema description, must request monetary `monthlyCost` values in canonical 2026 USD. The planner's live country context labels the separate **domestic** currency explicitly, labels all Project/GDP accounting numbers as USD, and does not treat missing GDP as funded spending. Nonmonetary plans use `monthlyCost: 0` because the engine does not charge cash.
+
+The fixed modern display conversion **cannot** derive an exchange value for a historic 1912 lev-denominated loan or establish financing. Borrowed amounts, disbursements, debt service and explicit national spending remain separate, future canonical fiscal design work. The current budget formula, daily allocation rules and existing saved plan values are unchanged.
