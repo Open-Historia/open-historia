@@ -121,13 +121,13 @@ test("a leader at war with the player is told what is on the table, and how to s
   // Not at war: nothing.
   assert.equal(describePeaceTalk({ world: world(), speaker: "Dorland", player: "Aland" }), "");
   // The hidden line comes off the reply, wherever it stands.
-  assert.deepEqual(parseDiplomaticEnvelope("We will not sign this.\nPEACE:decline\nDIPLOMATIC_MEMORY:Borduria refused Aland's terms.\nREACTION:😠"), { reply: "We will not sign this.", reaction: "😠", memorySummary: "Borduria refused Aland's terms.", peace: "decline", deal: "" });
+  assert.deepEqual(parseDiplomaticEnvelope("We will not sign this.\nPEACE:decline\nDIPLOMATIC_MEMORY:Borduria refused Aland's terms.\nREACTION:😠"), { reply: "We will not sign this.", reaction: "😠", memorySummary: "Borduria refused Aland's terms.", peace: "decline", treaty: "" });
   assert.equal(parseDiplomaticEnvelope("Good day.\nDIPLOMATIC_MEMORY:Nothing.").peace, "");
   // And what it said is carried out; a reply that says nothing of peace leaves the terms open.
   const accepted = answerPeaceProposal(put, { from: "Borduria", to: "Aland", verdict: { verdict: "accept" }, players: ["Aland"], date: "1915-01-12", round: 8 });
   assert.equal(accepted.world.wars[0].status, "ended");
   const chat = read("../GameUI/chat.jsx");
-  assert.ok(chat.includes("const { reply, reaction, memorySummary, peace, deal } = await sendDiplomaticMessage("));
+  assert.ok(chat.includes("const { reply, reaction, memorySummary, peace, treaty } = await sendDiplomaticMessage("));
   assert.ok(chat.includes("void answerPeaceInChat({ speaker: country.name, line: peace, chatId: chat.id, messageId: leaderMessage.id })"));
 });
 

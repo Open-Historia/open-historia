@@ -104,10 +104,10 @@ export const answerDiplomacy = hostOnly(async (...args) => (await gameplay()).an
 // (AI/warAndPeace.js answerPeaceProposal). In a shared game the host's table
 // turn reads it from its own answer instead.
 export const answerPeaceInChat = hostOnly(async (...args) => (await gameplay()).answerPeaceInChat(...args));
-// Deals with groups (AI/groupDeals.js): what a group's leader decided of one in
-// its chat reply, and what the player does with one between turns. No request.
-export const answerDealInChat = hostOnly(async (...args) => (await gameplay()).answerDealInChat(...args));
-export const playerGroupDeal = hostOnly(async (...args) => (await gameplay()).playerGroupDeal(...args));
+// Treaties made in a chat (AI/treatyTalk.js): what a leader decided of one on its reply's TREATY line,
+// and what the player does with one between turns (AI/agreementEngine.js). No request.
+export const answerTreatyInChat = hostOnly(async (...args) => (await gameplay()).answerTreatyInChat(...args));
+export const playerTreaty = hostOnly(async (...args) => (await gameplay()).playerTreaty(...args));
 export const advanceActiveInteractive = hostOnly(async (...args) => (await gameplay()).advanceActiveInteractive(...args));
 export const rewindActiveInteractive = hostOnly(async (...args) => (await gameplay()).rewindActiveInteractive(...args));
 export const endActiveInteractive = hostOnly(async (...args) => (await gameplay()).endActiveInteractive(...args));

@@ -14,25 +14,19 @@ import { readFileSync } from "node:fs";
 
 import { normalizeWorldState } from "../../runtime/gameState.js";
 import { GROUP_DEAL_TYPES, dealsBetween, groupPartyKey, relationBetween } from "../../runtime/groupParties.js";
-import { answerTreaty, proposeDeal, withTurnTreatyOffers } from "../../runtime/treatyOffers.js";
+import { answerTreaty, recordDraftedTreaty, withTurnTreatyOffers } from "../../runtime/treatyOffers.js";
+import { AGREEMENT_EFFECTS_FORMAT, AGREEMENT_EFFECTS_SCHEMA, EFFECT_CAPS, normalizeAgreementEffects } from "../../runtime/agreementEffects.js";
 import { parseDiplomaticEnvelope } from "../../runtime/diplomaticEnvelope.js";
 import { buildDiplomaticView } from "../../runtime/diplomaticViews.js";
 import { describeGroupsForPrompt } from "../../runtime/groups.js";
 import { applyDiplomaticUpdates, canonicalDiplomaticPolity, validateDiplomaticLedgerPayload } from "./nativeDiplomaticDirector.js";
-import {
-  CRACKDOWN_DAYS_PER_REGION,
-  GROUP_SPENDING_BOUNDS,
-  MAX_REGIONS_A_TURN,
-  START_RELATION,
-  declareGroupDeal,
-  endGroupDeal,
-  settleGroupDealStarts,
-  turnGroupDeals,
-} from "./groupDeals.js";
-import { GROUP_DIPLOMACY_RULE, describeDealTalk, describeGroupLeaderBrief, describeGroupStanding, readDealLine } from "./groupDealTalk.js";
+import { breakAgreement, settleAgreementStarts, turnAgreements } from "./agreementEngine.js";
+import { GROUP_DIPLOMACY_RULE, describeGroupLeaderBrief, describeGroupStanding } from "./groupDealTalk.js";
+import { describeTableTreaties, describeTreatyTalk, readTreaty, treatyAgreement } from "./treatyTalk.js";
+import { GAME_MASTER_SCHEMA } from "./gameplaySchemas.js";
 import { groupAreaColorExpression } from "../Map/groupAreaColors.js";
 
-const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
+const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 const CARTEL = "Cartel del Golfo";
 const REBELS = "Frente Sur";
@@ -108,136 +102,127 @@ test("a skip's relation and deal records naming a group pass the ledger and are 
 
 // ---- what a deal does -----------------------------------------------------------------------
 
-test("a truce puts a war between just the two on ceasefire, and moves the relation once", () => {
+// ---- what an agreement does: only what the AI wrote ---------------------------------------------
+
+const TRUCE_EFFECTS = {
+  months: 12,
+  onSign: [{ type: "war", op: "ceasefire" }, { type: "relation", party: "Mexico", with: CARTEL, change: 12 }],
+  monthly: [{ type: "payment", from: "Mexico", to: CARTEL, amount: 50_000_000 }, { type: "strength", party: CARTEL, figure: "spending", change: 0.5 }],
+  onEnd: [{ type: "relation", party: "Mexico", with: CARTEL, change: -3 }],
+  onBreak: [{ type: "relation", party: "breaker", with: CARTEL, change: -20 }, { type: "reputation", party: "breaker", change: -4 }],
+};
+
+test("effects are kept as written, held to generous caps, and an agreement without them does nothing", () => {
+  const held = normalizeAgreementEffects({
+    months: 9999,
+    onSign: [{ type: "relation", party: "A", with: "B", change: 80 }, { type: "stat", party: "A", stat: "Stability", change: 40 }, { type: "nonsense" }],
+    monthly: [{ type: "strength", party: "C", figure: "spending", change: 9 }, { type: "war", op: "end" }, { type: "area", group: "C", op: "take", region: "X" }],
+  });
+  assert.equal(held.months, 600);
+  assert.deepEqual(held.onSign, [{ type: "relation", party: "A", with: "B", change: EFFECT_CAPS.relation.once }, { type: "stat", party: "A", stat: "stability", change: 8 }]);
+  assert.deepEqual(held.monthly, [{ type: "strength", party: "C", figure: "spending", change: EFFECT_CAPS.strength.month }], "a war or the ground moves once, never monthly");
+  assert.equal(normalizeAgreementEffects({}), null);
+  const world = base({ relations: [{ a: "Mexico", b: CARTEL, score: -50 }], agreements: [{ id: "old", title: "Old pact", type: "truce", parties: ["Mexico", CARTEL], status: "active" }] });
+  const after = turnAgreements({ world, days: 400, date: "2027-02-01", round: 4 }).world;
+  assert.equal(relationBetween(after, "Mexico", CARTEL).score, -50, "an old save's agreement is neutral");
+  assert.equal(after.countryStats.Mexico.economy.publicDebt, 50);
+});
+
+test("an agreement's making, months, term and end are carried out exactly as written, once", () => {
   const world = base({
-    wars: [{ id: "gulf-war", title: "The Gulf War on the Cartels", status: "active", sideA: ["Mexico"], sideB: [CARTEL], startDate: "2025-01-01" }],
+    wars: [{ id: "gulf-war", title: "The Gulf War", status: "active", sideA: ["Mexico"], sideB: [CARTEL] }],
     relations: [{ a: "Mexico", b: CARTEL, score: -80 }],
-    agreements: [{ id: "t", title: "Truce", type: "truce", parties: ["Mexico", CARTEL], status: "active", startedDate: "2026-03-01" }],
+    agreements: [{ id: "t", title: "Gulf truce", type: "truce", parties: ["Mexico", CARTEL], status: "active", effects: TRUCE_EFFECTS }],
   });
-  const once = settleGroupDealStarts(world, { date: "2026-03-01", round: 3 });
-  assert.equal(once.world.wars.find((war) => war.id === "gulf-war").status, "ceasefire");
-  assert.equal(relationBetween(once.world, "Mexico", CARTEL).score, -80 + START_RELATION.truce);
-  const twice = settleGroupDealStarts(once.world, { date: "2026-04-01", round: 4 });
-  assert.equal(relationBetween(twice.world, "Mexico", CARTEL).score, -80 + START_RELATION.truce, "a deal's start is carried out once");
-  assert.equal(twice.started.length, 0);
+  const made = settleAgreementStarts(world, { date: "2026-03-01", round: 3 }).world;
+  assert.equal(made.wars[0].status, "ceasefire");
+  assert.equal(relationBetween(made, "Mexico", CARTEL).score, -68);
+  assert.equal(relationBetween(settleAgreementStarts(made, { date: "2026-04-01" }).world, "Mexico", CARTEL).score, -68, "made once");
+  const turn = turnAgreements({ world: made, days: 75, date: "2026-05-15", round: 4 }).world;
+  const truce = turn.agreements.find((entry) => entry.id === "t");
+  assert.equal(truce.monthsRun, 2);
+  assert.equal(truce.carryDays, 15);
+  // Two months of $50M from a $1T economy: 0.01 points of debt.
+  assert.ok(Math.abs(turn.countryStats.Mexico.economy.publicDebt - 50.01) < 1e-6);
+  assert.equal(turn.groups[CARTEL].military.spending, 51, "half a point a month: one whole point in two months");
+  const done = turnAgreements({ world: turn, days: 3650, date: "2036-05-15", round: 5 }).world;
+  const over = done.agreements.find((entry) => entry.id === "t");
+  assert.deepEqual([over.status, over.monthsRun, over.endApplied], ["expired", 12, true], "it runs its term and no further");
+  assert.equal(relationBetween(done, "Mexico", CARTEL).score, -71, "its onEnd, once");
 });
 
-test("an amnesty ends the war, gives up the group's ground in the granting country only, and stands its forces down", () => {
-  const world = base({
-    wars: [{ id: "w", title: "War", status: "active", sideA: ["Mexico"], sideB: [CARTEL] }],
-    agreements: [{ id: "am", title: "Amnesty", type: "amnesty", parties: ["Mexico", CARTEL], status: "active" }],
-  });
-  const settled = settleGroupDealStarts(world, { date: "2026-05-01", round: 5, regions: REGIONS }).world;
-  assert.equal(settled.wars.find((war) => war.id === "w").status, "ended");
-  assert.deepEqual(Object.keys(settled.groupAreas), ["r9"], "Texas is the United States' land, not Mexico's");
-  assert.ok(settled.groups[CARTEL].military.spending < 50);
+test("breaking an agreement carries out its breach, with the breaker named", () => {
+  const world = settleAgreementStarts(base({
+    relations: [{ a: "Mexico", b: CARTEL, score: 0 }],
+    agreements: [{ id: "t", title: "Gulf truce", type: "truce", parties: ["Mexico", CARTEL], status: "active", effects: TRUCE_EFFECTS }],
+  }), { date: "2026-03-01" }).world;
+  const broken = breakAgreement(world, { id: "t", by: "Mexico", date: "2026-04-01", round: 2 });
+  assert.equal(broken.agreement.brokenBy, "Mexico");
+  assert.equal(relationBetween(broken.world, "Mexico", CARTEL).score, 12 - 20);
+  assert.equal(breakAgreement(world, { id: "t", by: "Peru" }).reason, "not-yours");
 });
 
-test("a crackdown ends the cooperative deals between the two, and a hostage exchange is over when made", () => {
-  const world = base({
-    agreements: [
-      { id: "p", title: "Plaza", type: "protection", parties: ["Mexico", CARTEL], status: "active", effectsApplied: true },
-      { id: "h", title: "Swap", type: "hostage_exchange", parties: ["Mexico", CARTEL], status: "active" },
-    ],
-  });
-  const declared = declareGroupDeal(world, { by: "Mexico", against: CARTEL, type: "crackdown", title: "Operation Lighthouse", date: "2026-06-01", round: 6, regions: REGIONS });
-  assert.equal(declared.reason, "");
-  const status = (id) => declared.world.agreements.find((entry) => entry.id === id)?.status;
-  assert.equal(status("p"), "ended");
-  assert.equal(status("h"), "ended");
-  assert.equal(dealsBetween(declared.world, "Mexico", CARTEL).map((entry) => entry.type).join(), "crackdown");
-  assert.equal(declareGroupDeal(declared.world, { by: "Mexico", against: CARTEL, type: "crackdown" }).reason, "open", "one crackdown at a time");
-  assert.equal(declareGroupDeal(world, { by: "Mexico", against: CARTEL, type: "truce" }).reason, "type", "only a crackdown is declared alone");
+test("a payment is held to a share of the payer's GDP, and a group's area moves by the region's name", () => {
+  const world = base({ agreements: [{ id: "a", title: "Amnesty", type: "amnesty", parties: ["Mexico", CARTEL], status: "active", effects: {
+    onSign: [{ type: "payment", from: "Mexico", to: CARTEL, amount: 9e14 }, { type: "area", group: CARTEL, op: "release", region: "Tamaulipas" }],
+  } }] });
+  const made = settleAgreementStarts(world, { date: "2026-01-01", regions: REGIONS }).world;
+  assert.ok(Math.abs(made.countryStats.Mexico.economy.publicDebt - (50 + EFFECT_CAPS.payment.once * 100)) < 1e-6);
+  assert.equal(made.groupAreas.r1, undefined);
+  assert.equal(made.groupAreas.r2, CARTEL);
 });
 
-test("every turn a crackdown costs its government, weakens the group and takes back its ground region by region, within bounds", () => {
-  const start = declareGroupDeal(base(), { by: "Mexico", against: CARTEL, type: "crackdown", title: "Lighthouse", date: "2026-01-01", round: 1, regions: REGIONS }).world;
-  const short = turnGroupDeals({ world: start, days: 60, date: "2026-03-01", round: 2, regions: REGIONS }).world;
-  assert.equal(Object.keys(short.groupAreas).length, 4, "60 days take no region yet");
-  assert.equal(short.agreements.find((entry) => entry.type === "crackdown").carryDays, 60);
-  const later = turnGroupDeals({ world: short, days: 60, date: "2026-05-01", round: 3, regions: REGIONS }).world;
-  assert.equal(Object.keys(later.groupAreas).length, 3, "120 days carried take one");
-  assert.equal(later.agreements.find((entry) => entry.type === "crackdown").carryDays, 120 - CRACKDOWN_DAYS_PER_REGION);
-  assert.ok(later.countryStats.Mexico.economy.publicDebt > 50, "it costs the government");
-  assert.ok(later.groups[CARTEL].military.spending < 50, "it weakens the group");
-  const decade = turnGroupDeals({ world: later, days: 3650, date: "2036-05-01", round: 4, regions: REGIONS }).world;
-  assert.ok(Object.keys(decade.groupAreas).includes("r9"), "never the ground in another country's land");
-  assert.ok(Object.keys(decade.groupAreas).length >= 4 - 1 - MAX_REGIONS_A_TURN);
-  assert.ok(decade.groups[CARTEL].military.spending >= GROUP_SPENDING_BOUNDS[0]);
+test("no number of a deal is the engine's own", () => {
+  const engine = read("./agreementEngine.js");
+  assert.doesNotMatch(engine, /callAI|runJsonTask|fetch\(/, "no request");
+  for (const gone of ["START_RELATION", "PROTECTION_SHARE", "CRACKDOWN_DAYS_PER_REGION", "AMNESTY_STAND_DOWN"]) assert.doesNotMatch(engine, new RegExp(gone));
+  const peace = read("./warAndPeace.js");
+  assert.match(peace, /onBreak/, "a broken alliance costs what its own breach says");
 });
 
-test("protection and sponsorship are paid from a country's sheet and make the group stronger; no request is made", () => {
-  const world = base({
-    agreements: [
-      { id: "p", title: "Plaza", type: "protection", parties: ["Mexico", CARTEL], status: "active", effectsApplied: true },
-      { id: "s", title: "Arms", type: "sponsorship", parties: ["United States", REBELS], status: "active", effectsApplied: true },
-    ],
-  });
-  const next = turnGroupDeals({ world, days: 365, date: "2027-01-01", round: 9 }).world;
-  assert.ok(Math.abs(next.countryStats.Mexico.economy.publicDebt - 50.3) < 0.01, "0.3% of GDP a year");
-  assert.ok(next.groups[CARTEL].military.spending > 50);
-  assert.ok(next.countryStats["United States"].economy.publicDebt > 100);
-  assert.ok(next.groups[REBELS].military.spending > 50 && next.groups[REBELS].military.technology > 50);
-  const source = read("./groupDeals.js");
-  assert.doesNotMatch(source, /callAI|runJsonTask|fetch\(/, "a deal's effects are the engine's, never a request");
+// ---- treaties made in a chat -----------------------------------------------------------------------
+
+test("a proposal is answered on a hidden TREATY line in the shape every treaty has", () => {
+  const line = JSON.stringify({ answer: "counter", type: "military_access", parties: ["Syria", "Russia"], title: "Tartus lease", terms: "Russia uses Tartus.", effects: { months: 120, monthly: [{ type: "payment", from: "Russia", to: "Syria", amount: 166_000_000 }] } });
+  const envelope = parseDiplomaticEnvelope(`Ten years, not five.\nTREATY:${line}\nDIPLOMATIC_MEMORY:Syria countered.`);
+  assert.equal(envelope.reply, "Ten years, not five.");
+  const treaty = readTreaty(envelope.treaty);
+  assert.deepEqual([treaty.verdict, treaty.type, treaty.parties, treaty.effects.months], ["counter", "military_access", ["Syria", "Russia"], 120]);
+  assert.equal(readTreaty('{"answer":"maybe","type":"truce","parties":["A","B"]}'), null, "only the closed set of answers");
+  assert.deepEqual(readTreaty('{"answer":"break","title":"Gulf truce"}'), { verdict: "break", title: "Gulf truce" });
+  const put = recordDraftedTreaty({}, { from: "Syria", to: "Russia", status: "open", treaty, proposal: "We pay 2bn a year for Tartus", chatId: "c" });
+  const signed = answerTreaty(put.world, { op: "sign", ref: put.offer.id, country: "Russia", date: "2026-01-01" });
+  assert.deepEqual([signed.error, signed.agreement.parties, signed.agreement.effects.months], ["", ["Syria", "Russia"], 120]);
+  assert.equal(withTurnTreatyOffers(put.world.treatyOffers, { wars: [{ status: "active", sideA: ["Syria"], sideB: ["Russia"] }], round: 1 })[0].status, "open", "a drafted treaty may be made in a war");
+  const agreement = treatyAgreement(treaty, { id: "x", date: "2026-01-01" });
+  assert.equal(agreement.effects.monthly[0].amount, 166_000_000);
 });
 
-test("ending a deal short of its term is remembered by the other side; ending a crackdown is not", () => {
-  const world = base({ agreements: [{ id: "p", title: "Plaza", type: "protection", parties: ["Mexico", CARTEL], status: "active", effectsApplied: true }] });
-  const ended = endGroupDeal(world, { id: "p", by: "Mexico", date: "2026-02-01", round: 2 });
-  assert.equal(ended.agreement.status, "ended");
-  assert.ok(relationBetween(ended.world, "Mexico", CARTEL).score < 0);
-  assert.equal(endGroupDeal(world, { id: "p", by: "Peru" }).reason, "not-yours");
-});
-
-// ---- deals put in a chat ----------------------------------------------------------------------
-
-test("a deal put to a group is signed with the giver first, and is made during a war", () => {
-  const world = base({ wars: [{ id: "w", status: "active", sideA: ["Mexico"], sideB: [CARTEL] }] });
-  const put = proposeDeal(world, { from: "Mexico", to: CARTEL, type: "protection", giver: "to", title: "They pay us", date: "2026-01-01", round: 1, withLeader: true, chatId: "chat-1" });
-  assert.equal(put.reason, "");
-  assert.equal(put.offer.giverIsTo, true);
-  assert.equal(put.offer.withLeader, true);
-  assert.equal(proposeDeal(put.world, { from: "Mexico", to: CARTEL, type: "truce" }).reason, "open");
-  assert.equal(proposeDeal(world, { from: "Mexico", to: CARTEL, type: "crackdown" }).reason, "type", "a crackdown is declared, not put");
-  const kept = withTurnTreatyOffers(put.world.treatyOffers, { wars: world.wars, round: 2 });
-  assert.equal(kept[0].status, "open", "a deal with a group does not lapse for the war");
-  const signed = answerTreaty(put.world, { op: "sign", ref: put.offer.id, country: CARTEL, date: "2026-01-02", round: 1 });
-  assert.equal(signed.error, "");
-  assert.deepEqual(signed.agreement.parties, [CARTEL, "Mexico"], "the cartel pays");
-});
-
-test("a group's leadership says what it decides on a hidden DEAL line from a closed set", () => {
-  assert.deepEqual(readDealLine("sign"), { verdict: "sign" });
-  assert.deepEqual(readDealLine("Decline"), { verdict: "decline" });
-  assert.deepEqual(readDealLine("end protection"), { verdict: "end", type: "protection" });
-  assert.deepEqual(readDealLine("offer protection | you | La cuota | 5% of the port's take"), { verdict: "offer", type: "protection", giver: "you", title: "La cuota", terms: "5% of the port's take" });
-  assert.equal(readDealLine("accept"), null, "no synonym of the closed set is read");
-  assert.equal(readDealLine("offer crackdown|us|x"), null);
-  assert.equal(readDealLine("aceptar"), null);
-  const envelope = parseDiplomaticEnvelope("Bueno, gringo. Trato hecho.\nDEAL:sign\nDIPLOMATIC_MEMORY:The cartel took the truce.\nREACTION:🤝");
-  assert.equal(envelope.deal, "sign");
-  assert.equal(envelope.reply, "Bueno, gringo. Trato hecho.");
-  assert.equal(parseDiplomaticEnvelope("DEAL:decline").deal, "decline", "a reply of the line alone is an answer");
-});
-
-test("a group's leadership is told it is a group, in its own voice, by names only", () => {
-  const world = base({ relations: [{ a: "Mexico", b: CARTEL, score: -70 }] });
+test("the leader is told the context its effects are written from, compactly, and a group as a group", () => {
+  const world = base({ relations: [{ a: "Mexico", b: CARTEL, score: -70 }], agreements: [{ id: "t", title: "Gulf truce", type: "truce", parties: ["Mexico", CARTEL], status: "active" }] });
+  const talk = describeTreatyTalk({ world, speaker: CARTEL, player: "Mexico", proposal: true });
+  assert.match(talk, /^\[Treaty Proposal\]/);
+  assert.match(talk, /Mexico: GDP \$1\.00T, public debt 50% of GDP/);
+  assert.match(talk, /Cartel del Golfo \(group\): 4 regions, forces spending 50, technology 40/);
+  assert.match(talk, /Relation: hostile \(-70\)/);
+  assert.ok(talk.includes(AGREEMENT_EFFECTS_FORMAT));
+  assert.doesNotMatch(talk, /\br[0-9]\b/, "never a region's id");
+  const quiet = describeTreatyTalk({ world, speaker: CARTEL, player: "Mexico" });
+  assert.match(quiet, /"Gulf truce" \(truce\)/);
+  assert.ok(quiet.length < 400, `${quiet.length} characters without a proposal`);
+  assert.equal(describeTreatyTalk({ world: base(), speaker: CARTEL, player: "Mexico" }), "", "nothing to tell, nothing told");
+  assert.equal(describeTableTreaties({ governments: ["Mexico"] }), "", "a table needs two governments the AI plays");
   const brief = describeGroupLeaderBrief({ world, speaker: CARTEL, player: "Mexico", regionName: (id) => REGIONS.find((region) => region.id === id)?.name ?? "" });
   assert.match(brief, /^\[You Speak for a Group, Not a Government\]/);
-  assert.match(brief, /A drug cartel that runs the Gulf coast's ports/);
-  assert.match(brief, /It controls 4 regions: Tamaulipas, Nuevo León, Coahuila, Texas\./);
-  assert.match(brief, /relation with Mexico: hostile \(-70/);
-  assert.doesNotMatch(brief, /\br[0-9]\b/, "never a region's id");
-  assert.equal(describeGroupLeaderBrief({ world, speaker: "United States", player: "Mexico" }), "", "a country is told nothing of it");
-  const put = proposeDeal(world, { from: "Mexico", to: CARTEL, type: "truce", title: "Gulf truce", withLeader: true }).offer;
-  const talk = describeDealTalk({ world, speaker: CARTEL, player: "Mexico", openOffer: put });
-  assert.match(talk, /Mexico has put a deal to Cartel del Golfo: truce, "Gulf truce"/);
-  assert.match(talk, /DEAL:sign or DEAL:decline/);
-  assert.doesNotMatch(talk, /crackdown,/, "a crackdown is not offered in a chat");
 });
 
-// ---- what the time skip is told ---------------------------------------------------------------
+test("the Game Master writes group deals and effects in the same shape", () => {
+  const item = GAME_MASTER_SCHEMA.properties.agreementUpdates.items;
+  for (const type of GROUP_DEAL_TYPES) assert.ok(item.properties.type.enum.includes(type), type);
+  assert.ok(item.properties.op.enum.includes("break"));
+  assert.equal(item.properties.effects, AGREEMENT_EFFECTS_SCHEMA);
+  assert.ok(!item.required.includes("effects"), "an agreement written with none is still one");
+});
 
 test("the skip's [Groups] block carries each group's relations and deals compactly, and the rule is short", () => {
   const world = base({
@@ -274,13 +259,18 @@ test("the Relations view draws each group by its standing with the focus, and co
   assert.deepEqual(groupAreaColorExpression(null), ["get", "color"], "the political map keeps each group's own colour");
 });
 
-test("the deal UI is themed, has no gradient or purple, and talks to groups only in single player", () => {
-  const ui = read("../GameUI/groupDeals.jsx");
+test("Propose deal is a parchment beside the message box in every one-on-one chat, themed, without gradients", () => {
+  const ui = read("../GameUI/treatyCards.jsx");
+  assert.match(ui, /aria-label="Propose deal"/);
+  assert.match(ui, /title="Propose deal"/);
   assert.match(ui, /--oh-ui-accent/);
+  assert.match(ui, /height: "2\.75rem"/, "touch-sized");
   assert.doesNotMatch(ui, /gradient/i);
   const chat = read("../GameUI/chat.jsx");
-  assert.match(chat, /const dealGroup = peaceCounterpart && groupsOnHere && !inSharedGame\(\) \? groupPartyKey\(world, peaceCounterpart\.name\) : "";/);
-  assert.match(chat, /void answerDealInChat\(\{ speaker: country\.name, line: deal, chatId: chat\.id \}\)/);
-  assert.match(chat, /groups=\{pickableGroups\}/, "the new-conversation picker lists the groups");
+  assert.match(chat, /const treatyCounterpart = peaceCounterpart && !peaceWithPerson && !inSharedGame\(\)/);
+  assert.match(chat, /<ProposeDealButton[^\n]*\/>\}\n\s*<textarea\n\s*ref=\{composerRef\}/, "left of the text box");
+  assert.match(chat, /answerTreatyInChat\(\{ speaker: country\.name, line: treaty/);
+  assert.match(chat, /groups=\{pickableGroups\}/);
+  assert.match(read("../GameUI/stats.jsx"), /<EffectList compact effects=\{agreement\.effects\} \/>/, "the dossier shows each agreement's effects");
   assert.match(read("../Selection/Regions.jsx"), /Talk to their leadership/);
 });

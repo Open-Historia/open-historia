@@ -25,6 +25,7 @@ import { bundledFlagUrl } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { REGION_SELECTED_EVENT } from "../Selection/Regions.jsx";
 import { requestDiplomaticChat } from "./chat.jsx";
+import { EffectList } from "./treatyCards.jsx";
 import { relationBetween } from "../../runtime/groupParties.js";
 import { relationBandForScore } from "../../runtime/diplomaticStance.js";
 import { RELATION_CATEGORY_LABELS } from "../../runtime/diplomaticViews.js";
@@ -936,6 +937,8 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity, onPick
                     Updated {agreement.lastUpdatedDate}
                     </div>
                 )}
+                {/* What it does, as the AI that made it wrote it (treatyCards.jsx). */}
+                {agreement.effects && <div style={{ marginTop: "0.3rem" }}><EffectList compact effects={agreement.effects} /></div>}
                 </div>
                 <span style={statusBadgeStyle(tone)}>{prettyToken(agreement.status || "active")}</span>
                 </div>

@@ -25,6 +25,8 @@ import { CANON_KINDS } from "../../runtime/historyTiers.js";
 import { SOCIAL_POST_REACH } from "../../runtime/socialFeed.js";
 import { MARKER_FAMILIES, SAID_MARKER_FAMILIES } from "../../runtime/markerFamily.js";
 import { markerOpKind } from "../../runtime/markerOps.js";
+import { AGREEMENT_EFFECTS_SCHEMA } from "../../runtime/agreementEffects.js";
+import { GROUP_DEAL_TYPES } from "../../runtime/groupParties.js";
 const textSchema = (description) => ({
   type: "string",
   description,
@@ -2118,6 +2120,7 @@ export const CHAT_ACTIONS_SCHEMA = {
     // What a government at war with the player decides of peace, where a [Peace]
     // block asks for it (AI/warStatsPrompt.js describePeaceTalk).
     peaceAnswers: textSchema("Only where a [Peace] block asks: each government's decision on peace, a line each. Empty otherwise."),
+    treatiesJson: textSchema("Only where a [Treaties at the Table] block asks: the treaties agreed, as JSON. Empty otherwise."),
     lifecycleResponsesJson: textSchema(`Institution invitation/application decisions as JSON array text. Each object: {actorName, caseId, decision, reason?, terms?}. decision is ${INSTITUTION_LIFECYCLE_DECISIONS.slice(0, -1).join(", ")}, or ${INSTITUTION_LIFECYCLE_DECISIONS.at(-1)}. Use [] when this is not a lifecycle negotiation.`),
   },
   required: ["actions"],
@@ -2319,10 +2322,11 @@ const gmAgreementUpdateSchema = {
     id: nonEmptyTextSchema("Stable agreement id. Reuse an existing id for later lifecycle operations."),
     op: {
       type: "string",
-      enum: ["start", "update", "suspend", "resume", "end", "expire"],
+      enum: ["start", "update", "suspend", "resume", "end", "expire", "break"],
     },
     type: {
       type: "string",
+      // Every agreement type of the world, a group's deals among them (runtime/groupParties.js).
       enum: [
         "alliance",
         "mutual_defense",
@@ -2335,12 +2339,16 @@ const gmAgreementUpdateSchema = {
         "neutrality",
         "peace_settlement",
         "other",
+        ...GROUP_DEAL_TYPES,
       ],
     },
-    parties: stringArraySchema("Formal parties, using full canonical polity names."),
+    parties: stringArraySchema("Formal parties, using full canonical polity or group names; for break, the party breaking it."),
     eventIndexes: gmEventIndexesSchema,
     title: textSchema("Canonical agreement title; required when starting a new agreement."),
     terms: textSchema("Compact durable terms or lifecycle note."),
+    // What it does (runtime/agreementEffects.js): the one effects shape every request writes. Not
+    // required: an agreement written with none does nothing beyond what agreements always did.
+    effects: AGREEMENT_EFFECTS_SCHEMA,
   },
   required: ["id", "op", "type", "parties", "eventIndexes", "title", "terms"],
   additionalProperties: false,

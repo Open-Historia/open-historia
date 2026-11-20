@@ -13,7 +13,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { TREATY_BROKEN_REPUTATION } from "../../runtime/alliances.js";
 import { normalizeWorldState } from "../../runtime/gameState.js";
 import { TERRITORY_AS_HELD, TERRITORY_RESTORED, readTermsLine, readTreatyLines } from "../../runtime/peaceTerms.js";
 import { WEARINESS_A_YEAR, wearinessOf } from "../../runtime/warWeariness.js";
@@ -306,7 +305,9 @@ test("reparations are paid every turn: the payer owes more and the receiver less
   assert.equal(state.countryStats.Borduria.economy.publicDebt, 40);
 });
 
-const ALLIANCE = { id: "pact-1", title: "The Northern Pact", type: "mutual_defense", status: "active", parties: ["Borduria", "Cisland"], startedDate: "1910-01-01", lastUpdatedDate: "1910-01-01", terms: "Each defends the other." };
+// What breaking it costs is what the request that made it wrote (AI/agreementEngine.js): here a standing lost.
+const BREACH = 9;
+const ALLIANCE = { id: "pact-1", title: "The Northern Pact", type: "mutual_defense", status: "active", parties: ["Borduria", "Cisland"], startedDate: "1910-01-01", lastUpdatedDate: "1910-01-01", terms: "Each defends the other.", effects: { onBreak: [{ type: "reputation", party: "breaker", change: -BREACH }] } };
 // A war that begins this turn: it is in the world as the turn ends, and was not as it began.
 const attacked = (extra = {}, base = {}) => {
   const before = world({ wars: [], agreements: [ALLIANCE], regionSovereigntyOverrides: {}, regionOwnershipOverrides: { ...regions("a", "Aland", 10), ...regions("b", "Borduria", 10), ...regions("c", "Cisland", 4) }, ...base });
@@ -324,8 +325,12 @@ test("a war begun against a country brings in those bound to defend it, and one 
   const broke = turnWarAndPeace({ world: sour.after, baseWorld: sour.before, days: 30, date: "1914-04-01", round: 3, players: ["Aland"] });
   assert.deepEqual(war(broke).sideB, ["Borduria"]);
   assert.deepEqual(broke.callsToArms.map((call) => call.status), ["refused"]);
-  assert.equal(broke.internationalReputation.Cisland, 50 - TREATY_BROKEN_REPUTATION);
+  assert.equal(broke.internationalReputation.Cisland, 50 - BREACH);
   assert.deepEqual(broke.agreements.map((entry) => [entry.id, entry.status, entry.endedDate]), [["pact-1", "ended", "1914-04-01"]]);
+  // An alliance with no breach written (an old save's) costs its breaker nothing but the bond.
+  const unwritten = attacked({ agreements: [{ ...ALLIANCE, effects: undefined }], relations: sour.after.relations });
+  const free = turnWarAndPeace({ world: unwritten.after, baseWorld: unwritten.before, days: 30, date: "1914-04-01", round: 3, players: ["Aland"] });
+  assert.equal(free.internationalReputation?.Cisland ?? 50, 50);
   // A war that was already being fought calls on nobody new, and one applied twice calls once.
   const old = attacked({}, { wars: [WAR] });
   assert.deepEqual(turnWarAndPeace({ world: old.after, baseWorld: old.before, days: 30, date: "1914-04-01", round: 3, players: [] }).callsToArms, []);
@@ -333,7 +338,7 @@ test("a war begun against a country brings in those bound to defend it, and one 
   // The story ended the pact in the same turn the war began: that is a treaty broken, and the breaker pays.
   const ended = attacked({ agreements: [{ ...ALLIANCE, status: "ended", endedDate: "1914-03-20" }] });
   const dropped = turnWarAndPeace({ world: ended.after, baseWorld: ended.before, days: 30, date: "1914-04-01", round: 3, players: ["Aland"] });
-  assert.deepEqual([war(dropped).sideB, dropped.internationalReputation.Cisland], [["Borduria"], 50 - TREATY_BROKEN_REPUTATION]);
+  assert.deepEqual([war(dropped).sideB, dropped.internationalReputation.Cisland], [["Borduria"], 50 - BREACH]);
 });
 
 test("a person bound to defend a country is asked, and nobody joins a war for them", () => {
@@ -349,8 +354,8 @@ test("a person bound to defend a country is asked, and nobody joins a war for th
   const sheet = { ...asked, countryStats: { ...asked.countryStats, Cisland: { population: { total: 5e6 }, indices: { internationalReputation: 70 } } } };
   const refused = answerCallToArms(sheet, call.id, false, { date: "1914-04-05", round: 3 });
   assert.deepEqual([war(refused).sideB, refused.callsToArms[0].status], [["Borduria"], "refused"]);
-  assert.equal(refused.internationalReputation.Cisland, 70 - TREATY_BROKEN_REPUTATION);
-  assert.equal(refused.countryStats.Cisland.indices.internationalReputation, 70 - TREATY_BROKEN_REPUTATION);
+  assert.equal(refused.internationalReputation.Cisland, 70 - BREACH);
+  assert.equal(refused.countryStats.Cisland.indices.internationalReputation, 70 - BREACH);
   assert.equal(refused.agreements[0].status, "ended");
   // Through the one door: only the country called may answer, and once.
   const act = (op, country) => playerDiplomacy(asked, { op, ref: call.id, country, players: ["Cisland"], date: "1914-04-05", round: 3 });
@@ -362,7 +367,7 @@ test("a person bound to defend a country is asked, and nobody joins a war for th
   const later = turnWarAndPeace({ world: sent, baseWorld: sent, days: 30, date: "1914-05-01", round: 4, players: ["Cisland"] });
   assert.equal(later.callsToArms[0].status, "open");
   const lapsed = turnWarAndPeace({ world: later, baseWorld: later, days: 30, date: "1914-06-01", round: 5, players: ["Cisland"] });
-  assert.deepEqual([lapsed.callsToArms[0].status, lapsed.internationalReputation.Cisland], ["refused", 50 - TREATY_BROKEN_REPUTATION]);
+  assert.deepEqual([lapsed.callsToArms[0].status, lapsed.internationalReputation.Cisland], ["refused", 50 - BREACH]);
 });
 
 test("a standing is set on the world and on a sheet that carries the figure", () => {

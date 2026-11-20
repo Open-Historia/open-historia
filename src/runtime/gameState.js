@@ -20,6 +20,7 @@ import { normalizeClimateZones, normalizeFortifications, normalizeFreezingRegion
 import { normalizeMilitaryShift, normalizeMilitaryStats, shiftedMilitary } from "./militaryStats.js";
 import { MAX_GROUPS, applyGroupOps, canRenameGroup, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
 import { GROUP_DEAL_TYPES, groupPartyKey } from "./groupParties.js";
+import { normalizeAgreementEffects } from "./agreementEffects.js";
 import { enqueueEventStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { MAX_PUPPETS as MAX_WORLD_PUPPETS, PUPPET_KINDS, PUPPET_SECRECY_LEVELS, PUPPET_STATUSES } from "./puppets.js";
@@ -4135,10 +4136,21 @@ const normalizeWorldAgreement = (entry, identityWorld, index = 0) => {
     createdRound: Number.isFinite(Number(entry.createdRound)) ? Math.max(0, Math.trunc(Number(entry.createdRound))) : 0,
     updatedRound: Number.isFinite(Number(entry.updatedRound)) ? Math.max(0, Math.trunc(Number(entry.updatedRound))) : 0,
     ...(entry.migratedLegacy === true ? { migratedLegacy: true } : {}),
-    // A deal with a group (runtime/groupDeals.js): its signing's effects were
-    // carried out, and the days of its effects not yet spent on a whole step.
+    // What it does, as the AI that made it wrote it (runtime/agreementEffects.js),
+    // and how far the engine has carried it out (Game/AI/agreementEngine.js): its
+    // signing's effects, the months run, the days toward the next month, its end's
+    // effects, and who broke it.
+    ...(normalizeAgreementEffects(entry.effects) ? { effects: normalizeAgreementEffects(entry.effects) } : {}),
     ...(entry.effectsApplied === true ? { effectsApplied: true } : {}),
+    ...(Number(entry.monthsRun) > 0 ? { monthsRun: Math.min(600, Math.trunc(Number(entry.monthsRun))) } : {}),
     ...(Number(entry.carryDays) > 0 ? { carryDays: Math.min(3650, Math.round(Number(entry.carryDays))) } : {}),
+    ...(entry.endApplied === true ? { endApplied: true } : {}),
+    // Fractions of a point a group's figures are owed, banked between months.
+    ...(entry.figureCarry && typeof entry.figureCarry === "object" && !Array.isArray(entry.figureCarry)
+      && Object.keys(entry.figureCarry).length
+      ? { figureCarry: Object.fromEntries(Object.entries(entry.figureCarry).slice(0, 8).map(([key, value]) => [normalizeOptionalString(key).slice(0, 160), Math.max(-1, Math.min(1, Number(value) || 0))]).filter(([key, value]) => key && value)) }
+      : {}),
+    ...(normalizeOptionalString(entry.brokenBy) ? { brokenBy: normalizeOptionalString(entry.brokenBy) } : {}),
   };
 };
 
@@ -6537,7 +6549,7 @@ const YIELD_CARRY_KEY = "yieldCarry";
 // A stat effect as a patch for mergeCountryStatPatch, against the sheet as it is:
 // { patch, applied } with `applied` the change actually made, or null where the
 // sheet has no such figure to move.
-const statEffectPatch = (sheet, effect, scale, share = 1) => {
+export const statEffectPatch = (sheet, effect, scale, share = 1) => {
   const measure = statMeasure(effect.stat);
   const current = statValueOf(sheet, effect.stat);
   if (!measure || !Number.isFinite(current)) return null;

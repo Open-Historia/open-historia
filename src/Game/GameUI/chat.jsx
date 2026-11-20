@@ -9,10 +9,10 @@ import { resolveStockCountryCode } from "../../runtime/polityIdentity.js";
 import OFFICIAL_COUNTRY_CODES_BY_NAME from "../../runtime/generated/officialCountryAliases.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
-import { SharedGameRefusal, answerDealInChat, answerPeaceInChat, checkDemandReply, ensureCountryAssessed, playerGroupDeal, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
-import { GroupDealForm, GroupDealOfferCard, GroupDealsInForce, groupBannerDataUrl, groupDealReasonText, pickableGroupsOf } from "./groupDeals.jsx";
-import { dealsBetween, groupPartyKey, isGroupDealType, isUnilateralGroupDeal } from "../../runtime/groupParties.js";
-import { AGREEMENT_TYPE_LABELS } from "../../runtime/diplomaticViews.js";
+import { SharedGameRefusal, answerPeaceInChat, answerTreatyInChat, checkDemandReply, ensureCountryAssessed, playerTreaty, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
+import { AgreementsInForce, ProposalBox, ProposeDealButton, TreatyCard, treatyReasonText } from "./treatyCards.jsx";
+import { groupBannerDataUrl, pickableGroupsOf } from "./groupBanner.js";
+import { dealsBetween } from "../../runtime/groupParties.js";
 import { findGroupKey } from "../../runtime/groups.js";
 import { CallToArmsCard, PeaceOfferCard, PeaceTermsForm, sendPeaceAnswer } from "./warAndPeace.jsx";
 import { TreatyForm, TreatyOfferCard, sendTreaty, treatyOffersForThread } from "./treaties.jsx";
@@ -1462,22 +1462,24 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         : []), [peaceWithPerson, treatyOffersAll, playerCountry, peaceCounterpart]);
     const canProposeTreaty = peaceWithPerson && !peaceWar && !threadTreaties.some((offer) => offer.status === "open");
     const [treatyFormOpen, setTreatyFormOpen] = useState(false);
-    // DEALS WITH A GROUP (groupDeals.jsx), in the one-on-one chat with one, in single player: the deals put
-    // between the two at the foot of the thread, those in force with End, and Deal in the composer.
+    // TREATIES (treatyCards.jsx), in the one-on-one chat with a country or a group the AI plays, in single
+    // player: the treaties drafted in this thread at its foot, the agreements in force between the two with
+    // their effects, and the parchment left of the message box that opens a proposal.
     const groupsOnHere = useActiveFeatures().groups?.enabled !== false;
-    const dealGroup = peaceCounterpart && groupsOnHere && !inSharedGame() ? groupPartyKey(world, peaceCounterpart.name) : "";
-    const threadDeals = useMemo(() => {
-        if (!dealGroup) return [];
-        const pair = [String(playerCountry ?? "").trim().toLowerCase(), dealGroup.toLowerCase()].sort().join("|");
+    const treatyCounterpart = peaceCounterpart && !peaceWithPerson && !inSharedGame() ? String(peaceCounterpart.name ?? "").trim() : "";
+    const threadTreatyDrafts = useMemo(() => {
+        if (!treatyCounterpart) return [];
+        const pair = [String(playerCountry ?? "").trim().toLowerCase(), treatyCounterpart.toLowerCase()].sort().join("|");
         return (Array.isArray(treatyOffersAll) ? treatyOffersAll : [])
-            .filter((offer) => isGroupDealType(offer?.type) || offer?.withLeader || offer?.chatId)
+            .filter((offer) => offer?.drafted)
             .filter((offer) => [String(offer?.from ?? "").trim().toLowerCase(), String(offer?.to ?? "").trim().toLowerCase()].sort().join("|") === pair)
             .filter((offer) => offer.status === "open" || String(offer.chatId ?? "") === String(chat?.id ?? ""))
             .slice(-3);
-    }, [dealGroup, treatyOffersAll, playerCountry, chat?.id]);
-    const dealsInForce = useMemo(() => (dealGroup ? dealsBetween(world, playerCountry, dealGroup) : []), [dealGroup, world, playerCountry]);
-    const canProposeDeal = Boolean(dealGroup) && !threadDeals.some((offer) => offer.status === "open");
-    const [dealFormOpen, setDealFormOpen] = useState(false);
+    }, [treatyCounterpart, treatyOffersAll, playerCountry, chat?.id]);
+    const agreementsInForce = useMemo(() => (treatyCounterpart ? dealsBetween(world, playerCountry, treatyCounterpart) : []), [treatyCounterpart, world, playerCountry]);
+    const [proposalOpen, setProposalOpen] = useState(false);
+    // The proposals the player sent from the box, by their words: the reply to one is asked as a proposal's.
+    const proposalsRef = useRef(new Set());
     const [demandBusy, setDemandBusy] = useState(false);
     const newThreadId = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -1819,7 +1821,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             const asked = [...messagesRef.current].reverse().find((msg) => msg.role === "user" && msg.text === playerMessage);
             const repliedOn = asked?.time || gameDate;
             try {
-                const { reply, reaction, memorySummary, peace, deal } = await sendDiplomaticMessage(playerMessage, country.name, countries, { chatId: chat.id, catchUp: asked?.catchUp || "" });
+                const proposal = proposalsRef.current.has(playerMessage);
+                const { reply, reaction, memorySummary, peace, treaty } = await sendDiplomaticMessage(playerMessage, country.name, countries, { chatId: chat.id, catchUp: asked?.catchUp || "", proposal });
                 // The thread's rolling durable memory rides on the reply that
                 // produced it, so a reopened thread, the advisor's one-off sends
                 // and the world director read the same continuity. Its id is set
@@ -1867,11 +1870,12 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     void answerPeaceInChat({ speaker: country.name, line: peace, chatId: chat.id, messageId: leaderMessage.id })
                         .catch((error) => logDebugEvent("diplomacy", `${country.name}'s word on peace could not be carried out.`, error));
                 }
-                // What a group's leadership decided of a deal, its hidden DEAL line (AI/groupDealTalk.js): carried out
-                // by the game, no request.
-                if (deal && !isGroup) {
-                    void answerDealInChat({ speaker: country.name, line: deal, chatId: chat.id })
-                        .catch((error) => logDebugEvent("diplomacy", `${country.name}'s word on a deal could not be carried out.`, error));
+                // What the leader decided of a treaty, its hidden TREATY line (AI/treatyTalk.js): the treaty
+                // written as the game models it, signed, put as a counter-offer, refused or broken. No request.
+                if (treaty && !isGroup) {
+                    if (proposal) proposalsRef.current.delete(playerMessage);
+                    void answerTreatyInChat({ speaker: country.name, line: treaty, chatId: chat.id, proposal: proposal ? playerMessage : "" })
+                        .catch((error) => logDebugEvent("diplomacy", `${country.name}'s word on a treaty could not be carried out.`, error));
                 }
             } catch (err) {
                 pushMessages([...messagesRef.current, {
@@ -2299,29 +2303,22 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             return "";
         };
 
-        // A deal put to a group (GroupDealForm): kept first, so its leadership's prompt has it, then said in the
-        // thread, which asks for the reply as any message does. A crackdown is declared and in force at once.
-        // Resolves "" once done, else why not.
-        const proposeDealHere = async ({ type, giver, title, terms }) => {
-            if (!dealGroup || isLoading) return groupDealReasonText("nobody");
-            const kind = uiString(AGREEMENT_TYPE_LABELS[type] ?? AGREEMENT_TYPE_LABELS.other);
-            const named = title || `${kind} · ${dealGroup}`;
-            const done = await playerGroupDeal({ op: "propose", to: dealGroup, type, giver, title: named, terms, chatId: String(chat.id ?? "") });
-            if (!done?.ok) return groupDealReasonText(done?.reason);
-            setDealFormOpen(false);
-            const deal = title ? `${kind}: ${title}` : kind;
-            await submitPlayerText(isUnilateralGroupDeal(type)
-                ? uiString("We declare against you: {{deal}}.", { deal })
-                : uiString("We put a deal to you: {{deal}}.", { deal }));
+        // A deal the player writes out (ProposalBox): said in the thread as their own message, and answered as
+        // a proposal: the leader's one request answers it and writes the treaty (AI/treatyTalk.js).
+        const sendProposal = async (text) => {
+            if (!treatyCounterpart || isLoading) return treatyReasonText("not-open");
+            proposalsRef.current.add(text);
+            setProposalOpen(false);
+            await submitPlayerText(text);
             return "";
         };
-        const answerDealHere = async (op, offer) => {
-            const done = await playerGroupDeal({ op, ref: offer.id });
-            return done?.ok ? "" : groupDealReasonText(done?.reason);
+        const answerTreatyHere = async (op, offer) => {
+            const done = await playerTreaty({ op, ref: offer.id });
+            return done?.ok ? "" : treatyReasonText(done?.reason);
         };
-        const endDealHere = async (agreement) => {
-            const done = await playerGroupDeal({ op: "end", ref: agreement.id });
-            return done?.ok ? "" : groupDealReasonText(done?.reason);
+        const endAgreementHere = async (agreement) => {
+            const done = await playerTreaty({ op: "end", ref: agreement.id });
+            return done?.ok ? "" : treatyReasonText(done?.reason);
         };
 
         // A treaty put to the other player (TreatyForm): its card comes with the host's view. Resolves "" once it is
@@ -2723,8 +2720,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             {strandedDemands.map(renderDemandCard)}
             {strandedPeace.map(renderPeaceCard)}
             {threadTreaties.map((offer) => <TreatyOfferCard key={offer.id} offer={offer} viewer={playerCountry} />)}
-            {dealGroup ? <GroupDealsInForce deals={dealsInForce} viewer={playerCountry} onEnd={endDealHere} /> : null}
-            {threadDeals.map((offer) => <GroupDealOfferCard key={offer.id} offer={offer} viewer={playerCountry} onAnswer={answerDealHere} />)}
+            {treatyCounterpart ? <AgreementsInForce agreements={agreementsInForce} onEnd={endAgreementHere} /> : null}
+            {threadTreatyDrafts.map((offer) => <TreatyCard key={offer.id} offer={offer} viewer={playerCountry} onAnswer={answerTreatyHere} />)}
             {threadCalls.stranded.map((call) => <CallToArmsCard key={call.id} call={call} viewer={playerCountry} />)}
             {isLoading && lifecycleGroupThinking
                 ? <LifecycleThinkingBubble count={lifecycleState.responseCases.length || countries.length} />
@@ -2814,16 +2811,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 )}
                 {canProposePeace && peaceFormOpen && <PeaceTermsForm viewer={playerCountry} enemy={peaceCounterpart?.name} person={peaceWithPerson} busy={isLoading} onSend={proposePeaceHere} onCancel={() => setPeaceFormOpen(false)} />}
                 {canProposeTreaty && treatyFormOpen && <TreatyForm busy={isLoading} onSend={proposeTreatyHere} onCancel={() => setTreatyFormOpen(false)} />}
-                {canProposeDeal && dealFormOpen && <GroupDealForm group={dealGroup} busy={isLoading} onSend={proposeDealHere} onCancel={() => setDealFormOpen(false)} />}
+                {treatyCounterpart && proposalOpen && <ProposalBox counterpart={treatyCounterpart} busy={isLoading} onSend={sendProposal} onCancel={() => setProposalOpen(false)} />}
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     {canProposePeace && (
                         <button type="button" className="oh-tap" onClick={() => setPeaceFormOpen((open) => !open)} aria-pressed={peaceFormOpen} title={`Propose peace to ${peaceCounterpart?.name}`} style={{ background: peaceFormOpen ? "rgba(43,193,243,.16)" : "rgba(255,255,255,0.05)", border: `1px solid ${peaceFormOpen ? "rgba(43,193,243,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: peaceFormOpen ? "#2bc1f3" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Peace</button>
                     )}
                     {canProposeTreaty && (
                         <button type="button" className="oh-tap" onClick={() => setTreatyFormOpen((open) => !open)} aria-pressed={treatyFormOpen} title="Propose a treaty" style={{ background: treatyFormOpen ? "rgba(43,193,243,.16)" : "rgba(255,255,255,0.05)", border: `1px solid ${treatyFormOpen ? "rgba(43,193,243,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: treatyFormOpen ? "#2bc1f3" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Treaty</button>
-                    )}
-                    {canProposeDeal && (
-                        <button type="button" className="oh-tap" data-group-deal-button="true" onClick={() => setDealFormOpen((open) => !open)} aria-pressed={dealFormOpen} title={`Put a deal to ${dealGroup}`} style={{ background: dealFormOpen ? "var(--oh-ui-active, rgba(43,193,243,.16))" : "var(--oh-ui-surface, rgba(255,255,255,0.05))", border: `1px solid ${dealFormOpen ? "var(--oh-ui-accent, #2bc1f3)" : "var(--oh-ui-line, rgba(255,255,255,0.15))"}`, borderRadius: "10px", color: dealFormOpen ? "var(--oh-ui-accent, #2bc1f3)" : "var(--oh-ui-text, rgba(255,255,255,0.7))", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Deal</button>
                     )}
                     {canCallChatVote && (
                         <button type="button" className="oh-tap" onClick={() => { setPollComposerOpen((open) => !open); setPollError(""); }} aria-pressed={pollComposerOpen} title="Call a binding conversational vote in this group chat" style={{ background: pollComposerOpen ? "rgba(59,130,246,.2)" : "rgba(255,255,255,0.05)", border: `1px solid ${pollComposerOpen ? "rgba(96,165,250,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: pollComposerOpen ? "#bfdbfe" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Vote</button>
@@ -2838,6 +2832,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         style={{ background: makeDemand ? "rgba(234,179,8,0.22)" : "rgba(255,255,255,0.05)", border: `1px solid ${makeDemand ? "rgba(234,179,8,0.7)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: makeDemand ? "rgb(250,204,21)" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 700, height: "2.5rem", padding: "0 0.6rem" }}
                         >{makeDemand ? "⚑ Demand" : "⚑"}</button>
                     )}
+                    {treatyCounterpart && <ProposeDealButton open={proposalOpen} disabled={isLoading} onToggle={() => setProposalOpen((open) => !open)} />}
                     <textarea
                     ref={composerRef}
                     placeholder={canDemand && makeDemand ? `Your demand of ${countries[0]?.name}…` : isInstitutionCouncil ? "Address the council…" : isLifecycleConversation ? "Address the accession table…" : "Send a diplomatic message…"}
@@ -4395,7 +4390,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     }, [isOpen, hasLoadedInitialData]);
 
     const landHolders = useLandHolders(showSelector);
-    // The groups the player may talk to (groupDeals.jsx), while groups are on for this game.
+    // The groups the player may talk to (groupBanner.js), while groups are on for this game.
     const groupsOnHere = useActiveFeatures().groups?.enabled !== false;
     const pickableGroups = useMemo(
         () => (groupsOnHere ? pickableGroupsOf(worldSnapshot, playerCountry) : []),

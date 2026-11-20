@@ -292,7 +292,7 @@ const describeArea = (regions, regionName, maxRegions) => {
   return `${regions.length} region${regions.length === 1 ? "" : "s"}${list}`;
 };
 // `standingOf(name)`: a short line of the group's relations and deals in force
-// (Game/AI/groupDeals.js describeGroupStanding), "" for none; appended after its area.
+// (Game/AI/groupDealTalk.js describeGroupStanding), "" for none; appended after its area.
 export const describeGroupsForPrompt = (world, { regionName = () => "", maxRegions = 12, inView = null, standingOf = null } = {}) => {
   const groups = normalizeGroups(world?.groups);
   const names = Object.keys(groups);

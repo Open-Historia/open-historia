@@ -75,8 +75,9 @@ const NEW_UPDATES = [
   },
   {
     // "make it so you can have diplomacy with them like cartels and shit" (the owner, 2026-11-19): a group is a party
-    // to relations and agreements like a country (runtime/groupParties.js), with deals that fit it and do things in
-    // the world (Game/AI/groupDeals.js), its leadership talks as the group it is, and the diplomatic map draws it.
+    // to relations and agreements like a country (runtime/groupParties.js), its leadership talks as the group it is,
+    // and the diplomatic map draws it. Then "dont have the numbers be hardcoded ... add a button to diplomacy chat to
+    // propose deal": every agreement's effects written by the AI (runtime/agreementEffects.js), and Propose deal.
     id: "2026-11-back-channels",
     kind: "major",
     date: "2026-11-19",
@@ -103,24 +104,25 @@ const NEW_UPDATES = [
       {
         theme: "backChannels",
         scene: "deals",
-        title: "Deals That Bite",
-        subtitle: "Truces, protection, sponsors and crackdowns",
+        title: "Deals Written in Full",
+        subtitle: "Propose any deal in your own words",
         sections: [
           {
-            heading: "Making a deal",
+            heading: "Proposing a deal",
             icon: "book",
             items: [
-              "In a conversation with a group, Deal puts one to them: a truce, protection money, sponsorship, safe passage, smuggling, an amnesty, a hostage exchange or recognition. Their leadership signs it or turns it down in its reply, and may put a deal of its own to you.",
-              "A crackdown is declared, not signed. Every deal in force is listed in the conversation, and you can end it there, though the other side will remember.",
+              "Every conversation with a country or a group has a parchment beside the message box: Propose deal. Write the deal out in your own words and send it.",
+              "Their leadership answers in the same reply, accepting, refusing or countering, and writes the treaty as the game keeps it: its kind, its parties, its term, its terms and what it does.",
+              "A counter-offer comes as a card you sign or decline. Every deal in force is listed in the conversation and in a country's dossier with what it does, and you can end it there, though breaking it costs what it says.",
             ],
           },
           {
             heading: "What deals do",
             icon: "swords",
             items: [
-              "A truce halts a war between you and the group, and an amnesty ends it: the group gives up its ground in your land.",
-              "Protection and sponsorship are paid for every year and make the group stronger; a crackdown costs you, weakens the group and takes back its ground region by region.",
-              "Countries the AI plays make these deals with groups too, and the time skip keeps or breaks them in the story.",
+              "No deal runs on fixed numbers: what a treaty does when it is signed, every month, when it ends and if it is broken is written by the AI from both sides' economies, their relation, their wars and the terms, and the game carries out exactly that.",
+              "That holds for every agreement, alliances and trade pacts as well as truces, protection money and crackdowns. The game only keeps a single deal from changing a country overnight.",
+              "Countries the AI plays make deals with each other and with groups the same way, in conversations and in the time skip.",
             ],
           },
         ],

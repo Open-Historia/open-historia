@@ -1,5 +1,6 @@
 /*! Open Historia — portions (troop & era prompt additions) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import DEFAULT_PROMPTS from "./defaultPrompts.json";
+import { AGREEMENT_EFFECTS_FORMAT } from "../../runtime/agreementEffects.js";
 import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
 import { POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE } from "../../runtime/politicalActorOps.js";
 import {
@@ -106,7 +107,8 @@ relationUpdatesJson element:
 {"a":"Full Polity Name","b":"Full Polity Name","score":0,"status":"friendly|cordial|neutral|cautious|strained|hostile|rival","eventIndexes":[0],"summary":""}
 
 agreementUpdatesJson element:
-{"id":"stable-agreement-id","op":"start|update|suspend|resume|end|expire","type":"alliance|mutual_defense|guarantee|non_aggression|friendship_consultation|trade_economic|military_cooperation|military_access|neutrality|peace_settlement|other","parties":[],"eventIndexes":[0],"title":"","terms":""}
+{"id":"stable-agreement-id","op":"start|update|suspend|resume|end|expire|break","type":"alliance|mutual_defense|guarantee|non_aggression|friendship_consultation|trade_economic|military_cooperation|military_access|neutrality|peace_settlement|other|truce|protection|sponsorship|safe_passage|smuggling|amnesty|hostage_exchange|recognition|crackdown","parties":[],"eventIndexes":[0],"title":"","terms":"","effects":{"months":0,"onSign":[],"monthly":[],"onEnd":[],"onBreak":[]}}
+- break: parties names the one breaking it. effects, on a start: ${AGREEMENT_EFFECTS_FORMAT}
 
 puppetUpdatesJson element — a SUBORDINATION: one polity directing another's will while it remains a separate country holding its own territory and sovereignty:
 {"op":"install|reclassify|loyalty|reveal|release|annex|revolt|suppress","overlord":"Full Polity Name","puppet":"Full Polity Name","kind":"protectorate|satellite|client","loyalty":50,"secrecy":"open|covert","eventIndexes":[0],"note":""}
