@@ -269,6 +269,10 @@ import { applyTurnFronts, citiesFollowCountries, withAirStrikes, withFrontManpow
 import { STRIKES_PER_TURN_MOST, fliesAsAircraft, withTurnStrikes } from "../../runtime/strikes.js";
 import { airStrikeVisuals } from "../../runtime/fronts/airStrike.js";
 import { answerPeaceProposal, offerPeace, playerDiplomacy, turnDays, turnWarAndPeace } from "./warAndPeace.js";
+import { declareGroupDeal, endGroupDeal, settleGroupDealStarts, turnGroupDeals } from "./groupDeals.js";
+import { GROUP_DIPLOMACY_RULE, describeGroupLeaderBrief, describeGroupStanding, readDealLine } from "./groupDealTalk.js";
+import { answerTreaty, openOfferBetween as openDealBetween, proposeDeal } from "../../runtime/treatyOffers.js";
+import { groupPartyKey, isUnilateralGroupDeal } from "../../runtime/groupParties.js";
 import { holdPlayersWars } from "./playersWarsHold.js";
 // A person's land is theirs to give: a completed project cedes none they hold (runProjectsEngine).
 import { cessionsPeopleKeep, polityChangesPeopleKeep } from "../../runtime/projectCessions.js";
@@ -1482,6 +1486,8 @@ const buildGroupsContext = async (worldLike, { regionCatalog = null, inView = nu
   const catalog = regionCatalog ?? await loadRegionCatalog().catch(() => []);
   return describeGroupsForPrompt(world, {
     regionName: await promptRegionNamer(world, catalog),
+    // Each group's relations and deals in force (groupDeals.js).
+    standingOf: (name) => describeGroupStanding(world, name),
     maxRegions: Math.max(12, Math.floor(GROUP_REGIONS_IN_PROMPT / count)),
     ...(inView instanceof Set ? { inView: groupInViewTest(bundle, world, catalog, inView) } : {}),
   });
@@ -3030,7 +3036,7 @@ const buildJumpStaticRules = async (variables = {}) => {
     // How the board is kept (projectsDirective.js): always, since the engine runs
     // it and an empty board is where the first projects are opened.
     `${JUMP_PROJECTS_RULES_HEADING}\n${buildJumpProjectsRules({ folded: Boolean(variables?.foldedSkip) && variables?.foldedBoard !== false })}`,
-    isActiveFeatureEnabled("groups") ? `${GROUPS_RULE_HEADING}\n${GROUPS_RULE}` : "",
+    isActiveFeatureEnabled("groups") ? `${GROUPS_RULE_HEADING}\n${GROUPS_RULE_WITH_DIPLOMACY}` : "",
     `${WAR_LEDGER_RULES_HEADING}\n${warLedgerRules(playerName)}`,
     `${DIPLOMATIC_LEDGER_RULES_HEADING}\n${diplomaticLedgerRules(playerName)}`,
     `[Reading the Diplomatic Ledger]\n${DIPLOMATIC_SLICE_RULES}`,
@@ -3122,11 +3128,13 @@ const describeWarsWithoutFormations = (world) => {
 
 const GROUPS_RULE = "Groups are actors that are not countries — an insurgency, a cartel, a militia, a warlord's band, a cult, a zombie outbreak — each controlling an area of regions that stay their countries'. Found, change, move or erase them with groupOps whenever an event has one appear, spread, lose ground, change or be destroyed. A group taking a region moves no border; when a group becomes a state that governs its land, found the state with regionTransfers instead. A side in a war or a rising that is not a country on the map is a group too, even when none is listed below yet: found it the first time an event has it holding ground, so that its later gains and losses have something on the map to change.";
 const GROUPS_RULE_HEADING = "[How Groups Are Recorded]";
+// (And how they deal with others: groupDeals.js.)
+const GROUPS_RULE_WITH_DIPLOMACY = `${GROUPS_RULE} ${GROUP_DIPLOMACY_RULE}`;
 // `rulesAbove`: the rule is in the skip's standing rules (buildJumpStaticRules),
 // and the live block points at it.
 const buildJumpGroupsBlock = (groupsContext, { rulesAbove = false } = {}) => [
   "[Groups]",
-  rulesAbove ? `Recorded as ${GROUPS_RULE_HEADING} above says.` : GROUPS_RULE,
+  rulesAbove ? `Recorded as ${GROUPS_RULE_HEADING} above says.` : GROUPS_RULE_WITH_DIPLOMACY,
   normalizeString(groupsContext) || "No groups exist yet.",
 ].join("\n");
 
@@ -5968,6 +5976,8 @@ if (typeof window !== "undefined") {
 const resolveInvitees = async (names, world, additionalCountries = []) => {
   const countryCatalog = [
     ...mergePolityCatalog(await loadCountryNames(), world),
+    // A group writes to the player, and is written to, by its exact name (runtime/groupParties.js).
+    ...Object.keys(world?.groups && typeof world.groups === "object" ? world.groups : {}).map((name) => ({ code: "", name })),
     ...normalizeArray(additionalCountries).map((entry) => ({
       code: normalizeString(entry?.code),
       name: normalizeString(entry?.name || entry?.code),
@@ -9835,6 +9845,22 @@ const applySimulationResult = async ({
       }
     },
   });
+  // Deals with groups (groupDeals.js): the start of each new one carried out, and
+  // what those in force do over the period (payments, a group's strength, a
+  // crackdown retaking ground). After the war and peace of the turn.
+  {
+    const touchesGround = normalizeArray(worldWithImpacts?.agreements)
+      .some((agreement) => ["crackdown", "amnesty"].includes(agreement?.type) && normalizeString(agreement?.status || "active") === "active");
+    const dealt = turnGroupDeals({
+      world: worldWithImpacts,
+      days: turnDays(baseGame, nextGame),
+      date: nextGame.gameDate,
+      round: nextGame.round,
+      regions: touchesGround ? filterToRenderedRegions(await peaceRegionCatalog(), worldWithImpacts) : [],
+    });
+    worldWithImpacts = dealt.world;
+    if (dealt.notes.length) logDebugEvent("turn", `Deals with groups: ${dealt.notes.join("; ")}.`);
+  }
   // The player's offers the skip's end accepted, told once the peace is made: the war ended by it (or by a peace
   // in its twin, makePeace). One that was not made is told as refused, like any other end of a player's war.
   for (const entry of playersWars.accepted) {
@@ -15923,6 +15949,8 @@ export const runChatActionBatch = async ({
       buildWarStatsBlock({ world: bundle.world, countries: aiParticipants, max: 2400 }),
       ...peaceTalks,
       documentKnowledge ? `[PRIVATE GOVERNMENT DOCUMENTS - COMPARTMENTALIZED]\n${documentKnowledge}` : "",
+      // A participant that is a group speaks as one (groupDeals.js), not as a government.
+      ...(isActiveFeatureEnabled("groups") ? aiParticipants.map((speaker) => describeGroupLeaderBrief({ world: bundle.world, speaker, player })) : []),
       institutionLifecyclePrompt,
       formalInstitutionPrompt,
       "Return this turn's actions as JSON only.",
@@ -15940,7 +15968,11 @@ export const runChatActionBatch = async ({
     ...(typeof onRequest === "function" ? { onRequest } : {}),
   });
 
-  const known = mergePolityCatalog(await loadCountryNames(), bundle.world).map((entry) => entry.name).filter(Boolean);
+  const known = [
+    ...mergePolityCatalog(await loadCountryNames(), bundle.world).map((entry) => entry.name).filter(Boolean),
+    // A group may be brought into a conversation like a country (runtime/groupParties.js).
+    ...Object.keys(bundle.world?.groups && typeof bundle.world.groups === "object" ? bundle.world.groups : {}),
+  ];
   // A turn of words alone keeps what was said and drops everything else.
   const rawActions = normalizeArray(payload?.actions)
     .filter((action) => !wordsOnly || normalizeChatAction(action)?.type === "send_message");
@@ -16469,6 +16501,117 @@ export const answerPeaceInChat = async ({ speaker = "", line = "", player = "", 
     ? `${speaker} on peace with ${person}: ${verdict.verdict} (${answer.outcome}).`
     : `${speaker} said "${normalizeString(line)}" of peace with ${person}; nothing was done: ${answer.reason}.`);
   return answer;
+};
+
+// ---- deals with groups in a chat (groupDeals.js) ----------------------------------------------
+
+// The map's catalog, for a deal that moves a group's ground (an amnesty, a crackdown).
+const dealRegions = async (world) => filterToRenderedRegions(await peaceRegionCatalog(), world);
+
+// What a group's leader decided of a deal in its reply, its hidden DEAL line
+// (groupDeals.js describeDealTalk), carried out: the deal the player put to it
+// signed or declined, one of its own put to the player, or one in force ended.
+// Resolves { outcome, reason }: outcome "signed" | "declined" | "offered" | "ended" | "".
+export const answerDealInChat = async ({ speaker = "", line = "", player = "", chatId = "" } = {}) => {
+  const game = await readGameData();
+  const person = normalizeString(player) || normalizeString(game?.country);
+  const said = readDealLine(line);
+  if (!said) return { outcome: "", reason: "unread" };
+  const date = normalizeString(game?.gameDate || game?.startDate);
+  const round = game?.round;
+  let answer = { outcome: "", reason: "" };
+  const regions = said.verdict === "sign" ? await dealRegions(await readWorldState({ force: true })) : [];
+  await mutateWorldState((world) => {
+    const group = groupPartyKey(world, speaker);
+    if (!group) {
+      answer = { outcome: "", reason: "not-a-group" };
+      return null;
+    }
+    if (said.verdict === "sign" || said.verdict === "decline") {
+      const offer = openDealBetween(world?.treatyOffers, person, group);
+      if (!offer || offer.to.toLowerCase() !== group.toLowerCase()) {
+        answer = { outcome: "", reason: "no-offer" };
+        return null;
+      }
+      const result = answerTreaty(world, { op: said.verdict, ref: offer.id, country: offer.to, date, round });
+      if (result.error) {
+        answer = { outcome: "", reason: result.error };
+        return null;
+      }
+      answer = { outcome: said.verdict === "sign" ? "signed" : "declined", reason: "" };
+      return said.verdict === "sign" ? settleGroupDealStarts(result.world, { date, round, regions }).world : result.world;
+    }
+    if (said.verdict === "offer") {
+      const result = proposeDeal(world, { from: group, to: person, type: said.type, title: said.title, terms: said.terms, giver: said.giver === "you" ? "to" : "from", date, round, chatId });
+      answer = { outcome: result.offer ? "offered" : "", reason: result.reason };
+      return result.offer ? result.world : null;
+    }
+    const inForce = normalizeArray(world?.agreements).find((agreement) => agreement?.type === said.type
+      && ["active", "suspended"].includes(normalizeString(agreement?.status || "active"))
+      && normalizeArray(agreement?.parties).some((party) => normalizeString(party).toLowerCase() === group.toLowerCase())
+      && normalizeArray(agreement?.parties).some((party) => normalizeString(party).toLowerCase() === person.toLowerCase()));
+    if (!inForce) {
+      answer = { outcome: "", reason: "none-in-force" };
+      return null;
+    }
+    const result = endGroupDeal(world, { id: inForce.id, by: group, date, round });
+    answer = { outcome: result.agreement ? "ended" : "", reason: result.reason };
+    return result.agreement ? result.world : null;
+  });
+  logDebugEvent("diplomacy", answer.outcome
+    ? `${speaker} on a deal with ${person}: ${said.verdict} (${answer.outcome}).`
+    : `${speaker} said "${normalizeString(line)}" of a deal with ${person}; nothing was done: ${answer.reason}.`);
+  return answer;
+};
+
+// What the player does with a deal with a group, between turns, no request:
+//   op "propose"   put a deal to the group (its leader answers in the chat): to, type, giver ("us" | "them"),
+//                  title, terms, chatId; a deal declared alone (a crackdown) is in force at once
+//      "sign" | "decline"   the group's own offer (ref)
+//      "withdraw"  the player's own offer (ref)
+//      "end"       a deal in force (ref: the agreement's id)
+// Resolves { ok, reason, offer?, agreement? }.
+export const playerGroupDeal = async ({ op = "", ref = "", to = "", type = "", giver = "us", title = "", terms = "", chatId = "" } = {}) => {
+  const game = await readGameData();
+  const person = normalizeString(game?.country);
+  const date = normalizeString(game?.gameDate || game?.startDate);
+  const round = game?.round;
+  const needsGround = (op === "propose" && isUnilateralGroupDeal(type)) || op === "sign";
+  const regions = needsGround ? await dealRegions(await readWorldState({ force: true })) : [];
+  let outcome = { ok: false, reason: "unknown" };
+  await mutateWorldState((world) => {
+    if (op === "propose") {
+      const group = groupPartyKey(world, to);
+      if (!group) {
+        outcome = { ok: false, reason: "not-a-group" };
+        return null;
+      }
+      if (isUnilateralGroupDeal(type)) {
+        const result = declareGroupDeal(world, { by: person, against: group, type, title, terms, date, round, regions });
+        outcome = { ok: Boolean(result.agreement), reason: result.reason, agreement: result.agreement };
+        return result.agreement ? result.world : null;
+      }
+      const result = proposeDeal(world, { from: person, to: group, type, title, terms, giver: giver === "them" ? "to" : "from", date, round, withLeader: true, chatId });
+      outcome = { ok: Boolean(result.offer), reason: result.reason, offer: result.offer };
+      return result.offer ? result.world : null;
+    }
+    if (op === "sign" || op === "decline" || op === "withdraw") {
+      const result = answerTreaty(world, { op, ref, country: person, date, round });
+      outcome = { ok: !result.error, reason: result.error };
+      if (result.error) return null;
+      return op === "sign" ? settleGroupDealStarts(result.world, { date, round, regions }).world : result.world;
+    }
+    if (op === "end") {
+      const result = endGroupDeal(world, { id: ref, by: person, date, round });
+      outcome = { ok: Boolean(result.agreement), reason: result.reason };
+      return result.agreement ? result.world : null;
+    }
+    return null;
+  });
+  logDebugEvent("diplomacy", outcome.ok
+    ? `${person} — deal with a group: ${op}${type ? ` ${type}` : ""}${to ? ` (${to})` : ""}.`
+    : `${person} — deal with a group: ${op} was not done: ${outcome.reason}.`);
+  return outcome;
 };
 
 // A scene the player is in the middle of. A scene a time skip proposed before

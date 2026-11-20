@@ -5,6 +5,9 @@ import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, getPrimedScenarioRegionCatalog, resolveCountryDisplayName } from "../../runtime/assets.js";
 import { withMapClaims } from "../../runtime/mapClaims.js";
 import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
+import { dealsBetween, relationBetween } from "../../runtime/groupParties.js";
+import { RELATION_CATEGORY_LABELS, AGREEMENT_TYPE_LABELS } from "../../runtime/diplomaticViews.js";
+import { relationBandForScore } from "../../runtime/diplomaticStance.js";
 import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { readGameData, readWorldState } from "../../runtime/gameState.js";
 import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
@@ -653,6 +656,16 @@ const RegionPopup = () => {
     const controllingGroup = regionId && isActiveFeatureEnabled("groups")
         ? territoryState.groups?.[territoryState.groupAreas?.[regionId]] ?? null
         : null;
+    // The group's standing with the player (runtime/groupParties.js): the relation's band and the deals in
+    // force, and a way to talk to its leadership. Not for the player's own group.
+    const groupIsPlayers = Boolean(controllingGroup) && controllingGroup.name.toLowerCase() === String(playerCountry ?? "").trim().toLowerCase();
+    const groupRelation = controllingGroup && !groupIsPlayers ? relationBetween(worldState, controllingGroup.name, playerCountry) : null;
+    const groupDeals = controllingGroup && !groupIsPlayers ? dealsBetween(worldState, controllingGroup.name, playerCountry) : [];
+    const handleTalkToGroup = () => {
+        if (!controllingGroup) return;
+        requestDiplomaticChat({ targetType: "private", name: controllingGroup.name, code: "" });
+        _dismiss?.();
+    };
     const displayPolity = (code) => {
         if (!code) return "Unclaimed Territory";
         const identity = resolvePolityIdentity(code, worldState, {
@@ -977,6 +990,33 @@ const RegionPopup = () => {
                 <div style={{ marginTop: "3px", fontSize: "11px", lineHeight: 1.4, color: "rgba(255,255,255,0.72)", maxHeight: "88px", overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                 {controllingGroup.description}
                 </div>
+            )}
+            {!groupIsPlayers && (
+                <div data-group-standing="true" style={{ display: "grid", gridTemplateColumns: "76px minmax(0, 1fr)", gap: "3px 7px", fontSize: "11px", lineHeight: 1.35, marginTop: "5px" }}>
+                <span style={{ color: "rgba(255,255,255,0.42)" }}>Relation</span>
+                <span style={{ color: "rgba(255,255,255,0.84)" }}>
+                {groupRelation
+                    ? <>{RELATION_CATEGORY_LABELS[relationBandForScore(groupRelation.score)]} <span data-no-translate style={{ color: "rgba(255,255,255,0.5)" }}>({Math.round(Number(groupRelation.score) || 0)})</span></>
+                    : RELATION_CATEGORY_LABELS.unknown}
+                </span>
+                {groupDeals.length > 0 && (
+                    <>
+                    <span style={{ color: "rgba(255,255,255,0.42)" }}>Deals</span>
+                    <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{groupDeals.map((deal) => AGREEMENT_TYPE_LABELS[deal.type] ?? AGREEMENT_TYPE_LABELS.other).join(", ")}</span>
+                    </>
+                )}
+                </div>
+            )}
+            {!groupIsPlayers && (
+                <button
+                type="button"
+                className="oh-tap-row"
+                data-group-talk="true"
+                onClick={(e) => { e.stopPropagation(); handleTalkToGroup(); }}
+                style={rostraButtonStyle}
+                >
+                Talk to their leadership
+                </button>
             )}
             </>
         )}

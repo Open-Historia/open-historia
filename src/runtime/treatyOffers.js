@@ -22,6 +22,7 @@
 // (multiplayer/host/projection.js). Pure, and loads in plain Node.
 
 import { warBetween } from "./peaceTerms.js";
+import { isDirectedGroupDeal, isGroupDealType, isUnilateralGroupDeal } from "./groupParties.js";
 
 // The agreements people may sign (runtime/gameState.js WORLD_AGREEMENT_TYPE_SET): not a guarantee, which binds one
 // way and names who, nor a peace settlement, which is a peace's own (world.peaceTreaties).
@@ -54,7 +55,8 @@ const normalizeTreatyOffer = (raw) => {
   const id = clean(raw?.id, 160);
   const from = clean(raw?.from);
   const to = clean(raw?.to);
-  const type = TREATY_TYPES.includes(raw?.type) ? raw.type : "";
+  // (A deal with a group, runtime/groupDeals.js, is put the same way: proposeDeal.)
+  const type = TREATY_TYPES.includes(raw?.type) || (isGroupDealType(raw?.type) && !isUnilateralGroupDeal(raw?.type)) ? raw.type : "";
   if (!id || !from || !to || fold(from) === fold(to) || !type) return null;
   const status = TREATY_STATUSES.includes(raw?.status) ? raw.status : "open";
   return {
@@ -69,6 +71,11 @@ const normalizeTreatyOffer = (raw) => {
     status,
     ...(status !== "open" && Number.isFinite(Number(raw?.answeredRound)) ? { answeredRound: whole(raw.answeredRound) } : {}),
     ...(status === "signed" && clean(raw?.agreementId, 160) ? { agreementId: clean(raw.agreementId, 160) } : {}),
+    // A deal with a direction (groupParties.js): the one it was put to is the one who gives.
+    ...(isDirectedGroupDeal(type) && raw?.giverIsTo === true ? { giverIsTo: true } : {}),
+    // Put to a party nobody plays, whose leader answers it in the chat (`chatId`).
+    ...(raw?.withLeader === true ? { withLeader: true } : {}),
+    ...(clean(raw?.chatId, 160) ? { chatId: clean(raw.chatId, 160) } : {}),
   };
 };
 
@@ -122,6 +129,41 @@ export const proposeTreaty = (world, { from = "", to = "", type = "", title = ""
   return { world: { ...world, treatyOffers: normalizeTreatyOffers([...list(world?.treatyOffers), offer]) }, offer, reason: "" };
 };
 
+// A deal put to a party nobody plays, or by one to a person: a group's leader
+// answers it in the chat (Game/AI/gameplay.js answerDealInChat), a person with the
+// offer's buttons. Unlike a treaty between people it may be put while the two
+// fight, since a truce, an amnesty or a hostage exchange is made in a war.
+//   type     one of TREATY_TYPES or a group deal (groupParties.js), never one declared alone
+//   giver    "from" | "to": who gives, for a deal with a direction
+//   withLeader   true when `to` is answered by its leader in the chat `chatId`
+// Returns { world, offer, reason }, reason "" | "nobody" | "type" | "open".
+export const proposeDeal = (world, { from = "", to = "", type = "", title = "", terms = "", giver = "from", date = "", round = 0, withLeader = false, chatId = "" } = {}) => {
+  const nothing = (reason) => ({ world, offer: null, reason });
+  if (!clean(from) || !clean(to) || fold(from) === fold(to)) return nothing("nobody");
+  if (!(TREATY_TYPES.includes(type) || isGroupDealType(type)) || isUnilateralGroupDeal(type)) return nothing("type");
+  if (openBetween(world?.treatyOffers, from, to)) return nothing("open");
+  const turn = whole(round);
+  const offer = normalizeTreatyOffer({
+    id: `deal-offer:${fold(from)}:${fold(to)}:${turn}:${list(world?.treatyOffers).length}`,
+    from: clean(from),
+    to: clean(to),
+    type,
+    title,
+    terms,
+    date,
+    round: turn,
+    status: "open",
+    giverIsTo: giver === "to",
+    withLeader,
+    chatId,
+  });
+  if (!offer) return nothing("type");
+  return { world: { ...world, treatyOffers: normalizeTreatyOffers([...list(world?.treatyOffers), offer]) }, offer, reason: "" };
+};
+
+// The offer open between two, either way round, or null.
+export const openOfferBetween = (offers, a, b) => openBetween(offers, a, b);
+
 // A country answers a treaty put to it, or withdraws its own.
 //   op        "sign" | "decline" (the one it was put to), "withdraw" (the one who put it)
 //   ref       the offer's id
@@ -146,7 +188,7 @@ export const answerTreaty = (world, { op = "", ref = "", country = "", date = ""
   if (fold(offer.to) !== fold(country)) return nothing("not-yours");
   if (op === "decline") return { world: { ...world, treatyOffers: normalizeTreatyOffers(marked("declined")) }, error: "", agreement: null };
   if (Array.isArray(players) && !players.some((name) => fold(name) === fold(offer.from))) return nothing("maker-gone");
-  if (warBetween(world?.wars, offer.from, offer.to)) {
+  if (!isGroupDealType(offer.type) && warBetween(world?.wars, offer.from, offer.to)) {
     return { world: { ...world, treatyOffers: normalizeTreatyOffers(marked("lapsed")) }, error: "at-war", agreement: null };
   }
   const day = clean(date, 40);
@@ -155,7 +197,8 @@ export const answerTreaty = (world, { op = "", ref = "", country = "", date = ""
     title: offer.title,
     type: offer.type,
     status: "active",
-    parties: [offer.from, offer.to],
+    // Who gives first, for a deal with a direction (groupParties.js).
+    parties: offer.giverIsTo ? [offer.to, offer.from] : [offer.from, offer.to],
     startedDate: day,
     lastUpdatedDate: day,
     terms: offer.terms,
@@ -181,6 +224,8 @@ export const withTurnTreatyOffers = (offers, { wars = [], round = 0 } = {}) => {
   return normalizeTreatyOffers(list(offers).map((offer) => {
     if (offer?.status !== "open") return offer;
     const stale = turn - whole(offer.round) >= TREATY_OFFER_STANDS_ROUNDS;
-    return stale || warBetween(wars, offer.from, offer.to) ? { ...offer, status: "lapsed", answeredRound: turn } : offer;
+    // (A deal with a group is made in a war as well as out of one.)
+    const atWar = !isGroupDealType(offer.type) && warBetween(wars, offer.from, offer.to);
+    return stale || atWar ? { ...offer, status: "lapsed", answeredRound: turn } : offer;
   }));
 };

@@ -54,6 +54,76 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "make it so you can have diplomacy with them like cartels and shit" (the owner, 2026-11-19): a group is a party
+    // to relations and agreements like a country (runtime/groupParties.js), with deals that fit it and do things in
+    // the world (Game/AI/groupDeals.js), its leadership talks as the group it is, and the diplomatic map draws it.
+    id: "2026-11-back-channels",
+    kind: "major",
+    date: "2026-11-19",
+    channel: "alpha",
+    banners: [
+      {
+        theme: "backChannels",
+        scene: "talk",
+        title: "Back Channels",
+        subtitle: "Talk to the cartels, the rebels and the militias",
+        lead: "Groups are now parties to diplomacy as countries are. Open a conversation with any group on the map, and its leadership answers as what it is.",
+        sections: [
+          {
+            heading: "Talking",
+            icon: "people",
+            items: [
+              "Start a conversation with a group from the Diplomacy panel's list, from its area on the map (Talk to their leadership), or from a country's Groups on its territory.",
+              "A cartel talks like a cartel and a rebel movement like rebels, from what the group is and wants.",
+              "Groups can sit in group chats beside countries, and can write to you after a time skip.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "backChannels",
+        scene: "deals",
+        title: "Deals That Bite",
+        subtitle: "Truces, protection, sponsors and crackdowns",
+        sections: [
+          {
+            heading: "Making a deal",
+            icon: "book",
+            items: [
+              "In a conversation with a group, Deal puts one to them: a truce, protection money, sponsorship, safe passage, smuggling, an amnesty, a hostage exchange or recognition. Their leadership signs it or turns it down in its reply, and may put a deal of its own to you.",
+              "A crackdown is declared, not signed. Every deal in force is listed in the conversation, and you can end it there, though the other side will remember.",
+            ],
+          },
+          {
+            heading: "What deals do",
+            icon: "swords",
+            items: [
+              "A truce halts a war between you and the group, and an amnesty ends it: the group gives up its ground in your land.",
+              "Protection and sponsorship are paid for every year and make the group stronger; a crackdown costs you, weakens the group and takes back its ground region by region.",
+              "Countries the AI plays make these deals with groups too, and the time skip keeps or breaks them in the story.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "backChannels",
+        scene: "map",
+        title: "Groups on the Diplomatic Map",
+        subtitle: "Where every group stands with you",
+        sections: [
+          {
+            heading: "Relations view",
+            icon: "map",
+            items: [
+              "On the Diplomatic map's Relations view, each group's area is drawn in its standing with the focus country, a crackdown in a colour of its own.",
+              "The legend lists the groups apart from the countries, and a group's card shows its relation and its deals with you.",
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
     // "add a button to edit your submitted actions instead of only being able to delete it" (the owner, 2026-11-19).
     id: "2026-11-edit-orders",
     kind: "minor",

@@ -457,6 +457,10 @@ const WorldMap = ({ isGlobe = false }) => {
   const diplomaticHighlight = useDiplomaticMapState().highlight;
   const diplomaticViewRef = useRef(diplomaticView);
   diplomaticViewRef.current = diplomaticView;
+  // The Relations view draws each group's area in its standing with the focus (diplomaticViews.js `groups`).
+  const diplomaticGroupColors = useMemo(() => (diplomaticView?.view === "relations" && diplomaticView.groups?.length
+    ? Object.fromEntries(diplomaticView.groups.map((group) => [group.name, group.color]))
+    : null), [diplomaticView]);
   // A region a battlefield has taken in name but not yet in full is DRAWN as
   // its old holder's until all of it is held (frontOwnership.js). Everything
   // below that follows ownership (fills, borders, labels) reads this, and so
@@ -3677,7 +3681,7 @@ const WorldMap = ({ isGlobe = false }) => {
         </Source>
       )}
 
-      <GroupAreaLayers data={groupAreaData} visible={Boolean(customActive && worldKnown && groupsOn)} hasMapLayer={hasMapLayer} />
+      <GroupAreaLayers data={groupAreaData} visible={Boolean(customActive && worldKnown && groupsOn)} hasMapLayer={hasMapLayer} colorOf={diplomaticGroupColors} />
 
       <Source id="polity-boundaries-source" type="geojson" data={EMPTY_FEATURE_COLLECTION} tolerance={0.25}>
         <Layer

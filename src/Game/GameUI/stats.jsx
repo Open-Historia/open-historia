@@ -24,6 +24,10 @@ import { intelligenceOf } from "../../runtime/spycraft.js";
 import { bundledFlagUrl } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { REGION_SELECTED_EVENT } from "../Selection/Regions.jsx";
+import { requestDiplomaticChat } from "./chat.jsx";
+import { relationBetween } from "../../runtime/groupParties.js";
+import { relationBandForScore } from "../../runtime/diplomaticStance.js";
+import { RELATION_CATEGORY_LABELS } from "../../runtime/diplomaticViews.js";
 import { assessPoliticalLandscape, ensureCountryAssessed, ensureIntelligenceRated, ensureMilitaryFigures, generateCountryStatSheet, pendingCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
 import { wantsRating } from "../AI/militaryRating.js";
 import { militaryLookup } from "../../runtime/militaryStats.js";
@@ -608,7 +612,7 @@ const DiplomacyMetric = ({ label, value, tone = "#e7e7e9" }) => (
 // groupsOnTerritory), or, for a player leading a group, that group's own area.
 // A row flies the map to the regions it counts. Not shown while groups are
 // switched off for this game.
-const GroupsOnTerritory = ({ world, targetCountry, isPlayer, mapRef }) => {
+const GroupsOnTerritory = ({ world, targetCountry, isPlayer, mapRef, viewer = "" }) => {
     const groupsOn = useActiveFeatures().groups?.enabled !== false;
     const rows = useMemo(() => {
         if (!groupsOn || !world || !targetCountry) return [];
@@ -646,15 +650,18 @@ const GroupsOnTerritory = ({ world, targetCountry, isPlayer, mapRef }) => {
             const count = row.regionIds.length;
             const held = count === 0 ? "Controls no area yet" : count === 1 ? "Controls 1 region" : `Controls ${count} regions`;
             const canShow = Boolean(row.bounds);
+            // Its standing with the player, and a way to talk to its leadership (runtime/groupParties.js).
+            const relation = row.own ? null : relationBetween(world, row.name, viewer);
+            const standing = row.own ? "" : relation ? RELATION_CATEGORY_LABELS[relationBandForScore(relation.score)] : RELATION_CATEGORY_LABELS.unknown;
             return (
+                <div key={row.name} style={{ alignItems: "center", borderTop: index ? "1px solid rgba(255,255,255,0.07)" : "none", display: "flex", gap: "0.35rem", paddingRight: "0.55rem" }}>
                 <button
-                key={row.name}
                 type="button"
                 className="oh-tap-row"
                 disabled={!canShow}
                 onClick={() => show(row.bounds)}
                 title={canShow ? "Show on the map" : undefined}
-                style={{ alignItems: "flex-start", background: "none", border: "none", borderTop: index ? "1px solid rgba(255,255,255,0.07)" : "none", color: "inherit", cursor: canShow ? "pointer" : "default", display: "flex", gap: "0.55rem", padding: "0.55rem 0.65rem", textAlign: "left", width: "100%" }}
+                style={{ alignItems: "flex-start", background: "none", border: "none", color: "inherit", cursor: canShow ? "pointer" : "default", display: "flex", flex: "1 1 auto", gap: "0.55rem", minWidth: 0, padding: "0.55rem 0.65rem", textAlign: "left" }}
                 >
                 <span aria-hidden="true" style={{ background: row.color, borderRadius: "2px", boxShadow: "0 0 0 1px rgba(0,0,0,0.55)", flexShrink: 0, height: "10px", marginTop: "0.2rem", width: "10px" }} />
                 <span style={{ flex: 1, minWidth: 0 }}>
@@ -665,7 +672,19 @@ const GroupsOnTerritory = ({ world, targetCountry, isPlayer, mapRef }) => {
                 )}
                 </span>
                 {row.own && isPlayer && <span style={statusBadgeStyle("#2bc1f3")}>Our group</span>}
+                {standing && <span style={{ color: "rgba(255,255,255,0.55)", flexShrink: 0, fontSize: "0.6rem", marginTop: "0.15rem" }}>{standing}</span>}
                 </button>
+                {!row.own && (
+                    <button
+                    type="button"
+                    className="oh-tap"
+                    data-group-talk="true"
+                    onClick={() => requestDiplomaticChat({ targetType: "private", name: row.name, code: "" })}
+                    title={`Talk to ${row.name}`}
+                    style={{ background: "var(--oh-ui-surface, rgba(255,255,255,0.06))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.16))", borderRadius: "8px", color: "var(--oh-ui-accent, #2bc1f3)", cursor: "pointer", flexShrink: 0, fontSize: "0.64rem", fontWeight: 760, minHeight: "2rem", padding: "0 0.55rem" }}
+                    >Talk</button>
+                )}
+                </div>
             );
         })}
         </div>
@@ -2621,7 +2640,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 />
             )}
             {statsView === "politics" && (
-                <GroupsOnTerritory world={worldSnapshot} targetCountry={targetCountry} isPlayer={Boolean(player.code) && targetCountry === player.code} mapRef={mapRef} />
+                <GroupsOnTerritory world={worldSnapshot} targetCountry={targetCountry} isPlayer={Boolean(player.code) && targetCountry === player.code} mapRef={mapRef} viewer={player.code} />
             )}
 
             {statsView === "economy" && statSheetDefinitionError && (

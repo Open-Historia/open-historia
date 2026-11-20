@@ -18,16 +18,27 @@ export const DIPLOMATIC_RECENT_TRANSCRIPT_MESSAGES = 18;
 // (AI/warStatsPrompt.js describePeaceTalk): what it decides of peace, read by
 // runtime/peaceTerms.js readPeaceVerdict. It is taken out wherever it stands,
 // and returned as `peace` ("" for none).
+//
+// A group's leader may end with a hidden DEAL line the same way
+// (AI/groupDealTalk.js describeDealTalk): what it decides of a deal with the
+// player, returned as `deal` ("" for none).
 export const parseDiplomaticEnvelope = (raw) => {
   let text = clean(raw);
   let reaction = null;
   let memorySummary = "";
   let peace = "";
+  let deal = "";
 
   const peaceMatch = text.match(/^[ \t]*PEACE[ \t]*:[ \t]*(.+)$/im);
   if (peaceMatch) {
     peace = peaceMatch[1].trim();
     text = `${text.slice(0, peaceMatch.index)}${text.slice(peaceMatch.index + peaceMatch[0].length)}`.replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  const dealMatch = text.match(/^[ \t]*DEAL[ \t]*:[ \t]*(.+)$/im);
+  if (dealMatch) {
+    deal = dealMatch[1].trim();
+    text = `${text.slice(0, dealMatch.index)}${text.slice(dealMatch.index + dealMatch[0].length)}`.replace(/\n{3,}/g, "\n\n").trim();
   }
 
   const reactionMatch = text.match(/\n?\s*REACTION\s*:\s*(\S+)\s*$/i);
@@ -48,9 +59,9 @@ export const parseDiplomaticEnvelope = (raw) => {
   // line is the exception: it is the leader's answer, and the reply carries the
   // peace offer it settles (chat.jsx answerPeaceInChat). Refusing it lost the
   // verdict and asked the player to spend a second request on a Retry.
-  if (!text && !peace) throw new Error("Diplomatic AI response contained no visible diplomatic reply.");
+  if (!text && !peace && !deal) throw new Error("Diplomatic AI response contained no visible diplomatic reply.");
 
-  return { reply: text, reaction, memorySummary, peace };
+  return { reply: text, reaction, memorySummary, peace, deal };
 };
 
 // The newest durable memory a saved transcript carries, with the game date of

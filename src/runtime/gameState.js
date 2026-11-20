@@ -19,6 +19,7 @@ import { AIR_ROLES as UNIT_AIR_ROLES, OPERATION_APPROACHES } from "./fronts/cons
 import { normalizeClimateZones, normalizeFortifications, normalizeFreezingRegions, normalizeTerrainAreas, normalizeZoneWeather } from "./warGeography.js";
 import { normalizeMilitaryShift, normalizeMilitaryStats, shiftedMilitary } from "./militaryStats.js";
 import { MAX_GROUPS, applyGroupOps, canRenameGroup, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
+import { GROUP_DEAL_TYPES, groupPartyKey } from "./groupParties.js";
 import { enqueueEventStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { MAX_PUPPETS as MAX_WORLD_PUPPETS, PUPPET_KINDS, PUPPET_SECRECY_LEVELS, PUPPET_STATUSES } from "./puppets.js";
@@ -503,7 +504,8 @@ const normalizeArray = (value) => (Array.isArray(value) ? value : []);
 
 // Canonical ledger vocabularies (AI/nativeWarLedger.js, AI/nativeDiplomaticDirector.js).
 const WORLD_RELATION_STATUS_SET = new Set(["friendly", "cordial", "neutral", "cautious", "strained", "hostile", "rival"]);
-const WORLD_AGREEMENT_TYPE_SET = new Set(["alliance", "mutual_defense", "guarantee", "non_aggression", "friendship_consultation", "trade_economic", "military_cooperation", "military_access", "neutrality", "peace_settlement", "other"]);
+// With the deals that fit a group (runtime/groupParties.js): a party may be a group.
+const WORLD_AGREEMENT_TYPE_SET = new Set(["alliance", "mutual_defense", "guarantee", "non_aggression", "friendship_consultation", "trade_economic", "military_cooperation", "military_access", "neutrality", "peace_settlement", "other", ...GROUP_DEAL_TYPES]);
 const WORLD_AGREEMENT_STATUS_SET = new Set(["active", "suspended", "ended", "expired"]);
 const WORLD_STORYLINE_STATUS_SET = new Set(["active", "dormant", "resolved"]);
 const MAX_WORLD_STORYLINES = 96;
@@ -4014,9 +4016,23 @@ const diplomaticIdentityIndexOf = (identityWorld) => {
   return index;
 };
 
+// A party to a relation or an agreement: a polity, or a group by its exact name
+// (runtime/groupParties.js). "group: X" is the group; a bare name is a polity's
+// when one answers to it, else a group's, else kept as written.
 const resolveWorldDiplomaticPolity = (token, identityWorld) => {
   const raw = normalizeOptionalString(token);
   if (!raw) return "";
+  const named = groupPartyKey(identityWorld, raw);
+  if (named && /^\s*group\s*:/i.test(raw)) return named;
+  if (named) {
+    const known = resolvePolityIdentity(raw, identityWorld, {
+      allowUnknown: false,
+      requireActive: false,
+      allowStockBase: true,
+      identityIndex: diplomaticIdentityIndexOf(identityWorld),
+    });
+    return normalizeOptionalString(known?.resolved) || named;
+  }
   const resolved = resolvePolityIdentity(raw, identityWorld, {
     allowUnknown: true,
     requireActive: false,
@@ -4119,6 +4135,10 @@ const normalizeWorldAgreement = (entry, identityWorld, index = 0) => {
     createdRound: Number.isFinite(Number(entry.createdRound)) ? Math.max(0, Math.trunc(Number(entry.createdRound))) : 0,
     updatedRound: Number.isFinite(Number(entry.updatedRound)) ? Math.max(0, Math.trunc(Number(entry.updatedRound))) : 0,
     ...(entry.migratedLegacy === true ? { migratedLegacy: true } : {}),
+    // A deal with a group (runtime/groupDeals.js): its signing's effects were
+    // carried out, and the days of its effects not yet spent on a whole step.
+    ...(entry.effectsApplied === true ? { effectsApplied: true } : {}),
+    ...(Number(entry.carryDays) > 0 ? { carryDays: Math.min(3650, Math.round(Number(entry.carryDays))) } : {}),
   };
 };
 

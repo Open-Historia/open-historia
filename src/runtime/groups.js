@@ -291,7 +291,9 @@ const describeArea = (regions, regionName, maxRegions) => {
   const list = shown.length ? `: ${shown.join(", ")}${more > 0 ? `, +${more} more` : ""}` : "";
   return `${regions.length} region${regions.length === 1 ? "" : "s"}${list}`;
 };
-export const describeGroupsForPrompt = (world, { regionName = () => "", maxRegions = 12, inView = null } = {}) => {
+// `standingOf(name)`: a short line of the group's relations and deals in force
+// (Game/AI/groupDeals.js describeGroupStanding), "" for none; appended after its area.
+export const describeGroupsForPrompt = (world, { regionName = () => "", maxRegions = 12, inView = null, standingOf = null } = {}) => {
   const groups = normalizeGroups(world?.groups);
   const names = Object.keys(groups);
   if (!names.length) return "";
@@ -311,7 +313,8 @@ export const describeGroupsForPrompt = (world, { regionName = () => "", maxRegio
       : viewed && !viewed.has(name)
         ? briefDescription(group.description)
         : group.description.replace(/\n+/g, " ");
-    return `- ${name}${description ? ` — ${description}` : ""} [${where}]`;
+    const standing = typeof standingOf === "function" ? clean(standingOf(name)) : "";
+    return `- ${name}${description ? ` — ${description}` : ""} [${where}]${standing ? ` {${standing}}` : ""}`;
   }).join("\n");
 };
 

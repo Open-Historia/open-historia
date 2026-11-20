@@ -22,6 +22,7 @@
 // DIPLOMATIC_SLICE_RULES); its old treaty events and chats are history, not
 // records.
 
+import { GROUP_DEAL_TYPES, groupPartyKey } from "../../runtime/groupParties.js";
 import { normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { MAX_PUPPETS, PUPPET_COUP_LOYALTY, PUPPET_KINDS } from "../../runtime/puppets.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
@@ -65,6 +66,8 @@ export const AGREEMENT_TYPE_VALUES = Object.freeze([
   "neutrality",
   "peace_settlement",
   "other",
+  // The deals that fit a group, a party that is not a state (runtime/groupParties.js).
+  ...GROUP_DEAL_TYPES,
 ]);
 
 export const AGREEMENT_STATUS_VALUES = Object.freeze([
@@ -142,16 +145,23 @@ const pregameSourceIdsContain = (superset, required) => {
 
 // `identityIndex`: the polity identity index of this same world, for a caller
 // resolving many names against it (buildBoundedDiplomaticContext).
+//
+// A group is a party too (runtime/groupParties.js): "group: X" is the group, and
+// a bare name no polity answers to is the group of that exact name, when there
+// is one. Its key is its exact name, the one its records are kept under.
 export const canonicalDiplomaticPolity = (token, world, { allowUnknown = false, identityIndex = null } = {}) => {
   const raw = clean(token);
   if (!raw) return "";
+  const group = groupPartyKey(world, raw);
+  if (group && /^\s*group\s*:/i.test(raw)) return group;
   const resolved = resolvePolityIdentity(raw, world, {
-    allowUnknown,
+    allowUnknown: group ? false : allowUnknown,
     requireActive: false,
     allowStockBase: true,
     identityIndex,
   });
   if (resolved?.resolved) return clean(resolved.resolved);
+  if (group) return group;
   if (!allowUnknown) return "";
   return clean(toCountryName(raw)) || raw;
 };
