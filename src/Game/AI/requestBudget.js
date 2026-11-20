@@ -75,9 +75,9 @@ export const lookupRoundLimit = ({ unlimited = false } = {}) => (unlimited ? UNL
 // agents used to be a request each, and are the skip's own answer now.
 // The Stats refresh came back (2026-11-18: "readd the background ai for
 // refreshing the stats where you could set how often it runs"), but not here:
-// it is a background request of its own after the skip has landed, every so
-// many skips as the player picks it, Off by default (statsRefresh.js), under
-// the cap below.
+// it is a background request of its own after the skip has landed, at the
+// interval in game months picked in Advanced Statistics (statsRefresh.js),
+// at most one a skip, under the cap below.
 export const SKIP_SPENDERS = Object.freeze(["jump", "institutionBallots"]);
 
 // "jumpRetry" and "jumpLookup" are "jump" asking again and looking something up.

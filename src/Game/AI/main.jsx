@@ -41,6 +41,8 @@ import { RELAY_CUT_OFF_MESSAGE, isRelayRefusal, isRelayUnreachable, relayUnreach
 import { attachLookupRound, attachCallMetrics, attachRequestOutcome, attachAttemptOutcome, finishAiRecord, isTelemetryEnabled, startAiRecord } from "./telemetry.js";
 import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { describePlayerGroupForPrompt, normalizeGroups } from "../../runtime/groups.js";
+import { describeGroupLeaderBrief } from "./groupDealTalk.js";
+import { describeTreatyTalk } from "./treatyTalk.js";
 import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describePuppetBriefing, describeRole, livePuppetsFor, puppetBriefingFor } from "../../runtime/puppets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
@@ -4083,6 +4085,9 @@ Decide independently whether you need to speak as ${name}. Address a substantive
 // to appear there too, a second copy that changed with every message.
 export async function buildDiplomaticSystemPrompt(countries, playerCountry, speakingAs = "", {
     chatId = "",
+    // The player's line answered now is a treaty proposal (chat.jsx's Propose deal): the leader writes the
+    // treaty as the game models it on a hidden TREATY line (AI/treatyTalk.js).
+    proposal = false,
 } = {}) {
     await ensurePromptsLoaded();
     // The panel passes its country objects; `- ${country}` of one read
@@ -4200,6 +4205,20 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         return describePlayerGroupForPrompt(worldData, playerName, { regionName: (id) => names.get(id) || id });
     })();
 
+    // A group's leadership speaks as the group it is (Game/AI/groupDealTalk.js). Empty for a country.
+    const groupLeaderText = await (async () => {
+        const playerName = playerCountry || gameData?.country || "";
+        if (!worldData?.groups || !speaker || !isActiveFeatureEnabled("groups")) return "";
+        const catalog = await loadRegionCatalog().catch(() => []);
+        const names = new Map(catalog.map((region) => [region.id, region.name]));
+        return describeGroupLeaderBrief({ world: worldData, speaker: participantName(speaker), player: playerName, regionName: (id) => names.get(id) || "" });
+    })();
+    // Treaties with the player (AI/treatyTalk.js): those in force and how to break one, and, answering a
+    // proposal, how to write the treaty as the game models it, with its effects, from both sides' means.
+    const treatyText = speaker
+        ? describeTreatyTalk({ world: worldData, speaker: participantName(speaker), player: playerCountry || gameData?.country || "", proposal })
+        : "";
+
     // The Game Master's standing reminders bind a leader too: a leader told the
     // bridge is down does not offer to meet on it.
     const reminders = renderReminders(worldData?.simulationReminders, { formatDate: formatDateReadable });
@@ -4246,7 +4265,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
 
     // How softly or firmly a leader bargains at the chosen difficulty is in its
     // template (${DIFFICULTY_DESCRIPTION_CHATS}, the diplomacy directive), once.
-    return `${rendered}${politicalSection}${espionage}${standing ? `\n\n${standing}` : ""}${territory ? `\n\n${territory}` : ""}${wars ? `\n\n${wars}` : ""}${peaceTalk ? `\n\n${peaceTalk}` : ""}${playerGroupText ? `\n\n${playerGroupText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}`;
+    return `${rendered}${politicalSection}${espionage}${standing ? `\n\n${standing}` : ""}${territory ? `\n\n${territory}` : ""}${wars ? `\n\n${wars}` : ""}${peaceTalk ? `\n\n${peaceTalk}` : ""}${playerGroupText ? `\n\n${playerGroupText}` : ""}${groupLeaderText ? `\n\n${groupLeaderText}` : ""}${treatyText ? `\n\n${treatyText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}`;
 }
 
 // Each recipient has an independent in-memory history, durable memory and
@@ -4450,7 +4469,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     // `catchUp` is what the world did since this thread last spoke, written by
     // the panel and kept on the player's message (conversationCatchUp.js
     // buildThreadCatchUp); the leader reads it ahead of what the player typed.
-    const { chatId = "", catchUp = "", ...opts } = options || {};
+    const { chatId = "", catchUp = "", proposal = false, ...opts } = options || {};
     // The thread this reply is for, its history and the memory it was asked
     // with, taken before the first await: the player may open another thread
     // before the reply lands (liveConversation.js).
@@ -4458,7 +4477,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     const priorHistory = diplomaticHistory;
     const priorMemory = diplomaticMemorySummary;
     const priorMemoryTime = diplomaticMemoryThroughTime;
-    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs, { chatId });
+    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs, { chatId, proposal });
 
     const asked = { role: "user", parts: [{ text: withCatchUp(playerMessage, catchUp) }] };
     const history = compactConversationHistory([...priorHistory, asked]);
@@ -4485,7 +4504,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
 
     try {
         const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy → ${speakingAs}`, taskKey: "diplomacy", agentKind: "diplomacy" });
-        const { reply, reaction, memorySummary: generatedMemorySummary, peace } = parseDiplomaticEnvelope(raw);
+        const { reply, reaction, memorySummary: generatedMemorySummary, peace, treaty } = parseDiplomaticEnvelope(raw);
         // A reply that dropped the memory line keeps the last one; the
         // thread never forgets what it knew because one answer was terse.
         const memorySummary = generatedMemorySummary || priorMemory;
@@ -4504,11 +4523,13 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
             { verbose: true });
         // A reply that was only its PEACE line is remembered as that line, as the model wrote it, so the thread knows
         // what was decided.
-        const remembered = reply || String(raw ?? "").match(/^[ \t]*PEACE[ \t]*:.*$/im)?.[0]?.trim() || "";
+        const remembered = reply || String(raw ?? "").match(/^[ \t]*(?:PEACE|TREATY)[ \t]*:.*$/im)?.[0]?.trim() || "";
         if (stillOpen) diplomaticHistory.push({ role: "model", parts: [{ text: `[${speakingAs}]: ${remembered}` }] });
         // `peace`: what the leader decided of peace with the player, its hidden
         // PEACE line, "" for nothing (the panel carries it out: gameplay.js answerPeaceInChat).
-        return { reply, reaction, memorySummary, peace };
+        // `treaty`: what the leader decided of a treaty and the treaty itself, its hidden TREATY line
+        // (gameplay.js answerTreatyInChat).
+        return { reply, reaction, memorySummary, peace, treaty };
     } catch (err) {
         if (diplomaticConversation.isCurrent(conversation)) removeEntry(diplomaticHistory, asked);
         logDebugEvent("diplomacy", `${speakingAs} failed to reply after ${elapsedSeconds(startedAt)} — the message was rolled back off the history.`, err);

@@ -118,9 +118,11 @@ const idOf = (value) => text(value, 160);
 //   message, chatTurn({ chat, seat, ...flags }), readChats(), updateChats(fn)
 // Resolves { institutionId, proposalId, proposalStatus, chatId }.
 // `host` is the host's own country, or a function giving it as it is now.
-// `write(label, fn)`: the host's one order (host/gameHost.js write). Each thing
-// a call writes is one entry of it, and the seat's country is taken when that
-// entry runs (rule 3): taken when the request arrived, a founding, a vote or a
+// `write(label, fn, options)`: the host's one order (host/gameHost.js write).
+// Each thing a call writes is one entry of it, and the seat's country is taken
+// when that entry runs (rule 3); `fn({ fence })` hands the entry's fence to the
+// game's call, whose one commit carries it (`fenced`: host/worldQueue.js).
+// Taken when the request arrived, a founding, a vote or a
 // message asked while a round was resolved was written, once the round had
 // landed, under the name the round had renamed or founded away, which nobody
 // played (FOLLOWUPS A1). Thinking (a Council's or a hearing's turn) is done
@@ -132,7 +134,7 @@ export const createInstitutionDesk = ({ host: hostOf = "", game, write = (_label
   // meanwhile, or the host's own Council the guest now speaks in, keeps its owner.
   const ownership = async (seatNow, before, chatId) => {
     if (!chatId || before.has(chatId)) return;
-    await write("institution-business", () => {
+    await write("institution-business", ({ fence } = {}) => {
       const seat = seatNow();
       if (same(seat, host())) return null;
       return game.updateChats((chats) => {
@@ -143,8 +145,8 @@ export const createInstitutionDesk = ({ host: hostOf = "", game, write = (_label
           return { ...chat, player: seat };
         });
         return changed ? next : null;
-      });
-    });
+      }, { fence });
+    }, { fenced: true });
   };
   const chatIds = async () => new Set(list(await game.readChats()).map((chat) => clean(chat?.id)).filter(Boolean));
   // A Council's or a hearing's turn, in the table's own turn (host/gameHost.js
@@ -165,11 +167,12 @@ export const createInstitutionDesk = ({ host: hostOf = "", game, write = (_label
     return chat;
   };
 
-  // Each call is given `inEntry(fn)`, which runs `fn(country)` as one entry of
-  // the host's order for the seat's country as it is then, and `seatNow()`.
+  // Each call is given `inEntry(fn)`, which runs `fn(country, fence)` as one
+  // entry of the host's order for the seat's country as it is then, and
+  // `seatNow()`. Each game call it makes is handed the entry's `fence`.
   const calls = {
     lifecycle: async ({ inEntry }, { command }) => {
-      const result = await inEntry((seat) => game.lifecycle({ playerCountry: seat, command: lifecycleCommandFor(command, seat) }));
+      const result = await inEntry((seat, fence) => game.lifecycle({ fence, playerCountry: seat, command: lifecycleCommandFor(command, seat) }));
       return {
         institutionId: idOf(result?.institution?.id || command?.institutionId),
         proposalId: idOf(result?.proposal?.id),
@@ -178,11 +181,11 @@ export const createInstitutionDesk = ({ host: hostOf = "", game, write = (_label
       };
     },
     negotiation: async ({ inEntry }, { institutionId, caseIds }) => {
-      const result = await inEntry((seat) => game.negotiation({ playerCountry: seat, institutionId: idOf(institutionId), caseIds: names(caseIds, 24) }));
+      const result = await inEntry((seat, fence) => game.negotiation({ fence, playerCountry: seat, institutionId: idOf(institutionId), caseIds: names(caseIds, 24) }));
       return { institutionId: idOf(institutionId), chatId: idOf(result?.channel?.id) };
     },
     channel: async ({ inEntry }, { institutionId }) => {
-      const result = await inEntry((seat) => game.channel({ playerCountry: seat, institutionId: idOf(institutionId) }));
+      const result = await inEntry((seat, fence) => game.channel({ fence, playerCountry: seat, institutionId: idOf(institutionId) }));
       return { institutionId: idOf(institutionId), chatId: idOf(result?.channel?.id) };
     },
     proposal: async ({ inEntry }, { institutionId, proposal }) => {
@@ -191,21 +194,21 @@ export const createInstitutionDesk = ({ host: hostOf = "", game, write = (_label
       // The kind of proposal by name (the advisor tables more than resolutions);
       // the institution's charter decides whether this player may table it.
       const kind = /^[a-z][a-z-]{0,39}$/.test(clean(proposal?.type)) ? clean(proposal.type) : "resolution";
-      const result = await inEntry((seat) => game.proposal({ playerCountry: seat, institutionId: idOf(institutionId), proposal: { type: kind, title, summary: text(proposal?.summary, 1200) } }));
+      const result = await inEntry((seat, fence) => game.proposal({ fence, playerCountry: seat, institutionId: idOf(institutionId), proposal: { type: kind, title, summary: text(proposal?.summary, 1200) } }));
       return { institutionId: idOf(institutionId), proposalId: idOf(result?.proposal?.id), proposalStatus: idOf(result?.proposal?.status) };
     },
     voteRequest: async ({ inEntry }, { institutionId, proposalId }) => {
-      const result = await inEntry((seat) => game.voteRequest({ playerCountry: seat, institutionId: idOf(institutionId), proposalId: idOf(proposalId) }));
+      const result = await inEntry((seat, fence) => game.voteRequest({ fence, playerCountry: seat, institutionId: idOf(institutionId), proposalId: idOf(proposalId) }));
       return { institutionId: idOf(institutionId), proposalId: idOf(result?.proposal?.id || proposalId), proposalStatus: idOf(result?.proposal?.status) };
     },
     governance: async ({ inEntry }, { institutionId, command }) => {
-      const result = await inEntry((seat) => game.governance({ playerCountry: seat, institutionId: idOf(institutionId), command: governanceCommandFor(command, seat) }));
+      const result = await inEntry((seat, fence) => game.governance({ fence, playerCountry: seat, institutionId: idOf(institutionId), command: governanceCommandFor(command, seat) }));
       return { institutionId: idOf(institutionId), proposalId: idOf(result?.proposal?.id || command?.proposalId), proposalStatus: idOf(result?.proposal?.status) };
     },
     message: async ({ inEntry }, { institutionId, text: said }) => {
       const line = text(said, 2000);
       if (!line) throw new Error("A message needs words.");
-      const result = await inEntry((seat) => game.message({ playerCountry: seat, institutionId: idOf(institutionId), text: line }));
+      const result = await inEntry((seat, fence) => game.message({ fence, playerCountry: seat, institutionId: idOf(institutionId), text: line }));
       return { institutionId: idOf(institutionId), chatId: idOf(result?.channel?.id) };
     },
     // The Council's turn on a proposal (chat.jsx runInstitutionCouncilTurn), on
@@ -216,9 +219,9 @@ export const createInstitutionDesk = ({ host: hostOf = "", game, write = (_label
       if (!id || !proposal) throw new Error("Which institution, and which proposal?");
       const mode = kind === "vote" ? "vote" : kind === "amendment" ? "amendment" : "debate";
       const line = text(comment, 2000);
-      const opened = await inEntry((seat) => (line
-        ? game.message({ playerCountry: seat, institutionId: id, text: line })
-        : game.channel({ playerCountry: seat, institutionId: id })));
+      const opened = await inEntry((seat, fence) => (line
+        ? game.message({ fence, playerCountry: seat, institutionId: id, text: line })
+        : game.channel({ fence, playerCountry: seat, institutionId: id })));
       const chat = opened?.channel;
       if (!chat?.id) throw new Error("The Council could not be opened.");
       await turnOf(onTable, chat, seatNow, {
@@ -246,7 +249,7 @@ export const createInstitutionDesk = ({ host: hostOf = "", game, write = (_label
     const run = calls[call];
     if (!run) throw new Error("That is not something a player can do to an institution.");
     const seatNow = () => clean(typeof seat === "function" ? seat() : seat);
-    const inEntry = (fn) => write("institution-business", () => fn(seatNow()));
+    const inEntry = (fn) => write("institution-business", ({ fence = null } = {}) => fn(seatNow(), fence), { fenced: true });
     const before = await chatIds();
     const made = await run({ inEntry, seatNow }, args && typeof args === "object" ? args : {}, onTable);
     await ownership(seatNow, before, made.chatId);

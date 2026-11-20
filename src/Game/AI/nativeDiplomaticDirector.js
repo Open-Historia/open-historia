@@ -22,6 +22,8 @@
 // DIPLOMATIC_SLICE_RULES); its old treaty events and chats are history, not
 // records.
 
+import { GROUP_DEAL_TYPES, groupPartyKey } from "../../runtime/groupParties.js";
+import { normalizeAgreementEffects } from "../../runtime/agreementEffects.js";
 import { normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { MAX_PUPPETS, PUPPET_COUP_LOYALTY, PUPPET_KINDS } from "../../runtime/puppets.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
@@ -65,6 +67,8 @@ export const AGREEMENT_TYPE_VALUES = Object.freeze([
   "neutrality",
   "peace_settlement",
   "other",
+  // The deals that fit a group, a party that is not a state (runtime/groupParties.js).
+  ...GROUP_DEAL_TYPES,
 ]);
 
 export const AGREEMENT_STATUS_VALUES = Object.freeze([
@@ -142,16 +146,23 @@ const pregameSourceIdsContain = (superset, required) => {
 
 // `identityIndex`: the polity identity index of this same world, for a caller
 // resolving many names against it (buildBoundedDiplomaticContext).
+//
+// A group is a party too (runtime/groupParties.js): "group: X" is the group, and
+// a bare name no polity answers to is the group of that exact name, when there
+// is one. Its key is its exact name, the one its records are kept under.
 export const canonicalDiplomaticPolity = (token, world, { allowUnknown = false, identityIndex = null } = {}) => {
   const raw = clean(token);
   if (!raw) return "";
+  const group = groupPartyKey(world, raw);
+  if (group && /^\s*group\s*:/i.test(raw)) return group;
   const resolved = resolvePolityIdentity(raw, world, {
-    allowUnknown,
+    allowUnknown: group ? false : allowUnknown,
     requireActive: false,
     allowStockBase: true,
     identityIndex,
   });
   if (resolved?.resolved) return clean(resolved.resolved);
+  if (group) return group;
   if (!allowUnknown) return "";
   return clean(toCountryName(raw)) || raw;
 };
@@ -672,8 +683,24 @@ export const decodeRelationUpdates = (value, { limit = MAX_RELATION_UPDATES_PER_
     .slice(0, limit);
 };
 
-const decodeAgreementLine = (line, index) => {
+// A start line may end with the agreement's effects, as a JSON object after one
+// more separator (runtime/agreementEffects.js AGREEMENT_EFFECTS_FORMAT): the
+// game's own format, read as JSON or not at all.
+const splitEffects = (line) => {
   const text = String(line ?? "");
+  const at = text.lastIndexOf(SEP);
+  if (at < 0) return { text, effects: null };
+  const tail = text.slice(at + 1).trim();
+  if (!tail.startsWith("{") || !tail.endsWith("}")) return { text, effects: null };
+  try {
+    return { text: text.slice(0, at), effects: normalizeAgreementEffects(JSON.parse(tail)) };
+  } catch {
+    return { text, effects: null };
+  }
+};
+
+const decodeAgreementLine = (line, index) => {
+  const { text, effects } = splitEffects(line);
   const rawParts = text.split(SEP);
 
   // Accept both the seven-field record and the six-field form
@@ -693,6 +720,7 @@ const decodeAgreementLine = (line, index) => {
     eventIds: [],
     title: clean(title),
     terms: clean(terms),
+    ...(effects ? { effects } : {}),
   };
 };
 
@@ -710,6 +738,7 @@ export const decodeAgreementUpdates = (value, { limit = MAX_AGREEMENT_UPDATES_PE
         eventIds: unique(entry.eventIds, 24),
         title: clean(entry.title),
         terms: clean(entry.terms),
+        ...(normalizeAgreementEffects(entry.effects) ? { effects: normalizeAgreementEffects(entry.effects) } : {}),
       };
     }).filter(Boolean).slice(0, limit);
   }
@@ -785,6 +814,7 @@ const encodeAgreementUpdates = (updates) => array(updates).map((update) => [
   array(update?.eventIndexes).map((index) => Number(index) + 1).filter((n) => Number.isInteger(n) && n >= 1).join(","),
   clean(update?.title).replaceAll(SEP, "—"),
   clean(update?.terms).replaceAll(SEP, "—"),
+  ...(update?.effects ? [JSON.stringify(update.effects).replaceAll(SEP, "—")] : []),
 ].join(SEP)).join("\n");
 
 const sameCanonicalPartySet = (left, right, world) => {
@@ -1052,7 +1082,7 @@ export const salvageDiplomaticLedgerPayload = (candidate, { world, playerNotes =
     let why = "";
     let key = "agreementIncomplete";
     if (!id) why = "it names no agreement";
-    else if (!["start", "update", "suspend", "resume", "end", "expire"].includes(op)) why = `"${op}" is not an agreement operation`;
+    else if (!["start", "update", "suspend", "resume", "end", "expire", "break"].includes(op)) why = `"${op}" is not an agreement operation`;
     else if (op === "start") {
       const prior = existing.get(id);
       if (prior && !["ended", "expired"].includes(prior.status)) { why = "it already exists - update, suspend, resume or end it instead"; key = "agreementAlreadyInForce"; }
@@ -1148,7 +1178,7 @@ export const validateDiplomaticLedgerPayload = (
 
   const existing = agreementMapFromWorld(world);
   for (const update of agreements) {
-    if (!["start", "update", "suspend", "resume", "end", "expire"].includes(update.op)) {
+    if (!["start", "update", "suspend", "resume", "end", "expire", "break"].includes(update.op)) {
       return `Agreement ${update.id} has unsupported operation "${update.op}".`;
     }
     if (update.op === "start") {
@@ -1286,6 +1316,8 @@ export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = 
         endedDate: "",
         lastUpdatedDate: observedDate,
         terms: update.terms,
+        // What it does, as the skip wrote it (runtime/agreementEffects.js): the engine carries it out.
+        ...(update.effects ? { effects: update.effects } : {}),
         ...(type === "guarantee" && parties.length >= 2
           ? { guarantor: parties[0], beneficiary: parties[1] }
           : {}),
@@ -1303,13 +1335,16 @@ export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = 
       continue;
     }
 
-    const parties = update.parties.length ? canonicalizeParties(update.parties, nextWorld) : array(prior.parties);
+    // A break names the party that breaks it, not a new list of parties.
+    const breaker = update.op === "break" ? canonicalizeParties(update.parties, nextWorld)[0] || "" : "";
+    const parties = update.parties.length && update.op !== "break" ? canonicalizeParties(update.parties, nextWorld) : array(prior.parties);
     const type = update.type && update.type !== "other" ? normalizeAgreementType(update.type) : prior.type;
     let status = prior.status;
     if (update.op === "suspend") status = "suspended";
     else if (update.op === "resume") status = "active";
     else if (update.op === "end") status = "ended";
     else if (update.op === "expire") status = "expired";
+    else if (update.op === "break") status = "ended";
 
     const agreement = {
       ...prior,
@@ -1327,6 +1362,10 @@ export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = 
       terms: update.terms || prior.terms,
       sourceEventIds: eventIds,
       updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+      // Who broke it, for its onBreak effects (Game/AI/agreementEngine.js).
+      ...(breaker ? { brokenBy: breaker } : {}),
+      // Effects written for one not yet carried out (an update before it took hold).
+      ...(update.effects && prior.effectsApplied !== true ? { effects: update.effects } : {}),
     };
     if (type === "guarantee" && parties.length >= 2) {
       agreement.guarantor = parties[0];

@@ -78,3 +78,35 @@ test("while a shared game is open, the library switches to no other game, makes 
     library.setSharedGameEntry(null);
   }
 });
+
+// "if I exit the game and then try to reenter by clicking current on my open game, nothing happens" (the owner,
+// 2026-11-18): Current on the open shared game's own card was refused as a switch to another game would be, and the
+// refusal went to an error line under a menu that had just closed.
+test("Current on the open shared game's own card goes back into it, for the host and for a guest", async () => {
+  const entry = await import("./gameEntry.js");
+  library.setSharedGameEntry({ gameId: "mine", country: "France" });
+  try {
+    entry.leaveGame();
+    await assert.doesNotReject(library.activateGame("mine"));
+    assert.equal(entry.hasEnteredGame(), true);
+    // Any other game is still refused while it is open.
+    await assert.rejects(library.activateGame("standin"), /Leave the shared game first/);
+  } finally {
+    library.setSharedGameEntry(null);
+  }
+});
+
+test("a guest's stand-in is listed while its shared game is open, so its card has a Current", async () => {
+  CATALOG.games[0].standIn = true;
+  try {
+    await library.refreshLibraryCatalog({ force: true });
+    assert.equal(library.getLibraryState().games.some((game) => game.id === "standin"), false);
+    library.setSharedGameEntry({ gameId: "standin", country: "Russia" });
+    assert.equal(library.getLibraryState().games.some((game) => game.id === "standin"), true);
+    library.setSharedGameEntry(null);
+    assert.equal(library.getLibraryState().games.some((game) => game.id === "standin"), false);
+  } finally {
+    delete CATALOG.games[0].standIn;
+    library.setSharedGameEntry(null);
+  }
+});

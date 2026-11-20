@@ -35,6 +35,8 @@ const LEGEND_TEXTS = Object.freeze({
   noWars: "No wars in the world",
   clickToFocus: "Click a country to make it the focus",
   institution: "Institution",
+  groups: "Groups",
+  groupsHint: "Each group's area is drawn in its standing with the focus.",
 });
 
 const VIEW_ICONS = {
@@ -113,6 +115,22 @@ const smallButton = {
 };
 
 const CountryName = ({ name }) => <>{useCountryDisplayName(name) || name}</>;
+
+// A category of the groups' standing with the focus (diplomaticViews.js
+// `groupEntries`): an outlined swatch, as a group's area is drawn, the groups in it
+// named, and how many.
+const GroupEntryRow = ({ entry, names }) => (
+  <div
+    data-oh-diplomatic-group-entry={entry.id}
+    title={names.join(", ")}
+    style={{ display: "flex", alignItems: "center", gap: "0.45rem", padding: "0.16rem 0.3rem", fontSize: "0.68rem", color: "rgba(255,255,255,0.9)", minWidth: 0 }}
+  >
+    <span aria-hidden="true" style={{ width: "0.85rem", height: "0.85rem", flexShrink: 0, borderRadius: "3px", border: `2px solid ${entry.color}`, background: `${entry.color}80`, boxSizing: "border-box" }} />
+    <span style={{ flex: "0 0 auto" }}>{entry.label}</span>
+    <span data-no-translate style={{ flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "rgba(255,255,255,0.55)" }}>{names.join(", ")}</span>
+    <span data-no-translate style={{ color: "rgba(255,255,255,0.6)", fontVariantNumeric: "tabular-nums" }}>{entry.count}</span>
+  </div>
+);
 
 const EntryRow = ({ entry, picked, dimmed, onPick }) => (
   <button
@@ -317,6 +335,14 @@ export const DiplomaticLegend = memo(function DiplomaticLegend({ isMobile = fals
             onPick={() => (entry.colors?.length ? pick(entry) : null)}
           />
         ))}
+        {view.view === "relations" && view.groupEntries?.length > 0 && (
+          <div data-oh-diplomatic-groups="" style={{ display: "flex", flexDirection: "column", gap: "0.05rem", marginTop: "0.25rem", paddingTop: "0.3rem", borderTop: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))" }}>
+            <div title={LEGEND_TEXTS.groupsHint} style={{ fontSize: "0.58rem", fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: "rgba(255,255,255,0.55)", padding: "0 0.3rem" }}>{LEGEND_TEXTS.groups}</div>
+            {view.groupEntries.map((entry) => (
+              <GroupEntryRow key={entry.id} entry={entry} names={view.groups.filter((group) => group.category === entry.id).map((group) => group.name)} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

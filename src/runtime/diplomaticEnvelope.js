@@ -9,6 +9,24 @@ const clean = (value) => String(value ?? "").trim();
 
 export const DIPLOMATIC_RECENT_TRANSCRIPT_MESSAGES = 18;
 
+// The index of the brace that closes the one at `from`, strings respected; -1 for none.
+const closingBrace = (text, from) => {
+  let depth = 0;
+  let quoted = false;
+  for (let at = from; at < text.length; at += 1) {
+    const char = text[at];
+    if (quoted) {
+      if (char === "\\") at += 1;
+      else if (char === "\"") quoted = false;
+      continue;
+    }
+    if (char === "\"") quoted = true;
+    else if (char === "{") depth += 1;
+    else if (char === "}" && (depth -= 1) === 0) return at;
+  }
+  return -1;
+};
+
 // Splits the raw model output into { reply, reaction, memorySummary }. The
 // memory block is accepted across several lines defensively even though the
 // prompt asks for one compact line; it is hidden metadata and must never leak
@@ -18,16 +36,32 @@ export const DIPLOMATIC_RECENT_TRANSCRIPT_MESSAGES = 18;
 // (AI/warStatsPrompt.js describePeaceTalk): what it decides of peace, read by
 // runtime/peaceTerms.js readPeaceVerdict. It is taken out wherever it stands,
 // and returned as `peace` ("" for none).
+//
+// A leader answering a treaty the player proposed ends with a hidden TREATY
+// line the same way (AI/treatyTalk.js describeTreatyTalk): its decision and the
+// treaty as the game models it, as JSON on that line, returned as `treaty` (the
+// text after the colon, "" for none).
 export const parseDiplomaticEnvelope = (raw) => {
   let text = clean(raw);
   let reaction = null;
   let memorySummary = "";
   let peace = "";
+  let treaty = "";
 
   const peaceMatch = text.match(/^[ \t]*PEACE[ \t]*:[ \t]*(.+)$/im);
   if (peaceMatch) {
     peace = peaceMatch[1].trim();
     text = `${text.slice(0, peaceMatch.index)}${text.slice(peaceMatch.index + peaceMatch[0].length)}`.replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  // (Its JSON may run over several lines: it is taken to its closing brace.)
+  const treatyMatch = text.match(/^[ \t]*TREATY[ \t]*:[ \t]*/im);
+  if (treatyMatch) {
+    const from = treatyMatch.index + treatyMatch[0].length;
+    const end = text[from] === "{" ? closingBrace(text, from) : -1;
+    const stop = end >= 0 ? end + 1 : (text.indexOf("\n", from) < 0 ? text.length : text.indexOf("\n", from));
+    treaty = text.slice(from, stop).trim();
+    text = `${text.slice(0, treatyMatch.index)}${text.slice(stop)}`.replace(/\n{3,}/g, "\n\n").trim();
   }
 
   const reactionMatch = text.match(/\n?\s*REACTION\s*:\s*(\S+)\s*$/i);
@@ -48,9 +82,9 @@ export const parseDiplomaticEnvelope = (raw) => {
   // line is the exception: it is the leader's answer, and the reply carries the
   // peace offer it settles (chat.jsx answerPeaceInChat). Refusing it lost the
   // verdict and asked the player to spend a second request on a Retry.
-  if (!text && !peace) throw new Error("Diplomatic AI response contained no visible diplomatic reply.");
+  if (!text && !peace && !treaty) throw new Error("Diplomatic AI response contained no visible diplomatic reply.");
 
-  return { reply: text, reaction, memorySummary, peace };
+  return { reply: text, reaction, memorySummary, peace, treaty };
 };
 
 // The newest durable memory a saved transcript carries, with the game date of

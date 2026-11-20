@@ -27,14 +27,14 @@ import { GENERATION_COMPLETE_EVENT, adoptStoredAiRecord } from "../../Game/AI/te
 import { UNROUTED_NOTICE, planGameWrite, planWorldWrite, revealedTurnOf, suggestionsOutlived, unroutedChanges, unroutedRefusal } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
-import { setSharedAdvisorRefusal, setSharedGamePeople, setSharedGameRole, setSharedGameSettings, setSharedNotices, setSharedRequester, setSharedRequestsHeld, setSharedRoundBase, setSharedRoundDays, SHARED_ROUND_LANDED } from "./sharedGameBridge.js";
+import { setSharedAdvisorRefusal, setSharedGamePeople, setSharedGameRole, setSharedGameSeats, setSharedGameSettings, setSharedNotices, setSharedRequester, setSharedRequestsHeld, setSharedRoundBase, setSharedRoundDays, setSharedRoundPhase, SHARED_ROUND_LANDED } from "./sharedGameBridge.js";
 import { roundBaseOf } from "./roundBase.js";
 import { createRoundPayer } from "./roundPayer.js";
 import { createLoopbackScreenSide } from "../transport/loopback.js";
 import { createClientSession } from "../session/client.js";
 import { PLAYER_MESSAGE_MAX_CHARS } from "../protocol/codec.js";
 import { probeNetwork } from "../transport/peer.js";
-import { hostingHere, joinFailure, scenarioDiffers, scenarioMissing, scenarioUnchecked, unreadableFromHost } from "./joinProgress.js";
+import { hostingHere, scenarioDiffers, scenarioMissing, scenarioUnchecked, unreadableFromHost } from "./joinProgress.js";
 import { chooseStandInScenario } from "./standIn.js";
 import { setSharedGameFeatures } from "../../runtime/gameFeatures.js";
 import { setWorldLanguage } from "../../runtime/i18n.js";
@@ -44,6 +44,7 @@ import { loadDeviceIdentity } from "../identity.js";
 import { parseInvite } from "../invite.js";
 import { HOST_MESSAGES, SHARED_GAME_VERSION } from "../game/messages.js";
 import { advisorChangesOf } from "../game/advisorChanges.js";
+import { cutOffAfter, cutOffRefusal, endedWords, keepEndedNotice, takeEndedNotice } from "./hostGone.js";
 
 const IDLE = Object.freeze({
   mode: "off", // off | opening | lobby | playing | ended
@@ -53,6 +54,9 @@ const IDLE = Object.freeze({
   round: null,
   notices: [],
   connection: "", // the session's state, or "loopback"
+  // A guest cut off from its host, from the drop until it is back in the game
+  // (client/hostGone.js cutOffAfter): its banner, and its requests refused.
+  cutOff: false,
   // What a guest's session knows while it joins (session/client.js onState):
   // { heard, failures }. The lobby says which step it is on (joinProgress.js).
   detail: null,
@@ -70,9 +74,16 @@ const IDLE = Object.freeze({
   // since are marked new.
   noticesReadAt: 0,
   error: "",
+  // A shared game that ended for this page, while the page is taken out of it
+  // (endForThisPage): its box says why, with nothing to press.
+  leaving: false,
 });
 
-let state = IDLE;
+// A shared game that ended for the page before this one, which was taken out
+// of it (endForThisPage): the menu says why, once (client/hostGone.js). Nothing
+// else of it is kept: the page opens the menu, never the dead game.
+const endedBefore = typeof sessionStorage === "undefined" ? "" : takeEndedNotice(sessionStorage);
+let state = endedBefore ? { ...IDLE, mode: "ended", error: endedBefore } : IDLE;
 const listeners = new Set();
 const set = (patch) => {
   state = { ...state, ...patch };
@@ -321,9 +332,12 @@ const makeClient = (send, { maxMessageChars = Infinity } = {}) => createGameClie
     // And the rules of the game every screen says (who pays for what, the Game Master).
     if (lobby?.settings) setSharedGameSettings(lobby.settings);
     // And who plays which country: a seat a person's device holds (game/messages.js SEAT `held`), not one they watch.
-    if (lobby) setSharedGamePeople((Array.isArray(lobby.seats) ? lobby.seats : []).filter((seat) => seat?.held === true && seat?.status !== "watching").map((seat) => seat.country));
+    // Who plays what, with their names: the map's stars, the region card and the game menu's Players (sharedGameBridge.js).
+    if (lobby) setSharedGameSeats(lobby.seats);
     // And how far each round moves the world, which the Timeline panel shows in place of its skips.
     if (lobby?.settings) setSharedRoundDays(lobby.settings.daysPerRound);
+    // And the round's phase, which says whether a queued order can be edited (Actions panel).
+    setSharedRoundPhase(round?.phase);
     set({
       lobby,
       round,
@@ -390,7 +404,10 @@ export const hostSharedGame = async ({ settings, name, resuming = false } = {}) 
       for (const entry of entries) logDebugEvent(entry.category, `(host's engine) ${entry.message}`, entry.detail || undefined, { problem: entry.problem });
     },
     // The engine window crashed or froze: said, and Leave closes it, since it
-    // cannot close itself.
+    // cannot close itself. The host is never taken out for it (endForThisPage
+    // is for a game that has ended): a window that is only busy (a long time
+    // skip can block it well over the loopback's 20 s) must not end the game
+    // for every player.
     onGone: () => {
       if (!current || current.screen !== screen) return;
       current.engineGone = true;
@@ -606,8 +623,9 @@ export const joinSharedGame = async ({ token, name } = {}) => {
     log: (text) => logDebugEvent("shared game", text),
     onState: (connection, detail = {}) => {
       if (current !== joining) return;
-      const back = connection === "connected" && state.connection === "reconnecting";
-      set({ connection, detail: { heard: Boolean(detail.heard), failures: Number(detail.failures) || 0, clock: Boolean(detail.clock) } });
+      const cutOff = cutOffAfter(state.cutOff, connection);
+      const back = state.cutOff && connection === "connected";
+      set({ connection, cutOff, detail: { heard: Boolean(detail.heard), failures: Number(detail.failures) || 0, clock: Boolean(detail.clock) } });
       // Back after a drop: what was asked and not yet answered goes again, with
       // its own id, and the host answers it once.
       if (back) {
@@ -619,7 +637,14 @@ export const joinSharedGame = async ({ token, name } = {}) => {
       }
       if (!["rejected", "lost", "invalid"].includes(connection)) return;
       logDebugEvent("shared game", `joining ended: ${connection} (${detail.reason || detail.message || "no reason given"})`, undefined, { problem: true });
-      set({ mode: "ended", error: joinFailure({ connection, reason: detail.reason, message: detail.message, network: state.network }) });
+      // Every end of the session ends the shared game for this page, and it is
+      // taken out at once (endForThisPage), with why (client/hostGone.js): the
+      // host closed it or is gone for good, the host removed or banned this
+      // player, this device took its place from another window. A player the
+      // host banned was left in the game's screens under an "ended" box until
+      // they pressed it; one whose host was gone, "reconnecting" for good.
+      const wasIn = Boolean(session.player);
+      void endForThisPage(endedWords({ wasIn, connection, reason: detail.reason, message: detail.message, network: state.network }), { wasIn });
     },
     // Dropped by the session, and said here: a lobby that cannot be read
     // would otherwise look like a host that was never found.
@@ -650,9 +675,25 @@ export const joinSharedGame = async ({ token, name } = {}) => {
 
 // --- Playing ---------------------------------------------------------------------
 
-export const sharedRequest = (t, fields = {}) => (current?.client
-  ? current.client.request(t, fields)
-  : Promise.resolve({ ok: false, error: "Not in a shared game." }));
+// Cut off from the host, nothing a guest does is taken: refused with that
+// reason (client/hostGone.js). What it asked before the drop goes again once
+// the connection is back (gameClient.js resend).
+export const sharedRequest = (t, fields = {}) => {
+  const refused = cutOffRefusal(state);
+  if (refused) return Promise.resolve({ ok: false, error: refused });
+  return current?.client
+    ? current.client.request(t, fields)
+    : Promise.resolve({ ok: false, error: "Not in a shared game." });
+};
+
+// The menu's word on a shared game that ended for this page, put away; false
+// while the page is still being taken out of it, or while its game is still
+// open (the host's screen whose engine window stopped answering: Leave).
+export const dismissEndedNotice = () => {
+  if (current || state.mode !== "ended" || state.leaving) return false;
+  set({ ...IDLE });
+  return true;
+};
 // The game's own panels reach the host through the bridge.
 setSharedRequester(sharedRequest);
 
@@ -700,12 +741,32 @@ if (typeof window !== "undefined") {
 
 export const sharedRemainingMs = () => current?.client?.remainingMs() ?? 0;
 
-export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
+// The one way out of a shared game that has ended for this page, whatever
+// ended it (client/hostGone.js endedWords): the player is taken out at once,
+// as Leave takes them out, with nothing to press, and nothing of the game is
+// left on the screen or in the library. A page that was in the game goes back
+// to the menu (a reload, as Leave does: every cache is this device's own game
+// again), which says why, once (keepEndedNotice). One still joining had
+// nothing of the game yet: it is told why where it asked to join.
+const endForThisPage = async (words, { wasIn = true } = {}) => {
+  if (wasIn) keepEndedNotice(typeof sessionStorage === "undefined" ? null : sessionStorage, words);
+  try {
+    await leaveSharedGame({ endedWith: words, reloading: wasIn });
+  } finally {
+    if (wasIn && typeof window !== "undefined") window.location.reload();
+  }
+};
+
+// `endedWith`: the game ended for this page (endForThisPage); its box says
+// why while the page is taken out, and after, unless the page is `reloading`.
+export const leaveSharedGame = async ({ stopHosting = true, endedWith = "", reloading = false } = {}) => {
   const leaving = current;
   // An engine window that never answered this page, or stopped answering it,
   // cannot be trusted to close itself when it is told to stop.
   const unanswered = Boolean(leaving?.screen) && (leaving.engineGone || !state.engine?.open);
   current = null;
+  // The game's screens and round bar go at once; the box says why meanwhile.
+  if (endedWith) set({ mode: "ended", error: endedWith, leaving: true });
   roundPayer.close();
   if (remoteRuntimeActive()) stopRemoteRuntime();
   leaving?.client?.close();
@@ -721,12 +782,14 @@ export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
     if (stopHosting && unanswered) await fetch("/api/multiplayer/engine/close", { method: "POST" }).catch(() => {});
   }
   leaving?.session?.leave();
-  set({ ...IDLE });
+  set(endedWith ? { ...IDLE, mode: "ended", error: endedWith, leaving: reloading } : { ...IDLE });
   setSharedGameRole("");
   setSharedGamePeople([]);
+  setSharedGameSeats([]);
   setSharedNotices([]);
   setSharedRoundBase(null);
   setSharedRoundDays(0);
+  setSharedRoundPhase("");
   setSharedGameSettings(null);
   setSharedRequestsHeld([]);
   setSharedAdvisorRefusal("");
@@ -737,6 +800,11 @@ export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
   setSharedGameEntry(null);
   // A guest's stand-in goes with its shared game, and the game open before it
   // is the library's again (runtime/standInGames.js). The host's game is its own.
-  if (leaving && !leaving.screen) await closeStandInOf(leaving);
+  // One still being made is waited for (prepareStandIn closes it itself, seeing
+  // the page has left): a reload straight after left it in the library.
+  if (leaving && !leaving.screen) {
+    await leaving.preparing;
+    await closeStandInOf(leaving);
+  }
   await refreshLibraryCatalog({ force: true }).catch(() => {});
 };

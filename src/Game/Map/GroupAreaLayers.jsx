@@ -8,14 +8,23 @@
 // below cities, structures and units.
 import React from "react";
 import { Layer, Source } from "react-map-gl/maplibre";
+import { groupAreaColorExpression } from "./groupAreaColors.js";
 
 export const GROUP_AREA_TINT_OPACITY = 0.2;
+// On the diplomatic map's Relations view a group's area is drawn in its standing
+// with the focus (runtime/diplomaticViews.js `groups`), over fills as strong as the
+// countries': the tint is stronger there, or it would not read.
+export const GROUP_AREA_DIPLOMATIC_TINT_OPACITY = 0.5;
+const GROUP_AREA_DIPLOMATIC_LABEL = "#f2eee6";
+
 
 const OUTLINE_WIDTH = ["interpolate", ["linear"], ["zoom"], 1, 1.1, 3, 1.6, 6, 2.4, 9, 3, 12, 3.6];
 const CASING_WIDTH = ["interpolate", ["linear"], ["zoom"], 1, 2.4, 3, 3.2, 6, 4.4, 9, 5.4, 12, 6.4];
 
-const GroupAreaLayers = ({ data, visible, hasMapLayer }) => {
+const GroupAreaLayers = ({ data, visible, hasMapLayer, colorOf = null }) => {
   if (!data?.fills?.features?.length && !data?.outlines?.features?.length) return null;
+  const color = groupAreaColorExpression(colorOf);
+  const tintOpacity = colorOf ? GROUP_AREA_DIPLOMATIC_TINT_OPACITY : GROUP_AREA_TINT_OPACITY;
   const firstPresent = (ids) => ids.find((id) => hasMapLayer(id));
   const tintBefore = firstPresent(["polity-boundaries-shadow", "polity-boundaries"]);
   const outlineBefore = firstPresent([
@@ -31,8 +40,8 @@ const GroupAreaLayers = ({ data, visible, hasMapLayer }) => {
           type="fill"
           beforeId={tintBefore}
           paint={{
-            "fill-color": ["get", "color"],
-            "fill-opacity": visible ? GROUP_AREA_TINT_OPACITY : 0,
+            "fill-color": color,
+            "fill-opacity": visible ? tintOpacity : 0,
             "fill-antialias": false,
           }}
         />
@@ -56,7 +65,7 @@ const GroupAreaLayers = ({ data, visible, hasMapLayer }) => {
           beforeId={outlineBefore}
           layout={{ "line-cap": "round", "line-join": "round" }}
           paint={{
-            "line-color": ["get", "color"],
+            "line-color": color,
             "line-width": OUTLINE_WIDTH,
             "line-opacity": visible ? 0.95 : 0,
           }}
@@ -77,7 +86,8 @@ const GroupAreaLayers = ({ data, visible, hasMapLayer }) => {
             "symbol-sort-key": ["-", 0, ["get", "regions"]],
           }}
           paint={{
-            "text-color": ["get", "color"],
+            // (On the Relations view a dark standing, a crackdown's, would not read as text: the names in ivory.)
+            "text-color": colorOf ? GROUP_AREA_DIPLOMATIC_LABEL : color,
             "text-halo-color": "rgba(5, 8, 13, 0.92)",
             "text-halo-width": 1.5,
             "text-opacity": visible ? 1 : 0,

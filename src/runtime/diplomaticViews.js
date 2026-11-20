@@ -61,6 +61,7 @@ export const RELATION_CATEGORY_LABELS = Object.freeze({
   overlord: "Overlord",
   puppet: "Puppet",
   war: "At war",
+  crackdown: "Crackdown",
   ceasefire: "Ceasefire",
   alliance: "Alliance",
   guarantee: "Guarantee",
@@ -90,6 +91,16 @@ export const AGREEMENT_TYPE_LABELS = Object.freeze({
   friendship_consultation: "Friendship treaty",
   trade_economic: "Trade agreement",
   other: "Treaty",
+  // A group's deals (runtime/groupParties.js).
+  truce: "Truce",
+  protection: "Protection money",
+  sponsorship: "Sponsorship",
+  safe_passage: "Safe passage",
+  smuggling: "Smuggling deal",
+  amnesty: "Amnesty",
+  hostage_exchange: "Hostage exchange",
+  recognition: "Recognition",
+  crackdown: "Crackdown",
 });
 export const INSTITUTION_TIE_LABELS = Object.freeze({
   security_alliance: "Mutual defence",
@@ -330,6 +341,21 @@ const relationsView = ({ world, landed, focusCountry, playerCountry }) => {
   lines.sort((a, b) => a.rank - b.rank || a.to.localeCompare(b.to));
   const enemies = lines.filter((line) => line.kind !== "ally");
   const allies = lines.filter((line) => line.kind === "ally").slice(0, 40);
+  // The groups on the map (runtime/groups.js) by their own standing with the
+  // focus, the same reckoning as a country's: their areas are drawn in it, and
+  // the legend counts them apart from the countries.
+  const groups = (isRecord(world.groups) ? Object.keys(world.groups) : [])
+    .map((name) => clean(name))
+    .filter((name) => name && diplomaticKeyOf(name) !== focusKey)
+    .map((name) => {
+      const found = info(diplomaticKeyOf(name));
+      return { name, category: found.category, color: found.color, why: found.why };
+    });
+  const groupCounts = new Map();
+  for (const group of groups) groupCounts.set(group.category, (groupCounts.get(group.category) ?? 0) + 1);
+  const groupEntries = RELATION_PRECEDENCE
+    .filter((category) => groupCounts.get(category))
+    .map((category) => ({ id: category, label: RELATION_CATEGORY_LABELS[category] ?? category, color: RELATION_COLORS[category] ?? DIPLO_UNKNOWN, colors: [RELATION_COLORS[category] ?? DIPLO_UNKNOWN], count: groupCounts.get(category) }));
   return assemble({
     view: "relations",
     landed,
@@ -343,6 +369,8 @@ const relationsView = ({ world, landed, focusCountry, playerCountry }) => {
       focusOwners,
       lines: [...enemies.slice(0, 60), ...allies].map(({ kind, to }) => ({ kind, from: focusOwners[0] ?? stances?.focusName ?? "", to })),
       frontPairs: [...new Set(frontPairs)],
+      groups,
+      groupEntries,
     },
   });
 };

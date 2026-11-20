@@ -36,17 +36,30 @@ export const hostReadsFigures = () => hostReads;
 // writes what it was told; in the engine hosting a shared game that write was
 // made beside the host's one queue (rule 2: every change to the world is one
 // entry of it), between a player's request and the next (FOLLOWUPS A6). While
-// the engine shares a game it sets `enter(label)`, which resolves when an entry
-// of its queue begins with the function that ends it (host/engineMain.js): the
-// write half of every reading runs inside one (gameplay.js beginStatsWrite,
+// the engine shares a game it sets `order(label, write)`, which runs `write` as
+// one entry of its queue and settles with it (host/engineMain.js): the write
+// half of every reading is that entry (gameplay.js statsWrite,
 // inReadingOrder). Anywhere else, and before and after sharing, there is none
 // and a reading writes at once, as single player always has.
-let enterOrder = null;
+//
+// The entry is the write itself, never a hold: an entry used to be entered and
+// left open until the reading said it was done, and one never let go held
+// Start and every request behind it for good (2026-11-18). A function the
+// queue runs ends when its work ends, and is bounded there (host/worldQueue.js).
+// Every write of it carries the entry's fence (gameplay.js statsWrite hands it
+// to each: gameState.js mutate* `fence`), so the queue may let it go at its
+// bound and go on, and nothing of it lands after.
+let order = null;
 
-export const setReadingsOrder = (enter) => {
-  enterOrder = typeof enter === "function" ? enter : null;
+export const setReadingsOrder = (run) => {
+  order = typeof run === "function" ? run : null;
 };
 
-// The entry a reading's write is made in (a promise of the function that ends
-// it), or null when there is no host's order to make it in.
-export const readingEntry = (label) => (enterOrder ? enterOrder(String(label || "reading")) : null);
+// Runs a reading's `write({ inEntry, fence })`: as one entry of the host's
+// queue while this engine shares a game (`inEntry` true: inside it, the queue
+// is the game's lock, host/worldQueue.js; `fence` the entry's, for every write
+// it makes), at once anywhere else (`inEntry` false, and no fence). Resolves or
+// rejects with what the write did.
+export const writeInHostOrder = (label, write) => (order
+  ? order(String(label || "reading"), (entry) => write({ inEntry: true, fence: entry?.fence ?? null }), { fenced: true })
+  : (async () => write({ inEntry: false }))());

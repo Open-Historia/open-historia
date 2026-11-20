@@ -458,9 +458,25 @@ let engineWindow = null;
 let engineCredential = "";
 
 const closeEngineWindow = () => {
-  if (engineWindow && !engineWindow.isDestroyed()) engineWindow.destroy();
+  const closing = engineWindow;
   engineWindow = null;
   engineCredential = "";
+  if (!closing || closing.isDestroyed()) return;
+  // Its guests are told the game is closed before their connections drop
+  // (multiplayer/host/engineMain.js farewell): a window destroyed outright
+  // never sees its own pagehide, and a guest was left reconnecting to a host
+  // that was gone. A moment for the goodbyes to go out, and never longer.
+  const destroy = () => {
+    if (!closing.isDestroyed()) closing.destroy();
+  };
+  const wait = setTimeout(destroy, 1500);
+  closing.webContents.executeJavaScript("window.__ohSharedGameFarewell ? (window.__ohSharedGameFarewell(), true) : false", true)
+    .then((told) => new Promise((resolve) => setTimeout(resolve, told ? 300 : 0)))
+    .catch(() => {})
+    .finally(() => {
+      clearTimeout(wait);
+      destroy();
+    });
 };
 
 const installSharedGameEngine = () => {
@@ -488,7 +504,10 @@ const installSharedGameEngine = () => {
         logMain("warn", "engine.gone", String(details?.reason || "unknown"));
         closeEngineWindow();
       });
+      const opened = engineWindow;
       engineWindow.on("closed", () => {
+        // (A window closed late, while its farewell went out, is not the one open now.)
+        if (engineWindow !== opened) return;
         engineWindow = null;
         engineCredential = "";
       });

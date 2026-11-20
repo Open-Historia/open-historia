@@ -75,6 +75,8 @@ import { withTurnAttrition } from "../../runtime/attrition.js";
 import { middleFundingPerHead } from "../../runtime/militaryFunding.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
 import { applyWarUpdates } from "./nativeWarLedger.js";
+import { applyAgreementEffect } from "./agreementEngine.js";
+import { normalizeAgreementEffects } from "../../runtime/agreementEffects.js";
 import { annexationImpacts, regionOwnerNow, regionsHeldBy } from "../../runtime/gmAnnex.js";
 
 const clean = (value, most = 160) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, most).trim();
@@ -187,8 +189,26 @@ export const withReputation = (world, name, value) => {
   return next;
 };
 
-// A world with a treaty broken: the breaker's standing falls, and it is out of the agreement.
+// A world with a treaty broken: the breaker is out of the agreement, and what the agreement says a breach
+// costs is carried out with the breaker in it (its onBreak effects, written by the request that made it:
+// AI/agreementEngine.js); an agreement with none written costs nothing more. A member of an institution
+// that will not fight keeps its seat, and its standing falls by TREATY_BROKEN_REPUTATION: an institution's
+// charter is no agreement with effects of its own.
 export const withTreatyBroken = (world, { ally, via }, { date = "", round = 0 } = {}) => {
+  // (An agreement the story itself ended while its partner was attacked, "ended", is broken by the one bound
+  // to defend: its breach is carried out here, and not again as its end, endApplied.)
+  const agreement = ["agreement", "ended"].includes(via?.kind) ? list(world?.agreements).find((entry) => clean(entry?.id) === clean(via.id)) : null;
+  if (agreement) {
+    let next = { ...world, agreements: agreementsWithout(world?.agreements, { ...via, kind: "agreement" }, ally, { date, round }) };
+    const effects = normalizeAgreementEffects(agreement.effects);
+    for (const effect of list(effects?.onBreak)) {
+      next = applyAgreementEffect(next, agreement, effect, { scale: "once", date, round, breaker: clean(ally) });
+    }
+    if (effects && via.kind === "ended") {
+      next = { ...next, agreements: list(next.agreements).map((entry) => (clean(entry?.id) === clean(agreement.id) ? { ...entry, brokenBy: clean(ally), effectsApplied: true, endApplied: true } : entry)) };
+    }
+    return next;
+  }
   const map = record(world?.internationalReputation);
   const key = Object.keys(map).find((entry) => fold(entry) === fold(ally));
   const sheet = record(world?.countryStats)[sheetKeyOf(world, ally)];

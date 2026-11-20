@@ -7,7 +7,7 @@
 // opens a conversation lost whom it invites and its opening line. It now goes
 // as the panel would have saved it.
 
-import { ORDER_ID_MAX, ORDER_TITLE_MAX } from "../game/messages.js";
+import { ORDER_ID_MAX, ORDER_MAX_CHARS, ORDER_TITLE_MAX } from "../game/messages.js";
 import { SAY_RECIPIENTS_MAX } from "./sharedThreads.js";
 
 const ORDER_SOURCES = new Set(["manual", "suggested", "advisor"]);
@@ -38,5 +38,24 @@ export const orderRequestFor = (action, typed = "") => {
       invitees: (Array.isArray(action.invitees) ? action.invitees : []).map(text).filter(Boolean).slice(0, SAY_RECIPIENTS_MAX),
       chatStarter: text(action.chatStarter),
     } : {}),
+  };
+};
+
+// The "reword" request for a queued order the player edited (GameUI/actions.jsx):
+// the order by its id, and the parts given, each held to what the request
+// takes. The host changes the order as single player does (runtime/actionEdit.js
+// rewordAction), so a part not given stays as it was and a typed order's title
+// follows its words. Null for an order with no id: there is nothing to name.
+export const rewordRequestFor = (action, { title, text: words, chatStarter } = {}) => {
+  const order = text(action?.id).slice(0, ORDER_ID_MAX);
+  if (!order) return null;
+  const named = text(title).slice(0, ORDER_TITLE_MAX);
+  const body = text(words);
+  const opening = action?.kind === "chat" ? text(chatStarter) : "";
+  return {
+    order,
+    ...(named ? { title: named } : {}),
+    ...(body ? { text: body } : {}),
+    ...(opening ? { chatStarter: opening } : {}),
   };
 };

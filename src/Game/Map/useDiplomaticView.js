@@ -32,7 +32,7 @@ export const publishLandedOwners = (owners) => {
 
 const INPUT_KEYS = [
   "view", "focus", "player", "institutionId", "axis", "focusWar", "landed",
-  "wars", "agreements", "relations", "puppets", "institutions", "politicalActors", "powerStatus",
+  "wars", "agreements", "relations", "puppets", "institutions", "politicalActors", "powerStatus", "groups",
   "regionSovereigntyOverrides", "regionOwnershipOverrides",
 ];
 let cached = { inputs: null, view: null };
@@ -56,6 +56,8 @@ export const diplomaticViewFor = (inputs) => {
       institutions: inputs.institutions,
       politicalActors: inputs.politicalActors,
       powerStatus: inputs.powerStatus,
+      // The groups, whose areas the Relations view draws by their standing with the focus.
+      groups: inputs.groups,
       regionSovereigntyOverrides: inputs.regionSovereigntyOverrides,
       regionOwnershipOverrides: inputs.regionOwnershipOverrides,
     },
@@ -88,6 +90,7 @@ export function useDiplomaticView() {
     institutions: world.institutions,
     politicalActors: world.politicalActors,
     powerStatus: world.powerStatus,
+    groups: world.groups,
     regionSovereigntyOverrides: world.regionSovereigntyOverrides,
     regionOwnershipOverrides: world.regionOwnershipOverrides,
   });
