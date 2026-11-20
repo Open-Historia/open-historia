@@ -107,7 +107,7 @@ relationUpdatesJson element:
 {"a":"Full Polity Name","b":"Full Polity Name","score":0,"status":"friendly|cordial|neutral|cautious|strained|hostile|rival","eventIndexes":[0],"summary":""}
 
 agreementUpdatesJson element:
-{"id":"stable-agreement-id","op":"start|update|suspend|resume|end|expire|break","type":"alliance|mutual_defense|guarantee|non_aggression|friendship_consultation|trade_economic|military_cooperation|military_access|neutrality|peace_settlement|other|truce|protection|sponsorship|safe_passage|smuggling|amnesty|hostage_exchange|recognition|crackdown","parties":[],"eventIndexes":[0],"title":"","terms":"","effects":{"months":0,"onSign":[],"monthly":[],"onEnd":[],"onBreak":[]}}
+{"id":"stable-agreement-id","op":"start|update|suspend|resume|end|expire|break","type":"alliance|mutual_defense|guarantee|non_aggression|friendship_consultation|trade_economic|military_cooperation|military_access|neutrality|peace_settlement|other|truce|protection|sponsorship|safe_passage|smuggling|amnesty|hostage_exchange|recognition|crackdown","parties":[],"eventIndexes":[0],"title":"","terms":"","effects":{"months":0,"onSign":[],"perYear":[],"onEnd":[],"onBreak":[]}}
 - break: parties names the one breaking it. effects, on a start: ${AGREEMENT_EFFECTS_FORMAT}
 
 puppetUpdatesJson element — a SUBORDINATION: one polity directing another's will while it remains a separate country holding its own territory and sovereignty:

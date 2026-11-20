@@ -107,7 +107,8 @@ test("a skip's relation and deal records naming a group pass the ledger and are 
 const TRUCE_EFFECTS = {
   months: 12,
   onSign: [{ type: "war", op: "ceasefire" }, { type: "relation", party: "Mexico", with: CARTEL, change: 12 }],
-  monthly: [{ type: "payment", from: "Mexico", to: CARTEL, amount: 50_000_000 }, { type: "strength", party: CARTEL, figure: "spending", change: 0.5 }],
+  // A year's amounts: $600M and 6 points a year, a twelfth of each a month.
+  perYear: [{ type: "payment", from: "Mexico", to: CARTEL, amount: 600_000_000 }, { type: "strength", party: CARTEL, figure: "spending", change: 6 }],
   onEnd: [{ type: "relation", party: "Mexico", with: CARTEL, change: -3 }],
   onBreak: [{ type: "relation", party: "breaker", with: CARTEL, change: -20 }, { type: "reputation", party: "breaker", change: -4 }],
 };
@@ -116,11 +117,13 @@ test("effects are kept as written, held to generous caps, and an agreement witho
   const held = normalizeAgreementEffects({
     months: 9999,
     onSign: [{ type: "relation", party: "A", with: "B", change: 80 }, { type: "stat", party: "A", stat: "Stability", change: 40 }, { type: "nonsense" }],
-    monthly: [{ type: "strength", party: "C", figure: "spending", change: 9 }, { type: "war", op: "end" }, { type: "area", group: "C", op: "take", region: "X" }],
+    perYear: [{ type: "strength", party: "C", figure: "spending", change: 30 }, { type: "war", op: "end" }, { type: "area", group: "C", op: "take", region: "X" }],
   });
   assert.equal(held.months, 600);
   assert.deepEqual(held.onSign, [{ type: "relation", party: "A", with: "B", change: EFFECT_CAPS.relation.once }, { type: "stat", party: "A", stat: "stability", change: 8 }]);
-  assert.deepEqual(held.monthly, [{ type: "strength", party: "C", figure: "spending", change: EFFECT_CAPS.strength.month }], "a war or the ground moves once, never monthly");
+  assert.deepEqual(held.perYear, [{ type: "strength", party: "C", figure: "spending", change: EFFECT_CAPS.strength.year }], "a war or the ground moves once, never a year at a time");
+  // An agreement saved with the former `monthly` list (one month's amounts) reads as the year it makes.
+  assert.deepEqual(normalizeAgreementEffects({ monthly: [{ type: "payment", from: "A", to: "B", amount: 250_000_000 }] }), { perYear: [{ type: "payment", from: "A", to: "B", amount: 3_000_000_000 }] });
   assert.equal(normalizeAgreementEffects({}), null);
   const world = base({ relations: [{ a: "Mexico", b: CARTEL, score: -50 }], agreements: [{ id: "old", title: "Old pact", type: "truce", parties: ["Mexico", CARTEL], status: "active" }] });
   const after = turnAgreements({ world, days: 400, date: "2027-02-01", round: 4 }).world;
@@ -149,6 +152,18 @@ test("an agreement's making, months, term and end are carried out exactly as wri
   const over = done.agreements.find((entry) => entry.id === "t");
   assert.deepEqual([over.status, over.monthsRun, over.endApplied], ["expired", 12, true], "it runs its term and no further");
   assert.equal(relationBetween(done, "Mexico", CARTEL).score, -71, "its onEnd, once");
+});
+
+test("a sum a year is paid a twelfth each month", () => {
+  const world = settleAgreementStarts(base({ agreements: [{ id: "pact", title: "Border pact", type: "trade_economic", parties: ["United States", "Mexico"], status: "active",
+    effects: { months: 60, perYear: [{ type: "payment", from: "United States", to: "Mexico", amount: 3_000_000_000 }, { type: "relation", party: "United States", with: "Mexico", change: 6 }] } }] }), { date: "2026-01-01" }).world;
+  const month = turnAgreements({ world, days: 30, date: "2026-01-31", round: 2 }).world;
+  // $250M of a $20T economy is 0.00125 points of its debt; of Mexico's $1T, 0.025 points off.
+  assert.ok(Math.abs(month.countryStats["United States"].economy.publicDebt - 100.00125) < 1e-4, String(month.countryStats["United States"].economy.publicDebt));
+  assert.ok(Math.abs(month.countryStats.Mexico.economy.publicDebt - 49.975) < 1e-4);
+  const year = turnAgreements({ world: month, days: 330, date: "2026-12-31", round: 3 }).world;
+  assert.ok(Math.abs(year.countryStats.Mexico.economy.publicDebt - 49.7) < 1e-3, "a year of it is the year's sum");
+  assert.equal(relationBetween(year, "United States", "Mexico").score, 6, "half a point a month, a whole point every second month");
 });
 
 test("breaking an agreement carries out its breach, with the breaker named", () => {
@@ -183,7 +198,7 @@ test("no number of a deal is the engine's own", () => {
 // ---- treaties made in a chat -----------------------------------------------------------------------
 
 test("a proposal is answered on a hidden TREATY line in the shape every treaty has", () => {
-  const line = JSON.stringify({ answer: "counter", type: "military_access", parties: ["Syria", "Russia"], title: "Tartus lease", terms: "Russia uses Tartus.", effects: { months: 120, monthly: [{ type: "payment", from: "Russia", to: "Syria", amount: 166_000_000 }] } });
+  const line = JSON.stringify({ answer: "counter", type: "military_access", parties: ["Syria", "Russia"], title: "Tartus lease", terms: "Russia uses Tartus.", effects: { months: 120, perYear: [{ type: "payment", from: "Russia", to: "Syria", amount: 2_000_000_000 }] } });
   const envelope = parseDiplomaticEnvelope(`Ten years, not five.\nTREATY:${line}\nDIPLOMATIC_MEMORY:Syria countered.`);
   assert.equal(envelope.reply, "Ten years, not five.");
   const treaty = readTreaty(envelope.treaty);
@@ -195,7 +210,7 @@ test("a proposal is answered on a hidden TREATY line in the shape every treaty h
   assert.deepEqual([signed.error, signed.agreement.parties, signed.agreement.effects.months], ["", ["Syria", "Russia"], 120]);
   assert.equal(withTurnTreatyOffers(put.world.treatyOffers, { wars: [{ status: "active", sideA: ["Syria"], sideB: ["Russia"] }], round: 1 })[0].status, "open", "a drafted treaty may be made in a war");
   const agreement = treatyAgreement(treaty, { id: "x", date: "2026-01-01" });
-  assert.equal(agreement.effects.monthly[0].amount, 166_000_000);
+  assert.equal(agreement.effects.perYear[0].amount, 2_000_000_000);
 });
 
 test("the leader is told the context its effects are written from, compactly, and a group as a group", () => {

@@ -13,9 +13,11 @@
 // in a chat between turns and one the skip wrote go through the same door): its
 // onSign effects. A new agreement of the same type between the same parties
 // replaces the old one.
-// EVERY TURN (turnAgreements, after the war and peace of the turn): its monthly
-// effects, once for every whole month of the period it was in force (the days
-// short of a month carried to the next turn); at its term it expires.
+// EVERY TURN (turnAgreements, after the war and peace of the turn): a twelfth of
+// its perYear effects (written as a year's amounts) for every whole month of the
+// period it was in force (the days short of a month carried to the next turn);
+// at its term it expires. What the world keeps in whole points (a relation, a
+// standing, a group's figures) is banked as fractions between months.
 // WHEN IT ENDS (settleAgreementEnds, marked `endApplied`): its onBreak effects
 // when a party broke it (`brokenBy`, which stands for "breaker"), else its onEnd.
 //
@@ -25,7 +27,7 @@ import { applyCountryStatPatchToWorld, statEffectPatch } from "../../runtime/gam
 import { applyGroupOps, findGroupKey, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import { normalizeMilitaryStats } from "../../runtime/militaryStats.js";
 import { relationBandForScore } from "../../runtime/diplomaticStance.js";
-import { BREAKER, EFFECT_CAPS, normalizeAgreementEffects, scaleOfList } from "../../runtime/agreementEffects.js";
+import { BREAKER, EFFECT_CAPS, MONTHS_A_YEAR, normalizeAgreementEffects, scaleOfList } from "../../runtime/agreementEffects.js";
 import { dealsBetween, relationBetween } from "../../runtime/groupParties.js";
 import { applyWarUpdates } from "./nativeWarLedger.js";
 
@@ -94,7 +96,9 @@ const withDebt = (world, name, points) => {
 // (a group, a country with no sheet) neither pays from nor banks into a sheet.
 const withPayment = (world, effect, scale) => {
   const payerGdp = gdpOf(world, effect.from);
-  const most = payerGdp > 0 ? payerGdp * EFFECT_CAPS.payment[scale] : Infinity;
+  // (A month's share is a twelfth of the year's cap.)
+  const share = scale === "month" ? EFFECT_CAPS.payment.year / MONTHS_A_YEAR : EFFECT_CAPS.payment[scale];
+  const most = payerGdp > 0 ? payerGdp * share : Infinity;
   const amount = Math.min(effect.amount, most);
   let next = world;
   if (payerGdp > 0) next = withDebt(next, effect.from, (amount / payerGdp) * 100);
@@ -301,17 +305,21 @@ export const turnAgreements = ({ world = {}, days = 0, date = "", round = 0, reg
       const term = figure(effects.months);
       const left = term > 0 ? Math.max(0, term - run) : Infinity;
       const months = Math.min(left, Math.floor(carried / DAYS_PER_MONTH));
-      // Each month's effects in turn, each held to its month's cap; a group's figures, which the world keeps in
-      // whole points, banked as fractions of a point (`figureCarry`) and moved a whole point at a time.
+      // Each month a twelfth of each year's effect, held to a twelfth of its cap. A figure the world keeps in
+      // whole points (a relation, a standing, a group's figures) is banked as fractions of a point
+      // (`figureCarry`) and moved a whole point at a time; a sheet's figures and a payment take the fraction.
       const banked = { ...record(agreement.figureCarry) };
       for (let month = 0; month < months; month += 1) {
-        for (const effect of list(effects.monthly)) {
-          if (effect.type !== "strength") {
-            next = applyAgreementEffect(next, agreement, effect, { scale: "month", date, round, regions });
+        for (const effect of list(effects.perYear)) {
+          const twelfth = effect.type === "payment"
+            ? { ...effect, amount: effect.amount / MONTHS_A_YEAR }
+            : { ...effect, change: effect.change / MONTHS_A_YEAR };
+          if (!["relation", "reputation", "strength"].includes(effect.type)) {
+            next = applyAgreementEffect(next, agreement, twelfth, { scale: "month", date, round, regions });
             continue;
           }
-          const key = `${fold(effect.party)}|${effect.figure}`;
-          const total = figure(banked[key]) + effect.change;
+          const key = `${effect.type}|${fold(effect.party)}|${fold(effect.with || effect.figure || "")}`;
+          const total = figure(banked[key]) + twelfth.change;
           const whole = Math.trunc(total);
           banked[key] = Math.round((total - whole) * 1000) / 1000;
           if (whole) next = applyAgreementEffect(next, agreement, { ...effect, change: whole }, { scale: "month", date, round, regions });
@@ -325,7 +333,7 @@ export const turnAgreements = ({ world = {}, days = 0, date = "", round = 0, reg
       const rest = Math.round(carried - months * DAYS_PER_MONTH);
       if (rest > 0 && kept.monthsRun < (term > 0 ? term : Infinity)) kept.carryDays = rest;
       else delete kept.carryDays;
-      if (months > 0 && effects.monthly?.length) notes.push(`${months} month${months === 1 ? "" : "s"} of ${clean(agreement.title) || agreement.type}`);
+      if (months > 0 && effects.perYear?.length) notes.push(`${months} month${months === 1 ? "" : "s"} of ${clean(agreement.title) || agreement.type}`);
       next = replaceAgreement(next, term > 0 && kept.monthsRun >= term ? endedRecord(kept, { date, round, status: "expired" }) : kept);
     }
   }

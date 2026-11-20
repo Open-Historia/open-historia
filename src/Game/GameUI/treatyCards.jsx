@@ -33,7 +33,7 @@ export const PROPOSAL_MOST = 1200;
 
 export const EFFECT_LIST_LABELS = Object.freeze({
   onSign: "On signing",
-  monthly: "Every month",
+  perYear: "Every year",
   onEnd: "When it ends",
   onBreak: "If broken",
 });
@@ -72,6 +72,7 @@ export const EFFECT_WORD_LABELS = Object.freeze({
   noTerm: "No set term",
   breaker: "The one who breaks it",
   none: "No effects written",
+  aYear: "each year",
 });
 const TREATY_STATUS_LABELS = Object.freeze({
   signed: "Signed",
@@ -91,8 +92,8 @@ const money = (value) => {
 };
 const Name = ({ value }) => (fold(value) === "breaker" ? <span>{EFFECT_WORD_LABELS.breaker}</span> : <span data-no-translate>{value}</span>);
 
-// One effect, in a line.
-const EffectLine = ({ effect }) => {
+// One effect, in a line. `yearly`: a perYear effect, its amount a year's ("$3.00B each year").
+const EffectLine = ({ effect, yearly = false }) => {
   const number = (text) => <span data-no-translate style={{ fontVariantNumeric: "tabular-nums", fontWeight: 760 }}>{text}</span>;
   let body = null;
   if (effect.type === "stat") {
@@ -111,7 +112,7 @@ const EffectLine = ({ effect }) => {
   } else if (effect.type === "war") {
     body = <span>{effect.op === "end" ? EFFECT_WORD_LABELS.warEnds : EFFECT_WORD_LABELS.ceasefire}</span>;
   }
-  return body ? <li style={{ lineHeight: 1.45 }}>{body}</li> : null;
+  return body ? <li style={{ lineHeight: 1.45 }}>{body}{yearly ? <> {EFFECT_WORD_LABELS.aYear}</> : null}</li> : null;
 };
 
 // An agreement's effects (runtime/agreementEffects.js), grouped by when they happen.
@@ -127,7 +128,7 @@ export const EffectList = ({ effects, compact = false }) => {
         <div key={list}>
           <div style={{ color: "var(--oh-ui-accent, #2bc1f3)", fontSize: "0.58rem", fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase" }}>{EFFECT_LIST_LABELS[list]}</div>
           <ul style={{ margin: "0.1rem 0 0", paddingLeft: "1rem" }}>
-            {shown[list].map((effect, at) => <EffectLine key={`${list}-${at}`} effect={effect} />)}
+            {shown[list].map((effect, at) => <EffectLine key={`${list}-${at}`} effect={effect} yearly={list === "perYear"} />)}
           </ul>
         </div>
       ))}

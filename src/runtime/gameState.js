@@ -4145,10 +4145,10 @@ const normalizeWorldAgreement = (entry, identityWorld, index = 0) => {
     ...(Number(entry.monthsRun) > 0 ? { monthsRun: Math.min(600, Math.trunc(Number(entry.monthsRun))) } : {}),
     ...(Number(entry.carryDays) > 0 ? { carryDays: Math.min(3650, Math.round(Number(entry.carryDays))) } : {}),
     ...(entry.endApplied === true ? { endApplied: true } : {}),
-    // Fractions of a point a group's figures are owed, banked between months.
+    // Fractions of a point a relation, a standing or a group's figures are owed, banked between months.
     ...(entry.figureCarry && typeof entry.figureCarry === "object" && !Array.isArray(entry.figureCarry)
       && Object.keys(entry.figureCarry).length
-      ? { figureCarry: Object.fromEntries(Object.entries(entry.figureCarry).slice(0, 8).map(([key, value]) => [normalizeOptionalString(key).slice(0, 160), Math.max(-1, Math.min(1, Number(value) || 0))]).filter(([key, value]) => key && value)) }
+      ? { figureCarry: Object.fromEntries(Object.entries(entry.figureCarry).slice(0, 16).map(([key, value]) => [normalizeOptionalString(key).slice(0, 160), Math.max(-1, Math.min(1, Number(value) || 0))]).filter(([key, value]) => key && value)) }
       : {}),
     ...(normalizeOptionalString(entry.brokenBy) ? { brokenBy: normalizeOptionalString(entry.brokenBy) } : {}),
   };
