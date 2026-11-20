@@ -54,6 +54,26 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Four player reports (2026-11-19), each a whole Game Master request failed over one change inside one event: board ops the
+    // projects rework had removed, still in its prompt; a building with no family, refused for the landmark the game itself
+    // writes; a building half nested. One change that cannot be made is now left out and said (answerImpactOps.js).
+    id: "2026-11-gm-one-change",
+    kind: "minor",
+    date: "2026-11-19",
+    channel: "beta",
+    banners: [
+      {
+        title: "Game Master requests that go through",
+        items: [
+          "When one change in a Game Master request is written wrong, only that change is left out, and the preview says so. The rest of the request still goes through.",
+          "Game Master requests that put up a building on the map work again.",
+          "The Game Master now opens, sets back, speeds up and ends projects the way the Projects board works today.",
+          "A building a time skip puts up keeps the kind of icon it was given, and stays under construction when it is still being built.",
+        ],
+      },
+    ],
+  },
+  {
     // "make it so you can have diplomacy with them like cartels and shit" (the owner, 2026-11-19): a group is a party
     // to relations and agreements like a country (runtime/groupParties.js), with deals that fit it and do things in
     // the world (Game/AI/groupDeals.js), its leadership talks as the group it is, and the diplomatic map draws it.

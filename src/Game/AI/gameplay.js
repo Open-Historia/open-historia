@@ -320,6 +320,7 @@ import {
   unlimitedRequests,
 } from "./requestBudget.js";
 import { describeSchemaRemoval, salvageBySchema } from "./schemaSalvage.js";
+import { salvageTaskAnswer, settleMarkerOps } from "./answerImpactOps.js";
 import {
   TURN_REVIEW_TASK,
   buildTurnReviewPrompt,
@@ -467,8 +468,7 @@ import {
 } from "../../runtime/gameState.js";
 import { advancePoliticalBackgroundSimulation, describePoliticalBackgroundResult } from "../../runtime/politicalBackground.js";
 import { refreshPowerStatusForTurn } from "../../runtime/powerStatus.js";
-import { MARKER_OPS, markerOpKind } from "../../runtime/markerOps.js";
-import { withSaidFamily } from "../../runtime/markerFamily.js";
+import { markerOpKind } from "../../runtime/markerOps.js";
 import { firstSentence, withoutFinalTerminal } from "../../../server/sentences.js";
 import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
 import { validateQueuedActionIds } from "./actionOutcomeAssociations.js";
@@ -4560,52 +4560,11 @@ const runJsonTask = async (taskKey, {
           preserved: Object.keys(pregamePreservedTransportSections),
         }, { verbose: true });
       }
-      // Same idea for markerOps, for every task whose answer has events. A single
-      // rejected op fails the WHOLE payload, so one flattened building once cost
-      // the player the entire turn: a build written flat has the structure's own
-      // fields lifted under `marker`, and one with no op word but a `marker` is a
-      // build by its shape. The op itself is one of the five the schema and the
-      // engine share (runtime/markerOps.js), case and spaces aside. Any other word
-      // is left out here, and said in the receipt as schema salvage says what it
-      // cuts: the engine would read it as no op, and asking again for it would be
-      // a second request. "found" and "destroy" were once rewritten to build and
-      // remove (and the engine read "destroy" as a ruin instead), in English only
-      // (the owner, 2026-11-13: no keywording anywhere). A structure built here
-      // is drawn as the family the answer said, or as a landmark
-      // (runtime/markerFamily.js withSaidFamily), never by its kind's words.
-      const markerOpsLeftOut = [];
-      for (const [eventIndex, event] of (Array.isArray(parsed?.events) ? parsed.events : []).entries()) {
-        const ops = event?.impacts?.markerOps;
-        if (!Array.isArray(ops)) continue;
-        const kept = [];
-        for (const [opIndex, op] of ops.entries()) {
-          if (!op || typeof op !== "object") {
-            kept.push(op);
-            continue;
-          }
-          const written = normalizeString(op.op);
-          const kind = markerOpKind(written) || (!written && op.marker && typeof op.marker === "object" ? "build" : "");
-          if (!kind) {
-            const path = `$.events[${eventIndex}].impacts.markerOps[${opIndex}]`;
-            const title = normalizeString(event?.title);
-            markerOpsLeftOut.push({
-              kind: "item",
-              path,
-              error: `${path}.op must be one of ${MARKER_OPS.map((entry) => JSON.stringify(entry)).join(", ")}; ${JSON.stringify(written)} is none of them.`,
-              ...(title ? { label: `"${title}"` } : {}),
-            });
-            continue;
-          }
-          if (kind !== "build" || op.marker) {
-            kept.push(kind === "build" ? { ...op, op: kind, marker: withSaidFamily(op.marker) } : { ...op, op: kind });
-            continue;
-          }
-          // Flat build: lift the structure's own fields under `marker`.
-          const { op: _op, note, ...marker } = op;
-          kept.push({ op: "build", marker: withSaidFamily(marker), ...(note == null ? {} : { note }) });
-        }
-        event.impacts.markerOps = kept;
-      }
+      // Same idea for markerOps, for every task whose answer has events: a
+      // structure's op as the engine reads it, an op word that is none of the
+      // five left out and said in the receipt, as schema salvage says what it
+      // cuts (answerImpactOps.js settleMarkerOps).
+      const markerOpsLeftOut = settleMarkerOps(parsed);
       if (markerOpsLeftOut.length) {
         logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt}: ${markerOpsLeftOut.length} structure operation(s) named no operation the engine has and were left out.`, markerOpsLeftOut, { verbose: true });
       }
@@ -4833,24 +4792,19 @@ const runJsonTask = async (taskKey, {
       // A fault the schema can point at is cut out rather than costing the whole
       // answer (schemaSalvage.js) — but only once nothing better is coming: while
       // a retry remains and requests are not being saved, the model is told and
-      // fixes its own answer, as it always has. The GM's transaction is left
-      // alone: half a transaction is not a smaller transaction.
+      // fixes its own answer, as it always has.
       // (The structure operations left out above are this attempt's first.)
       let removedThisAttempt = [...markerOpsLeftOut];
-      if (!validation.valid && parsed && lastChance && taskKey !== "gameMaster" && !transportDecodeError) {
+      if (!validation.valid && parsed && lastChance && !transportDecodeError) {
         // On a copy: an answer that cannot be saved goes back to the model as it
-        // wrote it, not half taken apart.
-        const salvaged = salvageBySchema(cloneValue(parsed), checkAnswer, {
-          // Round Zero is the campaign's canonical starting state. Historical
-          // cards can be salvaged individually, but a malformed canonical fact
-          // must never be "fixed" by deleting it and silently starting the game
-          // without a war/relation/agreement/storyline the model attempted to
-          // establish. Fail closed and retry instead.
-          protectedPathPrefixes: taskKey === "pregameHistory" ? ["$.canonicalUpdates"] : [],
-          describe: (candidate, path) => (path[0] === "events" && typeof path[1] === "number"
-            ? `"${normalizeString(candidate?.events?.[path[1]]?.title) || `event ${path[1] + 1}`}"`
-            : ""),
-        });
+        // wrote it, not half taken apart. What may be cut is the task's own
+        // (answerImpactOps.js salvageTaskAnswer): Round Zero's canonical facts
+        // never, since a malformed one deleted would start the game without a
+        // war or treaty the model meant; the Game Master's transaction only one
+        // operation of one event, whole, so one malformed op no longer costs the
+        // administrator everything, while its events, ledgers and patches stay
+        // all or nothing.
+        const salvaged = salvageTaskAnswer(taskKey, cloneValue(parsed), checkAnswer);
         if (salvaged.valid && salvaged.removed.length) {
           parsed = salvaged.value;
           removedThisAttempt = [...markerOpsLeftOut, ...salvaged.removed];
@@ -7701,8 +7655,17 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // operations still pass native shape/reference/dry-run validation before they
   // are attached to the candidate. Null everywhere else.
   politicalClaimRepair = null,
+  // How an operation of an event that cannot be applied as written (a unit or a
+  // structure it does not name, a project not on the board, a report to nobody)
+  // is met: strict sends the answer back with the reason, otherwise it is left
+  // out, said in the receipt and in `territoryNotes`, and the event and its
+  // other operations stand. Strict with the rest unless given: the Game Master
+  // keeps its territory strict on every answer, and its operations strict only
+  // while it may still answer again (validateGameMasterPreviewPayload).
+  strictOps = null,
 } = {}) => {
   const strict = strictTransfers;
+  strictOps = typeof strictOps === "boolean" ? strictOps : strict;
   const containers = Array.isArray(candidate?.events)
     ? candidate.events.map((event, index) => ({ event, impacts: event?.impacts, path: `$.events[${index}].impacts` }))
     : [{
@@ -7712,12 +7675,11 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       }];
   const titleAt = (path) => normalizeString(containers.find((container) => container.path === path)?.event?.title);
   // `key` and `params`: the player's sentence (runtime/receiptPlayerNotes.js).
-  const drop = (path, text, key, params = {}) => noteReceipt(
-    receipt,
-    "dropped",
-    `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}${text}`,
-    receiptPlayerNote(key, params, titleAt(path)),
-  );
+  const drop = (path, text, key, params = {}) => {
+    const player = receiptPlayerNote(key, params, titleAt(path));
+    noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}${text}`, player);
+    if (player && Array.isArray(territoryNotes)) territoryNotes.push(player);
+  };
 
   // actionIds are stable queue references, not prose hints. Do not guess missing
   // links here; only ensure every link the model DID write points at a current
@@ -8100,7 +8062,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       const operationPath = `${path}.unitOps[${index}]`;
       if (operation.op === "spawn") {
         if (!normalizeString(operation.unit?.name) || !normalizeString(operation.unit?.ownerCode)) {
-          if (strict) return `${operationPath}.unit must have nonblank name and ownerCode values.`;
+          if (strictOps) return `${operationPath}.unit must have nonblank name and ownerCode values.`;
           drop(path, "a unit spawn was dropped — it had no name or no ownerCode, so no formation appeared.", "unitNotRaised");
           continue;
         }
@@ -8125,7 +8087,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         }
         const spawnedId = normalizeString(operation.unit?.id);
         if (spawnedId && unitIds.has(spawnedId)) {
-          if (strict) return `${operationPath}.unit.id duplicates an existing unit.`;
+          if (strictOps) return `${operationPath}.unit.id duplicates an existing unit.`;
           delete operation.unit.id; // salvage: let normalization mint a fresh id
         } else if (spawnedId) {
           unitIds.add(spawnedId);
@@ -8137,12 +8099,12 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       const unitId = normalizeString(operation.unitId);
       const unitOpName = normalizeString(operation.op) || "unit";
       if (!unitId) {
-        if (strict) return `${operationPath}.unitId must name the unit.`;
+        if (strictOps) return `${operationPath}.unitId must name the unit.`;
         drop(path, `a ${unitOpName} operation was dropped — it named no unit, so no formation changed.`, "unitOrderNoUnit");
         continue;
       }
       if (!unitIds.has(unitId)) {
-        if (strict) return `${operationPath}.unitId "${unitId}" does not name one existing unit. Write the unit's name exactly as Current Military Units lists it, with its owner in brackets where two units share a name.`;
+        if (strictOps) return `${operationPath}.unitId "${unitId}" does not name one existing unit. Write the unit's name exactly as Current Military Units lists it, with its owner in brackets where two units share a name.`;
         drop(path, `the ${unitOpName} operation on unit "${unitId}" was dropped — no single unit on the map has that name (it may have been destroyed, or never existed, or two units share the name and no owner was given).`, "unitOrderUnknownUnit", { unit: unitId });
         continue; // salvage: drop the op aimed at a unit that no longer exists
       }
@@ -8162,18 +8124,18 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       if (op === "build") {
         const marker = operation.marker ?? operation;
         if (!normalizeString(marker?.name)) {
-          if (strict) return `${operationPath}.marker.name must not be blank.`;
+          if (strictOps) return `${operationPath}.marker.name must not be blank.`;
           drop(path, "a structure was not built — the build operation gave it no name.", "structureUnnamed");
           continue;
         }
         if (!Number.isFinite(Number(marker?.lng)) || !Number.isFinite(Number(marker?.lat))) {
-          if (strict) return `${operationPath}.marker must carry numeric lng and lat coordinates.`;
+          if (strictOps) return `${operationPath}.marker must carry numeric lng and lat coordinates.`;
           drop(path, `"${normalizeString(marker?.name)}" was not built — the build operation carried no numeric lng and lat.`, "structureNowhere", { name: normalizeString(marker?.name) });
           continue;
         }
       } else if (op === "remove") {
         if (!normalizeString(operation?.name) && !normalizeString(operation?.markerId)) {
-          if (strict) return `${operationPath} must carry the name of the structure to remove.`;
+          if (strictOps) return `${operationPath} must carry the name of the structure to remove.`;
           drop(path, "a structure removal was dropped — it named nothing to remove.", "structureRemovalUnnamed");
           continue;
         }
@@ -8191,7 +8153,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       const operation = normalizeReportOp(impacts.reports[index]);
       const operationPath = `${path}.reports[${index}]`;
       if (!operation) {
-        if (strict) return `${operationPath} must be a report operation: create with a title, a body and visibleTo, or share with a reportId and visibleTo.`;
+        if (strictOps) return `${operationPath} must be a report operation: create with a title, a body and visibleTo, or share with a reportId and visibleTo.`;
         drop(path, "a report was dropped — it carried no document to write and no report to widen.", "reportEmpty");
         continue;
       }
@@ -8199,15 +8161,15 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         const holders = await resolveInvitees(operation.visibleTo, world, generatedPolities);
         const unknown = operation.visibleTo.filter((name) => !holders.some((holder) => regionKey(holder.name) === regionKey(name) || regionKey(holder.code) === regionKey(name)));
         if (!holders.length) {
-          if (strict) return `${operationPath}.visibleTo must name polities on this map; "${operation.visibleTo.join('", "')}" ${operation.visibleTo.length === 1 ? "is not one" : "are not"}.`;
+          if (strictOps) return `${operationPath}.visibleTo must name polities on this map; "${operation.visibleTo.join('", "')}" ${operation.visibleTo.length === 1 ? "is not one" : "are not"}.`;
           drop(path, `the report "${operation.title || operation.reportId}" was dropped — none of the governments it names (${operation.visibleTo.join(", ")}) is a polity on this map.`, "reportNoHolders", { title: operation.title || operation.reportId });
           continue;
         }
-        if (unknown.length && !strict) {
+        if (unknown.length && !strictOps) {
           noteReceipt(receipt, "adjusted", `The report "${operation.title || operation.reportId}" is held by ${holders.map((holder) => holder.name).join(", ")}: ${unknown.join(", ")} ${unknown.length === 1 ? "is not a polity" : "are not polities"} on this map.`,
           receiptPlayerNote("reportFewerHolders", { title: operation.title || operation.reportId, holders: holders.map((holder) => holder.name).join(", ") }, titleAt(path)));
         }
-        if (unknown.length && strict) return `${operationPath}.visibleTo names "${unknown.join('", "')}", which ${unknown.length === 1 ? "is not a polity" : "are not polities"} on this map. Use the full names exactly as the map spells them.`;
+        if (unknown.length && strictOps) return `${operationPath}.visibleTo names "${unknown.join('", "')}", which ${unknown.length === 1 ? "is not a polity" : "are not polities"} on this map. Use the full names exactly as the map spells them.`;
         operation.visibleTo = holders.map((holder) => holder.name);
       }
       keptReports.push(operation);
@@ -8241,7 +8203,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         const project = operation.project ?? operation;
         const projectName = normalizeString(project?.name);
         if (!projectName) {
-          if (strict) return `${operationPath} must name the project it is opening.`;
+          if (strictOps) return `${operationPath} must name the project it is opening.`;
           drop(path, "a project was not opened — the create operation gave it no name.", "projectUnnamed");
           continue;
         }
@@ -8286,12 +8248,12 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
 
       const target = normalizeString(operation?.projectId || operation?.id || operation?.name || operation?.project);
       if (!target) {
-        if (strict) return `${operationPath} must carry the name (or id) of the project it changes.`;
+        if (strictOps) return `${operationPath} must carry the name (or id) of the project it changes.`;
         drop(path, `a project ${op || "update"} was dropped — it named no project.`, "projectChangeNoProject");
         continue;
       }
       if (!projectKnown(operation)) {
-        if (strict) return buildProjectFeedback(operationPath, operation, knownProjects);
+        if (strictOps) return buildProjectFeedback(operationPath, operation, knownProjects);
         drop(path, `the project ${op || "update"} on "${normalizeString(operation?.projectId || operation?.id || operation?.name || operation?.project)}" was dropped — nothing on the board has that name, so the board did not move.`, "projectChangeUnknown", { name: normalizeString(operation?.projectId || operation?.id || operation?.name || operation?.project) });
         continue;
       }
@@ -19807,6 +19769,11 @@ const validateGameMasterPreviewPayload = async (candidate, {
   const territoryNotes = [];
   const worldChangeError = await validateGeneratedWorldChanges(candidate, world, {
     strictTransfers: true,
+    // One operation that cannot be applied (a unit or a structure it does not
+    // name, a project not on the board) is left out of the last answer with the
+    // administrator told, not the whole transaction refused; while the model can
+    // still answer again it is told why.
+    strictOps: !finalAttempt,
     resolvedRegionIdsOnly,
     playerCountry: game?.country || "",
     institutionLifecycleAuthority: "admin",
