@@ -695,7 +695,7 @@ const projectPlanSchema = {
   description: "The plan: what it takes and costs, its checkpoints, and what it does to the world.",
   properties: {
     durationDays: { type: "integer", description: "Days of work at normal funding, 14-3650." },
-    monthlyCost: { type: "number", description: "What it costs a month at normal funding, in the owner's GDP currency." },
+    monthlyCost: { type: "number", description: "Monthly cost at normal funding in canonical constant 2026 USD, not the polity's domestic or the player's display currency. Zero for non-monetary scenarios." },
     ongoing: { type: "boolean", description: "A programme that runs on once set up, paying its yields every month." },
     milestones: { type: "array", description: "Two to five checkpoints on the way.", items: projectPlanMilestoneSchema },
     effects: { type: "array", description: "What it does once, when done (or, for a programme, once set up).", items: projectEffectSchema },
