@@ -91,6 +91,7 @@ import { changedFields, followSavedFields, formDiffers } from "../../runtime/edi
 import { createActivationHandOff } from "../../runtime/afterActivation.js";
 import { createWorkInProgress } from "../../runtime/workInProgress.js";
 import { buildScenarioCountryOptions, isOfferedCountry, seededWorldOf, worldWithFaction, worldWithPlayerGroup } from "../../runtime/newGameWorld.js";
+import { applyStartingRelationEdits, withoutStartingRelations } from "../../Editor/scenarioStartingRelations.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave, scenarioAfterWorkshopRenames } from "../../Editor/playerCountryAfterSave.js";
@@ -4203,6 +4204,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         markers: Array.isArray(world.markers) ? world.markers : [],
         // Its puppet states, for the Countries panel.
         puppets: Array.isArray(world.puppets) ? world.puppets : [],
+        // Read the existing diplomatic climate; writing the map must not
+        // silently reset historical bilateral scores.
+        relations: Array.isArray(world.relations) ? world.relations : [],
         // Its region types, for the Region Types panel; null for a scenario
         // saved before they were, which opens with the default Land and Coastal.
         regionTypes: Array.isArray(world.regionTypes) && world.regionTypes.length ? world.regionTypes : null,
@@ -4343,11 +4347,39 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       throw new Error("The map in the editor is empty while this scenario has territory — its map had not finished loading. Wait for it to appear, then save again.");
     }
 
+    // Only explicitly authored bilateral-score changes are applied to the
+    // scenario's latest canonical diplomacy ledger, after native polity renames.
+    // Unchanged treaties, relation metadata and unknown legacy rows survive.
+    const editedRelations = Array.isArray(seed.startingRelationEdits) ? seed.startingRelationEdits : [];
+    const removedKeys = (Array.isArray(seed.polityAuthoringOps) ? seed.polityAuthoringOps : [])
+      .filter((operation) => operation?.op === "remove")
+      .map((operation) => String(operation.key || "").trim()).filter(Boolean);
+    const previousChoices = Object.entries(currentWorld.polityOverrides || {})
+      .map(([key, record]) => ({ key, ...(record || {}) }));
+    const currentChoices = [...new Set([
+      ...Object.keys(reconciledWorld.polityOverrides || {}),
+      ...Object.keys(seed.world?.polityOverrides || {}),
+      ...Object.values(seed.world?.regionOwnershipOverrides || {}),
+      ...(Array.isArray(reconciledWorld.ownerCodes) ? reconciledWorld.ownerCodes : []),
+    ])].map((key) => ({
+      key,
+      ...(reconciledWorld.polityOverrides?.[key] || {}),
+      ...(seed.world?.polityOverrides?.[key] || {}),
+    }));
+    const relationPlan = applyStartingRelationEdits(
+      withoutStartingRelations(reconciledWorld.relations, removedKeys, previousChoices),
+      editedRelations,
+      currentChoices,
+    );
+    if (!relationPlan.ok) throw new Error(relationPlan.reason);
+
     // The author's player country, not the seed's first owner (playerCountryAfterSave.js).
     const scenarioCountry = playerCountryAfterSave(currentGame.country, seed);
     const savedScenarioDetails = await saveScenario(scenarioId, {
       world: {
         ...reconciledWorld,
+        // No new score edits: preserve absence and every unchanged source row.
+        ...(editedRelations.length || removedKeys.length ? { relations: relationPlan.relations } : {}),
         regionOwnershipOverrides: seed.world?.regionOwnershipOverrides ?? {},
         // The Workshop is authoritative for the polity registry: it hydrated the
         // full current registry (landless polities included) before editing, so

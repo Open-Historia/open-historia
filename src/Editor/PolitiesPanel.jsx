@@ -14,6 +14,13 @@ import { acceptFor } from "../runtime/fileAccept.js";
 import { formatPopulationFigure, readPopulationFigure } from "../runtime/populationFigure.js";
 import PuppetFields from "./PuppetFields.jsx";
 import MilitaryFields from "./MilitaryFields.jsx";
+import CountryAliases from "./CountryAliases.jsx";
+import { planCountryDraft } from "./countryCreationDraft.js";
+import CountryCreationForm from "./CountryCreationForm.jsx";
+import StartingRelationsFields from "./StartingRelationsFields.jsx";
+import { applyStartingRelationEdits, mergeStartingRelationEdit, startingRelationRowsFor } from "./scenarioStartingRelations.js";
+
+import CountryDetailsNavigation from "./CountryDetailsNavigation.jsx";
 import { rateMilitaryFigures } from "../Game/AI/militaryRating.js";
 import { militaryScaleOf } from "./militaryForm.js";
 import { rosterRowKey } from "./polityRoster.js";
@@ -56,6 +63,7 @@ const uniqueStandardFlagForCandidates = (candidates) => {
 
 const PolitiesPanel = ({
   api,
+  initialCountryKey = "",
   polities = {},
   selection = [],
   setSelection,
@@ -69,21 +77,27 @@ const PolitiesPanel = ({
   removePolities,
   importPolityRoster,
   setColorOverride,
+  setFlag,
   setTags,
   onOpenFlagPicker,
   onPaintPolity,
   puppets = [],
   setPuppets,
+  relations = [],
+  relationEdits = [],
+  setRelationEdit,
   // What a military figure left empty stands for in the scenario whose map
   // this is (militaryForm.js militaryDefaultsFor); null for a map on its own.
   militaryDefaults = null,
   onClose,
 }) => {
   const [query, setQuery] = useState("");
-  const [selectedKey, setSelectedKey] = useState("");
+  const [selectedKey, setSelectedKey] = useState(() => clean(initialCountryKey));
+  const [detailsTab, setDetailsTab] = useState("overview");
+  const [countryListOpen, setCountryListOpen] = useState(() => !clean(initialCountryKey));
   const [bulkSelected, setBulkSelected] = useState(() => new Set());
   const [draftName, setDraftName] = useState("");
-  const [newName, setNewName] = useState("");
+  const [creating, setCreating] = useState(false);
   const [transferFrom, setTransferFrom] = useState("");
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [rosterPreview, setRosterPreview] = useState(null);
@@ -133,11 +147,13 @@ const PolitiesPanel = ({
   // Every polity by name, unfiltered: the puppet fields' overlord list.
   const polityChoices = useMemo(
     () => [...new Set([...Object.keys(polities || {}), ...usage.keys()])]
-      .map((key) => ({ key, name: clean(polities?.[key]?.name) || key }))
+      .map((key) => ({ key, name: clean(polities?.[key]?.name) || key,
+        aliases: polities?.[key]?.aliases || [], formerNames: polities?.[key]?.formerNames || [] }))
       .sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key)),
     [polities, usage],
   );
 
+   const effectiveRelations = applyStartingRelationEdits(relations, relationEdits, polityChoices);
   const allFilteredSelected = rows.length > 0 && rows.every((row) => bulkSelected.has(row.key));
   const selectedBulkRows = useMemo(() => {
     const allKeys = new Set([...Object.keys(polities || {}), ...usage.keys()]);
@@ -160,6 +176,21 @@ const PolitiesPanel = ({
       }
     : null;
 
+  const currentStartingRelations = current && effectiveRelations.ok
+    ? startingRelationRowsFor(effectiveRelations.relations, current.key, polityChoices)
+      .filter((row) => row.score !== null && row.score !== undefined && row.score !== "" && Number.isFinite(Number(row.score)))
+      .sort((a, b) => a.other.localeCompare(b.other))
+    : [];
+
+  const editStartingScore = (other, score) => {
+    if (!current || typeof setRelationEdit !== "function") return { ok: false, reason: "Diplomatic scores cannot be saved here." };
+    const edit = { a: current.key, b: other, score };
+    const planned = applyStartingRelationEdits(relations, mergeStartingRelationEdit(relationEdits, edit), polityChoices);
+    if (!planned.ok) return planned;
+    setRelationEdit(edit);
+    return { ok: true };
+  };
+
   // The regions the selected country owns, for the list under its name: a scan
   // of the region features, keyed like usageRows so it follows ownership edits.
   const ownedRegions = useMemo(
@@ -173,24 +204,67 @@ const PolitiesPanel = ({
     setTransferFrom("");
   }, [current?.key, current?.name]);
 
-  // A polity is keyed by its name: the name typed here is the key, and renaming
-  // it later re-keys everything (renamePolity).
-  const createPolity = () => {
-    const name = clean(newName);
-    const key = name;
-    if (!key) return;
-    if (Object.prototype.hasOwnProperty.call(polities || {}, key) || usage.has(key)) {
-      window.alert(`A polity named “${key}” already exists.`);
-      return;
+  // The country-creation form is an entirely local draft. Revalidate on the
+  // final click against CURRENT canonical identities, not an earlier preview.
+  // No map or scenario mutation is attempted before validation and consent.
+  const createPolity = (draft) => {
+    const plan = planCountryDraft({
+      draft, polities, occupiedKeys: [...usage.keys()], puppets, polityChoices,
+    });
+    if (!plan.ok) return plan;
+    const plannedRelations = applyStartingRelationEdits(
+      relations, [...relationEdits, ...plan.relationEdits], [...polityChoices, { key: plan.key }],
+    );
+    if (!plannedRelations.ok) return plannedRelations;
+    if (plan.relationEdits.length && typeof setRelationEdit !== "function") {
+      return { ok: false, reason: "Starting diplomatic scores cannot be saved here." };
     }
-    upsertPolity?.(key, { name, code: key, aliases: [name], status: "active", note: "" });
-    // A country is registered the moment it is created, regions or not: with a
-    // selection it takes those regions now; otherwise it waits, landless, for
-    // the paint tool or an assignment, and ships to the game either way.
-    if (selection.length) api?.setRegionAttrs?.(selection, { owner: key });
-    setRefreshNonce((n) => n + 1);
-    setSelectedKey(key);
-    setNewName("");
+    if (typeof upsertPolity !== "function") {
+      return { ok: false, reason: "Country creation is unavailable in this editor." };
+    }
+    if (plan.color && typeof setColorOverride !== "function") {
+      return { ok: false, reason: "Map colour editing is unavailable." };
+    }
+    if (plan.flag && typeof setFlag !== "function") {
+      return { ok: false, reason: "Flag editing is unavailable." };
+    }
+    if (plan.tags.length && typeof setTags !== "function") {
+      return { ok: false, reason: "Country traits cannot be saved here." };
+    }
+    if (plan.puppets && typeof setPuppets !== "function") {
+      return { ok: false, reason: "Country relationships cannot be saved here." };
+    }
+    if (plan.assignSelectedRegions) {
+      if (!selection.length || typeof api?.setRegionAttrs !== "function") {
+        return { ok: false, reason: "Select regions on the map before assigning starting territory." };
+      }
+      const owners = [...new Set(selection.map((id) => api?.getRegionSummary?.(id)?.owner).filter(Boolean))];
+      const oldOwnerText = owners.length
+        ? ` This changes the current ownership of regions belonging to: ${owners.join(", ")}.`
+        : "";
+      const ok = window.confirm(
+        `Create "${plan.key}" and assign ${selection.length.toLocaleString()} selected regions?` +
+        oldOwnerText +
+        "\n\nThese map ownership changes might not be reversible with the Undo button.",
+      );
+      if (!ok) return { ok: false, reason: "Creation cancelled. The unfinished country has not been added." };
+    }
+
+    // The preflight has passed. Commit the authored record and its independent
+    // scenario settings through their ORIGINAL canonical state owners.
+    upsertPolity(plan.key, plan.record);
+    if (plan.color) setColorOverride?.(plan.key, plan.color);
+    if (plan.flag) setFlag?.(plan.key, plan.flag);
+    if (plan.tags.length) setTags?.(plan.key, plan.tags);
+    if (plan.puppets) setPuppets?.(plan.puppets);
+    for (const edit of plan.relationEdits) setRelationEdit?.(edit);
+    if (plan.assignSelectedRegions) api?.setRegionAttrs?.(selection, { owner: plan.key });
+    setRefreshNonce((count) => count + 1);
+    setSelectedKey(plan.key);
+    setDetailsTab("overview");
+    setCountryListOpen(false);
+    setCreating(false);
+    return { ok: true };
   };
 
   const toggleBulkKey = (key) => {
@@ -264,6 +338,15 @@ const PolitiesPanel = ({
 
   const transferAll = () => {
     if (!current?.key || !transferFrom || transferFrom === current.key) return;
+    const regionCount = usage.get(transferFrom)?.regionCount || 0;
+    if (!regionCount) return;
+    const sourceName = clean(polities?.[transferFrom]?.name) || transferFrom;
+    const ok = window.confirm(
+      `Transfer all ${regionCount.toLocaleString()} regions from "${sourceName}" to "${current.name}"?\n\n` +
+      `"${sourceName}" will have no territory, but its country record will remain available to edit.\n\n` +
+      "This change may not be reversible using the map Undo button.",
+    );
+    if (!ok) return;
     const ids = api?.selectOwner?.(transferFrom, { zoom: false }) || [];
     if (!ids.length) return;
     api?.setRegionAttrs?.(ids, { owner: current.key });
@@ -423,9 +506,35 @@ const PolitiesPanel = ({
     );
   };
 
-  return (
-    <Panel title="Countries" icon="list" onClose={onClose} width={390}>
+  if (creating) {
+    return (
+      <CountryCreationForm
+        polities={polities}
+        occupiedKeys={[...usage.keys()]}
+        puppets={puppets}
+        polityChoices={polityChoices}
+        militaryDefaults={militaryDefaults}
+        selectionCount={selection.length}
+        onCreate={createPolity}
+        onOpenFlagPicker={(config) => onOpenFlagPicker?.({ kind: "country-draft", ...config })}
+        onCancel={() => setCreating(false)}
+      />
+    );
+  }
 
+  return (
+    <Panel title="Countries" icon="flag" onClose={onClose} width={440}>
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <strong style={{ fontSize: 12.5 }}>Find a country</strong>
+        <button type="button" style={pillButton(true)} onClick={() => setCreating(true)}>
+          + Create country
+        </button>
+        {current && <button type="button" style={pillButton(false)} onClick={() => setCountryListOpen((open) => !open)}>
+          {countryListOpen ? "Hide list" : "Change country"}
+        </button>}
+      </div>
+      {(!current || countryListOpen) && (<>
       <input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
@@ -464,7 +573,7 @@ const PolitiesPanel = ({
               </label>
               <button
                 type="button"
-                onClick={() => { setSelectedKey(row.key); api?.selectOwner?.(row.key, { zoom: true }); }}
+                onClick={() => { setSelectedKey(row.key); setDetailsTab("overview"); setCountryListOpen(false); api?.selectOwner?.(row.key, { zoom: true }); }}
                 style={{
                   flex: 1,
                   minWidth: 0,
@@ -474,9 +583,9 @@ const PolitiesPanel = ({
                   textAlign: "left",
                   padding: "7px 9px",
                   borderRadius: 8,
-                  border: active ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.08)",
-                  background: active ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.035)",
-                  color: "white",
+                  border: active ? "1px solid var(--oh-ui-focus, rgba(255,255,255,0.28))" : "1px solid var(--oh-ui-line, rgba(255,255,255,0.08))",
+                  background: active ? "var(--oh-ui-active, rgba(0,0,0,0.25))" : "var(--oh-ui-raised, rgba(255,255,255,0.035))",
+                  color: "var(--oh-ui-text, white)",
                   cursor: "pointer",
                 }}
               >
@@ -504,10 +613,30 @@ const PolitiesPanel = ({
         })}
       </div>
 
+      </>)}
+
       {current && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 9, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 9, paddingTop: 8, borderTop: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))" }}>
+          <CountryDetailsNavigation
+            current={current}
+            color={colors?.[current.key]}
+            flags={flags}
+            tags={tags}
+            polities={polities}
+            puppets={puppets}
+            tab={detailsTab}
+            onTabChange={setDetailsTab}
+          />
+          {detailsTab === "names" && (
+            <div style={{ display: "grid", gap: 10 }}>
+
           <div>
-            <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.48)", marginBottom: 4 }}>Name</div>
+            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8, color: "var(--oh-ui-text, #fff)" }}>
+              Names &amp; identity
+            </div>
+            <div style={{ fontSize: 10.5, color: "var(--oh-ui-muted, rgba(255,255,255,0.6))", marginBottom: 4 }}>
+              Country name
+            </div>
             <div style={{ display: "flex", gap: 6 }}>
               <input value={draftName} onChange={(e) => setDraftName(e.target.value)} style={inputStyle} />
               <button
@@ -534,10 +663,25 @@ const PolitiesPanel = ({
                 Rename
               </button>
             </div>
-            {Array.isArray(current.record?.formerNames) && current.record.formerNames.length > 0 && (
-              <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.45)", marginTop: 4 }}>Formerly {current.record.formerNames.join(", ")}</div>
-            )}
+            <p style={{ fontSize: 11.5, lineHeight: 1.45, margin: "8px 0 0", color: "var(--oh-ui-muted, rgba(255,255,255,0.66))" }}>
+              Renaming updates this country's name on the map and in the scenario.
+              The previous name will not automatically become an alternative name.
+            </p>
           </div>
+
+          <CountryAliases
+            key={current.key}
+            countryKey={current.key}
+            countryName={current.name}
+            record={current.record}
+            polities={polities}
+            occupiedKeys={[...usage.keys()]}
+            onChange={(aliases) => upsertPolity?.(current.key, { aliases })}
+          />
+            </div>
+          )}
+          {detailsTab === "territory" && (
+            <div style={{ display: "grid", gap: 10 }}>
 
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <button type="button" style={pillButton(false)} onClick={() => api?.selectOwner?.(current.key, { zoom: true })}>
@@ -556,7 +700,7 @@ const PolitiesPanel = ({
             </button>
           </div>
 
-          <details style={{ border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: "6px 9px" }}>
+          <details style={{ border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))", borderRadius: 8, padding: "6px 9px" }}>
             <summary style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700 }}>
               Regions ({ownedRegions.length}){current.claimantCount ? ` · ${current.claimantCount} claimed` : ""}
             </summary>
@@ -568,7 +712,7 @@ const PolitiesPanel = ({
                     type="button"
                     onClick={() => { setSelection?.([region.id]); api?.zoomToRegion?.(region.id); }}
                     title="Select this region and zoom to it"
-                    style={{ textAlign: "left", padding: "4px 7px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)", color: "white", cursor: "pointer", fontSize: 11.5 }}
+                    style={{ textAlign: "left", padding: "4px 7px", borderRadius: 6, border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.08))", background: "var(--oh-ui-raised, rgba(255,255,255,0.03))", color: "var(--oh-ui-text, white)", cursor: "pointer", fontSize: 11.5 }}
                   >
                     {region.name || region.id}
                   </button>
@@ -589,6 +733,21 @@ const PolitiesPanel = ({
               <button type="button" style={pillButton(false)} disabled={!transferFrom} onClick={transferAll}>Transfer</button>
             </div>
           </div>
+            </div>
+          )}
+          {detailsTab === "relations" && (
+            <StartingRelationsFields
+              key={current.key}
+              owner={current.key}
+              choices={polityChoices}
+              rows={currentStartingRelations}
+              onSave={editStartingScore}
+              onClear={(other) => editStartingScore(other, null)}
+              disabled={!effectiveRelations.ok}
+            />
+          )}
+          {detailsTab === "appearance" && (
+            <div style={{ display: "grid", gap: 10 }}>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 11, color: "rgba(255,255,255,0.58)", width: 52 }}>Colour</span>
@@ -607,6 +766,10 @@ const PolitiesPanel = ({
             <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.48)", marginBottom: 4 }}>Tags</div>
             <TagField value={tags?.[current.key] || []} suggestions={TAG_SUGGESTIONS} onChange={(next) => setTags?.(current.key, next)} />
           </div>
+            </div>
+          )}
+          {detailsTab === "governance" && (
+            <div style={{ display: "grid", gap: 10 }}>
 
           <PuppetFields
             polity={current.key}
@@ -659,19 +822,36 @@ const PolitiesPanel = ({
               </div>
             </div>
           )}
-
-          <button
-            type="button"
-            style={{ ...pillButton(false), color: "#f87171" }}
-            title="Make its regions unowned, drop the claims in its name, and remove the polity with its colour, flag and tags"
-            onClick={removeFromMap}
-          >
-            Remove from the map
-          </button>
+            </div>
+          )}
+          {detailsTab === "manage" && (
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{
+                padding: "12px", display: "grid", gap: 9,
+                background: "var(--oh-ui-raised, rgba(255,255,255,0.04))",
+                border: "1px solid rgba(239,68,68,0.5)", borderRadius: 10,
+              }}>
+                <strong style={{ fontSize: 12.5, color: "#fca5a5" }}>Remove this country</strong>
+                <span style={{ fontSize: 11.5, lineHeight: 1.5, color: "var(--oh-ui-muted, rgba(255,255,255,0.68))" }}>
+                  Removing it makes its regions unowned, drops its claims and removes its country record, flag and settings.
+                  Review the confirmation carefully; this operation is not guaranteed to be reversible with map Undo.
+                </span>
+                <button
+                  type="button"
+                  style={{ ...pillButton(false), color: "#f87171", justifyContent: "center" }}
+                  title="Make its regions unowned, drop the claims in its name, and remove the polity with its colour, flag and tags"
+                  onClick={removeFromMap}
+                >
+                  Remove from the map
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      <div style={{ paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.1)", display: "grid", gap: 7 }}>
+      {(!current || detailsTab === "manage") && (<>
+      <div style={{ paddingTop: 8, borderTop: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))", display: "grid", gap: 7 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
           <div style={{ fontSize: 12, fontWeight: 700, flex: 1 }}>Bulk polity roster</div>
           <button
@@ -696,7 +876,7 @@ const PolitiesPanel = ({
 
 
         {rosterPreview && (
-          <div style={{ padding: "8px 9px", borderRadius: 8, background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.1)", display: "grid", gap: 6 }}>
+          <div style={{ padding: "8px 9px", borderRadius: 8, background: "var(--oh-ui-raised, rgba(255,255,255,0.1))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))", display: "grid", gap: 6 }}>
             <div style={{ fontSize: 11.5, fontWeight: 700 }}>{rosterPreview.fileName}</div>
             <div style={{ fontSize: 10.8, lineHeight: 1.45, color: "rgba(255,255,255,0.62)" }}>
               {rosterPreview.rows.length.toLocaleString()} unique polity keys · {rosterPreview.fresh.toLocaleString()} new · {rosterPreview.existing.toLocaleString()} already present
@@ -722,15 +902,7 @@ const PolitiesPanel = ({
         )}
       </div>
 
-      <div style={{ paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-        <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Create country</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Name, e.g. Austria-Hungary" style={inputStyle} />
-          <button type="button" style={pillButton(false)} disabled={!clean(newName)} onClick={createPolity}>
-            {selection.length ? `Create country + assign ${selection.length} selected regions` : "Create country (no regions yet)"}
-          </button>
-        </div>
-      </div>
+      </>)}
     </Panel>
   );
 };

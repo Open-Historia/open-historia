@@ -31,6 +31,8 @@ import MilitaryFields from "./MilitaryFields.jsx";
 import { rateMilitaryFigures } from "../Game/AI/militaryRating.js";
 import { militaryScaleOf } from "./militaryForm.js";
 import { MAX_REACH } from "./fitToImage.js";
+import { nameKey } from "../../server/nameKey.js";
+import { planCountryCreation } from "./countryCreationPlan.js";
 
 const commonOr = (arr, blank = "") => {
   if (!arr.length) return blank;
@@ -38,7 +40,7 @@ const commonOr = (arr, blank = "") => {
   return arr.every((v) => v === first) ? first ?? blank : blank;
 };
 
-const foldPolityName = (value) => String(value ?? "").trim().toLowerCase();
+const foldPolityName = nameKey;
 
 const InspectorSection = ({ title, children }) => (
   <section style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
@@ -250,8 +252,13 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
     if (ownerDraft === null) return;
     const key = resolvePolityKey(draftText);
     if (key === null) {
-      upsertPolity?.(draftText, { name: draftText, code: draftText, aliases: [draftText], status: "active", note: "" });
-      setOwner(draftText);
+      const plan = planCountryCreation({ name: draftText, polities, occupiedKeys: countryNames });
+      if (!plan.ok) {
+        window.alert(plan.reason);
+        return;
+      }
+      upsertPolity?.(plan.key, { name: plan.key, code: plan.key, aliases: [], status: "active", note: "" });
+      setOwner(plan.key);
       return;
     }
     setOwner(key);

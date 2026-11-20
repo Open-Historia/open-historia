@@ -16,6 +16,7 @@ import { findPolityKey, renamePolityInDocument } from "../../server/polityRename
 import { mergeCityMarkers } from "./cityMarkers.js";
 import { mergePolityRoster } from "./polityRoster.js";
 import { withoutPolities } from "./scenarioPuppets.js";
+import { mergeStartingRelationEdit, rekeyStartingRelations, settleStartingRelationEdits, withoutStartingRelations } from "./scenarioStartingRelations.js";
 import { warGeographyOf } from "./warGeographyDoc.js";
 
 // The official editor ships a handful of region "types" carrying render +
@@ -117,6 +118,10 @@ export const createDocument = ({ name = "Untitled Map", kind = "import-world" } 
     // Puppet states the scenario starts with, as world.puppets rows
     // (scenarioPuppets.js); set in the Countries panel.
     puppets: [],
+    // Canonical starting relationship snapshot plus only explicitly staged edits.
+    // The scenario world.relations ledger remains authoritative at Apply & Play.
+    relations: [],
+    relationEdits: [],
     // What the scenario draws on its map for war, in the world's own form
     // (warGeographyDoc.js): the Terrain, Fortified line and Climate zone tools'
     // shapes, and the water regions marked Can freeze.
@@ -157,6 +162,8 @@ export const openStoredDocument = (stored) => {
       units: Array.isArray(doc.units) ? doc.units : [],
       groups: doc.groups && typeof doc.groups === "object" ? doc.groups : {},
       puppets: Array.isArray(doc.puppets) ? doc.puppets : [],
+      relations: Array.isArray(doc.relations) ? doc.relations : [],
+      relationEdits: Array.isArray(doc.relationEdits) ? doc.relationEdits : [],
       // Cleaned as the game cleans them; empty for a map saved before them.
       ...warGeographyOf(doc),
     },
@@ -299,7 +306,12 @@ export const useMapDocument = (initial) => {
       try {
         const renamed = renamePolityInDocument(d, from, to);
         const fromKey = findPolityKey(d.polities, from) || from;
-        return { ...renamed, polityRenames: [...(Array.isArray(d.polityRenames) ? d.polityRenames : []), { from: fromKey, to }] };
+        return {
+          ...renamed,
+          relations: rekeyStartingRelations(d.relations, fromKey, to),
+          relationEdits: rekeyStartingRelations(d.relationEdits, fromKey, to),
+          polityRenames: [...(Array.isArray(d.polityRenames) ? d.polityRenames : []), { from: fromKey, to }],
+        };
       } catch (error) {
         console.warn("[editor] polity rename refused:", error);
         return d;
@@ -327,7 +339,10 @@ export const useMapDocument = (initial) => {
       delete colorOverrides[stableKey];
       delete flags[stableKey];
       delete tags[stableKey];
-      return { ...d, polities, colorOverrides, flags, tags, puppets: withoutPolities(d.puppets, stableKey) };
+      return { ...d, polities, colorOverrides, flags, tags, puppets: withoutPolities(d.puppets, stableKey),
+        relations: withoutStartingRelations(d.relations, stableKey,
+          Object.entries(d.polities || {}).map(([key, record]) => ({ key, ...record }))),
+        relationEdits: withoutStartingRelations(d.relationEdits, stableKey) };
     });
     setSaveStatus("dirty");
   }, [setSaveStatus]);
@@ -346,7 +361,10 @@ export const useMapDocument = (initial) => {
         delete flags[stableKey];
         delete tags[stableKey];
       }
-      return { ...d, polities, colorOverrides, flags, tags, puppets: withoutPolities(d.puppets, stableKeys) };
+      return { ...d, polities, colorOverrides, flags, tags, puppets: withoutPolities(d.puppets, stableKeys),
+        relations: withoutStartingRelations(d.relations, stableKeys,
+          Object.entries(d.polities || {}).map(([key, record]) => ({ key, ...record }))),
+        relationEdits: withoutStartingRelations(d.relationEdits, stableKeys) };
     });
     setSaveStatus("dirty");
   }, [setSaveStatus]);
@@ -405,6 +423,21 @@ export const useMapDocument = (initial) => {
     setDoc((d) => ({ ...d, puppets: typeof updater === "function" ? updater(d.puppets || []) : (updater || []) }));
     setSaveStatus("dirty");
   }, [setSaveStatus]);
+  const setRelationEdit = useCallback((edit) => {
+    setDoc((d) => ({ ...d, relationEdits: mergeStartingRelationEdit(d.relationEdits, edit) }));
+    setSaveStatus("dirty");
+  }, [setSaveStatus]);
+  const settleRelationEdits = useCallback((savedEdits) => {
+    if (!Array.isArray(savedEdits) || !savedEdits.length) return;
+    setDoc((d) => {
+      const settled = settleStartingRelationEdits(d, savedEdits);
+      if (!settled.ok) {
+        console.warn("[editor] could not settle authored starting relations:", settled.reason);
+        return d;
+      }
+      return settled.document;
+    });
+  }, []);
   const setUnits = useCallback((updater) => {
     setDoc((d) => ({ ...d, units: typeof updater === "function" ? updater(d.units || []) : (updater || []) }));
     setSaveStatus("dirty");
@@ -467,6 +500,10 @@ export const useMapDocument = (initial) => {
     setGroups,
     puppets: doc.puppets || [],
     setPuppets,
+    relations: doc.relations || [],
+    relationEdits: doc.relationEdits || [],
+    setRelationEdit,
+    settleRelationEdits,
     terrainAreas: doc.terrainAreas || NO_ROWS,
     setTerrainAreas,
     fortifications: doc.fortifications || NO_ROWS,

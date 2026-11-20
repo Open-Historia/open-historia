@@ -17,6 +17,9 @@ import TileLayer from "ol/layer/Tile";
 import OSM from "ol/source/OSM";
 import XYZ from "ol/source/XYZ";
 import { editorBasemapById, esriXyzUrl } from "./basemaps.js";
+import { regionsInRectangle } from "./regionSelectionTools.js";
+import { regionMoveInteractions } from "./regionMoveInteractions.js";
+import { toolForHotkey } from "./editorToolHotkeys.js";
 import { useBrowserOnline } from "../runtime/networkStatus.js";
 import VectorLayer from "ol/layer/Vector";
 import VectorImageLayer from "ol/layer/VectorImage";
@@ -35,7 +38,7 @@ import CircleStyle from "ol/style/Circle";
 import Point from "ol/geom/Point";
 import Draw from "ol/interaction/Draw";
 import Modify from "ol/interaction/Modify";
-import Translate from "ol/interaction/Translate";
+
 import Snap from "ol/interaction/Snap";
 import RegionSnap from "./regionSnap.js";
 import PointerInteraction from "ol/interaction/Pointer";
@@ -70,7 +73,7 @@ import { isMapFeature, mapFeatureFamily } from "./mapFeatures.js";
 import { loadSeedFeatures, SEEDED_KINDS, seedUrlOf } from "./regionImport.js";
 import { ownersMatchingQuery, regionMatchesQuery } from "./regionSearch.js";
 import { newId } from "./useMapDocument.js";
-import { mergeRegionFeatures, trackMove } from "./shapeEdits.js";
+import { mergeRegionFeatures } from "./shapeEdits.js";
 import { resolvePastedIds } from "./regionClipboard.js";
 import { createWarGeographyLayers, drawTypeOf, pointsOfLine, ringsOfPolygon, shapeNear, syncShapes } from "./warGeographyLayers.js";
 import { isWarTool, mostCommon } from "./warGeographyDoc.js";
@@ -605,6 +608,7 @@ const OlMap = ({
   onUnitEdit,
   onUnitRemove,
   onSelectionChange,
+  onToolShortcut,
   onRegionCount,
   onRegionsChanged,
   onFeatureCreate,
@@ -729,6 +733,7 @@ const OlMap = ({
   const paintOwnerRef = useRef(paintOwner);
   const paintOnlyOwnerRef = useRef(paintOnlyOwner);
   const onSelectionRef = useRef(onSelectionChange);
+  const onToolShortcutRef = useRef(onToolShortcut);
   const onRegionsChangedRef = useRef(onRegionsChanged);
   const scenarioModeRef = useRef(scenarioMode);
   const selectionKey = (selectionIds || []).join("|");
@@ -763,6 +768,7 @@ const OlMap = ({
   paintOwnerRef.current = paintOwner;
   paintOnlyOwnerRef.current = paintOnlyOwner;
   onSelectionRef.current = onSelectionChange;
+  onToolShortcutRef.current = onToolShortcut;
   onRegionsChangedRef.current = onRegionsChanged;
 
   // Groups' outlines follow every change to the regions, a beat later: they are
@@ -1360,7 +1366,7 @@ const OlMap = ({
         layerFilter: isRegionLayer,
       });
       const tool = activeToolRef.current;
-      if (tool === "lasso" || tool === "draw" || tool === "modify" || tool === "paint" || tool === "feature-box" || isWarTool(tool)) {
+      if (tool === "lasso" || tool === "region-box" || tool === "draw" || tool === "modify" || tool === "paint" || tool === "feature-box" || isWarTool(tool)) {
         map.getTargetElement().style.cursor = "crosshair";
       } else if (tool === "feature" || tool === "marker" || tool === "delete" || tool === "unit") {
         // City-aware tools: pointer over an existing city (edit/remove target).
@@ -1417,6 +1423,17 @@ const OlMap = ({
           return;
         }
         if ((k === "z" && e.shiftKey) || k === "y") { e.preventDefault(); doRedo(); return; }
+      }
+      // Tool letters are map-editor shortcuts, not text input, browser
+      // shortcuts or a request to abandon an unfinished geometry sketch.
+      const toolShortcut = toolForHotkey(e, {
+        sketching: Boolean(activeDrawRef.current && placedPointsRef.current.length),
+        modalOpen: Boolean(document.querySelector('[role="dialog"][aria-modal="true"]')),
+      });
+      if (toolShortcut && onToolShortcutRef.current) {
+        e.preventDefault();
+        onToolShortcutRef.current(toolShortcut);
+        return;
       }
       // In a war tool (terrain, fortified line, climate zone) these keys are
       // about its shapes, never the regions selected underneath: Escape lets go
@@ -3723,17 +3740,10 @@ const OlMap = ({
         });
       }
     } else if (activeTool === "move") {
-      // A moved region is reshaped as far as the stock tiles know, so it is
-      // marked edited, and the move is one undo step (shapeEdits.js).
-      const translate = new Translate({ layers: [layer], hitTolerance: 2 });
-      const move = trackMove();
-      translate.on("translatestart", (e) => move.start(e.features.getArray(), e.startCoordinate));
-      translate.on("translateend", (e) => {
-        const cmd = move.end(e.features.getArray(), e.coordinate);
-        if (cmd) pushCmd(cmd);
-        notifyRegions();
-      });
-      added.push(translate);
+      added.push(...regionMoveInteractions({
+        source, layer, selectionIds, selectedIdsRef,
+        onStep: pushCmd, onRegionsChanged: notifyRegions,
+      }));
     } else if (isWarTool(activeTool) && warLayersRef.current) {
       // Terrain, Fortified line, Climate zone: draw a shape of that kind into its
       // own source (warGeographyLayers.js), never the regions'. Nothing is
@@ -3855,6 +3865,16 @@ const OlMap = ({
       const draw = new Draw({ type: "Polygon", features: new Collection(), freehand: true });
       draw.on("drawend", (e) => selectWithinPolygon(e.feature.getGeometry()));
       added.push(draw);
+    } else if (activeTool === "region-box") {
+      // Rectangle-marquee selects any region actually touched by the box,
+      // not just a region whose bounding box overlaps it. Shift adds.
+      const box = new DragBox();
+      box.on("boxend", (e) => {
+        const extent = box.getGeometry().getExtent();
+        const additive = Boolean(e?.mapBrowserEvent?.originalEvent?.shiftKey);
+        onSelectionRef.current?.(regionsInRectangle(source, extent, [...selectedIdsRef.current], additive));
+      });
+      added.push(box);
     } else if (activeTool === "feature-box") {
       // Hold the mouse down and drag a rectangle: every city/feature inside it
       // is selected (shift-drag adds to the selection). The Features panel then

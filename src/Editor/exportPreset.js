@@ -17,6 +17,7 @@ import { OWNER_SCHEMA } from "./documentMigration.js";
 import { findGroupKey, normalizeGroupAreas, normalizeGroups } from "../runtime/groups.js";
 import { buildMarkersForGame, isMapFeature } from "./mapFeatures.js";
 import { buildPuppetsForGame } from "./scenarioPuppets.js";
+import { applyStartingRelationEdits } from "./scenarioStartingRelations.js";
 import { buildOwnBasemapsForGame } from "./ownBasemaps.js";
 import { populationByYearField } from "../runtime/cityPopulation.js";
 import { normalizeRegionTypes } from "../runtime/regionTypes.js";
@@ -413,6 +414,13 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
   const gameCities = buildCitiesForGame(doc.features);
   const { background, backgroundData } = buildBackgroundForGame(doc.metadata?.customBackground, doc.metadata?.tiledBasemap, { name: doc.metadata?.startingMapName });
   const { ownBasemaps, ownBasemapsData } = buildOwnBasemapsForGame(doc.metadata?.ownBasemaps);
+  const relationResult = applyStartingRelationEdits(
+    doc.relations, doc.relationEdits,
+    [...new Set([...owners, ...claimants, ...Object.keys(declaredPolities)])].map((key) => ({
+      key, ...(declaredPolities[key] || {}),
+    })),
+  );
+  if (!relationResult.ok) throw new Error(relationResult.reason);
   const world = {
     ownerSchema: doc.ownerSchema ?? OWNER_SCHEMA,
     regionOwnershipOverrides,
@@ -431,6 +439,9 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     markers: buildMarkersForGame(doc.features),
     // The puppet states the scenario starts with (Countries panel).
     puppets: buildPuppetsForGame(doc.puppets, { startDate: doc.metadata?.startDate || "" }),
+    // Authored starting bilateral scores share the game's native world.relations.
+    // No unrecorded pair receives a fictitious neutral zero.
+    relations: relationResult.relations,
     // The map's region types (Region Types panel). Each region names its type
     // by typeId in the regions file; the game draws a type's colour, opacity,
     // border and zoom range, and tells the AI its movement rules

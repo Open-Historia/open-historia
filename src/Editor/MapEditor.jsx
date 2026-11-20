@@ -13,6 +13,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import "ol/ol.css";
 import OlMap from "./OlMap.jsx";
 import EditorSidebar, { SIDEBAR_WIDTH } from "./EditorSidebar.jsx";
+import EditorToolDock from "./EditorToolDock.jsx";
+import { selectedCountryFromMap } from "./selectedCountryFromMap.js";
 
 const SIDEBAR_SIDE_KEY = "oh-map-editor-sidebar-side";
 import TypeManager from "./TypeManager.jsx";
@@ -43,7 +45,7 @@ import DocumentsMenu from "./DocumentsMenu.jsx";
 import CityPopup from "./CityPopup.jsx";
 import MarkerPopup from "./MarkerPopup.jsx";
 import { isMapFeature, markerToFeature, newMapFeature } from "./mapFeatures.js";
-import { addRowStep, membershipStep, patchRowStep, removeRowStep } from "./documentUndo.js";
+import { addRowStep, membershipStep, patchRowStep, removeRowStep, removeRowsStep } from "./documentUndo.js";
 import WarMapPanel from "./WarMapPanel.jsx";
 import { WAR_LISTS, isWarTool, newClimateZone, newFortification, newTerrainArea, warGeographyOf } from "./warGeographyDoc.js";
 import SearchBar from "./SearchBar.jsx";
@@ -371,7 +373,6 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const togglePanel = (name) => setOpenPanel((cur) => (cur === name ? null : name));
 
   // ---- the war geography: terrain, fortified lines, climate zones ----------
   // (warGeographyDoc.js) The shape the designer has picked, { kind, id } or
@@ -790,6 +791,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     units: d.units,
     groups: d.groups,
     puppets: d.puppets,
+    // The canonical starting diplomacy baseline and specifically staged edits.
+    // Both are required when reopening a working map before Apply & Play.
+    relations: d.relations,
+    relationEdits: d.relationEdits,
     // What the scenario draws on its map for war (warGeographyDoc.js).
     terrainAreas: d.terrainAreas,
     fortifications: d.fortifications,
@@ -882,6 +887,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     const note = await cleanBorders({ mode });
     try {
       const authoringOps = polityAuthoringOpsRef.current.slice();
+      const startingRelationEdits = d.relationEdits.slice();
       const seed = {
         ...buildGameSeed(
           d.doc,
@@ -890,12 +896,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         ),
         // The polities removed since the last save (removalsForScenario).
         polityAuthoringOps: removalsForScenario(authoringOps),
+        startingRelationEdits,
       };
       // The renames made since the last save, so the scenario's player country
       // and its name-keyed world records follow them (useMapDocument renamePolity).
       const renames = d.polityRenames;
       await onApplyToScenario(seed, { play, renames });
       d.settlePolityRenames(renames.length);
+      d.settleRelationEdits(startingRelationEdits);
       // The scenario now owns these operations. A second Save from the same
       // still-open Workshop must not replay one already applied; any made
       // while the save ran stay for the next one, like the renames above.
@@ -1277,6 +1285,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     base.groups = normalizeGroups(initialMap.groups);
     // The scenario's puppet states, as its world has them (scenarioPuppets.js).
     base.puppets = Array.isArray(initialMap.puppets) ? structuredClone(initialMap.puppets) : [];
+    // Keep scenario-authoritative scores without re-generating them on map save.
+    base.relations = Array.isArray(initialMap.relations) ? structuredClone(initialMap.relations) : [];
+    base.relationEdits = [];
     // What it draws on its map for war, as its world has it, so a round trip
     // keeps every shape and every frozen lake (warGeographyDoc.js).
     Object.assign(base, warGeographyOf(initialMap));
@@ -1416,10 +1427,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
 
   const scenarioButton = (primary, dim = Boolean(scenarioAction) || !hydrated) => ({
     alignItems: "center",
-    background: primary ? "#2bc1f3" : "rgba(255,255,255,0.06)",
-    border: `1px solid ${primary ? "#2bc1f3" : "rgba(255,255,255,0.12)"}`,
+    background: primary ? "var(--oh-ui-accent, #2bc1f3)" : "var(--oh-ui-raised, rgba(255,255,255,0.06))",
+    border: primary ? "1px solid var(--oh-ui-accent, #2bc1f3)" : "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))",
     borderRadius: 10,
-    color: "#fff",
+    color: primary ? "var(--oh-ui-bg, #fff)" : "var(--oh-ui-text, #fff)",
     cursor: dim ? "default" : "pointer",
     display: "flex",
     fontSize: 12.5,
@@ -1550,7 +1561,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   ) : isWarTool(d.activeTool) ? (
     <div style={{ color: "rgba(255,255,255,0.7)" }}>{WAR_TOOL_HINTS[d.activeTool]}</div>
   ) : d.activeTool === "select" ? (
-    <div style={{ color: "rgba(255,255,255,0.7)" }}>Click a region to select it, Shift-click to add more, and double-click to select its whole country.</div>
+    <div style={{ color: "rgba(255,255,255,0.7)" }}>Click a region to select it, Shift-click to add more, and double-click to select its whole polity.</div>
+  ) : d.activeTool === "region-box" ? (
+    <div style={{ color: "rgba(255,255,255,0.7)" }}>Drag a rectangle to select every region touched; hold Shift to add to your current selection. Press M for Rectangle or L for Lasso.</div>
+  ) : d.activeTool === "move" ? (
+    <div style={{ color: "rgba(255,255,255,0.7)" }}>Drag a selected region to move all selected regions together as one Undo step. Drag an unselected region to move it alone; this may create border gaps against unmoved neighbours.</div>
   ) : null;
 
   return (
@@ -1558,7 +1573,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       style={{
         position: "fixed",
         inset: 0,
-        background: "#111113",
+        background: "var(--oh-ui-bg, #111113)",
         overflow: "hidden",
         fontFamily: "sans-serif",
         color: "white",
@@ -1586,6 +1601,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onFeatureSelectionChange={setFeatureSelection}
         features={d.features}
         onSelectionChange={d.setSelection}
+        onToolShortcut={d.setActiveTool}
         onRegionCount={d.setRegionCount}
         onRegionsChanged={(count, { loaded = false } = {}) => {
           d.setRegionCount(count);
@@ -1708,11 +1724,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         />
       )}
       {openPanel === "regions" && (
-        <RegionsPanel api={api} polities={d.polities} selection={d.selection} setSelection={d.setSelection} onClose={() => setOpenPanel(null)} />
+        <RegionsPanel api={api} polities={d.polities} types={d.types} groups={d.groups}
+          selection={d.selection} setSelection={d.setSelection} regionEpoch={regionEpoch}
+          onClose={() => setOpenPanel(null)} />
       )}
       {openPanel === "polities" && (
         <PolitiesPanel
           api={api}
+          initialCountryKey={selectedCountryFromMap(d.selection, api?.getRegionSummary)}
           polities={d.polities}
           selection={d.selection}
           setSelection={d.setSelection}
@@ -1757,11 +1776,15 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           }}
           puppets={d.puppets}
           setPuppets={d.setPuppets}
+          relations={d.relations}
+          relationEdits={d.relationEdits}
+          setRelationEdit={d.setRelationEdit}
           // What its Military fields stand for left empty: the scenario's war
           // settings and era (libraryBar.jsx); none for a map opened on its own.
           militaryDefaults={initialMap?.militaryDefaults ?? null}
           importPolityRoster={d.importPolityRoster}
           setColorOverride={d.setColorOverride}
+          setFlag={d.setFlag}
           setTags={d.setTags}
           onOpenFlagPicker={setFlagPickerFor}
           onPaintPolity={(key) => {
@@ -1778,6 +1801,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           api={api}
           groups={d.groups}
           setGroups={d.setGroups}
+          polities={d.polities}
           selection={d.selection}
           regionEpoch={regionEpoch}
           militaryDefaults={initialMap?.militaryDefaults ?? null}
@@ -1858,6 +1882,13 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           setSelection={setFeatureSelection}
           activeTool={d.activeTool}
           setActiveTool={d.setActiveTool}
+          onEdit={(id) => {
+            const feature = d.features.find((f) => f.id === id);
+            if (!feature) return;
+            api?.locateFeature?.(feature.coord);
+            setCityPopup({ id, x: Math.round((window.innerWidth || 1200) / 2),
+              y: Math.round((window.innerHeight || 800) / 2) - 160, isNew: false });
+          }}
           onClose={() => {
             setOpenPanel(null);
             if (d.activeTool === "feature-box") d.setActiveTool("select");
@@ -1878,9 +1909,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
             api?.locateFeature?.([unit.lng, unit.lat]);
             setUnitPopup({ id, x: Math.round((window.innerWidth || 1200) / 2), y: Math.round((window.innerHeight || 800) / 2) - 160, isNew: false });
           }}
-          onRemove={(id) => d.setUnits((list) => list.filter((u) => u.id !== id))}
+          onRemove={(id) => {
+            const step = removeRowStep(d.units, d.setUnits, id);
+            if (step) api?.pushStep?.(step);
+          }}
           onRemoveAll={() => {
-            if (window.confirm(`Remove all ${d.units.length} starting units from this map?`)) d.setUnits([]);
+            if (!window.confirm(`Remove all ${d.units.length} starting units from this map? The map Undo button can restore them.`)) return;
+            const step = removeRowsStep(d.units, d.setUnits, () => true);
+            if (step) api?.pushStep?.(step);
           }}
           onClose={() => {
             setOpenPanel(null);
@@ -1992,6 +2028,17 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         />
       )}
 
+      <EditorToolDock
+        visible={!isMobile}
+        activeTool={d.activeTool}
+        onToolChange={d.setActiveTool}
+        canUndo={history.canUndo}
+        canRedo={history.canRedo}
+        onUndo={() => api?.undo()}
+        onRedo={() => api?.redo()}
+        onFit={() => api?.fitToData()}
+      />
+
       <EditorSidebar
         name={d.name}
         onNameChange={d.setName}
@@ -2050,11 +2097,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         clipboardCount={clipboardCount}
         suggestionCount={review.active ? review.pendingCount : null}
         openPanel={openPanel}
-        onOpenPanel={togglePanel}
-        basemap={d.basemap}
-        hasCustomBackground={Boolean(customBg)}
+        onSetPanel={setOpenPanel}
         onOpenBasemaps={() => setBasemapPickerOpen(true)}
-        detailedMapLabel={d.doc?.metadata?.tiledBasemap?.name || ""}
+        onOpenGenerator={() => setFmgOpen(true)}
+        generatorAvailable={Boolean(fmgAvailable)}
         saveStatus={d.saveStatus}
         saveError={saveError}
         onRetrySave={() => {
@@ -2075,11 +2121,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       <FlagPicker
         open={Boolean(flagPickerFor)}
         onClose={() => setFlagPickerFor(null)}
-        ownerCode={flagPickerFor}
-        currentFlag={flagPickerFor ? d.flags?.[flagPickerFor] : null}
+        ownerCode={flagPickerFor?.kind === "country-draft" ? flagPickerFor.name : flagPickerFor}
+        currentFlag={flagPickerFor?.kind === "country-draft" ? flagPickerFor.flag : flagPickerFor ? d.flags?.[flagPickerFor] : null}
         mapFlags={d.flags}
         author={d.author}
-        onPick={(value) => d.setFlag(flagPickerFor, value)}
+        onPick={(value) => {
+          if (flagPickerFor?.kind === "country-draft") flagPickerFor.onPick?.(value);
+          else if (typeof flagPickerFor === "string") d.setFlag(flagPickerFor, value);
+        }}
       />
       <BasemapPicker
         open={basemapPickerOpen}
