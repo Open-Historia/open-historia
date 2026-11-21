@@ -549,7 +549,9 @@ const PolitiesPanel = ({
         </button>
       </div>
 
-      <div style={{ display: "grid", gap: 6, maxHeight: 230, overflowY: "auto" }}>
+      {/* A tall selected polity Overview must not squeeze the roster to one row.
+          Keep the list independently scrollable while the panel body scrolls below it. */}
+      <div style={{ display: "grid", gap: 6, flexShrink: 0, maxHeight: "min(46vh, 420px)", overflowY: "auto" }}>
         {rows.map((row) => {
           const active = row.key === selectedKey;
           const checked = bulkSelected.has(row.key);

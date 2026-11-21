@@ -94,3 +94,15 @@ test("country overview is view-only and all edit sections continue using canonic
     "removePolity?.(", "onOpenFlagPicker?.(",
   ]) assert.ok(source.includes(expected), `Lost native country handler: ${expected}`);
 });
+
+test("the polity picker stays tall and independently scrollable when the selected polity has extensive details", () => {
+  // Panel.jsx lays out its scrollable body as a flex column. A shrinkable
+  // child list gets compressed to 1-2 polity rows beside long Overview cards.
+  const list = source.match(/<div style=\{\{([^}]+)\}\}>\s*\{rows\.map\(\(row\) =>/);
+  assert.ok(list, "Expected the native polity picker list, not an unrelated regions list");
+  assert.match(list[1], /flexShrink:\s*0/, "The picker must not shrink under selected-polity details");
+  assert.match(list[1], /maxHeight:\s*"min\(\d+vh, \d+px\)"/,
+    "The list must show multiple polities on desktops but scale down for short viewports");
+  assert.match(list[1], /overflowY:\s*"auto"/, "The large roster retains its own scrollbar");
+  assert.doesNotMatch(list[1], /minHeight:\s*\d+/, "A one-polity roster should not reserve blank vertical space");
+});
