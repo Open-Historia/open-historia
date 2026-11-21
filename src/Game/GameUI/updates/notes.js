@@ -54,26 +54,140 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
-    id: "2026-11-interactive-event-history",
-    kind: "minor",
-    date: "2026-11-21",
-    channel: "beta",
-    banners: [{
-      title: "Your decisions, remembered",
-      items: [
-        "Play interactive scenes in a roomier dedicated window.",
-        "Read the accepted choices and responses of completed new scenes on their outcome cards.",
-        "Browse earlier recorded events beyond the recent-turn picker, with search and category filters.",
-      ],
-    }, {
-      title: "Finance your projects",
-      items: [
-        "Review signed loan terms and actual disbursements from recorded campaign events.",
-        "Earmark finite cash or supplier payments for eligible projects, with interest, repayments and arrears tracked separately.",
-        "Confirm accounting values and existing debt treatment before money enters your projects.",
-        "Available in single-player monetary campaigns; negotiated promises alone do not create funds.",
-      ],
-    }],
+    "id": "2026-11-interactive-event-history",
+    "kind": "major",
+    "date": "2026-11-21",
+    "channel": "beta",
+    "banners": [
+      {
+        "theme": "campaignRecords",
+        "scene": "history",
+        "title": "Your decisions, remembered",
+        "subtitle": "THE CAMPAIGN ARCHIVE",
+        "lead": "The history you make is now easier to revisit, preserve and share.",
+        "sections": [
+          {
+            "heading": "Interactive Events",
+            "icon": "book",
+            "items": [
+              "Play interactive scenes in a roomier dedicated window.",
+              "Reopen completed new scenes to read the original choices, your decisions and the responses.",
+              "Same-day scenes are grouped with the preceding time skip in Events."
+            ]
+          },
+          {
+            "heading": "Campaign Lore",
+            "icon": "note",
+            "items": [
+              "Open Campaign Lore in the Game menu to select world or player-focused history by date.",
+              "Export or copy retained history as Markdown or JSON without an AI request.",
+              "Choose whether to include private conversations, Actions, and interactive scene transcripts.",
+              "Request an AI-written chronicle with references to actual recorded events."
+            ]
+          },
+          {
+            "heading": "Earlier events",
+            "icon": "eye",
+            "items": [
+              "Browse earlier recorded events beyond the recent-turn picker, with search and category filters.",
+              "Open older event records directly without rewinding your campaign."
+            ]
+          }
+        ]
+      },
+      {
+        "theme": "campaignRecords",
+        "scene": "speech",
+        "title": "Words that reach the world",
+        "subtitle": "OFFICIAL PUBLIC COMMUNICATIONS",
+        "lead": "Ask your advisors to help you address the public, then decide exactly what your government says.",
+        "sections": [
+          {
+            "heading": "Draft and publish",
+            "icon": "phone",
+            "items": [
+              "Ask your chief advisor or a domestic minister to draft an official statement in a single-player campaign.",
+              "Review and edit the issuer, audience, title and wording before explicitly publishing.",
+              "Address your own people, foreign populations, the international community or an institution."
+            ]
+          },
+          {
+            "heading": "A public record",
+            "icon": "people",
+            "items": [
+              "Published statements enter campaign history and can shape the next time skip.",
+              "Discuss or cancel drafts, and withdraw published statements before time advances.",
+              "Advisors can discuss relevant public Rostra posts when social media is enabled."
+            ]
+          }
+        ]
+      },
+      {
+        "theme": "campaignRecords",
+        "scene": "finance",
+        "title": "Finance your projects",
+        "subtitle": "FROM AGREEMENT TO INVESTMENT",
+        "lead": "Turn recorded government loans into real project financing, with separate approval and disbursement.",
+        "sections": [
+          {
+            "heading": "Review the terms",
+            "icon": "book",
+            "items": [
+              "Review signed loan terms and actual disbursements from recorded campaign events.",
+              "Use optional AI-assisted extraction, then confirm the amounts, accounting equivalent and existing debt treatment yourself.",
+              "Available in single-player monetary campaigns; negotiated promises alone do not create funds."
+            ]
+          },
+          {
+            "heading": "Fund and repay",
+            "icon": "gear",
+            "items": [
+              "Earmark finite cash or supplier payments for eligible projects, with interest, repayments and arrears tracked separately.",
+              "Return unused funds and track outstanding loan principal in national debt.",
+              "Project funding and completion estimates account for financing commitments."
+            ]
+          }
+        ]
+      },
+      {
+        "theme": "campaignRecords",
+        "scene": "scenario",
+        "title": "More control over history",
+        "subtitle": "SCENARIO RULES AND EVERYDAY IMPROVEMENTS",
+        "lead": "Give scenario authors more precise starting conditions and make the everyday campaign easier to use.",
+        "sections": [
+          {
+            "heading": "Scripted events",
+            "icon": "flag",
+            "items": [
+              "Require a country to be human-controlled or not human-controlled before an event fires.",
+              "Author actual war declarations, subordinate-state arrangements and capital relocations, including in weighted outcomes.",
+              "Native validation checks these outcomes before accepting a turn."
+            ]
+          },
+          {
+            "heading": "Scenario creation",
+            "icon": "map",
+            "items": [
+              "Create up to 256 Day-one facts instead of 32.",
+              "Manage starting diplomatic scores and descriptions from Scenario Politics, using search and country filters.",
+              "Political World, Institutions and diplomatic relations managers now follow the selected interface theme.",
+              "Opt eligible custom characters into reading authored simulation rules; access is off by default."
+            ]
+          },
+          {
+            "heading": "Map and presence",
+            "icon": "gear",
+            "items": [
+              "Adjust when polity names disappear as you zoom in under Settings, Map, Labels.",
+              "Select units, cities and appropriate structures even on non-interactable territory; water placement rules still apply.",
+              "Discord Rich Presence follows the current campaign date and distinguishes saves with identical names."
+            ]
+          }
+        ],
+        "button": "Return to your world"
+      }
+    ]
   },
   {
     // Beta Map Editor V2 (N022): one player-facing major notice for the
@@ -97,6 +211,8 @@ const NEW_UPDATES = [
             items: [
               "Draw, split and repaint regions with clearer tools and precise close-up controls.",
               "Find and select territory across large maps from a dedicated region workspace.",
+              "Cut regions with Scissors and undo the split in one step.",
+              "Zoom from Z1 to Z24 with finer close-up steps and compact mobile controls.",
             ],
           },
           {
@@ -105,6 +221,8 @@ const NEW_UPDATES = [
             items: [
               "Dedicated workspaces bring together polities, territory, places, groups and war geography.",
               "Search and edit from the map or the accompanying lists without hunting through scattered controls.",
+              "View a temporary OpenStreetMap street reference when tracing modern geography.",
+              "Use Hand to pan even while adjusting a reference image; switch to Select to move or resize it.",
             ],
           },
         ],
@@ -122,6 +240,7 @@ const NEW_UPDATES = [
             items: [
               "Rename polities, manage their alternative names and keep their identities distinct.",
               "Create countries before giving them territory, or preserve a polity that has no land.",
+              "Create a polity with selected regions and keep its country roster visible when opening detailed information.",
             ],
           },
           {
@@ -147,6 +266,7 @@ const NEW_UPDATES = [
             items: [
               "Generate a new world and publish it as its own scenario instead of replacing established historical politics.",
               "Regions, cities and polity colours are saved with the new scenario.",
+              "Custom worlds retain only their own polity colours, while ordinary stock maps keep the colours they need.",
             ],
           },
           {
@@ -155,6 +275,7 @@ const NEW_UPDATES = [
             items: [
               "Verified recovery maps give you a way back before major world replacements.",
               "Save the working map, apply changes to a scenario or start a game from the world you made.",
+              "Paste regions and their newly imported records together, then undo or redo the whole paste in one step.",
             ],
           },
         ],

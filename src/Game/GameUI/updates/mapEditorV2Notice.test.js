@@ -26,7 +26,7 @@ test("a returning beta player sees Map Editor V2 at login, but a previous dismis
   const due=pendingUpdates({seen:previous.id,keeps:true});
   const newerId = "2026-11-interactive-event-history";
   assert.deepEqual(due.map(entry=>entry.id),[newerId,UPDATE_ID,"2026-11-project-currency-clarity","2026-11-gm-one-change"]);
-  assert.equal(noticePages(due)[0].update.id,UPDATE_ID,"the major feature still opens before the newer minor notice");
+  assert.deepEqual(noticePages(due).slice(0,7).map(page=>page.update.id),[...Array(4).fill(newerId),...Array(3).fill(UPDATE_ID)],"both staged major notices appear before the minor upstream notices");
   assert.deepEqual(pendingUpdates({seen:UPDATE_ID,keeps:true}).map(entry=>entry.id),[newerId]);
   assert.deepEqual(pendingUpdates({seen:newerId,keeps:true}),[]);
   assert.equal(previewedUpdates("?updateNotice="+UPDATE_ID)[0].id,UPDATE_ID);
@@ -39,4 +39,17 @@ test("archive illustration stays within its own card instead of scaling the full
   assert.match(source,/const ArchiveMap = \(\{ newWorld \}\)/);
   assert.match(source,/<ArchiveMap newWorld=\{newWorld\}\/>/);
   assert.doesNotMatch(source,/translate\(21 51\) scale\(0\.525\)/);
+});
+
+test("integrated Beta notice covers every campaign and authoring workstream",()=>{
+  const id="2026-11-interactive-event-history";
+  const entry=NOTICE_UPDATES.find(item=>item.id===id);
+  assert.equal(UPDATES.filter(item=>item.id===id).length,1);
+  assert.equal(entry.kind,"major");
+  assert.equal(entry.channel,"beta");
+  assert.deepEqual(entry.banners.map(b=>b.scene),["history","speech","finance","scenario"]);
+  assert.ok(entry.banners.every(b=>b.theme==="campaignRecords"&&b.lead&&b.sections.length>=2));
+  const lines=[...entry.banners,...UPDATES.find(item=>item.id===UPDATE_ID).banners].flatMap(b=>b.sections.flatMap(s=>s.items)).join("\n");
+  for(const phrase of ["Campaign Lore","Markdown or JSON","interactive scene transcripts","domestic minister","Rostra","disbursements","arrears","human-controlled","capital relocations","256 Day-one facts","diplomatic scores and descriptions","selected interface theme","simulation rules","polity names","non-interactable territory","Discord Rich Presence","Scissors","Z1 to Z24","OpenStreetMap","Hand to pan","undo or redo the whole paste"])assert.ok(lines.includes(phrase),phrase);
+  assert.equal(previewedUpdates("?updateNotice="+id)[0].id,id);
 });
