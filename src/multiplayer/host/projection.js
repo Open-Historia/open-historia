@@ -515,7 +515,7 @@ export const projectEvents = (events, viewer, { ownOrderIds = new Set(), unitOwn
   if (!isRecord(event)) return event;
   // The narrator's provenance, NPC-reaction bookkeeping and storyline links stay
   // with the host, and so does who else an event was for.
-  const { impacts, agency: _agency, npcReaction: _npc, storylineIds: _storylines, audience: _audience, ...rest } = event;
+  const { impacts, agency: _agency, npcReaction: _npc, storylineIds: _storylines, audience: _audience, interactiveTranscript, ...rest } = event;
   const own = list(impacts?.actionIds).filter((id) => ownOrderIds.has(clean(id)));
   const unitOps = list(impacts?.unitOps).filter((op) => isRecord(op)
     && (op.op !== "move" || same(unitOwner(op.unitId), viewer)));
@@ -531,6 +531,9 @@ export const projectEvents = (events, viewer, { ownOrderIds = new Set(), unitOwn
     : [];
   return {
     ...rest,
+    // Scenes are solo-player records. A later guest sees the ordinary outcome,
+    // not the private scene that the original host played.
+    ...(same(host, viewer) && interactiveTranscript ? { interactiveTranscript } : {}),
     impacts: {
       ...projected,
       actionIds: own,

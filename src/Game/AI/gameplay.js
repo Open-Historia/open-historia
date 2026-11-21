@@ -465,7 +465,8 @@ import { refreshPowerStatusForTurn } from "../../runtime/powerStatus.js";
 import { MARKER_OPS, markerOpKind } from "../../runtime/markerOps.js";
 import { withSaidFamily } from "../../runtime/markerFamily.js";
 import { firstSentence, withoutFinalTerminal } from "../../../server/sentences.js";
-import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
+import { dedupeGeneratedEvents, dedupeEventLog, eventCanonicalKey } from "../../runtime/eventDedup.js";
+import { archiveInteractiveScene, attachInteractiveTranscript } from "../../runtime/interactiveTranscript.js";
 import { validateQueuedActionIds } from "./actionOutcomeAssociations.js";
 import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
 import { sortTimelineEventsChronologically } from "../../runtime/timelineOrder.js";
@@ -8412,7 +8413,7 @@ const normalizeGeneratedEvent = (entry, index = 0) => {
   // Whether an event invites a reaction, and what came of it, is the Event
   // Editor's to write. The schema has no such field, but not every provider
   // holds a model to its schema.
-  const { npcReaction, ...generated } = normalized;
+  const { npcReaction, interactiveTranscript: _interactiveTranscript, ...generated } = normalized;
   return {
     ...generated,
     id: normalized.id || `generated-event-${index}`,
@@ -9226,6 +9227,11 @@ const applySimulationResult = async ({
     round: (baseGame.round || 1) + 1,
   });
   const freshEvents = canonicalEventIdentity.events;
+  const resolvedSceneEventId = result.sceneArchive
+    ? canonicalEventIdentity.idMap.get(result.sceneArchive.outcomeId) : "";
+  if (result.sceneArchive && (!resolvedSceneEventId || freshEvents.filter((event) => event.id === resolvedSceneEventId && event.kind === "interactive").length !== 1)) {
+    throw new Error("The completed scene would not have a unique event on the timeline. The scene remains open.");
+  }
   const warUpdates = remapLedgerEventIds(normalizeArray(keptWarUpdates), canonicalEventIdentity.idMap);
   const relationUpdates = remapLedgerEventIds(normalizeArray(keptRelationUpdates), canonicalEventIdentity.idMap);
   const agreementUpdates = remapLedgerEventIds(normalizeArray(keptAgreementUpdates), canonicalEventIdentity.idMap);
@@ -9876,7 +9882,7 @@ const applySimulationResult = async ({
   // ran appends to it. `[...priorEvents, ...freshEvents]` is a copy, so a snapshot
   // taken before the loop cannot see an exposure or a discovery — and that copy is
   // what the canonical commit persists and what this function returns.
-  const nextEvents = [...priorEvents, ...freshEvents];
+  let nextEvents = [...priorEvents, ...freshEvents];
   // Same reason, for this turn's own record: simulationHistory is built as an
   // argument to applyEventImpactsToWorld, which has to run BEFORE espionage
   // resolves on its output, so its eventIds snapshot also predates the loop.
@@ -10505,6 +10511,17 @@ const applySimulationResult = async ({
   throwIfAborted(projects?.signal, "Timeline jump cancelled.");
   assertCampaignUnchanged(campaignId, activeCampaignId());
 
+  // Archive only the accepted native scene, after all event removals and before
+  // the same canonical commit that closes it. The ordinary event remains the
+  // simulation's condensed record; no transcript is sent through the directors.
+  if (result.sceneArchive) {
+    nextEvents = attachInteractiveTranscript(nextEvents, resolvedSceneEventId, result.sceneArchive.transcript);
+    const persisted = dedupeEventLog(normalizeEvents(nextEvents));
+    if (!persisted.some((event) => event.id === resolvedSceneEventId && event.interactiveTranscript)) {
+      throw new Error("The scene outcome would be removed as a duplicate. The scene remains open.");
+    }
+  }
+
   // A time skip is shown one event at a time (time.jsx), its first on screen as
   // it lands; until the reveal reaches an event, nothing the player or the AI
   // speaking to them is shown may contain it (runtime/unseenEvents.js). Marked
@@ -10625,6 +10642,7 @@ const applySimulationResult = async ({
     chats: chatsToWrite, // what was actually persisted, not the pre-turn snapshot
     colors: nextColors,
     events: nextEvents,
+    ...(resolvedSceneEventId ? { resolvedSceneEventId } : {}),
     game: nextGame,
     generation: result.generation ?? { source: "ai", fallbackReason: "" },
     // With saving off, the agents whose report failed after this turn was
@@ -16519,7 +16537,8 @@ const sceneRecordFrom = (payload) => {
   };
 };
 
-const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interactive, history, record = null, recordGeneration = null }) => {
+const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interactive, history, endedBy = "player", record = null, recordGeneration = null }) => {
+  const transcript = archiveInteractiveScene({ ...interactive, history }, endedBy);
   const ownRecord = record && recordGeneration && !(await hasAuthoredSummaryGuidance()) ? record : null;
   let summaryGeneration = recordGeneration;
   let summaryPayload = ownRecord;
@@ -16582,6 +16601,7 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
   const mapChanged = sceneChangedMap(summaryPayload);
   const scene = outcome ? await sceneMapConsequences({ bundle, outcome: markSceneOutcome(outcome, mapChanged), generation: summaryGeneration, mapChanged }) : null;
   const sceneOutcome = scene?.events?.[0] ?? outcome;
+  if (!sceneOutcome?.id) throw new Error("The scene has no valid outcome. The scene remains open.");
 
   const applyScene = async (withBoard) => {
     const applied = await applySimulationResult({
@@ -16599,7 +16619,8 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
     projects: withBoard ? { bundle, signal: null, review: scene.review, requests: null } : null,
     result: {
       clearActions: false,
-      events: sceneOutcome ? [sceneOutcome] : [],
+      events: [sceneOutcome],
+      sceneArchive: { outcomeId: sceneOutcome.id, transcript },
       structureLinks: scene?.structureLinks ?? [],
       mode: "interactive",
       stopDate: bundle.game.gameDate,
@@ -16678,9 +16699,12 @@ const sceneMapConsequences = async ({ bundle, outcome, generation, mapChanged = 
 // End the scene where it stands (the panel's End the scene). With no beat
 // played there is nothing to record, and it is simply set aside.
 export const endActiveInteractive = async () => {
+  if (isSimulationBusy()) throw new Error("A simulation is already running; wait for it to finish.");
+  const campaignId = activeCampaignId();
   beginSimulation();
   try {
     const bundle = await readGameStateBundle({ force: true });
+    assertCampaignUnchanged(campaignId, activeCampaignId());
     const interactive = normalizeWorldState(bundle.world).activeInteractive;
     if (!interactive) throw new Error("No scene is in progress.");
     if (!normalizeArray(interactive.history).length) {
@@ -16688,7 +16712,7 @@ export const endActiveInteractive = async () => {
       return { resolved: false };
     }
     const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
-    const applied = await resolveInteractiveScene({ bundle, baseColors, campaignId: activeCampaignId(), interactive, history: interactive.history });
+    const applied = await resolveInteractiveScene({ bundle, baseColors, campaignId, interactive, history: interactive.history });
     logDebugEvent("turn", `Interactive event: scene "${interactive.title || "untitled"}" ended by the player after ${interactive.history.length} beat(s).`);
     return { resolved: true, ...applied };
   } finally {
@@ -16721,11 +16745,13 @@ export const rewindActiveInteractive = async ({ beatIndex, choice = "" } = {}) =
 };
 
 export const advanceActiveInteractive = async (choiceText) => {
+  if (isSimulationBusy()) throw new Error("A simulation is already running; wait for it to finish.");
+  const campaignId = activeCampaignId();
   beginSimulation();
   try {
   const bundle = await readGameStateBundle({ force: true });
   // Same hazard as a jump: AI calls run for a while, then the whole turn is written.
-  const campaignId = activeCampaignId();
+  assertCampaignUnchanged(campaignId, activeCampaignId());
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   const world = normalizeWorldState(bundle.world);
   const interactive = world.activeInteractive;
@@ -16776,6 +16802,8 @@ export const advanceActiveInteractive = async (choiceText) => {
   });
 
   if (!payload?.resolved) {
+    archiveInteractiveScene(nextInteractive);
+    assertCampaignUnchanged(campaignId, activeCampaignId());
     // Only the scene is this beat's to write: the rest of the world is taken
     // as it stands now, not as it was read before the model call.
     const nextWorld = await mutateWorldState((latest) => ({
@@ -16792,8 +16820,9 @@ export const advanceActiveInteractive = async (choiceText) => {
     bundle,
     baseColors,
     campaignId,
-    interactive,
-    history: [...normalizeArray(interactive.history), historyEntry],
+    interactive: nextInteractive,
+    history: nextInteractive.history,
+    endedBy: "scene",
     record: sceneRecordFrom(payload),
     recordGeneration: generation,
   });

@@ -59,7 +59,7 @@ test("behind the buttons, nothing that writes a turn starts while a skip or a re
 
 test("the Events panel's Rollback and Intervene wait for a retry as they wait for a skip", () => {
     assert.match(time, /canRollbackTurn=\{undoCount > 0 && !isLoading && !skipInFlight && !isRetryingHeld && !olderTurnRecord\}/);
-    assert.match(time, /canIntervene=\{canInterveneTurn && undoCount > 0 && !isLoading && !skipInFlight && !isRetryingHeld && !olderTurnRecord\}/);
+    assert.match(time, /canIntervene=\{!latestTurnRecord\?\.sceneAppendCount && canInterveneTurn && undoCount > 0 && !isLoading && !skipInFlight && !isRetryingHeld && !olderTurnRecord\}/);
 });
 
 test("« opens the Events panel during a skip that is being watched live", () => {

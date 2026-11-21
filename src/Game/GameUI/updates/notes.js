@@ -54,6 +54,20 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-11-interactive-event-history",
+    kind: "minor",
+    date: "2026-11-21",
+    channel: "beta",
+    banners: [{
+      title: "Your decisions, remembered",
+      items: [
+        "Play interactive scenes in a roomier dedicated window.",
+        "Read the accepted choices and responses of completed new scenes on their outcome cards.",
+        "Browse earlier recorded events beyond the recent-turn picker, with search and category filters.",
+      ],
+    }],
+  },
+  {
     // Beta Map Editor V2 (N022): one player-facing major notice for the
     // verified P12-P19B creator workflow. Date is the preview's staging date,
     // to be rechecked against the actual distribution day before publication.

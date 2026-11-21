@@ -68,6 +68,7 @@ import { applyReportOps, normalizeReportOp, normalizeReports } from "./reports.j
 import { normalizeGmChanges, normalizeReminders } from "./gmChanges.js";
 import { normalizePlayerGoals } from "./playerGoal.js";
 import { normalizeInteractiveOffer } from "./interactiveOffer.js";
+import { normalizeInteractiveTranscript, assertInteractiveTranscriptsRetained } from "./interactiveTranscript.js";
 import { normalizeSpyOp, spyTasking } from "./spycraft.js";
 import { eventsFromLegacyChat, normalizeChatEvents, projectChatThread, withUnloggedMessages } from "./chatThreads.js";
 import { latestTurnEventIds, unseenEvents, withoutUnseenChats, withoutUnseenEvents, withoutUnseenReports } from "./unseenEvents.js";
@@ -3731,6 +3732,8 @@ export const normalizeEventEntry = (entry, index = 0) => {
   // The polities the event says it is about (runtime/eventConcerns.js), read
   // as its combatants are.
   const concerns = normalizeEventConcerns(entry.concerns, { toName: (name) => toCountryName(name) });
+  const interactiveTranscript = normalizeRenamedKind(entry.kind) === "interactive"
+    ? normalizeInteractiveTranscript(entry.interactiveTranscript) : null;
 
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
@@ -3738,6 +3741,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
     description: presentation.description,
     // Only when present, so an event without one saves exactly as before.
     ...(digest ? { digest } : {}),
+    ...(interactiveTranscript ? { interactiveTranscript } : {}),
     ...(presentation.quote ? { quote: presentation.quote } : {}),
     // Only when present, so an event without one saves exactly as before.
     ...(npcReaction ? { npcReaction } : {}),
@@ -4890,6 +4894,7 @@ export const writeEventsState = async (events, options = {}) => {
   const normalized = preserveApprovedEvents
     ? dedupeEventLog(normalizedEvents, { keyOf: eventCanonicalKey })
     : dedupeEventLog(normalizedEvents);
+  assertInteractiveTranscriptsRetained(events, normalized);
   // A scenario's own events follow the UI language immediately (see above);
   // the AI's are written in it.
   enqueueEventStrings(normalized);
@@ -4961,6 +4966,7 @@ const buildCanonicalTurnPayload = ({
   const normalizedEvents = preserveApprovedEvents
     ? dedupeEventLog(eventLog, { keyOf: eventCanonicalKey })
     : dedupeEventLog(eventLog);
+  assertInteractiveTranscriptsRetained(eventLog, normalizedEvents);
   enqueueEventStrings(normalizedEvents);
 
   return {
