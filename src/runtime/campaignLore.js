@@ -1,5 +1,6 @@
 /*! Open Historia - read-only campaign lore records. AGPL-3.0-or-later. */
 import { compareGameDates, isGameDate, normalizeGameDate } from "./gameDates.js";
+import { normalizePublicStatement } from "./publicCommunications.js";
 import { normalizeInteractiveTranscript } from "./interactiveTranscript.js";
 import { eventNamesPolity } from "./eventConcerns.js";
 import { polityMatches } from "../Game/AI/audience.js";
@@ -53,6 +54,8 @@ export const buildCampaignLore = ({ metadata = {}, game = {}, world = {}, events
       ...(str(event.description||event.summary||event.text)?{description:str(event.description||event.summary||event.text)}:{}),
       tags: strings(event.tags), concerns: strings(event.concerns), combatants: strings(event.combatants),
       ...(record(event.quote) && str(event.quote.text) ? { quote: fields(event.quote,["text","speaker","role"]) } : {}) };
+    const statement=normalizePublicStatement(event);
+    if(statement)entry.publicStatement=statement;
     if (event.kind === "interactive" || event.kind === "catalyst") {
       const archive = normalizeInteractiveTranscript(event.interactiveTranscript);
       const permitted = archive && !hiddenIds.has(archive.sourceEventId);
@@ -137,7 +140,8 @@ export const campaignLoreMarkdown = lore => {
   if(!lore.events.length) out.push("No matching retained events.");
   for(const e of lore.events){
     out.push("### "+escape(e.date||"Undated")+" - "+escape(e.title||"Untitled event"),[ref(e),named("Kind",e.kind),named("Importance",e.importance),named("Source",e.source),named("Categories",e.tags.join(", ")),named("Concerns",e.concerns.join(", ")),named("Combatants",e.combatants.join(", ")),named("War ID",e.warId)].filter(Boolean).join("\n"));
-    if(e.description)out.push(block(e.description));
+    if(e.publicStatement)out.push("**Official public statement**",[named("Issuer",e.publicStatement.issuer),named("Intended audience",e.publicStatement.audienceLabel)].filter(Boolean).join("\n"),block(e.publicStatement.body));
+    else if(e.description)out.push(block(e.description));
     if(e.quote?.text)out.push("**Attributed quotation**",[named("Speaker",e.quote.speaker),named("Role",e.quote.role)].filter(Boolean).join("\n"),block(e.quote.text));
     if(e.transcriptStatus && !e.interactiveTranscript)out.push("Interactive transcript: "+e.transcriptStatus+".");
     const t=e.interactiveTranscript;

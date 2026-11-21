@@ -11,6 +11,7 @@
 // to it before the next question (advisorBlocks.js describeReplyProblems).
 import { extractFencedJson, filterAdvisorDeployments, validateChartConfig } from "./advisorBlocks.js";
 import { buildMessageDrafts } from "./advisorDrafts.js";
+import { normalizePublicDraft } from "../../runtime/publicCommunications.js";
 import { buildInstitutionDrafts } from "./advisorInstitutionDrafts.js";
 import { stripAdvisorActionHistoryAnnotations } from "../AI/advisorActionHistory.js";
 
@@ -74,13 +75,17 @@ export const parseAdvisorReply = (rawText, { allowedUnitTypes = null, streaming 
     ? validateChartConfig(chartJson)
     : { config: null, problem: chartReason ? `the chart block was ${chartReason}` : unclosedChart ? "the chart block was cut off before it closed" : "" };
   const { rest: afterActions, json: actionsRaw, problems: actionBlockProblems } = extractActionBlocks(afterChart, { streaming });
-  const { rest: afterDrafts, json: draftsRaw, reason: draftsReason } = extractFencedJson(afterActions, "senddraft", { streaming });
+  const { rest: afterPublic, json: publicRaw, reason: publicReason } = extractFencedJson(afterActions, "publicstatement", { streaming: true });
+  const publicDrafts = Array.isArray(publicRaw) && publicRaw.length<=4 ? publicRaw.map(normalizePublicDraft) : [];
+  const publicProblems = blockProblems(publicRaw,publicReason);
+  if(Array.isArray(publicRaw) && (publicRaw.length>4 || publicDrafts.some(d=>!d)))publicProblems.push("A public statement draft was invalid or exceeded the draft limit.");
+  const { rest: afterDrafts, json: draftsRaw, reason: draftsReason } = extractFencedJson(afterPublic, "senddraft", { streaming });
   const { rest: afterInstitutionDrafts, json: institutionDraftsRaw, reason: institutionDraftsReason } = extractFencedJson(afterDrafts, "institutiondraft", { streaming });
   const { rest: afterDeploy, json: deployRaw, reason: deployReason } = extractFencedJson(afterInstitutionDrafts, "deploy", { streaming });
   const { rest, json: projectsRaw, truncated: projectsTruncated } = extractFencedJson(afterDeploy, "projects", { salvageTruncated: true, streaming });
 
   const draftProblems = blockProblems(draftsRaw, draftsReason);
-  const messageDrafts = Array.isArray(draftsRaw) ? buildMessageDrafts(draftsRaw, afterActions, draftProblems) : null;
+  const messageDrafts = Array.isArray(draftsRaw) ? buildMessageDrafts(draftsRaw, afterPublic, draftProblems) : null;
   const institutionDraftProblems = blockProblems(institutionDraftsRaw, institutionDraftsReason);
   const institutionDrafts = buildInstitutionDrafts(institutionDraftsRaw, institutionDraftProblems);
   // A deployment the advisor is recommending, ready to place with one click.
@@ -94,6 +99,8 @@ export const parseAdvisorReply = (rawText, { allowedUnitTypes = null, streaming 
     actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null,
     actionBlockProblems,
     messageDrafts,
+    publicDrafts: publicDrafts.length && !streaming ? publicDrafts : null,
+    publicProblems,
     institutionDrafts: institutionDrafts.length ? institutionDrafts : null,
     deployments: deployments.length ? deployments : null,
     projectsProposal: Array.isArray(projectsRaw) ? projectsRaw : null,

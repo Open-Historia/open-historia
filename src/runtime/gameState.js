@@ -69,6 +69,7 @@ import { normalizeGmChanges, normalizeReminders } from "./gmChanges.js";
 import { normalizePlayerGoals } from "./playerGoal.js";
 import { normalizeInteractiveOffer } from "./interactiveOffer.js";
 import { normalizeInteractiveTranscript, assertInteractiveTranscriptsRetained } from "./interactiveTranscript.js";
+import { normalizePublicStatement, assertPublicStatementsRetained, normalizeCancelledPublicDrafts } from "./publicCommunications.js";
 import { normalizeSpyOp, spyTasking } from "./spycraft.js";
 import { eventsFromLegacyChat, normalizeChatEvents, projectChatThread, withUnloggedMessages } from "./chatThreads.js";
 import { latestTurnEventIds, unseenEvents, withoutUnseenChats, withoutUnseenEvents, withoutUnseenReports } from "./unseenEvents.js";
@@ -3742,6 +3743,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
     // Only when present, so an event without one saves exactly as before.
     ...(digest ? { digest } : {}),
     ...(interactiveTranscript ? { interactiveTranscript } : {}),
+    ...(normalizePublicStatement(entry) ? {publicStatement:normalizePublicStatement(entry)} : {}),
     ...(presentation.quote ? { quote: presentation.quote } : {}),
     // Only when present, so an event without one saves exactly as before.
     ...(npcReaction ? { npcReaction } : {}),
@@ -4405,6 +4407,8 @@ export const normalizeWorldState = (world) => {
     labelHaloColor: normalizeOptionalString(nextWorld.labelHaloColor),
     labelTextColor: normalizeOptionalString(nextWorld.labelTextColor),
     language: normalizeOptionalString(nextWorld.language) || WORLD_DEFAULTS.language,
+    ...(Object.hasOwn(nextWorld,"cancelledPublicDrafts")?{cancelledPublicDrafts:normalizeCancelledPublicDrafts(nextWorld.cancelledPublicDrafts)}:{}),
+    ...(Object.hasOwn(nextWorld,"publicStatementCursor")?{publicStatementCursor:Number.isSafeInteger(nextWorld.publicStatementCursor)&&nextWorld.publicStatementCursor>=0?nextWorld.publicStatementCursor:0}:{}),
     lastJumpMode: normalizeOptionalString(nextWorld.lastJumpMode),
     lastJumpSummary: normalizeOptionalString(nextWorld.lastJumpSummary),
     lastJumpTargetDate: normalizeOptionalString(nextWorld.lastJumpTargetDate),
@@ -4895,6 +4899,7 @@ export const writeEventsState = async (events, options = {}) => {
     ? dedupeEventLog(normalizedEvents, { keyOf: eventCanonicalKey })
     : dedupeEventLog(normalizedEvents);
   assertInteractiveTranscriptsRetained(events, normalized);
+  assertPublicStatementsRetained(events, normalized);
   // A scenario's own events follow the UI language immediately (see above);
   // the AI's are written in it.
   enqueueEventStrings(normalized);
@@ -4967,6 +4972,7 @@ const buildCanonicalTurnPayload = ({
     ? dedupeEventLog(eventLog, { keyOf: eventCanonicalKey })
     : dedupeEventLog(eventLog);
   assertInteractiveTranscriptsRetained(eventLog, normalizedEvents);
+  assertPublicStatementsRetained(events, normalizedEvents);
   enqueueEventStrings(normalizedEvents);
 
   return {

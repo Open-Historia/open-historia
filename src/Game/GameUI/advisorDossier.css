@@ -470,3 +470,34 @@
   .oh-advisor-send, .oh-advisor-mic, .oh-advisor-mic-progress span { transition: none; }
   .oh-advisor-mic[data-listening="true"] { animation: none; }
 }
+
+ /* Public statements are part of the Advisor's reply, never a popup. */
+.oh-public-statement {
+  box-sizing: border-box; min-width: 0; width: 100%; display: grid; gap: .65rem;
+  padding: .7rem; margin: .65rem 0 .15rem; white-space: normal;
+  border: 1px solid var(--oh-ui-line, rgba(133, 203, 230, .3));
+  border-radius: 8px; background: var(--oh-ui-overlay-card, rgba(255,255,255,.045));
+}
+.oh-public-statement-heading { display: flex; gap: .5rem; align-items: center; font-size: .8rem; color: var(--oh-advisor-accent); }
+.oh-public-statement-heading svg { flex-shrink: 0; }
+.oh-public-statement-meta { font-size: .72rem; line-height: 1.45; opacity: .8; overflow-wrap: anywhere; }
+.oh-public-statement-copy { border-top: 1px solid var(--oh-ui-line, rgba(255,255,255,.15)); padding-top: .65rem; display: grid; gap: .35rem; }
+.oh-public-statement-copy > div { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .83rem; line-height: 1.6; }
+.oh-public-statement-confirm { display: flex; gap: .45rem; align-items: flex-start; font-size: .72rem; line-height: 1.45; }
+.oh-public-statement-confirm input { flex-shrink: 0; margin: .15rem 0 0; accent-color: var(--oh-ui-accent); }
+.oh-public-statement-buttons { display: flex; gap: .4rem; flex-wrap: wrap; }
+.oh-public-statement-buttons > button { flex: 1 1 6.6rem; }
+.oh-public-statement button, .oh-public-statement :is(select,input:not([type=checkbox]),textarea) {
+  box-sizing: border-box; min-width: 0; max-width: 100%; min-height: 2.15rem; padding: .45rem .55rem;
+  background: var(--oh-ui-overlay-card, rgba(255,255,255,.06)); color: inherit;
+  border: 1px solid var(--oh-ui-line, rgba(255,255,255,.2)); border-radius: 6px; font: inherit; font-size: .76rem;
+}
+.oh-public-statement button { font-weight: 700; cursor: pointer; line-height: 1.3; }
+.oh-public-statement .oh-public-statement-publish { background: var(--oh-ui-active,#28546e); border-color: var(--oh-ui-accent,#85cbe6); }
+.oh-public-statement :is(button,input,textarea,select):disabled { opacity: .48; cursor: not-allowed; }
+.oh-public-statement :is(button,input,textarea,select):focus-visible { outline: 2px solid var(--oh-ui-accent,#85cbe6); outline-offset: 2px; }
+.oh-public-statement-fields { display: grid; gap: .5rem; min-width: 0; }
+.oh-public-statement-fields label { display: grid; gap: .25rem; font-size: .73rem; min-width: 0; }
+.oh-public-statement-fields :is(select,input,textarea) { width: 100%; }
+.oh-public-statement-fields textarea { min-height: 10rem; resize: vertical; line-height: 1.55; }
+.oh-public-statement-fields select option { background: var(--oh-ui-overlay-strong,#202023); color: white; }

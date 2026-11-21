@@ -26,6 +26,7 @@ import { draftIdOf, sentLetterDate, splitAtBlockquotes } from "./advisorDrafts.j
 import { repeatedOrder } from "../AI/playerFocus.js";
 import { institutionDraftButtonLabel } from "./advisorInstitutionDrafts.js";
 import { parseAdvisorReply } from "./advisorReply.js";
+import { PublicStatementCard } from "./publicStatement.jsx";
 import { completeAdvisorActionReply } from "./advisorActionCompleteness.js";
 import { prepareAdvisorGroupMemberReply, stageAdvisorGroupBatch } from "./advisorGroupOrders.js";
 import { applyAdvisorGroupProjectBatch } from "./advisorProjectRouting.js";
@@ -812,8 +813,8 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment }) => {
-    const { text, chartConfig, chartProblem, messageDrafts: parsedDrafts, institutionDrafts, deployments } = msg.role === "advisor"
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussPublicStatement, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment }) => {
+    const { text, chartConfig, chartProblem, messageDrafts: parsedDrafts, publicDrafts, publicProblems, institutionDrafts, deployments } = msg.role === "advisor"
         ? parseAdvisorReply(msg.text, { allowedUnitTypes: allowedUnitTypes ? allowedUnitTypes.split(",") : null, streaming: Boolean(msg.streaming) })
         : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, institutionDrafts: null, deployments: null };
     // Each letter's own id (advisorDrafts.js draftIdOf), which the message sent
@@ -847,6 +848,8 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
             onDraftMessage={canDraft ? onDraftMessage : undefined}
             />
         )}
+        {canExecute && !msg.streaming && publicDrafts?.map((draft,index)=>draft&&<PublicStatementCard key={msg.id+":public:"+index} draft={draft} replyId={msg.id} index={index} onDiscuss={onDiscussPublicStatement}/>)}
+        {canExecute && !msg.streaming && publicProblems?.length>0 && <div role="status" style={{fontSize:"0.74rem",opacity:0.75}}>{publicProblems.join(" ")}</div>}
         {chartConfig && <AdvisorChart config={chartConfig} />}
         {/* Not while streaming: a chart still arriving is not a broken one. */}
         {chartProblem && !msg.streaming && (
@@ -988,7 +991,7 @@ const ADVISOR_RENDER_WINDOW_STEP = 20;
 // Only the last `visibleLimit` messages are drawn. `i` stays the index into
 // the WHOLE transcript: placedDeployments and completedInstitutionDrafts are
 // written back through it.
-const AdvisorMessageList = React.memo(({ messages, groupMemberIds = [], visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", speakerNameFor = null, emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => {
+const AdvisorMessageList = React.memo(({ messages, groupMemberIds = [], visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", speakerNameFor = null, emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussPublicStatement, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => {
     // Silent group-participation markers are persisted for resume/idempotence,
     // but never consume visible history slots or display empty bubbles.
     const silentTurnEnds = new Set(completedSilentGroupTurnIndices(messages, groupMemberIds));
@@ -1027,7 +1030,7 @@ const AdvisorMessageList = React.memo(({ messages, groupMemberIds = [], visibleL
             {uiString("All group members passed on this turn. No answer or execution was recorded.")}
           </div>
         : (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerNameFor ? speakerNameFor(msg) : speakerName} canExecute={canExecute} canDraft={canDraft} canReviewActions={canReviewActions} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} actionStates={actionStates} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={i === visibleLastIndex && msg.projectsProblem ? onRetryProjects : undefined} onDraftMessage={onDraftMessage} onDiscussAction={onDiscussAction} onProceedAction={onProceedAction} onCancelAction={onCancelAction} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerNameFor ? speakerNameFor(msg) : speakerName} canExecute={canExecute} canDraft={canDraft} canReviewActions={canReviewActions} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} actionStates={actionStates} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={i === visibleLastIndex && msg.projectsProblem ? onRetryProjects : undefined} onDraftMessage={onDraftMessage} onDiscussPublicStatement={onDiscussPublicStatement} onDiscussAction={onDiscussAction} onProceedAction={onProceedAction} onCancelAction={onCancelAction} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
         onRetry={i === visibleLastIndex && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
     )))}
 
@@ -1869,6 +1872,13 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
 
     // Discuss is a local composer handoff: it neither sends a message nor
     // writes an Action. Preserve any draft the player was already typing.
+    const handleDiscussPublicStatement = React.useCallback((draft) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current) return;
+        const subject = String(draft?.title || "this statement").trim().slice(0,180);
+        const prompt = "Let's discuss the proposed public statement "+JSON.stringify(subject)+" before publication. Prepare a fresh draft if we agree on revisions.";
+        setInput(current => current.trim() ? current.trimEnd()+"\n\n"+prompt : prompt);
+        inputRef.current?.focus();
+    }, []);
     const handleDiscussAction = React.useCallback((_messageId, proposal, needsNewAction = false) => {
         if (turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current) return;
         const subject = String(proposal?.title || proposal?.text || "this Action").trim().slice(0, 240);
@@ -2303,6 +2313,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         onRetry={handleRetryTurn}
         retrying={isLoading}
         onDraftMessage={handleDraftMessage}
+        onDiscussPublicStatement={handleDiscussPublicStatement}
         onDiscussAction={handleDiscussAction}
         onProceedAction={handleProceedAction}
         onCancelAction={handleCancelAction}

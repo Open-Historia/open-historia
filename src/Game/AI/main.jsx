@@ -154,6 +154,8 @@ import { describeGoalForAdvisor, playerGoalOf } from "../../runtime/playerGoal.j
 import { describeReportsForPrompt, normalizeReports } from "../../runtime/reports.js";
 import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
+import { advisorRostraContext } from "../../runtime/advisorRostra.js";
+import { publicAudienceOptions, publicIssuerOptions, publicStatementContext } from "../../runtime/publicCommunications.js";
 import { withCatchUp } from "./conversationCatchUp.js";
 import { advisorMemoryDirectiveForMode, advisorMemoryContextEntry, latestAdvisorMemory, splitAdvisorMemory } from "./advisorMemory.js";
 import { pendingAdvisorActionDrafts, redactHistoricalAdvisorActionBlocks, renderHistoricalAdvisorReply, renderPendingAdvisorActionDrafts, sanitizeAdvisorModelHistory } from "./advisorActionHistory.js";
@@ -3848,6 +3850,14 @@ async function buildAdvisorSystemPrompt({ recipient = null, discussionOnly = fal
         discussionOnly || meetingMode ? "" : renderPendingAdvisorActionDrafts(
             pendingAdvisorActionDrafts(advisorData, actionData, recipient?.id || CHIEF_ADVISOR_THREAD)),
         discussionOnly ? "" : ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
+        advisorRostraContext({feed:worldData?.socialFeed,round:gameData?.round,query:currentQuestion,enabled:isActiveFeatureEnabled("socialMedia")}),
+        publicStatementContext(eventData,worldData,gameData),
+        !recipient && !discussionOnly && !meetingMode && !hostingSharedGame() ? [
+            "[Official public communications]",
+            "When asked to prepare a public speech, proclamation, press release or official public statement, write a brief introduction, then a fenced publicstatement JSON array of at most four objects. Use {title,body,issuerId,audience:{kind,target}}. issuerId may be omitted for the canonical default, or use an exact issuing-office id listed below. Body must be complete plain text, at most 4000 characters; title at most 180. Do not also repeat the body in a blockquote. Audience kind: domestic, worldwide, foreign-public, or institution. target is empty for domestic/worldwide, otherwise an exact canonical ID listed below. Public address to a foreign population or institution is distinct from private diplomacy. The issuing government is determined natively. This only prepares a draft; the human must review and publish it. Never claim publication, legal enactment or a Rostra post before a native receipt. Do not create Actions merely to publish an address.",
+            "Available issuing offices: "+JSON.stringify(publicIssuerOptions(worldData,gameData)),
+            "Available public audiences (IDs and labels): "+JSON.stringify(publicAudienceOptions(worldData)),
+        ].join("\n") : "",
         discussionOnly || meetingMode ? "" : ADVISOR_INSTITUTION_DRAFT_DIRECTIVE,
         discussionOnly || meetingMode ? "" : ADVISOR_DEPLOY_DIRECTIVE,
         discussionOnly ? "" : buildAdvisorProjectsDirective(variables.projectsSummary),

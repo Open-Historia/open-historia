@@ -103,7 +103,7 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "reparations",
   "peaceTreaties",
   // Rostra, the social network (runtime/socialFeed.js): posts are public.
-  "socialFeed",
+  "socialFeed", "publicStatementCursor",
   // The stat sheets, and how each has moved: public figures (see the limits above).
   "countryStats", "countryStatsHistory",
   // The map itself, as the scenario draws it: how it is projected, its region
@@ -126,7 +126,7 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
 export const HOST_ONLY_WORLD_KEYS = Object.freeze([
   "actionSuggestions", "chargedRefusals", "chatKnowledgeCursors", "consolidatedHistory",
   "gmAudit", "gmChanges", "historyDocument", "idlePulseTick", "lastJumpSummary", "naviesRaised", "notes",
-  "pendingEventOutreach", "politicalSimulation", "seatBoards", "seatSeals", "seenFleetPostures",
+  "cancelledPublicDrafts", "pendingEventOutreach", "politicalSimulation", "seatBoards", "seatSeals", "seenFleetPostures",
   // A beta save's record of the work its older lending put on the game's
   // board (runtime/seatBoards.js settleBoards reads it, and drops it).
   // Projects deliberately shelved by the game owner are save-management

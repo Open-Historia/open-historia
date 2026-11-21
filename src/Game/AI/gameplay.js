@@ -1,5 +1,6 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { nextTask } from "../../runtime/nextTask.js";
+import { PUBLICATION_SOURCE, publicStatementContext, nextPublicStatementCursor } from "../../runtime/publicCommunications.js";
 import { callAI, geminiDeclaresTaskFunction, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
 import { forgetBatch, readStoredBatches, rememberBatch } from "./batchRegistry.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
@@ -3204,6 +3205,8 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
     round: Number(game?.round) || 0,
   }));
 
+  const publications=publicStatementContext(await readEventsState(),world,game,{onlyPending:true});
+  if(publications)blocks.push(publications);
   const reputation = normalizeString(variables.playerPolityReputationContext);
   const intelligence = normalizeString(variables.playerPolityIntelligenceContext);
   if (reputation || intelligence) {
@@ -8414,6 +8417,8 @@ const normalizeGeneratedEvent = (entry, index = 0) => {
   // Editor's to write. The schema has no such field, but not every provider
   // holds a model to its schema.
   const { npcReaction, interactiveTranscript: _interactiveTranscript, ...generated } = normalized;
+  delete generated.publicStatement;
+  if(generated.source===PUBLICATION_SOURCE)generated.source="ai";
   return {
     ...generated,
     id: normalized.id || `generated-event-${index}`,
@@ -9426,6 +9431,7 @@ const applySimulationResult = async ({
       ...(Array.isArray(result.seatAdvice)
         ? { seatAdvice: mergeSeatAdvice(baseWorld?.seatAdvice, result.seatAdvice, { people: humanCountriesOf(baseGame), round: nextGame.round }) }
         : null),
+      ...(nextPublicStatementCursor(priorEvents,baseWorld,result.mode,nextGame.round)!==undefined?{publicStatementCursor:nextPublicStatementCursor(priorEvents,baseWorld,result.mode,nextGame.round)}:{}),
       lastJumpMode: normalizeString(result.mode),
       lastJumpSummary: normalizeString(result.summary),
       lastJumpTargetDate: nextGame.gameDate,
