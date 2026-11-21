@@ -504,11 +504,14 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     hasCustomGeometry,
     stats: { ownedRegions: Object.keys(regionOwnershipOverrides).length, owners: owners.size, customGeometry: customCount },
     world,
-    // Merge onto the full base palette so re-ownership (tier-1) maps keep colors
-    // for every country the stock pmtiles still renders, not just the edited ones.
-    // Overrides go on last so a colour the map-maker picked survives even for a
-    // country that owns no regions on this map — the stock tiles still paint it.
-    colors: { ...palette, ...colors, ...overrides },
+    // A stock/tier-1 reownership map still renders countries from the stock
+    // PMTiles: preserve their full palette, including authored overrides.
+    // Custom geometry instead declares its COMPLETE polity universe; leaking
+    // the stock or old scenario palette would carry unrelated historical
+    // owners into the independently generated world's static colors asset.
+    // emitPolity covers region owners, claimants and registered landless
+    // polities, so their colors remain even when they have no territory.
+    colors: world.customRegions ? colors : { ...palette, ...colors, ...overrides },
     game,
     // flags.json: owner code -> PNG data URL. Deliberately NOT part of world, which
     // the game re-polls every 5s — these are re-fetched only when the scenario

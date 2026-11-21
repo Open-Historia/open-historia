@@ -94,6 +94,7 @@ import { buildScenarioCountryOptions, isOfferedCountry, seededWorldOf, worldWith
 import { applyStartingRelationEdits, withoutStartingRelations } from "../../Editor/scenarioStartingRelations.js";
 import { applyGovernmentEdits } from "../../Editor/scenarioGovernmentEdits.js";
 import { assertGeneratedWorldScenarioSaveAllowed } from "../../Editor/scenarioWorldReplacement.js";
+import { createFreshScenarioFromGeneratedMap } from "../../Editor/generatedScenarioDestination.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave, scenarioAfterWorkshopRenames } from "../../Editor/playerCountryAfterSave.js";
@@ -4301,8 +4302,50 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // player SEES the map right away — the stock country-level renderer can't show
   // per-region ownership, so every applied map ships its geometry and renders via
   // the custom GeoJSON layer.
-  const applyMapToScenario = async (scenario, seed, { play = true, renames = [], beforePlay = null } = {}) => {
+  const applyMapToScenario = async (scenario, seed, {
+    play = true, renames = [], beforePlay = null,
+    destination = "current", newScenarioName = "",
+  } = {}) => {
     if (!scenario || !seed) return;
+    if (destination === "new") {
+      // New-world generation cannot silently reuse an established scenario's
+      // Political Actors, wars, institutions, treaties or scripted history.
+      // The same native writeMapToScenario path publishes into a *new*, blank
+      // scenario. The source scenario and active game are never selected or
+      // mutated as part of this creation.
+      if (mapEditorReview) throw new Error("Finish the existing suggestion review before creating a separate scenario.");
+      const sourceEditorHasUnsavedForm = Boolean(editorKind === "scenario" && editorDetails && editorState) && (
+        formDiffers(editorState, buildScenarioEditorState(editorDetails))
+        || formDiffers(editorStats, editorStatsSavedRef.current)
+      );
+      if (sourceEditorHasUnsavedForm && !window.confirm(
+        "Your existing scenario editor form has unsaved changes that cannot be copied into the new scenario. Continue without those form edits?",
+      )) {
+        throw new Error("New scenario creation cancelled. The original scenario was not changed.");
+      }
+      return createFreshScenarioFromGeneratedMap({
+        seed,
+        name: newScenarioName,
+        createScenario,
+        saveMap: (newId, freshSeed) =>
+          withSingleLibraryRefresh(() => writeMapToScenario(newId, freshSeed, [])),
+        // This is the same pre-unmount settlement used by Apply & Play.
+        settleSource: beforePlay,
+        openScenarioEditor: async (newId) => {
+          // Switch selection only after the new world and local settlement
+          // succeeded. Creation/publishing failures leave the historical
+          // scenario selected and its canonical records untouched.
+          await selectScenario(newId);
+          await openScenarioEditor(newId);
+          mapEditorRequest.cancel();
+          setIsMapEditorOpen(false);
+          setMapEditorScenario(null);
+          setMapEditorSeed(null);
+          setMapEditorReview(null);
+        },
+      });
+    }
+    if (destination !== "current") throw new Error("Unknown map scenario destination.");
     const scenarioId = scenario.id;
 
     // A save is a scenario save and up to six asset writes. Each used to rebuild

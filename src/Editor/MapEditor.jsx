@@ -240,6 +240,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const [fmgOpen, setFmgOpen] = useState(false); // FMG "Generate" drawer
   const [fmgBusy, setFmgBusy] = useState(false);
   const [fmgLog, setFmgLog] = useState([]);
+  const [newGeneratedScenarioName, setNewGeneratedScenarioName] = useState("Generated World");
   // Whether this build serves the generator (fmgDriver.js checkFmgAvailable):
   // null until asked once, and the GENERATE tab shows only on true.
   const [fmgAvailable, setFmgAvailable] = useState(null);
@@ -925,8 +926,12 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
 
   // Persist the Workshop map into the scenario without forcing a new game.
   // Playing is now an explicit third action instead of the only way to save.
-  const persistScenario = async ({ play = false, closeAfter = false } = {}) => {
+  const persistScenario = async ({ play = false, closeAfter = false, destination = "current", newScenarioName = "" } = {}) => {
     if (!api || !onApplyToScenario || scenarioAction || cleanAnswerRef.current) return false;
+    if (destination === "new" && !generatedWorldReplacementId(d.doc)) {
+      window.alert("Generate a world before creating a separate scenario from it.");
+      return false;
+    }
     // Before the scenario's map has loaded the document is empty, and a save
     // then wrote an empty map over the scenario. That was the "save twice" bug:
     // the first click, made while the map was still downloading, wiped it, and
@@ -939,7 +944,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     // Quick or deep, before anything is read. Backed out of, the save is off.
     const mode = await chooseClean();
     if (!mode) return false;
-    const action = play ? "play" : closeAfter ? "save-exit" : "save";
+    const action = destination === "new" ? "new-scenario" : play ? "play" : closeAfter ? "save-exit" : "save";
     setScenarioAction(action);
     const note = await cleanBorders({ mode });
     let canonicalSaved = false;
@@ -1004,6 +1009,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       const accepted = await onApplyToScenario(seed, {
         play,
         renames,
+        destination,
+        newScenarioName,
         beforePlay: async (applied) => {
           // Apply & Play activates the game and unmounts us. Persist the local
           // settlement first, including the explicit null metadata tombstone.
@@ -1705,6 +1712,64 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       >
         {scenarioAction === "play" ? "Applying…" : "▶ Apply & Play"}
       </button>
+      {generatedWorldReplacementId(d.doc) && !reviewSource && (
+        <div
+          role="group"
+          aria-label="Generated world destination"
+          style={{
+            gridColumn: "1 / -1",
+            display: "grid",
+            gap: 8,
+            marginTop: 5,
+            padding: 11,
+            border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.15))",
+            borderRadius: 11,
+            background: "var(--oh-ui-raised, rgba(255,255,255,0.06))",
+            color: "var(--oh-ui-text, #fff)",
+          }}
+        >
+          <strong style={{ fontSize: 12.5 }}>Generated world: choose a destination</strong>
+          <span style={{ fontSize: 11.5, lineHeight: 1.45, color: "var(--oh-ui-muted, #b0b8c7)" }}>
+            Save or Apply & Play above targets {scenarioName || "the current scenario"} and may be refused
+            when its established history is incompatible. To preserve that history, publish this
+            generated map as a separate scenario instead.
+          </span>
+          <label htmlFor="oh-generated-world-scenario-name" style={{ fontSize: 11.5, fontWeight: 650 }}>
+            New scenario name
+          </label>
+          <input
+            id="oh-generated-world-scenario-name"
+            type="text"
+            maxLength={96}
+            value={newGeneratedScenarioName}
+            onChange={(event) => setNewGeneratedScenarioName(event.target.value)}
+            disabled={Boolean(scenarioAction)}
+            placeholder="Generated World"
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              borderRadius: 8,
+              border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.2))",
+              padding: "9px 10px",
+              background: "var(--oh-ui-bg, #171c26)",
+              color: "var(--oh-ui-text, #fff)",
+              fontSize: 12.5,
+            }}
+          />
+          <button
+            onClick={() => void persistScenario({
+              play: false,
+              destination: "new",
+              newScenarioName: newGeneratedScenarioName,
+            })}
+            disabled={Boolean(scenarioAction) || !hydrated || newGeneratedScenarioName.trim().length < 3}
+            title="Create a separate blank-canon scenario and open it after saving this generated map. The current scenario remains unchanged."
+            style={scenarioButton(true, Boolean(scenarioAction) || !hydrated || newGeneratedScenarioName.trim().length < 3)}
+          >
+            {scenarioAction === "new-scenario" ? "Creating scenario…" : "Create New Scenario from This World"}
+          </button>
+        </div>
+      )}
     </div>
   ) : exitButton);
 
