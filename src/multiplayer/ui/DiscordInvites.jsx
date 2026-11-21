@@ -88,6 +88,7 @@ export default function DiscordInvites() {
       if (stopped || !inbox) return;
       if (inbox.join?.token) {
         setError("");
+        setName(rememberedPlayerName());
         setInvite({ token: String(inbox.join.token) });
       }
       setRequests(Array.isArray(inbox.requests) ? inbox.requests : []);

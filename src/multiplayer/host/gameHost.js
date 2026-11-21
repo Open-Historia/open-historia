@@ -1783,8 +1783,9 @@ export const createGameHost = ({
       const { store, hold } = cx;
       let refusal = "";
       let landed = [];
-      // (A peace taken may annex a country or cede regions by name: they are found on the map.)
-      const map = op === "accept"
+      // (A peace taken may annex a country or cede regions by name, and refusing a
+      // call to arms may break a treaty with an area clause: they are found on the map.)
+      const map = op === "accept" || op === "refuse"
         ? await hold(Promise.all([import("../../runtime/assets.js"), import("../../Game/AI/promptContext.js")])
           .then(async ([assets, context]) => ({ catalog: await assets.loadRegionCatalog(), rendered: context.filterToRenderedRegions }))
           .catch(() => null))
@@ -2562,7 +2563,7 @@ export const createGameHost = ({
       send(connection, roundMessage(round.status(), connection));
       // A paying device back on a new connection is sent the request again.
       payers.joined(player.device);
-      void seatsChanged();
+      void seatsChanged().catch(() => {});
     },
     leave(player) {
       const connection = connections.get(player.id);
@@ -2586,7 +2587,7 @@ export const createGameHost = ({
         return;
       }
       seats.left(connection.device);
-      void seatsChanged();
+      void seatsChanged().catch(() => {});
     },
     receive,
     // The host's own controls, from the host's own screen only.
@@ -2854,7 +2855,7 @@ export const createGameHost = ({
         for (const connection of connections.values()) {
           send(connection, notice("info", `${handed.join(", ")} ${handed.length === 1 ? "is" : "are"} now played by the AI.`));
         }
-        void seatsChanged();
+        void seatsChanged().catch(() => {});
       }, 15_000);
     },
     // The game is single player again: nobody is played by a person but the

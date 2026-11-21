@@ -4018,13 +4018,22 @@ const diplomaticIdentityIndexOf = (identityWorld) => {
 };
 
 // A party to a relation or an agreement: a polity, or a group by its exact name
-// (runtime/groupParties.js). "group: X" is the group; a bare name is a polity's
-// when one answers to it, else a group's, else kept as written.
+// (runtime/groupParties.js). "group: X" stays prefixed when a polity shares the
+// same name so subsequent normalizations never rebind the record to the state;
+// a bare name is a polity's when one answers to it, else a group's, else kept as written.
 const resolveWorldDiplomaticPolity = (token, identityWorld) => {
   const raw = normalizeOptionalString(token);
   if (!raw) return "";
   const named = groupPartyKey(identityWorld, raw);
-  if (named && /^\s*group\s*:/i.test(raw)) return named;
+  if (named && /^\s*group\s*:/i.test(raw)) {
+    const colliding = resolvePolityIdentity(named, identityWorld, {
+      allowUnknown: false,
+      requireActive: false,
+      allowStockBase: true,
+      identityIndex: diplomaticIdentityIndexOf(identityWorld),
+    });
+    return colliding?.resolved ? `group: ${named}` : named;
+  }
   if (named) {
     const known = resolvePolityIdentity(raw, identityWorld, {
       allowUnknown: false,
@@ -4746,7 +4755,8 @@ export const normalizeGameData = (game) => {
   return {
     ...GAME_DEFAULTS,
     ...restGame,
-    country: normalizeOptionalString(nextGame.country),
+    // Always store the player's country as its canonical full name, never an ISO-3 code.
+    country: toCountryName(normalizeOptionalString(nextGame.country)),
     difficulty: normalizeOptionalString(nextGame.difficulty) || GAME_DEFAULTS.difficulty,
     gameDate: canonicalizeDateString(nextGame.gameDate),
     language: normalizeOptionalString(nextGame.language) || GAME_DEFAULTS.language,
@@ -6260,6 +6270,32 @@ export const applyEventImpactsToWorld = ({
         if (change.op === "rename") {
           nextWorld.battlefields = renameInBattlefields(nextWorld.battlefields, change.from, change.name);
           nextWorld.transports = renameInTransports(nextWorld.transports, change.from, change.name);
+        }
+        // A dissolved group cannot keep running recurring agreements with no UI to end them.
+        if (change.op === "dissolve" && Array.isArray(nextWorld.agreements) && nextWorld.agreements.length) {
+          const hasCollidingPolity = Boolean(resolvePolityIdentity(change.name, nextWorld, {
+            allowUnknown: false,
+            requireActive: false,
+            allowStockBase: true,
+            identityIndex: diplomaticIdentityIndexOf(nextWorld),
+          })?.resolved);
+          const groupTag = `group: ${change.name}`.toLocaleLowerCase();
+          const bareName = String(change.name ?? "").trim().toLocaleLowerCase();
+          nextWorld.agreements = nextWorld.agreements.map((agreement) => {
+            if (!["active", "suspended"].includes(String(agreement?.status || "active").toLowerCase())) return agreement;
+            const parties = Array.isArray(agreement?.parties) ? agreement.parties : [];
+            const involvesGroup = parties.some((party) => {
+              const folded = String(party ?? "").trim().toLocaleLowerCase();
+              return folded === groupTag || (!hasCollidingPolity && folded === bareName);
+            });
+            if (!involvesGroup) return agreement;
+            return {
+              ...agreement,
+              status: "ended",
+              endedDate: normalizeOptionalString(event?.date) || normalizeOptionalString(agreement?.endedDate),
+              lastUpdatedDate: normalizeOptionalString(event?.date) || normalizeOptionalString(agreement?.lastUpdatedDate),
+            };
+          });
         }
         if (change.op === "refused") console.warn(`[groups] "${change.name}" was not created on event "${event.title}": the ${MAX_GROUPS}-group limit is reached.`);
       }

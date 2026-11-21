@@ -334,11 +334,16 @@ const Lobby = ({ shared, me }) => {
     setPressed(true);
     hostControl("start");
   };
-  // Once the engine has said it, the engine's word is the one followed.
+  // Once the engine has said it, or failed fast with an error, the engine's word is followed.
   const [saidStarting, setSaidStarting] = useState(engineStarting);
   if (saidStarting !== engineStarting) {
     setSaidStarting(engineStarting);
     if (engineStarting) setPressed(false);
+  }
+  const [seenError, setSeenError] = useState(error);
+  if (seenError !== error) {
+    setSeenError(error);
+    if (error) setPressed(false);
   }
   useEffect(() => {
     if (!pressed) return undefined;

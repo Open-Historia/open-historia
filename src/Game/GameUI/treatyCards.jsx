@@ -22,9 +22,10 @@
 //
 // Every write goes through gameplayLazy.js playerTreaty: single player only.
 
-import React, { useState } from "react";
+import React, { useState, useSyncExternalStore } from "react";
 import { AGREEMENT_TYPE_LABELS } from "../../runtime/diplomaticViews.js";
 import { AGREEMENT_EFFECT_LISTS, normalizeAgreementEffects } from "../../runtime/agreementEffects.js";
+import { formatEconomicDisplayValue, getActiveEconomicDisplayCurrency, subscribeEconomicDisplayCurrency } from "../../runtime/economicDisplayCurrency.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLowerCase();
@@ -83,17 +84,14 @@ const TREATY_STATUS_LABELS = Object.freeze({
 
 const kindOf = (type) => AGREEMENT_TYPE_LABELS[type] ?? AGREEMENT_TYPE_LABELS.other;
 const signed = (value) => `${value > 0 ? "+" : ""}${Math.round(value * 100) / 100}`;
-const money = (value) => {
-  const number = Number(value) || 0;
-  if (number >= 1e12) return `$${(number / 1e12).toFixed(2)}T`;
-  if (number >= 1e9) return `$${(number / 1e9).toFixed(2)}B`;
-  if (number >= 1e6) return `$${(number / 1e6).toFixed(1)}M`;
-  return `$${Math.round(number).toLocaleString()}`;
+const money = (value, displayCurrency) => {
+  const amount = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+  return formatEconomicDisplayValue(amount, displayCurrency, { compact: true });
 };
 const Name = ({ value }) => (fold(value) === "breaker" ? <span>{EFFECT_WORD_LABELS.breaker}</span> : <span data-no-translate>{value}</span>);
 
 // One effect, in a line. `yearly`: a perYear effect, its amount a year's ("$3.00B each year").
-const EffectLine = ({ effect, yearly = false }) => {
+const EffectLine = ({ effect, yearly = false, displayCurrency }) => {
   const number = (text) => <span data-no-translate style={{ fontVariantNumeric: "tabular-nums", fontWeight: 760 }}>{text}</span>;
   let body = null;
   if (effect.type === "stat") {
@@ -104,7 +102,7 @@ const EffectLine = ({ effect, yearly = false }) => {
   } else if (effect.type === "reputation") {
     body = <><Name value={effect.party} />: {EFFECT_WORD_LABELS.reputation} {number(signed(effect.change))}</>;
   } else if (effect.type === "payment") {
-    body = <><Name value={effect.from} /> → <Name value={effect.to} />: {number(money(effect.amount))}</>;
+    body = <><Name value={effect.from} /> → <Name value={effect.to} />: {number(money(effect.amount, displayCurrency))}</>;
   } else if (effect.type === "strength") {
     body = <><Name value={effect.party} />: {EFFECT_STRENGTH_LABELS[effect.figure] ?? effect.figure} {number(signed(effect.change))}</>;
   } else if (effect.type === "area") {
@@ -117,6 +115,7 @@ const EffectLine = ({ effect, yearly = false }) => {
 
 // An agreement's effects (runtime/agreementEffects.js), grouped by when they happen.
 export const EffectList = ({ effects, compact = false }) => {
+  const displayCurrency = useSyncExternalStore(subscribeEconomicDisplayCurrency, getActiveEconomicDisplayCurrency);
   const shown = normalizeAgreementEffects(effects);
   if (!shown) return <div style={{ color: "var(--oh-ui-muted, rgba(255,255,255,0.5))", fontSize: compact ? "0.6rem" : "0.66rem" }}>{EFFECT_WORD_LABELS.none}</div>;
   return (
@@ -128,7 +127,7 @@ export const EffectList = ({ effects, compact = false }) => {
         <div key={list}>
           <div style={{ color: "var(--oh-ui-accent, #2bc1f3)", fontSize: "0.58rem", fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase" }}>{EFFECT_LIST_LABELS[list]}</div>
           <ul style={{ margin: "0.1rem 0 0", paddingLeft: "1rem" }}>
-            {shown[list].map((effect, at) => <EffectLine key={`${list}-${at}`} effect={effect} yearly={list === "perYear"} />)}
+            {shown[list].map((effect, at) => <EffectLine key={`${list}-${at}`} effect={effect} yearly={list === "perYear"} displayCurrency={displayCurrency} />)}
           </ul>
         </div>
       ))}
@@ -227,8 +226,14 @@ export const ProposalBox = ({ counterpart = "", busy = false, onSend, onCancel }
     if (!proposal || sending || busy) return;
     setSending(true);
     setSaid("");
-    const why = await onSend?.(proposal);
-    setSending(false);
+    let why = "";
+    try {
+      why = (await onSend?.(proposal)) || "";
+    } catch (error) {
+      why = String(error?.message || error || "That could not be done.");
+    } finally {
+      setSending(false);
+    }
     if (why) setSaid(why);
     else setText("");
   };
@@ -270,8 +275,14 @@ export const TreatyCard = ({ offer, viewer, onAnswer }) => {
     if (busy) return;
     setBusy(true);
     setError("");
-    const why = await onAnswer?.(op, offer);
-    setBusy(false);
+    let why = "";
+    try {
+      why = (await onAnswer?.(op, offer)) || "";
+    } catch (err) {
+      why = String(err?.message || err || "That could not be done.");
+    } finally {
+      setBusy(false);
+    }
     if (why) setError(why);
   };
   const state = open ? (mine ? "Waiting for their answer" : "") : TREATY_STATUS_LABELS[offer?.status] ?? "";
@@ -319,9 +330,15 @@ export const AgreementsInForce = ({ agreements = [], onEnd }) => {
     }
     setBusy(agreement.id);
     setError("");
-    const why = await onEnd?.(agreement);
-    setBusy("");
-    setArmed("");
+    let why = "";
+    try {
+      why = (await onEnd?.(agreement)) || "";
+    } catch (err) {
+      why = String(err?.message || err || "That could not be done.");
+    } finally {
+      setBusy("");
+      setArmed("");
+    }
     if (why) setError(why);
   };
   return (

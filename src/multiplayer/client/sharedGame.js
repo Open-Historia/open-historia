@@ -700,10 +700,17 @@ setSharedRequester(sharedRequest);
 // With the host's setting that players take turns to pay (host/settings.js
 // payment "cycle"): this device's turn, made on its own AI (client/roundPayer.js).
 // The game's AI is loaded only when a request comes.
+// For in-flight paid round answers and lookups: queue on the client even during
+// a brief reconnect so gameClient.resend() delivers the already-billed response
+// once the connection returns, instead of discarding it with CUT_OFF_REFUSAL.
+const queuedSharedRequest = (t, fields = {}) => (current?.client
+  ? current.client.request(t, fields)
+  : Promise.resolve({ ok: false, error: "Not in a shared game." }));
+
 const roundPayer = createRoundPayer({
   ask: async (call, options) => (await import("../../Game/AI/main.jsx")).carryRoundRequest(call, options),
-  answer: (fields) => sharedRequest("paid", fields),
-  lookup: (fields) => sharedRequest("payLookup", fields),
+  answer: (fields) => queuedSharedRequest("paid", fields),
+  lookup: (fields) => queuedSharedRequest("payLookup", fields),
   alive: (message) => current?.client?.notify(message),
   cycle: () => state.lobby?.settings?.payment === "cycle",
   log: (text) => logDebugEvent("shared game", text, undefined, { problem: true }),
@@ -759,7 +766,12 @@ const endForThisPage = async (words, { wasIn = true } = {}) => {
 
 // `endedWith`: the game ended for this page (endForThisPage); its box says
 // why while the page is taken out, and after, unless the page is `reloading`.
+// Serialized through `leavingPromise` so a concurrent leave (e.g. card menu click
+// while endForThisPage is already cleaning up a stand-in) waits for cleanup
+// instead of reloading prematurely.
+let leavingPromise = null;
 export const leaveSharedGame = async ({ stopHosting = true, endedWith = "", reloading = false } = {}) => {
+  if (leavingPromise) return leavingPromise;
   const leaving = current;
   // An engine window that never answered this page, or stopped answering it,
   // cannot be trusted to close itself when it is told to stop.
@@ -767,44 +779,51 @@ export const leaveSharedGame = async ({ stopHosting = true, endedWith = "", relo
   current = null;
   // The game's screens and round bar go at once; the box says why meanwhile.
   if (endedWith) set({ mode: "ended", error: endedWith, leaving: true });
-  roundPayer.close();
-  if (remoteRuntimeActive()) stopRemoteRuntime();
-  leaving?.client?.close();
-  if (leaving?.screen) {
-    leaving.forgetGoodbye?.();
-    leaving.screen.bye();
-    if (stopHosting) leaving.screen.control("stop");
-    leaving.screen.close();
-    if (stopHosting) forgetHosting();
-    // An engine window that stopped answering cannot close itself: closed here,
-    // so the game is this page's to write again. One that answers closes
-    // itself once it has stopped (host/engineMain.js "stop").
-    if (stopHosting && unanswered) await fetch("/api/multiplayer/engine/close", { method: "POST" }).catch(() => {});
+  let finishLeave = () => {};
+  leavingPromise = new Promise((resolve) => { finishLeave = resolve; });
+  try {
+    roundPayer.close();
+    if (remoteRuntimeActive()) stopRemoteRuntime();
+    leaving?.client?.close();
+    if (leaving?.screen) {
+      leaving.forgetGoodbye?.();
+      leaving.screen.bye();
+      if (stopHosting) leaving.screen.control("stop");
+      leaving.screen.close();
+      if (stopHosting) forgetHosting();
+      // An engine window that stopped answering cannot close itself: closed here,
+      // so the game is this page's to write again. One that answers closes
+      // itself once it has stopped (host/engineMain.js "stop").
+      if (stopHosting && unanswered) await fetch("/api/multiplayer/engine/close", { method: "POST" }).catch(() => {});
+    }
+    leaving?.session?.leave();
+    set(endedWith ? { ...IDLE, mode: "ended", error: endedWith, leaving: reloading } : { ...IDLE });
+    setSharedGameRole("");
+    setSharedGamePeople([]);
+    setSharedGameSeats([]);
+    setSharedNotices([]);
+    setSharedRoundBase(null);
+    setSharedRoundDays(0);
+    setSharedRoundPhase("");
+    setSharedGameSettings(null);
+    setSharedRequestsHeld([]);
+    setSharedAdvisorRefusal("");
+    // This device's own features again, and its own language.
+    setSharedGameFeatures(null);
+    setWorldLanguage("");
+    // Back to this device's own documents, and the library's own entry.
+    setSharedGameEntry(null);
+    // A guest's stand-in goes with its shared game, and the game open before it
+    // is the library's again (runtime/standInGames.js). The host's game is its own.
+    // One still being made is waited for (prepareStandIn closes it itself, seeing
+    // the page has left): a reload straight after left it in the library.
+    if (leaving && !leaving.screen) {
+      await leaving.preparing;
+      await closeStandInOf(leaving);
+    }
+    await refreshLibraryCatalog({ force: true }).catch(() => {});
+  } finally {
+    leavingPromise = null;
+    finishLeave();
   }
-  leaving?.session?.leave();
-  set(endedWith ? { ...IDLE, mode: "ended", error: endedWith, leaving: reloading } : { ...IDLE });
-  setSharedGameRole("");
-  setSharedGamePeople([]);
-  setSharedGameSeats([]);
-  setSharedNotices([]);
-  setSharedRoundBase(null);
-  setSharedRoundDays(0);
-  setSharedRoundPhase("");
-  setSharedGameSettings(null);
-  setSharedRequestsHeld([]);
-  setSharedAdvisorRefusal("");
-  // This device's own features again, and its own language.
-  setSharedGameFeatures(null);
-  setWorldLanguage("");
-  // Back to this device's own documents, and the library's own entry.
-  setSharedGameEntry(null);
-  // A guest's stand-in goes with its shared game, and the game open before it
-  // is the library's again (runtime/standInGames.js). The host's game is its own.
-  // One still being made is waited for (prepareStandIn closes it itself, seeing
-  // the page has left): a reload straight after left it in the library.
-  if (leaving && !leaving.screen) {
-    await leaving.preparing;
-    await closeStandInOf(leaving);
-  }
-  await refreshLibraryCatalog({ force: true }).catch(() => {});
 };

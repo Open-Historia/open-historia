@@ -23,9 +23,9 @@
 // the words of the reply or the terms.
 
 import { AGREEMENT_TYPE_VALUES } from "./nativeDiplomaticDirector.js";
-import { AGREEMENT_EFFECTS_FORMAT, normalizeAgreementEffects } from "../../runtime/agreementEffects.js";
-import { dealsBetween, isGroupParty, relationBetween } from "../../runtime/groupParties.js";
-import { findGroupKey, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
+import { AGREEMENT_EFFECTS_FORMAT, canonicalizeAgreementEffects, normalizeAgreementEffects } from "../../runtime/agreementEffects.js";
+import { dealsBetween, groupPartyKey, isGroupParty, relationBetween } from "../../runtime/groupParties.js";
+import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import { relationBandForScore } from "../../runtime/diplomaticStance.js";
 
 export const TREATY_LINE = "TREATY";
@@ -82,10 +82,12 @@ const money = (value) => {
   if (!Number.isFinite(number) || number <= 0) return "";
   if (number >= 1e12) return `$${(number / 1e12).toFixed(2)}T`;
   if (number >= 1e9) return `$${(number / 1e9).toFixed(1)}B`;
-  return `$${Math.round(number / 1e6)}M`;
+  if (number >= 1e6) return `$${Math.round(number / 1e6)}M`;
+  if (number >= 1e3) return `$${Math.round(number / 1e3)}K`;
+  return `$${Math.round(number)}`;
 };
-export const describePartyMeans = (world, name) => {
-  const groupKey = findGroupKey(record(world?.groups), name);
+export const describePartyMeans = (world, name, { isGroup = null } = {}) => {
+  const groupKey = isGroup === false ? "" : groupPartyKey(world, name);
   if (groupKey) {
     const groups = normalizeGroups(world?.groups);
     const military = record(groups[groupKey]?.military);
@@ -109,11 +111,11 @@ const atWar = (world, a, b) => list(world?.wars).some((war) => ["active", "cease
     || (list(war.sideA).some((x) => fold(x) === fold(b)) && list(war.sideB).some((x) => fold(x) === fold(a)))));
 
 // The context a treaty's effects are written from, between two: each one's means, their relation, their war.
-export const describeTreatyContext = (world, a, b) => {
+export const describeTreatyContext = (world, a, b, { speakerIsGroup = null, playerIsGroup = null } = {}) => {
   const relation = relationBetween(world, a, b);
   return [
-    describePartyMeans(world, a),
-    describePartyMeans(world, b),
+    describePartyMeans(world, a, { isGroup: speakerIsGroup }),
+    describePartyMeans(world, b, { isGroup: playerIsGroup }),
     relation ? `Relation: ${relationBandForScore(relation.score)} (${Math.round(figure(relation.score))})` : "Relation: none on record",
     atWar(world, a, b) ? "They are at war with each other." : "",
   ].filter(Boolean).join("\n");
@@ -125,19 +127,19 @@ const inForceLines = (world, a, b) => dealsBetween(world, a, b).map((agreement) 
 // What a leader in a one-on-one chat is told of treaties with the player.
 //   proposal   true when the player's last message is a treaty proposal (the Propose deal box)
 // The short form (no proposal) only lists the treaties in force and how to break one; "" when there are none.
-export const describeTreatyTalk = ({ world = {}, speaker = "", player = "", proposal = false } = {}) => {
+export const describeTreatyTalk = ({ world = {}, speaker = "", player = "", proposal = false, speakerIsGroup = null, playerIsGroup = null } = {}) => {
   if (!clean(speaker) || !clean(player)) return "";
   const inForce = inForceLines(world, speaker, player);
   const breakLine = `To break one of them, end the reply with the hidden line ${TREATY_LINE}:{"answer":"break","title":"<its exact title>"}.`;
   if (!proposal) return inForce.length ? ["[Treaties]", `In force between ${speaker} and ${player}:`, ...inForce, breakLine].join("\n") : "";
   const types = AGREEMENT_TYPE_VALUES.join(", ");
-  const asGroup = isGroupParty(world, speaker) || isGroupParty(world, player);
+  const asGroup = (speakerIsGroup !== false && isGroupParty(world, speaker)) || (playerIsGroup !== false && isGroupParty(world, player));
   return [
     "[Treaty Proposal]",
     `${player}'s last message is a formal treaty proposal, in its own words. ${speaker} answers it in its reply as its own interests, means and nature say: it accepts, counters with its own version, or refuses.`,
     `Then end the reply with one hidden line: ${TREATY_LINE}:{"answer":"accept|counter|refuse","type":T,"parties":[...],"title":"","terms":"","effects":{...}} — the treaty as the game models it: T one of ${types}${asGroup ? " (truce … crackdown are for a group)" : ""}; parties their exact names, the one who gives first where a type has a direction; terms what each side does and by when, written out; effects what it does. accept writes the proposal as proposed; counter writes ${speaker}'s version; refuse may leave effects empty.`,
     AGREEMENT_EFFECTS_FORMAT,
-    describeTreatyContext(world, speaker, player),
+    describeTreatyContext(world, speaker, player, { speakerIsGroup, playerIsGroup }),
     ...(inForce.length ? [`In force between them already:`, ...inForce, breakLine] : []),
     "The reply and the line must agree: the game signs, puts or drops the treaty from the line alone.",
   ].join("\n");
@@ -153,10 +155,11 @@ export const describeTableTreaties = ({ governments = [], people = [] } = {}) =>
 
 // A treaty read as an agreement of the world (the record applyAgreementUpdates would make), parties
 // as `resolve` finds them. Null when fewer than two resolve.
-export const treatyAgreement = (treaty, { id = "", date = "", round = 0, resolve = (name) => name } = {}) => {
+export const treatyAgreement = (treaty, { id = "", date = "", round = 0, resolve = (name) => name, resolveGroup = null } = {}) => {
   const parties = [...new Set(list(treaty?.parties).map((party) => clean(resolve(party), 120)).filter(Boolean))];
   if (parties.length < 2 || !treaty?.type) return null;
   const turn = Math.max(0, Math.trunc(Number(round) || 0));
+  const effects = treaty.effects ? canonicalizeAgreementEffects(treaty.effects, resolve, { resolveGroup }) : null;
   return {
     id,
     title: clean(treaty.title, TREATY_TITLE_MOST) || treaty.type,
@@ -166,7 +169,7 @@ export const treatyAgreement = (treaty, { id = "", date = "", round = 0, resolve
     startedDate: clean(date, 40),
     lastUpdatedDate: clean(date, 40),
     terms: termsText(treaty.terms),
-    ...(treaty.effects ? { effects: treaty.effects } : {}),
+    ...(effects ? { effects } : {}),
     createdRound: turn,
     updatedRound: turn,
   };

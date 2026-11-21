@@ -24,11 +24,13 @@
 // Pure: takes a world and returns one.
 
 import { applyCountryStatPatchToWorld, statEffectPatch } from "../../runtime/gameState.js";
-import { applyGroupOps, findGroupKey, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
+import { applyGroupOps, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import { normalizeMilitaryStats } from "../../runtime/militaryStats.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
+import { statMeasure } from "../../runtime/projectEngine.js";
 import { relationBandForScore } from "../../runtime/diplomaticStance.js";
-import { BREAKER, EFFECT_CAPS, MONTHS_A_YEAR, normalizeAgreementEffects, scaleOfList } from "../../runtime/agreementEffects.js";
-import { dealsBetween, relationBetween } from "../../runtime/groupParties.js";
+import { BREAKER, EFFECT_CAPS, MONTHS_A_YEAR, PAYMENT_MOST, normalizeAgreementEffects, scaleOfList } from "../../runtime/agreementEffects.js";
+import { dealsBetween, groupPartyKey, isDirectedGroupDeal, relationBetween } from "../../runtime/groupParties.js";
 import { applyWarUpdates } from "./nativeWarLedger.js";
 
 const clean = (value, most = 200) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, most).trim();
@@ -46,12 +48,41 @@ export const DAYS_PER_MONTH = 30;
 
 // ---- the systems an effect moves ------------------------------------------------------------
 
-const sheetKeyOf = (world, name) => Object.keys(record(world?.countryStats)).find((key) => fold(key) === fold(name)) ?? "";
+const hasNumber = (value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+const isExplicitGroup = (value) => /^\s*group\s*:/i.test(String(value ?? ""));
+const sheetKeyOf = (world, name) => {
+  if (isExplicitGroup(name)) return "";
+  const canonical = toCountryName(clean(name)) || clean(name);
+  return Object.keys(record(world?.countryStats)).find((key) => fold(key) === fold(canonical) || fold(key) === fold(name)) ?? "";
+};
 const gdpOf = (world, name) => figure(record(world?.countryStats)[sheetKeyOf(world, name)]?.economy?.gdp);
+const isPolityInWorld = (world, name) => {
+  const canonical = toCountryName(clean(name)) || clean(name);
+  return Boolean(
+    sheetKeyOf(world, canonical)
+    || Object.keys(record(world?.polityOverrides)).some((key) => fold(key) === fold(canonical))
+    || (canonical && fold(canonical) !== fold(name)),
+  );
+};
+// Resolves a party name inside an agreement effect to the canonical key used in
+// world.relations / world.agreements: handles "group: Name", renamed groups,
+// and ISO-3 country codes.
+const resolveEffectParty = (world, name) => {
+  const raw = clean(name);
+  if (!raw) return "";
+  const groupKey = groupPartyKey(world, raw);
+  if (groupKey && isExplicitGroup(raw)) {
+    return isPolityInWorld(world, groupKey) ? `group: ${groupKey}` : groupKey;
+  }
+  const canonical = toCountryName(raw) || raw;
+  if (isPolityInWorld(world, canonical)) return canonical;
+  if (groupKey) return groupKey;
+  return canonical;
+};
 
 // The relation between two moved by `delta` (a row made where there is none, from 0).
 export const withRelationShift = (world, a, b, delta, { date = "", round = 0 } = {}) => {
-  const [x, y] = [clean(a), clean(b)];
+  const [x, y] = [resolveEffectParty(world, a), resolveEffectParty(world, b)];
   if (!x || !y || fold(x) === fold(y) || !figure(delta)) return world;
   const prior = relationBetween(world, x, y);
   const score = Math.max(-100, Math.min(100, Math.round(figure(prior?.score) + figure(delta))));
@@ -92,32 +123,39 @@ const withDebt = (world, name, points) => {
 };
 
 // A payment: the payer's debt up by what it paid (held to its cap, a share of its GDP),
-// the receiver's down by the same sum against its own GDP. A party with no GDP on record
-// (a group, a country with no sheet) neither pays from nor banks into a sheet.
+// the receiver's down by the same sum against its own GDP. When the payer has no GDP on
+// record (a group, or an unassessed country), cap against the receiver's GDP so a group
+// payment can never wipe out a country's entire public debt.
 const withPayment = (world, effect, scale) => {
   const payerGdp = gdpOf(world, effect.from);
+  const theirs = gdpOf(world, effect.to);
   // (A month's share is a twelfth of the year's cap.)
   const share = scale === "month" ? EFFECT_CAPS.payment.year / MONTHS_A_YEAR : EFFECT_CAPS.payment[scale];
-  const most = payerGdp > 0 ? payerGdp * share : Infinity;
+  const baseGdp = payerGdp > 0 ? payerGdp : theirs;
+  const most = baseGdp > 0 ? baseGdp * share : PAYMENT_MOST;
   const amount = Math.min(effect.amount, most);
   let next = world;
   if (payerGdp > 0) next = withDebt(next, effect.from, (amount / payerGdp) * 100);
-  const theirs = gdpOf(next, effect.to);
   if (theirs > 0) next = withDebt(next, effect.to, -(amount / theirs) * 100);
   return next;
 };
 
 // A country's standing (world.internationalReputation, and its sheet's figure).
 const withReputation = (world, name, delta) => {
+  if (isExplicitGroup(name)) return world;
+  const canonical = toCountryName(clean(name)) || clean(name);
+  if (!canonical) return world;
   const map = record(world?.internationalReputation);
-  const named = (table) => Object.keys(record(table)).find((entry) => fold(entry) === fold(name));
-  const key = named(map) ?? named(world?.countryStats) ?? named(world?.polityOverrides);
-  if (!key) return world;
-  const sheetKey = sheetKeyOf(world, name);
-  const before = Number.isFinite(Number(map[key])) ? Number(map[key]) : figure(record(world.countryStats)[sheetKey]?.indices?.internationalReputation) || 50;
+  const named = (table) => Object.keys(record(table)).find((entry) => fold(entry) === fold(canonical) || fold(entry) === fold(name));
+  // Groups have no internationalReputation entry unless a colliding state exists.
+  if (groupPartyKey(world, name) && !named(map) && !named(world?.countryStats) && !named(world?.polityOverrides)) return world;
+  const key = named(map) ?? named(world?.countryStats) ?? named(world?.polityOverrides) ?? canonical;
+  const sheetKey = sheetKeyOf(world, canonical);
+  const sheetRep = record(world.countryStats)[sheetKey]?.indices?.internationalReputation;
+  const before = hasNumber(map[key]) ? Number(map[key]) : hasNumber(sheetRep) ? Number(sheetRep) : 50;
   const value = Math.max(0, Math.min(100, Math.round(before + delta)));
   const next = { ...world, internationalReputation: { ...map, [key]: value } };
-  if (sheetKey && Number.isFinite(Number(world.countryStats[sheetKey]?.indices?.internationalReputation))) {
+  if (sheetKey && hasNumber(sheetRep)) {
     next.countryStats = { ...world.countryStats };
     applyCountryStatPatchToWorld(next, sheetKey, { indices: { internationalReputation: value } });
   }
@@ -127,10 +165,10 @@ const withReputation = (world, name, delta) => {
 // A group's own military figures moved, each within 0-100.
 const withGroupFigure = (world, name, field, delta) => {
   const groups = record(world?.groups);
-  const key = findGroupKey(groups, name);
+  const key = groupPartyKey(world, name);
   if (!key) return world;
   const before = normalizeMilitaryStats(groups[key]?.military) ?? {};
-  const from = Number.isFinite(Number(before[field])) ? Number(before[field]) : 50;
+  const from = hasNumber(before[field]) ? Number(before[field]) : 50;
   const to = Math.max(0, Math.min(100, Math.round((from + delta) * 100) / 100));
   if (to === before[field]) return world;
   return { ...world, groups: { ...groups, [key]: { ...groups[key], military: { ...before, [field]: to } } } };
@@ -144,7 +182,7 @@ const regionNamed = (regions, written) => {
 
 const withArea = (world, effect, regions) => {
   const region = regionNamed(regions, effect.region);
-  const key = findGroupKey(record(world?.groups), effect.group);
+  const key = groupPartyKey(world, effect.group);
   if (!region || !key) return world;
   const id = clean(region.id);
   const areas = normalizeGroupAreas(world.groupAreas, normalizeGroups(world.groups));
@@ -182,7 +220,14 @@ const withWar = (world, agreement, op, { date = "", round = 0 } = {}) => {
 // One effect carried out. `breaker`: who broke the agreement, for an onBreak effect naming "breaker".
 export const applyAgreementEffect = (world, agreement, effect, { scale = "once", date = "", round = 0, regions = [], breaker = "" } = {}) => {
   const who = (name) => (fold(name) === BREAKER ? clean(breaker) : clean(name));
-  const named = { ...effect, ...(effect.party ? { party: who(effect.party) } : {}), ...(effect.with ? { with: who(effect.with) } : {}), ...(effect.from ? { from: who(effect.from) } : {}), ...(effect.to ? { to: who(effect.to) } : {}) };
+  const named = {
+    ...effect,
+    ...(effect.party ? { party: who(effect.party) } : {}),
+    ...(effect.with ? { with: who(effect.with) } : {}),
+    ...(effect.from ? { from: who(effect.from) } : {}),
+    ...(effect.to ? { to: who(effect.to) } : {}),
+    ...(effect.group ? { group: who(effect.group) } : {}),
+  };
   switch (named.type) {
     case "stat": return withStat(world, named, scale);
     case "relation": return withRelationShift(world, named.party, named.with, named.change, { date, round });
@@ -218,6 +263,20 @@ const endedRecord = (agreement, { date = "", round = 0, status = "ended", by = "
 
 // ---- made ---------------------------------------------------------------------------------------
 
+// Whether two agreements bind the exact same parties (and in the same order
+// for directed types like protection, sponsorship, crackdown, or guarantee).
+const sameAgreementParties = (a, b) => {
+  const left = list(a?.parties).map(fold).filter(Boolean);
+  const right = list(b?.parties).map(fold).filter(Boolean);
+  if (left.length !== right.length) return false;
+  if (isDirectedGroupDeal(a?.type) || fold(a?.type) === "guarantee") {
+    return left.every((party, index) => party === right[index]);
+  }
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((party, index) => party === sortedRight[index]);
+};
+
 // Carries out the making of every agreement in force whose making has not been carried out and
 // that carries effects. Oldest first (the world lists its agreements newest first), so the newer of
 // two of the same type between the same parties is the one that stands.
@@ -237,7 +296,7 @@ export const settleAgreementStarts = (world, { date = "", round = 0, regions = [
     if (!agreement || !live(agreement)) continue;
     const [first, second] = list(agreement.parties);
     for (const prior of dealsBetween(next, first, second)) {
-      if (prior.id === agreement.id || !live(prior) || prior.type !== agreement.type || list(prior.parties).length !== list(agreement.parties).length) continue;
+      if (prior.id === agreement.id || !live(prior) || prior.type !== agreement.type || !sameAgreementParties(prior, agreement)) continue;
       if (normalizeAgreementEffects(prior.effects) && prior.effectsApplied !== true) continue;
       next = replaceAgreement(next, { ...endedRecord(prior, { date, round }), endApplied: true });
     }
@@ -305,15 +364,36 @@ export const turnAgreements = ({ world = {}, days = 0, date = "", round = 0, reg
       const term = figure(effects.months);
       const left = term > 0 ? Math.max(0, term - run) : Infinity;
       const months = Math.min(left, Math.floor(carried / DAYS_PER_MONTH));
-      // Each month a twelfth of each year's effect, held to a twelfth of its cap. A figure the world keeps in
-      // whole points (a relation, a standing, a group's figures) is banked as fractions of a point
-      // (`figureCarry`) and moved a whole point at a time; a sheet's figures and a payment take the fraction.
+      // Each month a twelfth of each year's effect, held to a twelfth of its cap.
+      // Figures stored as whole integers (relation, reputation, group strength, and
+      // points-measured sheet stats such as stability/indices/military) are banked as
+      // fractions of a point (`figureCarry`) and applied a whole point at a time;
+      // fractional stats are banked to 0.01 steps so sub-0.06/yr changes aren't lost.
       const banked = { ...record(agreement.figureCarry) };
       for (let month = 0; month < months; month += 1) {
         for (const effect of list(effects.perYear)) {
           const twelfth = effect.type === "payment"
             ? { ...effect, amount: effect.amount / MONTHS_A_YEAR }
             : { ...effect, change: effect.change / MONTHS_A_YEAR };
+          if (effect.type === "payment") {
+            next = applyAgreementEffect(next, agreement, twelfth, { scale: "month", date, round, regions });
+            continue;
+          }
+          if (effect.type === "stat") {
+            const key = `stat|${fold(effect.party)}|${fold(effect.stat)}`;
+            const total = figure(banked[key]) + twelfth.change;
+            if (statMeasure(effect.stat) === "points") {
+              const whole = Math.trunc(total);
+              banked[key] = Math.round((total - whole) * 1000) / 1000;
+              // Apply the banked whole point without re-clamping down to the 0.5 monthly cap.
+              if (whole) next = applyAgreementEffect(next, agreement, { ...effect, change: whole }, { scale: "once", date, round, regions });
+            } else {
+              const step = Math.trunc(total * 100) / 100;
+              banked[key] = Math.round((total - step) * 10000) / 10000;
+              if (step) next = applyAgreementEffect(next, agreement, { ...effect, change: step }, { scale: "month", date, round, regions });
+            }
+            continue;
+          }
           if (!["relation", "reputation", "strength"].includes(effect.type)) {
             next = applyAgreementEffect(next, agreement, twelfth, { scale: "month", date, round, regions });
             continue;

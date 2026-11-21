@@ -54,14 +54,43 @@ export const parseDiplomaticEnvelope = (raw) => {
     text = `${text.slice(0, peaceMatch.index)}${text.slice(peaceMatch.index + peaceMatch[0].length)}`.replace(/\n{3,}/g, "\n\n").trim();
   }
 
-  // (Its JSON may run over several lines: it is taken to its closing brace.)
-  const treatyMatch = text.match(/^[ \t]*TREATY[ \t]*:[ \t]*/im);
-  if (treatyMatch) {
-    const from = treatyMatch.index + treatyMatch[0].length;
-    const end = text[from] === "{" ? closingBrace(text, from) : -1;
-    const stop = end >= 0 ? end + 1 : (text.indexOf("\n", from) < 0 ? text.length : text.indexOf("\n", from));
-    treaty = text.slice(from, stop).trim();
-    text = `${text.slice(0, treatyMatch.index)}${text.slice(stop)}`.replace(/\n{3,}/g, "\n\n").trim();
+  // (Its JSON may run over several lines or inside a ```json fence: scan from the
+  // bottom up and prefer a TREATY: header whose payload starts a JSON object so
+  // ordinary prose starting a line with "Treaty:" is never hijacked.)
+  const treatyMatches = [...text.matchAll(/^[ \t]*TREATY[ \t]*:[ \t]*/gim)];
+  let chosenTreaty = null;
+  for (let idx = treatyMatches.length - 1; idx >= 0; idx -= 1) {
+    const match = treatyMatches[idx];
+    const from = match.index + match[0].length;
+    const after = text.slice(from);
+    const fenceOpen = after.match(/^(?:\r?\n)?[ \t]*```(?:json)?[ \t]*\r?\n?[ \t]*(?=\{)/i);
+    const wsOpen = !fenceOpen ? after.match(/^(?:\r?\n[ \t]*)?(?=\{)/) : null;
+    if (fenceOpen || wsOpen) {
+      const jsonStart = from + (fenceOpen ? fenceOpen[0].length : wsOpen[0].length);
+      const end = closingBrace(text, jsonStart);
+      if (end >= 0) {
+        let stop = end + 1;
+        if (fenceOpen) {
+          const fenceClose = text.slice(stop).match(/^[ \t]*\r?\n?[ \t]*```[ \t]*/);
+          if (fenceClose) stop += fenceClose[0].length;
+        }
+        chosenTreaty = { index: match.index, value: text.slice(jsonStart, end + 1).trim(), stop };
+        break;
+      }
+    }
+  }
+  if (!chosenTreaty && treatyMatches.length) {
+    const match = treatyMatches.at(-1);
+    if (/^[ \t]*TREATY[ \t]*:/.test(match[0])) {
+      const from = match.index + match[0].length;
+      const lineEnd = text.indexOf("\n", from);
+      const stop = lineEnd < 0 ? text.length : lineEnd;
+      chosenTreaty = { index: match.index, value: text.slice(from, stop).trim(), stop };
+    }
+  }
+  if (chosenTreaty) {
+    treaty = chosenTreaty.value;
+    text = `${text.slice(0, chosenTreaty.index)}${text.slice(chosenTreaty.stop)}`.replace(/\n{3,}/g, "\n\n").trim();
   }
 
   const reactionMatch = text.match(/\n?\s*REACTION\s*:\s*(\S+)\s*$/i);

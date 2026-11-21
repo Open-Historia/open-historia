@@ -15,6 +15,7 @@ import {
 } from "../AI/gameplayPrompts.js";
 import { guidanceSegmentsFor, promptCharCount } from "../AI/promptGuidance.js";
 import { promptTranslationsVersion, subscribePromptTranslations } from "../../runtime/promptTranslations.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
 import {
   activateGame,
   clearGameAsset,
@@ -2980,7 +2981,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // itself: patched in a second request, after `setActive` had switched to
       // the game, the opening cover and the HUD named the scenario's default
       // country until it landed.
-      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
+      const canonicalCountry = toCountryName(countryCode);
+      const gamePatch = { ...(canonicalCountry ? { country: canonicalCountry } : null), ...(difficulty ? { difficulty } : null) };
       await createGame({
         name: `${scenario.name} Session`,
         scenarioId: scenario.id,
@@ -4627,7 +4629,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     if (!gid) return;
     setMenuOpen(false);
     try {
-      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
+      const canonicalCountry = toCountryName(countryCode);
+      const gamePatch = { ...(canonicalCountry ? { country: canonicalCountry } : null), ...(difficulty ? { difficulty } : null) };
       if (Object.keys(gamePatch).length) {
         await saveGame(gid, { gamePatch });
       }

@@ -5,9 +5,9 @@
 // effects, Game/AI/agreementEngine.js; how one is made in a chat, treatyTalk.js.)
 // Light on purpose: the leader prompt (main.jsx) loads it with the first chat.
 
-import { findGroupKey, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
+import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import { relationBandForScore } from "../../runtime/diplomaticStance.js";
-import { GROUP_DEAL_TYPES, isDirectedGroupDeal, relationBetween } from "../../runtime/groupParties.js";
+import { GROUP_DEAL_TYPES, groupPartyKey, isDirectedGroupDeal, relationBetween } from "../../runtime/groupParties.js";
 
 const clean = (value, most = 200) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, most).trim();
 const fold = (value) => clean(value).toLocaleLowerCase();
@@ -24,7 +24,7 @@ const figure = (value) => {
 export const describeDeal = (agreement) => {
   const parties = list(agreement?.parties).map((party) => clean(party));
   const who = isDirectedGroupDeal(agreement?.type) && parties.length >= 2
-    ? `${parties[0]} → ${parties[1]}`
+    ? `${parties[0]} → ${parties.slice(1).join(" / ")}`
     : parties.join(" / ");
   const title = clean(agreement?.title, 80);
   const status = fold(agreement?.status || "active") === "suspended" ? ", suspended" : "";
@@ -59,10 +59,11 @@ export const GROUP_DIPLOMACY_RULE = `A group is a party to relations and agreeme
 
 // What a group's leader is told it is, in a chat: a group, not a government, in its own voice.
 // "" when the speaker is no group.
-export const describeGroupLeaderBrief = ({ world = {}, speaker = "", player = "", regionName = () => "" } = {}) => {
+export const describeGroupLeaderBrief = ({ world = {}, speaker = "", player = "", regionName = () => "", isGroup = null } = {}) => {
+  if (isGroup === false) return "";
   const groups = normalizeGroups(world?.groups);
-  const key = findGroupKey(groups, speaker);
-  if (!key) return "";
+  const key = groupPartyKey(world, speaker);
+  if (!key || !groups[key]) return "";
   const group = groups[key];
   const areas = normalizeGroupAreas(world?.groupAreas, groups);
   const regions = Object.entries(areas).filter(([, name]) => name === key).map(([regionId]) => regionId);

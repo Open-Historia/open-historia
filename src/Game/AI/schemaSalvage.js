@@ -130,7 +130,8 @@ export const salvageBySchema = (value, validate, {
         if (typeof confineTo === "function") {
             const itemPath = confineTo(parsed.segments);
             const list = Array.isArray(itemPath) ? valueAt(value, itemPath.slice(0, -1)) : null;
-            removal = Array.isArray(list) && itemPath.at(-1) < list.length ? { kind: "item", path: itemPath } : null;
+            const itemIndex = Array.isArray(itemPath) ? itemPath.at(-1) : -1;
+            removal = Array.isArray(list) && itemIndex >= 0 && itemIndex < list.length ? { kind: "item", path: itemPath } : null;
         } else {
             removal = planRemoval(value, parsed.segments, parsed.rest);
         }

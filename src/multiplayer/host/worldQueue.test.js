@@ -433,3 +433,25 @@ test("what an entry took for itself is given back when it is let go, whether or 
   await queue.run("ended", async ({ fence }) => { fence.onClose(() => { after += 1; }); });
   assert.equal(after, 1, "an entry that ends gives back what it took as it ends");
 });
+
+test("a committing write that lands after its bound still notifies onSettled so the host broadcasts the saved world", async () => {
+  const clock = createClock();
+  const { queue, settled } = queueWith(clock);
+  let finishCommit = () => {};
+  const docs = { world: { n: 0 } };
+  const store = {
+    updateWorld: async (fn) => {
+      const next = await fn(structuredClone(docs.world));
+      await new Promise((resolve) => { finishCommit = resolve; });
+      if (next) docs.world = next;
+    },
+  };
+  const stuck = queue.run("order", (entry) => fencedStore(store, entry.fence).updateWorld((world) => ({ ...world, n: 1 })));
+  stuck.catch(() => {});
+  await clock.flush();
+  await clock.advance(ENTRY_MOST_MS + SLOW_MS);
+  assert.deepEqual(settled, [], "not yet settled while commit is in flight");
+  finishCommit();
+  await clock.flush();
+  assert.deepEqual(settled, ["order"], "onSettled fires once the late-landing commit finishes");
+});

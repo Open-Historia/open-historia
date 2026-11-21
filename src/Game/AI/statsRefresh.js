@@ -167,7 +167,8 @@ export const pickStatsRefreshCountries = ({ candidates = [], players = [], oppon
     seen.add(fold(name));
     if (!(Number(entry?.fresh) > 0)) continue;
     const assessed = clean(entry?.assessedDate);
-    const since = assessed ? countryStatsTrackingMonthsElapsed(assessed, date) : Infinity;
+    const futureAssessed = assessed && date && (diffGameDays(date, assessed) ?? 0) > 0;
+    const since = !assessed || futureAssessed ? Infinity : countryStatsTrackingMonthsElapsed(assessed, date);
     if (since < step) continue;
     stale.push({ name, since, rank: playing.has(fold(name)) ? 0 : fighting.has(fold(name)) ? 1 : 2 });
   }

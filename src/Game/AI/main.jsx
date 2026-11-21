@@ -41,6 +41,7 @@ import { RELAY_CUT_OFF_MESSAGE, isRelayRefusal, isRelayUnreachable, relayUnreach
 import { attachLookupRound, attachCallMetrics, attachRequestOutcome, attachAttemptOutcome, finishAiRecord, isTelemetryEnabled, startAiRecord } from "./telemetry.js";
 import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { describePlayerGroupForPrompt, normalizeGroups } from "../../runtime/groups.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
 import { describeGroupLeaderBrief } from "./groupDealTalk.js";
 import { describeTreatyTalk } from "./treatyTalk.js";
 import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
@@ -4197,26 +4198,30 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     // When the player leads a group rather than a country (runtime/groups.js), the
     // leader answering it knows what it is dealing with. Not while groups are
     // switched off for the game (server/gameFeatures.js), as for the time skip.
+    const canonicalPlayerName = toCountryName(playerCountry || gameData?.country || "");
+    const speakerEntry = Array.isArray(countries)
+        ? countries.find((entry) => entry && typeof entry === "object" && String(entry.name || "").trim().toLowerCase() === participantName(speaker).toLowerCase())
+        : null;
+    const speakerIsCountry = Boolean(speakerEntry && String(speakerEntry.code || "").trim());
+
     const playerGroupText = await (async () => {
-        const playerName = playerCountry || gameData?.country || "";
-        if (!worldData?.groups || !playerName || !isActiveFeatureEnabled("groups")) return "";
+        if (!worldData?.groups || !canonicalPlayerName || !isActiveFeatureEnabled("groups")) return "";
         const catalog = await loadRegionCatalog().catch(() => []);
         const names = new Map(catalog.map((region) => [region.id, region.name]));
-        return describePlayerGroupForPrompt(worldData, playerName, { regionName: (id) => names.get(id) || id });
+        return describePlayerGroupForPrompt(worldData, canonicalPlayerName, { regionName: (id) => names.get(id) || id });
     })();
 
     // A group's leadership speaks as the group it is (Game/AI/groupDealTalk.js). Empty for a country.
     const groupLeaderText = await (async () => {
-        const playerName = playerCountry || gameData?.country || "";
-        if (!worldData?.groups || !speaker || !isActiveFeatureEnabled("groups")) return "";
+        if (!worldData?.groups || !speaker || speakerIsCountry || !isActiveFeatureEnabled("groups")) return "";
         const catalog = await loadRegionCatalog().catch(() => []);
         const names = new Map(catalog.map((region) => [region.id, region.name]));
-        return describeGroupLeaderBrief({ world: worldData, speaker: participantName(speaker), player: playerName, regionName: (id) => names.get(id) || "" });
+        return describeGroupLeaderBrief({ world: worldData, speaker: participantName(speaker), player: canonicalPlayerName, regionName: (id) => names.get(id) || "", isGroup: speakerIsCountry ? false : null });
     })();
     // Treaties with the player (AI/treatyTalk.js): those in force and how to break one, and, answering a
     // proposal, how to write the treaty as the game models it, with its effects, from both sides' means.
     const treatyText = speaker
-        ? describeTreatyTalk({ world: worldData, speaker: participantName(speaker), player: playerCountry || gameData?.country || "", proposal })
+        ? describeTreatyTalk({ world: worldData, speaker: participantName(speaker), player: canonicalPlayerName, proposal, speakerIsGroup: speakerIsCountry ? false : null })
         : "";
 
     // The Game Master's standing reminders bind a leader too: a leader told the
@@ -4523,7 +4528,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
             { verbose: true });
         // A reply that was only its PEACE line is remembered as that line, as the model wrote it, so the thread knows
         // what was decided.
-        const remembered = reply || String(raw ?? "").match(/^[ \t]*(?:PEACE|TREATY)[ \t]*:.*$/im)?.[0]?.trim() || "";
+        const remembered = reply || (treaty ? `TREATY:${treaty}` : "") || String(raw ?? "").match(/^[ \t]*PEACE[ \t]*:.*$/im)?.[0]?.trim() || "";
         if (stillOpen) diplomaticHistory.push({ role: "model", parts: [{ text: `[${speakingAs}]: ${remembered}` }] });
         // `peace`: what the leader decided of peace with the player, its hidden
         // PEACE line, "" for nothing (the panel carries it out: gameplay.js answerPeaceInChat).

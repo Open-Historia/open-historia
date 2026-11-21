@@ -102,8 +102,17 @@ export const normalizeTreatyOffers = (value) => {
   return all.filter((offer) => keep.has(offer));
 };
 
+const uniqueId = (existing, prefix, start = 0) => {
+  const taken = new Set(list(existing).map((entry) => clean(entry?.id, 160)));
+  let index = Math.max(0, Math.trunc(Number(start) || 0));
+  while (taken.has(`${prefix}:${index}`)) index += 1;
+  return `${prefix}:${index}`;
+};
+
+const pairKey = (a, b) => [fold(a), fold(b)].sort().join("|");
+
 const openBetween = (offers, a, b) => normalizeTreatyOffers(offers).find((offer) => offer.status === "open"
-  && [fold(offer.from), fold(offer.to)].sort().join("|") === [fold(a), fold(b)].sort().join("|")) ?? null;
+  && pairKey(offer.from, offer.to) === pairKey(a, b)) ?? null;
 
 // A country puts a treaty to another (a person's to a person's).
 //   from, to          the two countries
@@ -122,8 +131,9 @@ export const proposeTreaty = (world, { from = "", to = "", type = "", title = ""
   if (warBetween(world?.wars, from, to)) return nothing("at-war");
   if (openBetween(world?.treatyOffers, from, to)) return nothing("open");
   const turn = whole(round);
+  const existing = list(world?.treatyOffers);
   const offer = normalizeTreatyOffer({
-    id: `treaty-offer:${fold(from)}:${fold(to)}:${turn}:${list(world?.treatyOffers).length}`,
+    id: uniqueId(existing, `treaty-offer:${fold(from)}:${fold(to)}:${turn}`, existing.length),
     from: clean(from),
     to: clean(to),
     type,
@@ -133,7 +143,7 @@ export const proposeTreaty = (world, { from = "", to = "", type = "", title = ""
     round: turn,
     status: "open",
   });
-  return { world: { ...world, treatyOffers: normalizeTreatyOffers([...list(world?.treatyOffers), offer]) }, offer, reason: "" };
+  return { world: { ...world, treatyOffers: normalizeTreatyOffers([...existing, offer]) }, offer, reason: "" };
 };
 
 // A treaty an AI leader drafted in a chat (Game/AI/treatyTalk.js), kept for its card: one it puts to the
@@ -145,8 +155,19 @@ export const proposeTreaty = (world, { from = "", to = "", type = "", title = ""
 // Returns { world, offer }.
 export const recordDraftedTreaty = (world, { from = "", to = "", status = "open", treaty = null, proposal = "", chatId = "", agreementId = "", date = "", round = 0 } = {}) => {
   const turn = whole(round);
+  const pair = pairKey(from, to);
+  // A new open counter-offer or a signed deal between the same two supersedes
+  // any earlier open drafted counter-offer waiting between them.
+  const existing = list(world?.treatyOffers).map((entry) => (
+    (status === "open" || status === "signed")
+    && entry?.drafted === true
+    && entry?.status === "open"
+    && pairKey(entry.from, entry.to) === pair
+      ? { ...entry, status: "lapsed", answeredRound: turn }
+      : entry
+  ));
   const offer = normalizeTreatyOffer({
-    id: `treaty-draft:${fold(from)}:${fold(to)}:${turn}:${list(world?.treatyOffers).length}`,
+    id: uniqueId(existing, `treaty-draft:${fold(from)}:${fold(to)}:${turn}`, existing.length),
     from,
     to,
     type: treaty?.type,
@@ -164,7 +185,7 @@ export const recordDraftedTreaty = (world, { from = "", to = "", status = "open"
     ...(agreementId ? { agreementId } : {}),
   });
   if (!offer) return { world, offer: null };
-  return { world: { ...world, treatyOffers: normalizeTreatyOffers([...list(world?.treatyOffers), offer]) }, offer };
+  return { world: { ...world, treatyOffers: normalizeTreatyOffers([...existing, offer]) }, offer };
 };
 
 // The open offer between two, either way round, or null.
@@ -199,8 +220,9 @@ export const answerTreaty = (world, { op = "", ref = "", country = "", date = ""
     return { world: { ...world, treatyOffers: normalizeTreatyOffers(marked("lapsed")) }, error: "at-war", agreement: null };
   }
   const day = clean(date, 40);
+  const priorAgreements = list(world?.agreements);
   const agreement = {
-    id: `treaty:${fold(offer.from)}:${fold(offer.to)}:${turn}:${list(world?.agreements).length}`,
+    id: uniqueId(priorAgreements, `treaty:${fold(offer.from)}:${fold(offer.to)}:${turn}`, priorAgreements.length),
     title: offer.title,
     type: offer.type,
     status: "active",
@@ -210,14 +232,14 @@ export const answerTreaty = (world, { op = "", ref = "", country = "", date = ""
     startedDate: day,
     lastUpdatedDate: day,
     terms: offer.terms,
-    ...(offer.type === "military_access" ? { reciprocalAccess: true } : {}),
+    ...(!offer.drafted && offer.type === "military_access" ? { reciprocalAccess: true } : {}),
     createdRound: turn,
     updatedRound: turn,
   };
   return {
     world: {
       ...world,
-      agreements: [...list(world?.agreements), agreement],
+      agreements: [agreement, ...priorAgreements],
       treatyOffers: normalizeTreatyOffers(marked("signed", { agreementId: agreement.id })),
     },
     error: "",

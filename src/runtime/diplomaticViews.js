@@ -346,14 +346,17 @@ const relationsView = ({ world, landed, focusCountry, playerCountry }) => {
   // the legend counts them apart from the countries.
   const groups = (isRecord(world.groups) ? Object.keys(world.groups) : [])
     .map((name) => clean(name))
-    .filter((name) => name && diplomaticKeyOf(name) !== focusKey)
+    .filter(Boolean)
     .map((name) => {
+      if (diplomaticKeyOf(name) === focusKey) {
+        return { name, category: "self", color: RELATION_COLORS.self, why: null };
+      }
       const found = info(diplomaticKeyOf(name));
       return { name, category: found.category, color: found.color, why: found.why };
     });
   const groupCounts = new Map();
   for (const group of groups) groupCounts.set(group.category, (groupCounts.get(group.category) ?? 0) + 1);
-  const groupEntries = RELATION_PRECEDENCE
+  const groupEntries = [...RELATION_PRECEDENCE, "unknown"]
     .filter((category) => groupCounts.get(category))
     .map((category) => ({ id: category, label: RELATION_CATEGORY_LABELS[category] ?? category, color: RELATION_COLORS[category] ?? DIPLO_UNKNOWN, colors: [RELATION_COLORS[category] ?? DIPLO_UNKNOWN], count: groupCounts.get(category) }));
   return assemble({

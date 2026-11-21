@@ -12,7 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { normalizeWorldState } from "../../runtime/gameState.js";
+import { applyEventImpactsToWorld, normalizeGameData, normalizeWorldState } from "../../runtime/gameState.js";
 import { GROUP_DEAL_TYPES, dealsBetween, groupPartyKey, relationBetween } from "../../runtime/groupParties.js";
 import { answerTreaty, recordDraftedTreaty, withTurnTreatyOffers } from "../../runtime/treatyOffers.js";
 import { AGREEMENT_EFFECTS_FORMAT, AGREEMENT_EFFECTS_SCHEMA, EFFECT_CAPS, normalizeAgreementEffects } from "../../runtime/agreementEffects.js";
@@ -288,4 +288,111 @@ test("Propose deal is a parchment beside the message box in every one-on-one cha
   assert.match(chat, /groups=\{pickableGroups\}/);
   assert.match(read("../GameUI/stats.jsx"), /<EffectList compact effects=\{agreement\.effects\} \/>/, "the dossier shows each agreement's effects");
   assert.match(read("../Selection/Regions.jsx"), /Talk to their leadership/);
+});
+
+// ---- regression tests for PR #1053 review fixes -----------------------------------------------
+
+test("normalizeGameData always stores canonical full country names, never ISO-3 codes", () => {
+  assert.equal(normalizeGameData({ country: "GBR" }).country, "United Kingdom");
+  assert.equal(normalizeGameData({ country: "USA" }).country, "United States");
+  assert.equal(normalizeGameData({ country: "MEX" }).country, "Mexico");
+  assert.equal(normalizeGameData({ country: "Mexico" }).country, "Mexico");
+  assert.equal(normalizeGameData({ country: CARTEL }).country, CARTEL);
+});
+
+test("perYear stat effects bank whole points for point stats and preserve small annual percentages", () => {
+  // Small annual GDP growth (+0.05%/yr) must not be dropped to 0, and +1%/yr must not distort to +0.96%/yr.
+  const normSmall = normalizeAgreementEffects({ perYear: [{ type: "stat", party: "Mexico", stat: "economy.gdpGrowth", change: 0.05 }] });
+  assert.deepEqual(normSmall, { perYear: [{ type: "stat", party: "Mexico", stat: "economy.gdpGrowth", change: 0.05 }] });
+  const normOne = normalizeAgreementEffects({ perYear: [{ type: "stat", party: "Mexico", stat: "economy.gdpGrowth", change: 1 }] });
+  assert.deepEqual(normOne, { perYear: [{ type: "stat", party: "Mexico", stat: "economy.gdpGrowth", change: 1 }] });
+
+  // +6/yr and -6/yr stability must bank 0.5/mo into +1/-1 every two months (net +6 / -6 over 12 months),
+  // rather than Math.round(n ± 0.5) doubling or zeroing every month.
+  const upWorld = settleAgreementStarts(base({
+    countryStats: {
+      Mexico: { economy: { gdp: 1_000_000_000_000, publicDebt: 50 }, stability: 50 },
+      "United States": { economy: { gdp: 20_000_000_000_000, publicDebt: 100 }, stability: 50 },
+    },
+    agreements: [
+      { id: "up", title: "Order", type: "truce", parties: ["Mexico", CARTEL], status: "active", effects: { months: 12, perYear: [{ type: "stat", party: "Mexico", stat: "stability", change: 6 }] } },
+      { id: "down", title: "Unrest", type: "truce", parties: ["United States", CARTEL], status: "active", effects: { months: 12, perYear: [{ type: "stat", party: "United States", stat: "stability", change: -6 }] } },
+    ],
+  }), { date: "2026-01-01" }).world;
+  const afterYear = turnAgreements({ world: upWorld, days: 360, date: "2027-01-01", round: 2 }).world;
+  assert.equal(afterYear.countryStats.Mexico.stability, 56, "+6/yr stability adds exactly 6 over 12 months");
+  assert.equal(afterYear.countryStats["United States"].stability, 44, "-6/yr stability subtracts exactly 6 over 12 months");
+});
+
+test("group-to-state payment caps against receiver GDP, and reputation works for unassessed stock countries and preserves 0", () => {
+  const world = base({
+    internationalReputation: { Mexico: 0 },
+    agreements: [{
+      id: "pay-rep",
+      title: "Tribute",
+      type: "protection",
+      parties: [CARTEL, "Mexico"],
+      status: "active",
+      effects: {
+        onSign: [
+          { type: "payment", from: CARTEL, to: "Mexico", amount: 9e14 },
+          { type: "reputation", party: "Mexico", change: -5 },
+          { type: "reputation", party: "FRA", change: -4 },
+        ],
+      },
+    }],
+  });
+  const made = settleAgreementStarts(world, { date: "2026-01-01" }).world;
+  assert.ok(Math.abs(made.countryStats.Mexico.economy.publicDebt - (50 - EFFECT_CAPS.payment.once * 100)) < 1e-6, "group payment is capped to receiver GDP share");
+  assert.equal(made.internationalReputation.Mexico, 0, "reputation 0 is preserved, not reset to 50");
+  assert.equal(made.internationalReputation.France, 46, "unassessed stock country resolves by canonical name");
+});
+
+test("colliding country/group names keep 'group:' disambiguation and dissolved groups end active deals", () => {
+  const world = base({
+    polityOverrides: {
+      Mexico: { name: "Mexico", aliases: [] },
+      "United States": { name: "United States", aliases: [] },
+      Kurdistan: { name: "Kurdistan", aliases: [] },
+    },
+    groups: {
+      Kurdistan: { description: "A faction sharing a state's name.", color: "#e11d48" },
+      [CARTEL]: { description: "A drug cartel.", color: "#22c55e" },
+    },
+    relations: [{ a: "Mexico", b: "group: Kurdistan", score: -25 }],
+    agreements: [{ id: "g-deal", title: "Gulf truce", type: "truce", parties: ["Mexico", CARTEL], status: "active" }],
+  });
+  assert.equal(canonicalDiplomaticPolity("group: Kurdistan", world), "group: Kurdistan");
+  assert.equal(canonicalDiplomaticPolity("Kurdistan", world), "Kurdistan");
+  assert.equal(world.relations[0].a === "group: Kurdistan" || world.relations[0].b === "group: Kurdistan", true, "re-normalization keeps group: prefix on collision");
+
+  // Dissolving a group ends its active agreements so zombie perYear clauses stop running.
+  const dissolved = applyEventImpactsToWorld({
+    world,
+    events: [{ id: "e-dissolve", date: "2026-06-01", title: "Cartel collapses", impacts: { groupOps: [{ op: "dissolve", name: CARTEL }] } }],
+    round: 5,
+  }).world;
+  assert.equal(dissolved.groups[CARTEL], undefined);
+  assert.equal(dissolved.agreements.find((a) => a.id === "g-deal")?.status, "ended");
+});
+
+test("settleAgreementStarts does not end an unrelated 3-party agreement that only shares the first two parties", () => {
+  const world = base({
+    agreements: [
+      { id: "new-2", title: "New bilateral", type: "truce", parties: ["Mexico", CARTEL], status: "active", effects: { onSign: [{ type: "relation", party: "Mexico", with: CARTEL, change: 5 }] } },
+      { id: "old-3", title: "Trilateral", type: "truce", parties: ["Mexico", CARTEL, REBELS], status: "active", effectsApplied: true },
+    ],
+  });
+  const settled = settleAgreementStarts(world, { date: "2026-01-01" }).world;
+  assert.equal(settled.agreements.find((a) => a.id === "old-3")?.status, "active", "3-party agreement stays active");
+});
+
+test("relationsView includes unknown groups in groupEntries and marks a group focus as self", () => {
+  const world = base({ relations: [], agreements: [] });
+  const view = buildDiplomaticView({ view: "relations", playerCountry: CARTEL, world, landedOwners: ["Mexico", "United States"] });
+  const selfGroup = view.groups.find((g) => g.name === CARTEL);
+  const otherGroup = view.groups.find((g) => g.name === REBELS);
+  assert.equal(selfGroup?.category, "self");
+  assert.equal(otherGroup?.category, "unknown");
+  assert.ok(view.groupEntries.some((entry) => entry.id === "unknown" && entry.count === 1));
 });

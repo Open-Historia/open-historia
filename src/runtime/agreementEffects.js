@@ -97,12 +97,21 @@ export const normalizeAgreementEffect = (value, { scale = "once" } = {}) => {
   if (!AGREEMENT_EFFECT_TYPES.includes(type)) return null;
   const party = asText(value.party, 120);
   if (type === "stat") {
-    // A year's change is held as twelve of a project's months.
+    // A year's change is held directly against twelve of a project's months,
+    // without rounding the twelfth to two decimals and dropping small annual changes.
     const year = scale === "year";
     const change = finite(value.change);
-    const held = normalizeProjectEffect({ type: "stat", stat: value.stat, change: year ? change / MONTHS_A_YEAR : change }, { scale: year ? "month" : scale });
-    if (!held || !party) return null;
-    return { type, party, stat: held.stat, change: year ? round2(held.change * MONTHS_A_YEAR) : held.change };
+    if (!party || !Number.isFinite(change)) return null;
+    if (year) {
+      const probe = normalizeProjectEffect({ type: "stat", stat: value.stat, change: 1 }, { scale: "once" });
+      if (!probe) return null;
+      const cap = statCapOf(probe.stat, "year");
+      const held = round2(within(change, -cap, cap));
+      return held ? { type, party, stat: probe.stat, change: held } : null;
+    }
+    const held = normalizeProjectEffect({ type: "stat", stat: value.stat, change }, { scale });
+    if (!held) return null;
+    return { type, party, stat: held.stat, change: held.change };
   }
   if (type === "relation" || type === "reputation" || type === "strength") {
     const change = finite(value.change);
@@ -178,6 +187,38 @@ export const normalizeAgreementEffects = (value) => {
     ...(term ? { months: term } : {}),
     ...Object.fromEntries(AGREEMENT_EFFECT_LISTS.filter((list) => lists[list].length).map((list) => [list, lists[list]])),
   };
+};
+
+// Canonicalizes party and group names inside normalized agreement effects,
+// preserving the "breaker" placeholder.
+export const canonicalizeAgreementEffects = (value, resolve = (name) => name, { resolveGroup = null } = {}) => {
+  const normalized = normalizeAgreementEffects(value);
+  if (!normalized) return null;
+  const partyOf = (name) => {
+    const raw = asText(name, 120);
+    if (!raw || raw.toLowerCase() === BREAKER) return raw;
+    return asText(resolve(raw), 120) || raw;
+  };
+  const groupOf = (name) => {
+    const raw = asText(name, 120);
+    if (!raw || raw.toLowerCase() === BREAKER) return raw;
+    const fn = resolveGroup || resolve;
+    return asText(fn(raw), 120) || raw;
+  };
+  const mapEffect = (effect) => {
+    const next = { ...effect };
+    if (next.party) next.party = partyOf(next.party);
+    if (next.with) next.with = partyOf(next.with);
+    if (next.from) next.from = partyOf(next.from);
+    if (next.to) next.to = partyOf(next.to);
+    if (next.group) next.group = groupOf(next.group);
+    return next;
+  };
+  const out = { ...(normalized.months ? { months: normalized.months } : {}) };
+  for (const listName of AGREEMENT_EFFECT_LISTS) {
+    if (normalized[listName]?.length) out[listName] = normalized[listName].map(mapEffect);
+  }
+  return normalizeAgreementEffects(out);
 };
 
 // The cap of a stat on its scale ("once" or "year"), for the record shown to the player (projectEngine.js

@@ -461,7 +461,7 @@ const closeEngineWindow = () => {
   const closing = engineWindow;
   engineWindow = null;
   engineCredential = "";
-  if (!closing || closing.isDestroyed()) return;
+  if (!closing || closing.isDestroyed()) return Promise.resolve();
   // Its guests are told the game is closed before their connections drop
   // (multiplayer/host/engineMain.js farewell): a window destroyed outright
   // never sees its own pagehide, and a guest was left reconnecting to a host
@@ -469,14 +469,21 @@ const closeEngineWindow = () => {
   const destroy = () => {
     if (!closing.isDestroyed()) closing.destroy();
   };
-  const wait = setTimeout(destroy, 1500);
-  closing.webContents.executeJavaScript("window.__ohSharedGameFarewell ? (window.__ohSharedGameFarewell(), true) : false", true)
-    .then((told) => new Promise((resolve) => setTimeout(resolve, told ? 300 : 0)))
-    .catch(() => {})
-    .finally(() => {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
       clearTimeout(wait);
       destroy();
-    });
+      resolve();
+    };
+    const wait = setTimeout(finish, 1500);
+    closing.webContents.executeJavaScript("window.__ohSharedGameFarewell ? (window.__ohSharedGameFarewell(), true) : false", true)
+      .then((told) => new Promise((done) => setTimeout(done, told ? 300 : 0)))
+      .catch(() => {})
+      .finally(finish);
+  });
 };
 
 const installSharedGameEngine = () => {
@@ -1291,6 +1298,12 @@ if (!app.requestSingleInstanceLock()) {
   app.on("before-quit", () => {
     quitting = true;
     globalThis.__ohSystemSpeech?.stopAll();
+  });
+  app.on("before-quit", (event) => {
+    if (engineWindow && !engineWindow.isDestroyed()) {
+      event.preventDefault();
+      void closeEngineWindow().finally(() => app.quit());
+    }
   });
   ipcMain.handle("setup:cancel", () => app.quit());
   // "Download the beta" on the update screen: in the player's own browser, so

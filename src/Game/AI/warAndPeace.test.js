@@ -18,6 +18,7 @@ import { TERRITORY_AS_HELD, TERRITORY_RESTORED, readTermsLine, readTreatyLines }
 import { WEARINESS_A_YEAR, wearinessOf } from "../../runtime/warWeariness.js";
 import { FILTERED_WORLD_KEY_NAMES, PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
 import { buildPeaceBlock } from "./peacePrompt.js";
+import { turnAgreements } from "./agreementEngine.js";
 import { playerFronts } from "../GameUI/warRoomData.js";
 import {
   acceptPeaceOffer,
@@ -665,4 +666,49 @@ test("terms one country puts to two players in the same war and round are two of
   const toAland = offerPeace(ai, { from: "Borduria", to: "Aland", terms, players: ["Aland", "Cisland"], round: 8 });
   const toCisland = offerPeace(toAland.world, { from: "Borduria", to: "Cisland", terms, players: ["Aland", "Cisland"], round: 8 });
   assert.deepEqual(toCisland.world.peaceOffers.map((offer) => [offer.id, offer.to, offer.status]), [["peace:war-2:borduria:8", "Aland", "open"], ["peace:war-2:borduria:8:2", "Cisland", "open"]]);
+});
+
+test("refusing a call to arms marks the broken alliance endApplied so onEnd does not fire again, and applies onBreak area clauses", () => {
+  const regions = [{ id: "r1", name: "Border Valley", country: "Aland" }];
+  const state = world({
+    groups: { "Border Guard": { description: "A local force.", color: "#22c55e" } },
+    groupAreas: { r1: "Border Guard" },
+    relations: [{ a: "Aland", b: "Cisland", score: 50 }],
+    agreements: [{
+      id: "all-1",
+      title: "Mutual Defense Pact",
+      type: "alliance",
+      parties: ["Aland", "Cisland"],
+      status: "active",
+      effectsApplied: true,
+      effects: {
+        onBreak: [
+          { type: "relation", party: "Aland", with: "Cisland", change: -20 },
+          { type: "area", group: "Border Guard", op: "release", region: "Border Valley" },
+        ],
+        onEnd: [{ type: "relation", party: "Aland", with: "Cisland", change: -15 }],
+      },
+    }],
+    callsToArms: [{
+      id: "call-1",
+      warId: "war-1",
+      defender: "Aland",
+      ally: "Cisland",
+      aggressor: "Borduria",
+      via: { kind: "agreement", id: "all-1", title: "Mutual Defense Pact" },
+      status: "open",
+      round: 2,
+    }],
+  });
+  const refused = answerCallToArms(state, "call-1", false, { date: "1914-04-05", round: 3, regions });
+  const ended = refused.agreements.find((a) => a.id === "all-1");
+  assert.equal(ended.status, "ended");
+  assert.equal(ended.brokenBy, "Cisland");
+  assert.equal(ended.endApplied, true, "broken agreement must not also fire onEnd on the next turn");
+  assert.equal(refused.groupAreas.r1, undefined, "onBreak area effect ran with the passed region catalog");
+  const scoreAfterBreak = refused.relations.find((r) => [r.a, r.b].sort().join("|") === "Aland|Cisland")?.score;
+  assert.equal(scoreAfterBreak, 30);
+  const afterTurn = turnAgreements({ world: refused, days: 30, date: "1914-05-05", round: 4, regions }).world;
+  const scoreAfterTurn = afterTurn.relations.find((r) => [r.a, r.b].sort().join("|") === "Aland|Cisland")?.score;
+  assert.equal(scoreAfterTurn, 30, "onEnd did not double-fire after onBreak");
 });

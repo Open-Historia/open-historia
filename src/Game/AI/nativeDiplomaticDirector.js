@@ -154,7 +154,15 @@ export const canonicalDiplomaticPolity = (token, world, { allowUnknown = false, 
   const raw = clean(token);
   if (!raw) return "";
   const group = groupPartyKey(world, raw);
-  if (group && /^\s*group\s*:/i.test(raw)) return group;
+  if (group && /^\s*group\s*:/i.test(raw)) {
+    const colliding = resolvePolityIdentity(group, world, {
+      allowUnknown: false,
+      requireActive: false,
+      allowStockBase: true,
+      identityIndex,
+    });
+    return colliding?.resolved ? `group: ${group}` : group;
+  }
   const resolved = resolvePolityIdentity(raw, world, {
     allowUnknown: group ? false : allowUnknown,
     requireActive: false,
@@ -691,11 +699,19 @@ const splitEffects = (line) => {
   const at = text.lastIndexOf(SEP);
   if (at < 0) return { text, effects: null };
   const tail = text.slice(at + 1).trim();
-  if (!tail.startsWith("{") || !tail.endsWith("}")) return { text, effects: null };
-  try {
-    return { text: text.slice(0, at), effects: normalizeAgreementEffects(JSON.parse(tail)) };
-  } catch {
+  const prefix = text.slice(0, at);
+  // Only treat an 8th field as an optional effects slot.
+  const hasSevenPrefixFields = prefix.split(SEP).length >= 7;
+  if (!tail.startsWith("{") || !tail.endsWith("}")) {
+    if (hasSevenPrefixFields && (!tail || /^(?:null|none)$/i.test(tail))) {
+      return { text: prefix, effects: null };
+    }
     return { text, effects: null };
+  }
+  try {
+    return { text: prefix, effects: normalizeAgreementEffects(JSON.parse(tail)) };
+  } catch {
+    return { text: hasSevenPrefixFields ? prefix : text, effects: null };
   }
 };
 
@@ -1335,9 +1351,14 @@ export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = 
       continue;
     }
 
-    // A break names the party that breaks it, not a new list of parties.
-    const breaker = update.op === "break" ? canonicalizeParties(update.parties, nextWorld)[0] || "" : "";
-    const parties = update.parties.length && update.op !== "break" ? canonicalizeParties(update.parties, nextWorld) : array(prior.parties);
+    // A break names the party that breaks it, not a new list of parties; only a
+    // party actually in the agreement may be recorded as its breaker.
+    const priorParties = array(prior.parties);
+    const candidateBreaker = update.op === "break" ? canonicalizeParties(update.parties, nextWorld)[0] || "" : "";
+    const breaker = candidateBreaker && priorParties.some((party) => lower(party) === lower(candidateBreaker))
+      ? candidateBreaker
+      : "";
+    const parties = update.parties.length && update.op !== "break" ? canonicalizeParties(update.parties, nextWorld) : priorParties;
     const type = update.type && update.type !== "other" ? normalizeAgreementType(update.type) : prior.type;
     let status = prior.status;
     if (update.op === "suspend") status = "suspended";

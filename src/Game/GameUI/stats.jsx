@@ -27,6 +27,7 @@ import { REGION_SELECTED_EVENT } from "../Selection/Regions.jsx";
 import { requestDiplomaticChat } from "./chat.jsx";
 import { EffectList } from "./treatyCards.jsx";
 import { relationBetween } from "../../runtime/groupParties.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
 import { relationBandForScore } from "../../runtime/diplomaticStance.js";
 import { RELATION_CATEGORY_LABELS } from "../../runtime/diplomaticViews.js";
 import { assessPoliticalLandscape, ensureCountryAssessed, ensureIntelligenceRated, ensureMilitaryFigures, generateCountryStatSheet, pendingCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
@@ -651,9 +652,11 @@ const GroupsOnTerritory = ({ world, targetCountry, isPlayer, mapRef, viewer = ""
             const count = row.regionIds.length;
             const held = count === 0 ? "Controls no area yet" : count === 1 ? "Controls 1 region" : `Controls ${count} regions`;
             const canShow = Boolean(row.bounds);
+            const viewerName = toCountryName(viewer);
+            const isOwnGroup = row.own || Boolean(viewerName && row.name.toLowerCase() === viewerName.toLowerCase());
             // Its standing with the player, and a way to talk to its leadership (runtime/groupParties.js).
-            const relation = row.own ? null : relationBetween(world, row.name, viewer);
-            const standing = row.own ? "" : relation ? RELATION_CATEGORY_LABELS[relationBandForScore(relation.score)] : RELATION_CATEGORY_LABELS.unknown;
+            const relation = isOwnGroup ? null : relationBetween(world, row.name, viewerName);
+            const standing = isOwnGroup ? "" : relation ? RELATION_CATEGORY_LABELS[relationBandForScore(relation.score)] : RELATION_CATEGORY_LABELS.unknown;
             return (
                 <div key={row.name} style={{ alignItems: "center", borderTop: index ? "1px solid rgba(255,255,255,0.07)" : "none", display: "flex", gap: "0.35rem", paddingRight: "0.55rem" }}>
                 <button
@@ -672,10 +675,10 @@ const GroupsOnTerritory = ({ world, targetCountry, isPlayer, mapRef, viewer = ""
                     <span style={{ WebkitBoxOrient: "vertical", WebkitLineClamp: 2, color: "rgba(255,255,255,0.38)", display: "-webkit-box", fontSize: "0.62rem", lineHeight: 1.4, marginTop: "0.2rem", overflow: "hidden" }}>{row.description}</span>
                 )}
                 </span>
-                {row.own && isPlayer && <span style={statusBadgeStyle("#2bc1f3")}>Our group</span>}
+                {isOwnGroup && <span style={statusBadgeStyle("#2bc1f3")}>Our group</span>}
                 {standing && <span style={{ color: "rgba(255,255,255,0.55)", flexShrink: 0, fontSize: "0.6rem", marginTop: "0.15rem" }}>{standing}</span>}
                 </button>
-                {!row.own && (
+                {!isOwnGroup && (
                     <button
                     type="button"
                     className="oh-tap"

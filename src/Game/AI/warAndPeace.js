@@ -194,7 +194,7 @@ export const withReputation = (world, name, value) => {
 // AI/agreementEngine.js); an agreement with none written costs nothing more. A member of an institution
 // that will not fight keeps its seat, and its standing falls by TREATY_BROKEN_REPUTATION: an institution's
 // charter is no agreement with effects of its own.
-export const withTreatyBroken = (world, { ally, via }, { date = "", round = 0 } = {}) => {
+export const withTreatyBroken = (world, { ally, via }, { date = "", round = 0, regions = [] } = {}) => {
   // (An agreement the story itself ended while its partner was attacked, "ended", is broken by the one bound
   // to defend: its breach is carried out here, and not again as its end, endApplied.)
   const agreement = ["agreement", "ended"].includes(via?.kind) ? list(world?.agreements).find((entry) => clean(entry?.id) === clean(via.id)) : null;
@@ -202,10 +202,17 @@ export const withTreatyBroken = (world, { ally, via }, { date = "", round = 0 } 
     let next = { ...world, agreements: agreementsWithout(world?.agreements, { ...via, kind: "agreement" }, ally, { date, round }) };
     const effects = normalizeAgreementEffects(agreement.effects);
     for (const effect of list(effects?.onBreak)) {
-      next = applyAgreementEffect(next, agreement, effect, { scale: "once", date, round, breaker: clean(ally) });
+      next = applyAgreementEffect(next, agreement, effect, { scale: "once", date, round, regions, breaker: clean(ally) });
     }
-    if (effects && via.kind === "ended") {
-      next = { ...next, agreements: list(next.agreements).map((entry) => (clean(entry?.id) === clean(agreement.id) ? { ...entry, brokenBy: clean(ally), effectsApplied: true, endApplied: true } : entry)) };
+    if (effects) {
+      next = {
+        ...next,
+        agreements: list(next.agreements).map((entry) => {
+          if (clean(entry?.id) !== clean(agreement.id)) return entry;
+          const ended = via.kind === "ended" || fold(entry?.status) === "ended";
+          return ended ? { ...entry, brokenBy: clean(ally), effectsApplied: true, endApplied: true } : entry;
+        }),
+      };
     }
     return next;
   }
@@ -559,7 +566,7 @@ export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "
       limit: Infinity,
     }).world;
   }
-  for (const entry of broken) next = withTreatyBroken(next, entry, { date, round: turn });
+  for (const entry of broken) next = withTreatyBroken(next, entry, { date, round: turn, regions });
   next = { ...next, callsToArms: due.calls };
 
   // ---- weariness ----
@@ -836,13 +843,13 @@ export const answerPeaceProposal = (world, { from = "", to = "", verdict = null,
 // A world with a call to arms answered.
 //   honour   true joins the war on the defender's side; false breaks the treaty
 // The same world when the call is not open.
-export const answerCallToArms = (world, callId, honour, { date = "", round = 0 } = {}) => {
+export const answerCallToArms = (world, callId, honour, { date = "", round = 0, regions = [] } = {}) => {
   const calls = normalizeCallsToArms(world?.callsToArms);
   const call = calls.find((entry) => entry.id === clean(callId, 120));
   if (!call || call.status !== "open") return world;
   const turn = Math.max(1, Math.round(figure(round)));
   const answered = (status) => calls.map((entry) => (entry.id === call.id ? { ...entry, status, answeredRound: turn } : entry));
-  if (!honour) return { ...withTreatyBroken(world, call, { date, round: turn }), callsToArms: answered("refused") };
+  if (!honour) return { ...withTreatyBroken(world, call, { date, round: turn, regions }), callsToArms: answered("refused") };
   const war = list(world?.wars).find((entry) => clean(entry?.id) === call.warId);
   if (!war || !active(war)) return { ...world, callsToArms: answered("lapsed") };
   const side = sidesOf(war)[0].some((member) => fold(member) === fold(call.defender)) ? "join-a" : "join-b";
@@ -886,7 +893,7 @@ export const playerDiplomacy = (world, { op = "", ref = "", terms = null, to = "
     const call = normalizeCallsToArms(world?.callsToArms).find((entry) => entry.id === clean(ref, 120));
     if (!call || call.status !== "open") return nothing("not-open");
     if (fold(call.ally) !== who) return nothing("not-yours");
-    return { world: answerCallToArms(world, call.id, op === "honour", { date, round }), error: "", accepted: op === "honour", to: call.defender };
+    return { world: answerCallToArms(world, call.id, op === "honour", { date, round, regions }), error: "", accepted: op === "honour", to: call.defender };
   }
   if (op === "propose") {
     const put = proposePeace(world, { warId: ref, from: country, to, terms, players, date, round, chatId, messageId });

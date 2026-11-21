@@ -110,7 +110,7 @@ const isThenable = (value) => Boolean(value) && typeof value.then === "function"
 
 // An entry's fence (see above). `onLate()` is called once, the first time
 // anything of the entry's comes back or asks to write after it was closed.
-const createFence = ({ onLate = () => {} } = {}) => {
+const createFence = ({ onLate = () => {}, onLateCommit = () => {} } = {}) => {
   let open = true;
   let lateSaid = false;
   let committing = 0;
@@ -218,7 +218,12 @@ const createFence = ({ onLate = () => {} } = {}) => {
         pending = Promise.reject(error);
       }
       void pending.then(() => {}, () => {}).then(() => {
-        if (saving) committing -= 1;
+        if (saving) {
+          committing -= 1;
+          if (!open) {
+            try { onLateCommit(); } catch { /* the watch never breaks the fence */ }
+          }
+        }
       });
       return pending;
     },
@@ -291,7 +296,16 @@ export const createWorldQueue = ({
         staleSaid = true;
         try { onStale({ label: name, ms: now() - started, passed: fenced }); } catch { /* the watch never breaks the queue */ }
       };
-      const gate = createFence({ onLate: stale });
+      const gate = createFence({
+        onLate: stale,
+        // A write that was already in flight at the bound may land on disk
+        // after the queue moved on; let the host broadcast the saved world.
+        onLateCommit: () => {
+          if (done) {
+            try { onSettled(name); } catch { /* as above */ }
+          }
+        },
+      });
       let late = () => {};
       const lateness = new Promise((_resolve, reject) => { late = reject; });
       running = name;

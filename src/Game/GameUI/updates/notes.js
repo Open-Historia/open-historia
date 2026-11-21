@@ -81,7 +81,7 @@ const NEW_UPDATES = [
     id: "2026-11-back-channels",
     kind: "major",
     date: "2026-11-19",
-    channel: "alpha",
+    channel: "beta",
     banners: [
       {
         theme: "backChannels",
@@ -150,7 +150,7 @@ const NEW_UPDATES = [
     id: "2026-11-edit-orders",
     kind: "minor",
     date: "2026-11-19",
-    channel: "alpha",
+    channel: "beta",
     banners: [
       {
         title: "Edit your orders",

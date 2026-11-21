@@ -1111,9 +1111,13 @@ const CountrySelectorModal = ({
     }, [uniqueCountries, search]);
     const filteredFlagUrls = useCountryFlagUrls(filtered);
     const selectedFlagUrls = useCountryFlagUrls(selected);
-    const isSelectedName = (name) => selected.some((entry) => entry.name === name);
-    const toggle = ({ name, code }) => setSelected((previous) => previous.some((entry) => entry.name === name)
-        ? previous.filter((entry) => entry.name !== name)
+    const groupColorByName = useMemo(
+        () => new Map((Array.isArray(groups) ? groups : []).map((group) => [group.name, group.color])),
+        [groups],
+    );
+    const isSelectedEntry = (name, code = "") => selected.some((entry) => entry.name === name && entry.code === code);
+    const toggle = ({ name, code }) => setSelected((previous) => previous.some((entry) => entry.name === name && entry.code === code)
+        ? previous.filter((entry) => !(entry.name === name && entry.code === code))
         : single ? [{ name, code }] : [...previous, { name, code }]);
 
     return (
@@ -1147,8 +1151,8 @@ const CountrySelectorModal = ({
                         {selected.length === 0
                             ? <span className="oh-diplomacy-picker-empty-selection">{emptyLabel}</span>
                             : selected.map((country) => (
-                                <button type="button" key={country.name} className="oh-diplomacy-picker-chip" onClick={() => toggle(country)} aria-label={"Remove " + country.name} title={"Remove " + country.name}>
-                                    <FlagImg url={selectedFlagUrls[country.name]} alt={country.name} size="0.9em" />
+                                <button type="button" key={`${country.code || "0"}:${country.name}`} className="oh-diplomacy-picker-chip" onClick={() => toggle(country)} aria-label={"Remove " + country.name} title={"Remove " + country.name}>
+                                    <FlagImg url={!country.code && groupColorByName.has(country.name) ? groupBannerDataUrl(groupColorByName.get(country.name)) : selectedFlagUrls[country.name]} alt={country.name} size="0.9em" />
                                     <span>{country.name}</span><span aria-hidden="true">×</span>
                                 </button>
                             ))}
@@ -1171,7 +1175,7 @@ const CountrySelectorModal = ({
                                 key={country.name}
                                 country={country.name}
                                 flagUrl={filteredFlagUrls[country.name] ?? null}
-                                isSelected={isSelectedName(country.name)}
+                                isSelected={isSelectedEntry(country.name, country.code)}
                                 onToggle={() => toggle(country)}
                             />
                         ))}
@@ -1189,7 +1193,7 @@ const CountrySelectorModal = ({
                                     key={`group:${group.name}`}
                                     country={group.name}
                                     flagUrl={groupBannerDataUrl(group.color)}
-                                    isSelected={isSelectedName(group.name)}
+                                    isSelected={isSelectedEntry(group.name, "")}
                                     onToggle={() => toggle({ name: group.name, code: "" })}
                                 />
                             ))}
@@ -1870,10 +1874,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     void answerPeaceInChat({ speaker: country.name, line: peace, chatId: chat.id, messageId: leaderMessage.id })
                         .catch((error) => logDebugEvent("diplomacy", `${country.name}'s word on peace could not be carried out.`, error));
                 }
+                if (proposal) proposalsRef.current.delete(playerMessage);
                 // What the leader decided of a treaty, its hidden TREATY line (AI/treatyTalk.js): the treaty
                 // written as the game models it, signed, put as a counter-offer, refused or broken. No request.
                 if (treaty && !isGroup) {
-                    if (proposal) proposalsRef.current.delete(playerMessage);
                     void answerTreatyInChat({ speaker: country.name, line: treaty, chatId: chat.id, proposal: proposal ? playerMessage : "" })
                         .catch((error) => logDebugEvent("diplomacy", `${country.name}'s word on a treaty could not be carried out.`, error));
                 }
