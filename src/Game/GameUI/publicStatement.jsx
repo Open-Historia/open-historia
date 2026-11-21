@@ -16,7 +16,7 @@ const audienceLabel = (draft, options) => {
 };
 const Megaphone = () => <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9v6h4l12 5V4L7 9H3Z"/><path d="m7 15 2 6m12-11v4"/></svg>;
 
-export const PublicStatementCard = ({ draft: original, replyId, index, onDiscuss }) => {
+export const PublicStatementCard = ({ draft: original, threadId, replyId, index, onDiscuss }) => {
     const [draft, setDraft] = useState(original);
     const [editing, setEditing] = useState(false);
     const [review, setReview] = useState(null);
@@ -90,7 +90,7 @@ export const PublicStatementCard = ({ draft: original, replyId, index, onDiscuss
         setBusy(true);
         setStatus("");
         try {
-            const result = await commitPublicReview({ review, draft: { ...draft, issuerId: selectedId }, draftId: id, replyId, index, confirmed: true });
+            const result = await commitPublicReview({ review, draft: { ...draft, issuerId: selectedId }, draftId: id, threadId, replyId, index, confirmed: true });
             setReview(null);
             setDone(true);
             setStatus(result?.skipped ? "Already published." : "Published in your campaign's Events record.");
@@ -109,7 +109,7 @@ export const PublicStatementCard = ({ draft: original, replyId, index, onDiscuss
         }
         working.current=true; setBusy(true); setStatus("");
         try {
-            await cancelPublicReview({campaignId:getLibraryState().activeGameId,expected:{country:game.country,date:game.gameDate,round:game.round},draftId:id,replyId,index});
+            await cancelPublicReview({campaignId:getLibraryState().activeGameId,expected:{country:game.country,date:game.gameDate,round:game.round},draftId:id,threadId,replyId,index});
             setReview(null);setDone(false);setEditing(false);
             setStatus(approved?"Publication cancelled before time advanced.":"Draft cancelled.");
             if(discuss)onDiscuss?.(approved||draft);

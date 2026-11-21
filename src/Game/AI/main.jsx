@@ -155,7 +155,7 @@ import { describeReportsForPrompt, normalizeReports } from "../../runtime/report
 import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
 import { advisorRostraContext } from "../../runtime/advisorRostra.js";
-import { publicAudienceOptions, publicIssuerOptions, publicStatementContext } from "../../runtime/publicCommunications.js";
+import { publicAudienceOptions, publicIssuerOptions, publicStatementContext, permitsPublicDraft } from "../../runtime/publicCommunications.js";
 import { withCatchUp } from "./conversationCatchUp.js";
 import { advisorMemoryDirectiveForMode, advisorMemoryContextEntry, latestAdvisorMemory, splitAdvisorMemory } from "./advisorMemory.js";
 import { pendingAdvisorActionDrafts, redactHistoricalAdvisorActionBlocks, renderHistoricalAdvisorReply, renderPendingAdvisorActionDrafts, sanitizeAdvisorModelHistory } from "./advisorActionHistory.js";
@@ -3852,7 +3852,7 @@ async function buildAdvisorSystemPrompt({ recipient = null, discussionOnly = fal
         discussionOnly ? "" : ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
         advisorRostraContext({feed:worldData?.socialFeed,round:gameData?.round,query:currentQuestion,enabled:isActiveFeatureEnabled("socialMedia")}),
         publicStatementContext(eventData,worldData,gameData),
-        !recipient && !discussionOnly && !meetingMode && !hostingSharedGame() ? [
+        permitsPublicDraft(recipient?.id || CHIEF_ADVISOR_THREAD, recipient, {discussionOnly, meetingMode, sharedGame:hostingSharedGame()}) ? [
             "[Official public communications]",
             "When asked to prepare a public speech, proclamation, press release or official public statement, write a brief introduction, then a fenced publicstatement JSON array of at most four objects. Use {title,body,issuerId,audience:{kind,target}}. issuerId may be omitted for the canonical default, or use an exact issuing-office id listed below. Body must be complete plain text, at most 4000 characters; title at most 180. Do not also repeat the body in a blockquote. Audience kind: domestic, worldwide, foreign-public, or institution. target is empty for domestic/worldwide, otherwise an exact canonical ID listed below. Public address to a foreign population or institution is distinct from private diplomacy. The issuing government is determined natively. This only prepares a draft; the human must review and publish it. Never claim publication, legal enactment or a Rostra post before a native receipt. Do not create Actions merely to publish an address.",
             "Available issuing offices: "+JSON.stringify(publicIssuerOptions(worldData,gameData)),
@@ -3905,7 +3905,7 @@ You are ${recipient.name}, known to the player as ${recipient.title}. You are sp
 ${officeContext}
 ${recipient.personality ? `Personality and operating principles: ${recipient.personality}\n` : ""}Maintain this identity across turns. Speak within your actual knowledge and office; do not invent appointments or authority. ${discussionOnly
   ? "This conversation is discussion-only. Propose plans in prose, but do not emit executable blocks or claim that you changed game state."
-  : "You may propose Actions for human review using fenced actions blocks, but they are NOT queued until the player explicitly selects Proceed; never claim to have executed one. You may also create or update Projects with fenced projects blocks once the player has clearly committed to the sustained effort, or when recording substantiated progress; those Project edits go directly to the existing board without an extra approval. Recommend potential Projects freely in prose, but do not open speculative ones or claim institutional powers merely from your typed title."} No other canonical government mutations are authorized by this conversation.`
+  : "You may propose Actions for human review using fenced actions blocks, but they are NOT queued until the player explicitly selects Proceed; never claim to have executed one. You may also create or update Projects with fenced projects blocks once the player has clearly committed to the sustained effort, or when recording substantiated progress; those Project edits go directly to the existing board without an extra approval. Recommend potential Projects freely in prose, but do not open speculative ones or claim institutional powers merely from your typed title."} ${permitsPublicDraft(recipient.id,recipient,{discussionOnly,meetingMode,sharedGame:hostingSharedGame()}) ? "You can also draft official public statements using the publicstatement contract above for explicit player review and publication; this is neither an Action nor a Rostra post." : ""} No other canonical government mutations are authorized by this conversation.`
         : "";
     const chiefIdentity = recipient || meetingMode === "batch" ? "" : describeChiefAdvisorOverride(chiefAdvisorProfile(advisorData));
     return { systemPrompt: `${rendered}\n\n${[...directives, identity, chiefIdentity].filter(Boolean).join("\n\n")}`, lookups };

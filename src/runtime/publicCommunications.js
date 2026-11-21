@@ -7,6 +7,22 @@ import { buildPolityIdentityIndex, resolvePolityIdentity } from "./polityIdentit
 import COUNTRY_NAMES from "./generated/countryNames.js";
 import { eventContentKey } from "./eventDedup.js";
 import { historyEntryCoversDate } from "./manualEventTimeline.js";
+import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorRecipientType, advisorMessagesFor } from "./advisorThreads.js";
+
+// One-to-one domestic recipient capability shared by prompt, renderer and
+// saved-message approval. Drafting grants no issuing authority.
+export const permitsPublicDraft = (threadId, recipient, { sharedGame=false, meetingMode=false, discussionOnly=false }={}) =>
+  !sharedGame && !meetingMode && !discussionOnly &&
+  (threadId===CHIEF_ADVISOR_THREAD ? recipient==null :
+    Boolean(recipient && recipient.id===threadId && !recipient.archived &&
+      advisorRecipientType(recipient)===ADVISOR_RECIPIENT_TYPES.MINISTER));
+export const findPublicDraftReply = (saved,threadId,replyId) => {
+  const recipient=threadId===CHIEF_ADVISOR_THREAD?null:advisorContacts(saved).find(c=>c.id===threadId);
+  if(!permitsPublicDraft(threadId,recipient))fail("Only an active domestic Advisor / Minister conversation may submit an official statement.");
+  const matches=advisorMessagesFor(saved,threadId).filter(m=>m.role==="advisor"&&m.id===replyId);
+  if(matches.length!==1)fail("The saved advisor draft is no longer available.");
+  return matches[0];
+};
 
 export const PUBLICATION_SOURCE="player-publication";
 export const PUBLICATION_MAX_BODY=4000;

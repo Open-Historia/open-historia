@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeEvents, normalizeWorldState } from "./gameState.js";
-import { normalizePublicDraft, planPublicPublication, normalizePublicStatement, pendingPublicStatements, nextPublicStatementCursor, publicStatementContext, assertPublicStatementsRetained, planPublicCancellation, canCancelPublicStatement } from "./publicCommunications.js";
+import { normalizePublicDraft, planPublicPublication, normalizePublicStatement, pendingPublicStatements, nextPublicStatementCursor, publicStatementContext, assertPublicStatementsRetained, planPublicCancellation, canCancelPublicStatement, permitsPublicDraft, findPublicDraftReply } from "./publicCommunications.js";
 import { advisorRostraContext } from "./advisorRostra.js";
 import { parseAdvisorReply } from "../Game/GameUI/advisorReply.js";
 import { buildCampaignLore, campaignLoreMarkdown } from "./campaignLore.js";
@@ -112,4 +112,28 @@ test("cancel unconsumed statement atomically unlinks only its receipt and perman
  assert.equal(planPublicCancellation({...args,...noHistory}).world.simulationHistory.length,0);
  const unpublished=planPublicCancellation({...args,events:[],world});
  assert.deepEqual(unpublished.world.cancelledPublicDrafts,["reply:public:0"]);
+});
+
+test("N035 uses one authority boundary for domestic minister drafts, not chief-only execution",()=>{
+ const contact={role:"advisor-contact",id:"advisor-testchat",name:"TEST CHAT",title:"Advisor",recipientType:"advisor-minister"};
+ const msg={role:"advisor",id:"reply-denmark",threadId:contact.id,text:"Draft"};
+ const chief={...msg,id:"reply-chief",threadId:"chief"};
+ const saved=[contact,msg,chief];
+ assert.equal(permitsPublicDraft("chief",null),true);
+ assert.equal(permitsPublicDraft(contact.id,contact),true);
+ assert.equal(findPublicDraftReply(saved,contact.id,msg.id),msg);
+ assert.equal(findPublicDraftReply(saved,"chief",chief.id),chief);
+ assert.throws(()=>findPublicDraftReply(saved,"chief",msg.id),/no longer available/);
+ assert.throws(()=>findPublicDraftReply(saved,contact.id,chief.id),/no longer available/);
+ assert.throws(()=>findPublicDraftReply([...saved,msg],contact.id,msg.id),/no longer available/);
+ for(const type of ["foreign-official","citizen-civilian","other-character","invented"]){
+   const c={...contact,recipientType:type};
+   assert.equal(permitsPublicDraft(c.id,c),false);
+   assert.throws(()=>findPublicDraftReply([c,msg],c.id,msg.id),/active domestic/);
+ }
+ assert.equal(permitsPublicDraft(contact.id,{...contact,archived:true}),false);
+ assert.throws(()=>findPublicDraftReply([{...contact,archived:true},msg],contact.id,msg.id),/active domestic/);
+ assert.equal(permitsPublicDraft("advisor-group-test",contact,{meetingMode:true}),false);
+ for(const options of [{sharedGame:true},{meetingMode:true},{discussionOnly:true}])assert.equal(permitsPublicDraft(contact.id,contact,options),false);
+ assert.equal(permitsPublicDraft("chief",contact),false);
 });
