@@ -24,7 +24,7 @@ import { describeBasisAction, describeUnknownBasis, sameRegionChange, screenTerr
 import { GROUP_OP_KINDS, PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, findGroupKey, groupOpKind, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import { hostingSharedGame, humanCountriesOf, humanCountriesWith, orderOwner } from "../../runtime/humanPolities.js";
-import { hostReadsFigures, readingEntry } from "../../runtime/sharedReadings.js";
+import { hostReadsFigures, writeInHostOrder } from "../../runtime/sharedReadings.js";
 import { uiString } from "../../runtime/translator.js";
 import { withTurnSeaBattles } from "../../runtime/naval/record.js";
 import { withFrontFortifications } from "../../runtime/warGeography.js";
@@ -35,7 +35,7 @@ import { MILITARY_CHANGE_RULE, describeMilitaryStanding } from "../../runtime/mi
 import { warSettingsOf } from "../../runtime/warSettings.js";
 import { STATS_BACKEND_FIELD, conflictSheetTargets, hasStatsBackend, readableFigure, statsBackendInstruction, statsBackendOf, statsBackendPatch, statsBackendTurnRule } from "../../runtime/statsBackend.js";
 import { CONFLICT_BACKENDS_MOST, conflictBackendsRequest, readConflictBackends } from "./conflictBackends.js";
-import { compactStatSheet, describeStatsRefreshEvidence, deviceStorage, lastStatsRefreshRound, pickStatsRefreshCountries, readStatsRefreshEvery, readStatsRefreshUpdates, rememberStatsRefreshRound, statsRefreshPatch, statsRefreshRequest, statsRefreshRunDue } from "./statsRefresh.js";
+import { compactStatSheet, describeStatsRefreshEvidence, deviceStorage, lastStatsRefreshDate, pickStatsRefreshCountries, readStatsRefreshMonths, readStatsRefreshUpdates, rememberStatsRefreshDate, statsRefreshPatch, statsRefreshRequest, statsRefreshRunDue } from "./statsRefresh.js";
 import { MILITARY_BATCH_MOST, militaryRatingRequest, militaryTargets, nextRatingBatch, ratedFigures, ratedScaleOf, readMilitaryRatings, waitForRating, wantsRating } from "./militaryRating.js";
 import { peopleFor } from "../../runtime/militaryPower.js";
 import {
@@ -271,6 +271,12 @@ import { applyTurnFronts, citiesFollowCountries, withAirStrikes, withFrontManpow
 import { STRIKES_PER_TURN_MOST, fliesAsAircraft, withTurnStrikes } from "../../runtime/strikes.js";
 import { airStrikeVisuals } from "../../runtime/fronts/airStrike.js";
 import { answerPeaceProposal, offerPeace, playerDiplomacy, turnDays, turnWarAndPeace } from "./warAndPeace.js";
+import { breakAgreement, settleAgreementEnds, settleAgreementStarts, turnAgreements } from "./agreementEngine.js";
+import { GROUP_DIPLOMACY_RULE, describeGroupLeaderBrief, describeGroupStanding } from "./groupDealTalk.js";
+import { TREATIES_FIELD, describeTableTreaties, readTreaty, treatyAgreement } from "./treatyTalk.js";
+import { answerTreaty, recordDraftedTreaty } from "../../runtime/treatyOffers.js";
+import { AGREEMENT_EFFECTS_FORMAT, canonicalizeAgreementEffects } from "../../runtime/agreementEffects.js";
+import { groupPartyKey } from "../../runtime/groupParties.js";
 import { holdPlayersWars } from "./playersWarsHold.js";
 // A person's land is theirs to give: a completed project cedes none they hold (runProjectsEngine).
 import { cessionsPeopleKeep, polityChangesPeopleKeep } from "../../runtime/projectCessions.js";
@@ -318,6 +324,7 @@ import {
   unlimitedRequests,
 } from "./requestBudget.js";
 import { describeSchemaRemoval, salvageBySchema } from "./schemaSalvage.js";
+import { salvageTaskAnswer, settleMarkerOps } from "./answerImpactOps.js";
 import {
   TURN_REVIEW_TASK,
   buildTurnReviewPrompt,
@@ -454,6 +461,7 @@ import {
   mutateCanonicalTurnState,
   mutateChatsState,
   mutateEventsState,
+  mutateFlagsState,
   mutateInterceptsState,
   mutateWorldState,
   runInCanonicalWriteQueue,
@@ -464,8 +472,7 @@ import {
 } from "../../runtime/gameState.js";
 import { advancePoliticalBackgroundSimulation, describePoliticalBackgroundResult } from "../../runtime/politicalBackground.js";
 import { refreshPowerStatusForTurn } from "../../runtime/powerStatus.js";
-import { MARKER_OPS, markerOpKind } from "../../runtime/markerOps.js";
-import { withSaidFamily } from "../../runtime/markerFamily.js";
+import { markerOpKind } from "../../runtime/markerOps.js";
 import { firstSentence, withoutFinalTerminal } from "../../../server/sentences.js";
 import { dedupeGeneratedEvents, dedupeEventLog, eventCanonicalKey } from "../../runtime/eventDedup.js";
 import { archiveInteractiveScene, attachInteractiveTranscript } from "../../runtime/interactiveTranscript.js";
@@ -492,6 +499,7 @@ import {
   bindAgreementUpdatesToEvents,
   bindRelationUpdatesToEvents,
   buildBoundedDiplomaticContext,
+  canonicalDiplomaticPolity,
   DIPLOMATIC_SLICE_RULES,
   decodeAgreementUpdates,
   decodeRelationUpdates,
@@ -779,7 +787,7 @@ ${rulesAbove ? `A war is opened, joined, left, halted or ended as ${WAR_LEDGER_R
 // The same for relations, agreements and client states.
 const DIPLOMATIC_LEDGER_RULES_HEADING = "[How Relations and Agreements Are Recorded]";
 const diplomaticLedgerRules = (playerName) => `A relation is the lasting political climate between two polities — friendly, cordial, neutral, cautious, strained, hostile or rival. It is a strong prior for how they deal with each other, never a veto: a friendly government can refuse a dangerous demand and a hostile one can cooperate under necessity. Formal agreements, warmth and war are separate facts. Other powers make their own diplomacy with each other, without waiting for ${playerName}, and it goes on the timeline as events.
-relationUpdates is one string, one record per line: A~B~score~status~eventNumbersCSV~summary — the new absolute score from -100 to 100, status blank to derive it from the score — only when an event changes the climate, never because time passed. agreementUpdates is one string, one record per line: agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms, where op is start, update, suspend, resume, end or expire, and type is alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement or other; give it a stable id (franco-russian-alliance-1894) and reuse it; only start needs the type, parties and title. Every record needs an event that causes it, named by its number in this answer's events (1 for the first) in eventNumbersCSV: never a date or an id there.
+relationUpdates is one string, one record per line: A~B~score~status~eventNumbersCSV~summary — the new absolute score from -100 to 100, status blank to derive it from the score — only when an event changes the climate, never because time passed. agreementUpdates is one string, one record per line: agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms~effects, where op is start, update, suspend, resume, end, expire or break (a party breaks it: partiesCSV names that party), effects the agreement's effects as JSON on a start line, and type is alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement or other; give it a stable id (franco-russian-alliance-1894) and reuse it; only start needs the type, parties, title and effects. ${AGREEMENT_EFFECTS_FORMAT} Every record needs an event that causes it, named by its number in this answer's events (1 for the first) in eventNumbersCSV: never a date or an id there.
 puppetUpdates is one string, one record per line: op~overlord~puppet~kind~loyalty~secrecy~eventNumbersCSV~note, for one polity directing another's will while it stays a separate country with its own land. op is install, reclassify (a new kind), loyalty (move the score), reveal (covert becomes open, for good), release, annex, revolt (thrown off) or suppress (a rising crushed; loyalty forced up, the overlord's reputation down). kind is protectorate (surrenders foreign policy), satellite (formal sovereignty, no real independence) or client (a bought or installed government) — which powers the overlord holds, not how tightly; loyalty is 0-100; secrecy is open or covert; only install needs kind, loyalty and secrecy. A polity has one overlord at most, and a puppet holds no puppets of its own. A puppet is a separate country with its own interests: it may refuse its overlord, loyalty says how likely that is, and a puppet whose loyalty has collapsed may rise (revolt) or be crushed (suppress) — unrest an overlord with an agent inside it or a strong service would see coming. The engine already charges an overlord's reputation for annexing its own puppet and a puppet's loyalty for refusing a demand in a chat; do not charge either again. A covert puppet acts as a fully independent country toward everyone outside the arrangement.
 Any event that makes one polity the puppet, vassal, protectorate, satellite, client state or tributary of another — by treaty, surrender terms, an installed government, a forced submission, or the player's own order succeeding — gets the matching install line in puppetUpdates, with that event's number; a polity founded in the same event as someone's puppet is installed there too. An event that frees, annexes or sees a puppet throw off its overlord gets a release, annex or revolt line the same way. These lines, like every relation, agreement and war record, are the answer's own, beside its events: never inside an event or its impacts. Without the line the story says it and the world never records it: the overlord has no puppet.
 A deal both sides accepted in a chat is an agreement from the moment it is made: an agreementUpdates start records it, naming by number the event that reports it, unless the ledger above already has it, with the terms written out in full — what each side does and by when. Chats fade from view after a while; the ledger does not, so a deal left out of it is forgotten.
@@ -1497,6 +1505,8 @@ const buildGroupsContext = async (worldLike, { regionCatalog = null, inView = nu
   const catalog = regionCatalog ?? await loadRegionCatalog().catch(() => []);
   return describeGroupsForPrompt(world, {
     regionName: await promptRegionNamer(world, catalog),
+    // Each group's relations and deals in force (groupDealTalk.js).
+    standingOf: (name) => describeGroupStanding(world, name),
     maxRegions: Math.max(12, Math.floor(GROUP_REGIONS_IN_PROMPT / count)),
     ...(inView instanceof Set ? { inView: groupInViewTest(bundle, world, catalog, inView) } : {}),
   });
@@ -3050,7 +3060,7 @@ const buildJumpStaticRules = async (variables = {}) => {
     // How the board is kept (projectsDirective.js): always, since the engine runs
     // it and an empty board is where the first projects are opened.
     `${JUMP_PROJECTS_RULES_HEADING}\n${buildJumpProjectsRules({ folded: Boolean(variables?.foldedSkip) && variables?.foldedBoard !== false })}`,
-    isActiveFeatureEnabled("groups") ? `${GROUPS_RULE_HEADING}\n${GROUPS_RULE}` : "",
+    isActiveFeatureEnabled("groups") ? `${GROUPS_RULE_HEADING}\n${GROUPS_RULE_WITH_DIPLOMACY}` : "",
     `${WAR_LEDGER_RULES_HEADING}\n${warLedgerRules(playerName)}`,
     `${DIPLOMATIC_LEDGER_RULES_HEADING}\n${diplomaticLedgerRules(playerName)}`,
     `[Reading the Diplomatic Ledger]\n${DIPLOMATIC_SLICE_RULES}`,
@@ -3142,11 +3152,13 @@ const describeWarsWithoutFormations = (world) => {
 
 const GROUPS_RULE = "Groups are actors that are not countries — an insurgency, a cartel, a militia, a warlord's band, a cult, a zombie outbreak — each controlling an area of regions that stay their countries'. Found, change, move or erase them with groupOps whenever an event has one appear, spread, lose ground, change or be destroyed. A group taking a region moves no border; when a group becomes a state that governs its land, found the state with regionTransfers instead. A side in a war or a rising that is not a country on the map is a group too, even when none is listed below yet: found it the first time an event has it holding ground, so that its later gains and losses have something on the map to change.";
 const GROUPS_RULE_HEADING = "[How Groups Are Recorded]";
+// (And how they deal with others: groupDealTalk.js.)
+const GROUPS_RULE_WITH_DIPLOMACY = `${GROUPS_RULE} ${GROUP_DIPLOMACY_RULE}`;
 // `rulesAbove`: the rule is in the skip's standing rules (buildJumpStaticRules),
 // and the live block points at it.
 const buildJumpGroupsBlock = (groupsContext, { rulesAbove = false } = {}) => [
   "[Groups]",
-  rulesAbove ? `Recorded as ${GROUPS_RULE_HEADING} above says.` : GROUPS_RULE,
+  rulesAbove ? `Recorded as ${GROUPS_RULE_HEADING} above says.` : GROUPS_RULE_WITH_DIPLOMACY,
   normalizeString(groupsContext) || "No groups exist yet.",
 ].join("\n");
 
@@ -4576,52 +4588,11 @@ const runJsonTask = async (taskKey, {
           preserved: Object.keys(pregamePreservedTransportSections),
         }, { verbose: true });
       }
-      // Same idea for markerOps, for every task whose answer has events. A single
-      // rejected op fails the WHOLE payload, so one flattened building once cost
-      // the player the entire turn: a build written flat has the structure's own
-      // fields lifted under `marker`, and one with no op word but a `marker` is a
-      // build by its shape. The op itself is one of the five the schema and the
-      // engine share (runtime/markerOps.js), case and spaces aside. Any other word
-      // is left out here, and said in the receipt as schema salvage says what it
-      // cuts: the engine would read it as no op, and asking again for it would be
-      // a second request. "found" and "destroy" were once rewritten to build and
-      // remove (and the engine read "destroy" as a ruin instead), in English only
-      // (the owner, 2026-11-13: no keywording anywhere). A structure built here
-      // is drawn as the family the answer said, or as a landmark
-      // (runtime/markerFamily.js withSaidFamily), never by its kind's words.
-      const markerOpsLeftOut = [];
-      for (const [eventIndex, event] of (Array.isArray(parsed?.events) ? parsed.events : []).entries()) {
-        const ops = event?.impacts?.markerOps;
-        if (!Array.isArray(ops)) continue;
-        const kept = [];
-        for (const [opIndex, op] of ops.entries()) {
-          if (!op || typeof op !== "object") {
-            kept.push(op);
-            continue;
-          }
-          const written = normalizeString(op.op);
-          const kind = markerOpKind(written) || (!written && op.marker && typeof op.marker === "object" ? "build" : "");
-          if (!kind) {
-            const path = `$.events[${eventIndex}].impacts.markerOps[${opIndex}]`;
-            const title = normalizeString(event?.title);
-            markerOpsLeftOut.push({
-              kind: "item",
-              path,
-              error: `${path}.op must be one of ${MARKER_OPS.map((entry) => JSON.stringify(entry)).join(", ")}; ${JSON.stringify(written)} is none of them.`,
-              ...(title ? { label: `"${title}"` } : {}),
-            });
-            continue;
-          }
-          if (kind !== "build" || op.marker) {
-            kept.push(kind === "build" ? { ...op, op: kind, marker: withSaidFamily(op.marker) } : { ...op, op: kind });
-            continue;
-          }
-          // Flat build: lift the structure's own fields under `marker`.
-          const { op: _op, note, ...marker } = op;
-          kept.push({ op: "build", marker: withSaidFamily(marker), ...(note == null ? {} : { note }) });
-        }
-        event.impacts.markerOps = kept;
-      }
+      // Same idea for markerOps, for every task whose answer has events: a
+      // structure's op as the engine reads it, an op word that is none of the
+      // five left out and said in the receipt, as schema salvage says what it
+      // cuts (answerImpactOps.js settleMarkerOps).
+      const markerOpsLeftOut = settleMarkerOps(parsed);
       if (markerOpsLeftOut.length) {
         logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt}: ${markerOpsLeftOut.length} structure operation(s) named no operation the engine has and were left out.`, markerOpsLeftOut, { verbose: true });
       }
@@ -4849,24 +4820,19 @@ const runJsonTask = async (taskKey, {
       // A fault the schema can point at is cut out rather than costing the whole
       // answer (schemaSalvage.js) — but only once nothing better is coming: while
       // a retry remains and requests are not being saved, the model is told and
-      // fixes its own answer, as it always has. The GM's transaction is left
-      // alone: half a transaction is not a smaller transaction.
+      // fixes its own answer, as it always has.
       // (The structure operations left out above are this attempt's first.)
       let removedThisAttempt = [...markerOpsLeftOut];
-      if (!validation.valid && parsed && lastChance && taskKey !== "gameMaster" && !transportDecodeError) {
+      if (!validation.valid && parsed && lastChance && !transportDecodeError) {
         // On a copy: an answer that cannot be saved goes back to the model as it
-        // wrote it, not half taken apart.
-        const salvaged = salvageBySchema(cloneValue(parsed), checkAnswer, {
-          // Round Zero is the campaign's canonical starting state. Historical
-          // cards can be salvaged individually, but a malformed canonical fact
-          // must never be "fixed" by deleting it and silently starting the game
-          // without a war/relation/agreement/storyline the model attempted to
-          // establish. Fail closed and retry instead.
-          protectedPathPrefixes: taskKey === "pregameHistory" ? ["$.canonicalUpdates"] : [],
-          describe: (candidate, path) => (path[0] === "events" && typeof path[1] === "number"
-            ? `"${normalizeString(candidate?.events?.[path[1]]?.title) || `event ${path[1] + 1}`}"`
-            : ""),
-        });
+        // wrote it, not half taken apart. What may be cut is the task's own
+        // (answerImpactOps.js salvageTaskAnswer): Round Zero's canonical facts
+        // never, since a malformed one deleted would start the game without a
+        // war or treaty the model meant; the Game Master's transaction only one
+        // operation of one event, whole, so one malformed op no longer costs the
+        // administrator everything, while its events, ledgers and patches stay
+        // all or nothing.
+        const salvaged = salvageTaskAnswer(taskKey, cloneValue(parsed), checkAnswer);
         if (salvaged.valid && salvaged.removed.length) {
           parsed = salvaged.value;
           removedThisAttempt = [...markerOpsLeftOut, ...salvaged.removed];
@@ -5289,8 +5255,8 @@ const afterJumpWritten = async (applied, { applyArgs, signal, phases = null, dat
     console.warn("[institution autonomy] post-turn ballot pass failed; the completed turn remains committed.", error);
   }
   reportJumpRequests(requests);
-  // The stat sheets kept up to date, at the pace the player picks (Settings,
-  // AI requests; Off by default): after the skip's requests are reported, as a background request
+  // The stat sheets kept up to date, at the interval the player picks in
+  // Advanced Statistics (6 game months unless changed; Off stops it): after the skip's requests are reported, as a background request
   // of its own that waits for the world to be idle. Never awaited: the skip is
   // done, and nothing here may hold it or count against it.
   void refreshStaleStatSheets().catch(() => null);
@@ -5992,6 +5958,10 @@ if (typeof window !== "undefined") {
 const resolveInvitees = async (names, world, additionalCountries = []) => {
   const countryCatalog = [
     ...mergePolityCatalog(await loadCountryNames(), world),
+    // A group writes to the player, and is written to, by its exact name (runtime/groupParties.js).
+    ...(isActiveFeatureEnabled("groups")
+      ? Object.keys(world?.groups && typeof world.groups === "object" ? world.groups : {}).map((name) => ({ code: "", name }))
+      : []),
     ...normalizeArray(additionalCountries).map((entry) => ({
       code: normalizeString(entry?.code),
       name: normalizeString(entry?.name || entry?.code),
@@ -7715,8 +7685,17 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // operations still pass native shape/reference/dry-run validation before they
   // are attached to the candidate. Null everywhere else.
   politicalClaimRepair = null,
+  // How an operation of an event that cannot be applied as written (a unit or a
+  // structure it does not name, a project not on the board, a report to nobody)
+  // is met: strict sends the answer back with the reason, otherwise it is left
+  // out, said in the receipt and in `territoryNotes`, and the event and its
+  // other operations stand. Strict with the rest unless given: the Game Master
+  // keeps its territory strict on every answer, and its operations strict only
+  // while it may still answer again (validateGameMasterPreviewPayload).
+  strictOps = null,
 } = {}) => {
   const strict = strictTransfers;
+  strictOps = typeof strictOps === "boolean" ? strictOps : strict;
   const containers = Array.isArray(candidate?.events)
     ? candidate.events.map((event, index) => ({ event, impacts: event?.impacts, path: `$.events[${index}].impacts` }))
     : [{
@@ -7726,12 +7705,11 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       }];
   const titleAt = (path) => normalizeString(containers.find((container) => container.path === path)?.event?.title);
   // `key` and `params`: the player's sentence (runtime/receiptPlayerNotes.js).
-  const drop = (path, text, key, params = {}) => noteReceipt(
-    receipt,
-    "dropped",
-    `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}${text}`,
-    receiptPlayerNote(key, params, titleAt(path)),
-  );
+  const drop = (path, text, key, params = {}) => {
+    const player = receiptPlayerNote(key, params, titleAt(path));
+    noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}${text}`, player);
+    if (player && Array.isArray(territoryNotes)) territoryNotes.push(player);
+  };
 
   // actionIds are stable queue references, not prose hints. Do not guess missing
   // links here; only ensure every link the model DID write points at a current
@@ -8114,7 +8092,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       const operationPath = `${path}.unitOps[${index}]`;
       if (operation.op === "spawn") {
         if (!normalizeString(operation.unit?.name) || !normalizeString(operation.unit?.ownerCode)) {
-          if (strict) return `${operationPath}.unit must have nonblank name and ownerCode values.`;
+          if (strictOps) return `${operationPath}.unit must have nonblank name and ownerCode values.`;
           drop(path, "a unit spawn was dropped — it had no name or no ownerCode, so no formation appeared.", "unitNotRaised");
           continue;
         }
@@ -8139,7 +8117,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         }
         const spawnedId = normalizeString(operation.unit?.id);
         if (spawnedId && unitIds.has(spawnedId)) {
-          if (strict) return `${operationPath}.unit.id duplicates an existing unit.`;
+          if (strictOps) return `${operationPath}.unit.id duplicates an existing unit.`;
           delete operation.unit.id; // salvage: let normalization mint a fresh id
         } else if (spawnedId) {
           unitIds.add(spawnedId);
@@ -8151,12 +8129,12 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       const unitId = normalizeString(operation.unitId);
       const unitOpName = normalizeString(operation.op) || "unit";
       if (!unitId) {
-        if (strict) return `${operationPath}.unitId must name the unit.`;
+        if (strictOps) return `${operationPath}.unitId must name the unit.`;
         drop(path, `a ${unitOpName} operation was dropped — it named no unit, so no formation changed.`, "unitOrderNoUnit");
         continue;
       }
       if (!unitIds.has(unitId)) {
-        if (strict) return `${operationPath}.unitId "${unitId}" does not name one existing unit. Write the unit's name exactly as Current Military Units lists it, with its owner in brackets where two units share a name.`;
+        if (strictOps) return `${operationPath}.unitId "${unitId}" does not name one existing unit. Write the unit's name exactly as Current Military Units lists it, with its owner in brackets where two units share a name.`;
         drop(path, `the ${unitOpName} operation on unit "${unitId}" was dropped — no single unit on the map has that name (it may have been destroyed, or never existed, or two units share the name and no owner was given).`, "unitOrderUnknownUnit", { unit: unitId });
         continue; // salvage: drop the op aimed at a unit that no longer exists
       }
@@ -8176,18 +8154,18 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       if (op === "build") {
         const marker = operation.marker ?? operation;
         if (!normalizeString(marker?.name)) {
-          if (strict) return `${operationPath}.marker.name must not be blank.`;
+          if (strictOps) return `${operationPath}.marker.name must not be blank.`;
           drop(path, "a structure was not built — the build operation gave it no name.", "structureUnnamed");
           continue;
         }
         if (!Number.isFinite(Number(marker?.lng)) || !Number.isFinite(Number(marker?.lat))) {
-          if (strict) return `${operationPath}.marker must carry numeric lng and lat coordinates.`;
+          if (strictOps) return `${operationPath}.marker must carry numeric lng and lat coordinates.`;
           drop(path, `"${normalizeString(marker?.name)}" was not built — the build operation carried no numeric lng and lat.`, "structureNowhere", { name: normalizeString(marker?.name) });
           continue;
         }
       } else if (op === "remove") {
         if (!normalizeString(operation?.name) && !normalizeString(operation?.markerId)) {
-          if (strict) return `${operationPath} must carry the name of the structure to remove.`;
+          if (strictOps) return `${operationPath} must carry the name of the structure to remove.`;
           drop(path, "a structure removal was dropped — it named nothing to remove.", "structureRemovalUnnamed");
           continue;
         }
@@ -8205,7 +8183,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       const operation = normalizeReportOp(impacts.reports[index]);
       const operationPath = `${path}.reports[${index}]`;
       if (!operation) {
-        if (strict) return `${operationPath} must be a report operation: create with a title, a body and visibleTo, or share with a reportId and visibleTo.`;
+        if (strictOps) return `${operationPath} must be a report operation: create with a title, a body and visibleTo, or share with a reportId and visibleTo.`;
         drop(path, "a report was dropped — it carried no document to write and no report to widen.", "reportEmpty");
         continue;
       }
@@ -8213,15 +8191,16 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         const holders = await resolveInvitees(operation.visibleTo, world, generatedPolities);
         const unknown = operation.visibleTo.filter((name) => !holders.some((holder) => regionKey(holder.name) === regionKey(name) || regionKey(holder.code) === regionKey(name)));
         if (!holders.length) {
-          if (strict) return `${operationPath}.visibleTo must name polities on this map; "${operation.visibleTo.join('", "')}" ${operation.visibleTo.length === 1 ? "is not one" : "are not"}.`;
+          if (strictOps) return `${operationPath}.visibleTo must name polities on this map; "${operation.visibleTo.join('", "')}" ${operation.visibleTo.length === 1 ? "is not one" : "are not"}.`;
           drop(path, `the report "${operation.title || operation.reportId}" was dropped — none of the governments it names (${operation.visibleTo.join(", ")}) is a polity on this map.`, "reportNoHolders", { title: operation.title || operation.reportId });
           continue;
         }
-        if (unknown.length && !strict) {
-          noteReceipt(receipt, "adjusted", `The report "${operation.title || operation.reportId}" is held by ${holders.map((holder) => holder.name).join(", ")}: ${unknown.join(", ")} ${unknown.length === 1 ? "is not a polity" : "are not polities"} on this map.`,
-          receiptPlayerNote("reportFewerHolders", { title: operation.title || operation.reportId, holders: holders.map((holder) => holder.name).join(", ") }, titleAt(path)));
+        if (unknown.length && !strictOps) {
+          const playerNote = receiptPlayerNote("reportFewerHolders", { title: operation.title || operation.reportId, holders: holders.map((holder) => holder.name).join(", ") }, titleAt(path));
+          noteReceipt(receipt, "adjusted", `The report "${operation.title || operation.reportId}" is held by ${holders.map((holder) => holder.name).join(", ")}: ${unknown.join(", ")} ${unknown.length === 1 ? "is not a polity" : "are not polities"} on this map.`, playerNote);
+          if (playerNote && Array.isArray(territoryNotes)) territoryNotes.push(playerNote);
         }
-        if (unknown.length && strict) return `${operationPath}.visibleTo names "${unknown.join('", "')}", which ${unknown.length === 1 ? "is not a polity" : "are not polities"} on this map. Use the full names exactly as the map spells them.`;
+        if (unknown.length && strictOps) return `${operationPath}.visibleTo names "${unknown.join('", "')}", which ${unknown.length === 1 ? "is not a polity" : "are not polities"} on this map. Use the full names exactly as the map spells them.`;
         operation.visibleTo = holders.map((holder) => holder.name);
       }
       keptReports.push(operation);
@@ -8255,7 +8234,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         const project = operation.project ?? operation;
         const projectName = normalizeString(project?.name);
         if (!projectName) {
-          if (strict) return `${operationPath} must name the project it is opening.`;
+          if (strictOps) return `${operationPath} must name the project it is opening.`;
           drop(path, "a project was not opened — the create operation gave it no name.", "projectUnnamed");
           continue;
         }
@@ -8300,12 +8279,12 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
 
       const target = normalizeString(operation?.projectId || operation?.id || operation?.name || operation?.project);
       if (!target) {
-        if (strict) return `${operationPath} must carry the name (or id) of the project it changes.`;
+        if (strictOps) return `${operationPath} must carry the name (or id) of the project it changes.`;
         drop(path, `a project ${op || "update"} was dropped — it named no project.`, "projectChangeNoProject");
         continue;
       }
       if (!projectKnown(operation)) {
-        if (strict) return buildProjectFeedback(operationPath, operation, knownProjects);
+        if (strictOps) return buildProjectFeedback(operationPath, operation, knownProjects);
         drop(path, `the project ${op || "update"} on "${normalizeString(operation?.projectId || operation?.id || operation?.name || operation?.project)}" was dropped — nothing on the board has that name, so the board did not move.`, "projectChangeUnknown", { name: normalizeString(operation?.projectId || operation?.id || operation?.name || operation?.project) });
         continue;
       }
@@ -9842,6 +9821,11 @@ const applySimulationResult = async ({
     ...toldTreaties,
     ...playersWars.accepted.filter((entry) => !toldTreaties.some((line) => samePair(line, entry))).map(({ from, to }) => ({ from, to, terms: null })),
   ];
+  const agreementTouchesGround = normalizeArray(worldWithImpacts?.agreements)
+    .some((agreement) => JSON.stringify(agreement?.effects ?? {}).includes('"type":"area"') && agreement?.endApplied !== true);
+  const peaceAndAgreementRegions = (turnTreaties.length > 0 || agreementTouchesGround)
+    ? filterToRenderedRegions(await peaceRegionCatalog(), worldWithImpacts)
+    : [];
   worldWithImpacts = turnWarAndPeace({
     world: worldWithImpacts,
     baseWorld,
@@ -9853,8 +9837,8 @@ const applySimulationResult = async ({
     held: await regionHoldingsOf(worldWithImpacts, nextGame, campaignId),
     // (With a player's offer of peace the skip ended the war over: that offer accepted, on its own terms, playersWarsHold.js.)
     treaties: turnTreaties,
-    // (The map's regions, for a peace that annexes a country or cedes regions by name.)
-    regions: turnTreaties.length > 0 ? filterToRenderedRegions(await peaceRegionCatalog(), worldWithImpacts) : [],
+    // (The map's regions, for a peace that annexes a country or cedes regions by name, and broken-treaty area effects.)
+    regions: peaceAndAgreementRegions,
     onRefused: (treaty) => logDebugEvent("turn", `The skip's peace between ${treaty.from} and ${treaty.to} was not made: ${treaty.reason}.`),
     // A player's order to end their war: their offer of peace, put to the other side.
     proposals: playersWars.proposals,
@@ -9867,6 +9851,22 @@ const applySimulationResult = async ({
       }
     },
   });
+  // What the agreements do (agreementEngine.js), as the requests that made them
+  // wrote it: the making of each new one, a month of effects for every whole
+  // month each was in force, their terms, and the end of those that ended. After
+  // the war and peace of the turn. (The map's catalog only where an effect moves
+  // a group's area, which names its region.)
+  {
+    const dealt = turnAgreements({
+      world: worldWithImpacts,
+      days: turnDays(baseGame, nextGame),
+      date: nextGame.gameDate,
+      round: nextGame.round,
+      regions: agreementTouchesGround ? peaceAndAgreementRegions : [],
+    });
+    worldWithImpacts = dealt.world;
+    if (dealt.notes.length) logDebugEvent("turn", `Agreements: ${dealt.notes.join("; ")}.`);
+  }
   // The player's offers the skip's end accepted, told once the peace is made: the war ended by it (or by a peace
   // in its twin, makePeace). One that was not made is told as refused, like any other end of a player's war.
   for (const entry of playersWars.accepted) {
@@ -12668,8 +12668,9 @@ const buildTargetEconomicEvidence = ({ bundle, statCode, previous, normalizedWor
 // The automatic Stats refresh of tracked countries, a request after the skips
 // it fell due on, went on 2026-11-07, and with it the Historical tracking list
 // (a save's countryStatsTracking is left as it is and no longer read). It came
-// back on 2026-11-18 as a background request after the skip, never in it, on
-// a schedule the player sets: refreshStaleStatSheets.
+// back on 2026-11-18 as a background request after the skip, never in it, at
+// an interval in game months the player sets in Advanced Statistics:
+// refreshStaleStatSheets.
 
 // "Stats should be generated for countries you're going into conflict with,
 // either if you deploy a front on them, if you redirect a front to attack them
@@ -13897,59 +13898,60 @@ const waitForSimulationIdle = async ({ signal, timeoutMs = 10 * 60 * 1000 } = {}
 // minutes later: a skip that started meanwhile owns the world until it lands,
 // so wait for it and take the lock before the first await of the write (#724);
 // and a sheet read from a campaign the player has since left belongs to
-// nobody, since the world endpoint follows the open campaign. Returns holding
-// the lock, with the function that ends the write's entry (`inOrder`, below);
-// the caller ends both once the write is done: endSimulation(), then that.
+// nobody, since the world endpoint follows the open campaign. Runs
+// `write({ inEntry })` holding the lock, lets it go when the write ends, and
+// resolves with what the write resolved.
 //
 // `inOrder`: a reading the game makes by itself out of turn, named. While this
 // engine hosts a shared game its write is one entry of the host's queue
-// (runtime/sharedReadings.js readingEntry), and inside it the queue is the
-// lock: no turn and no other write runs beside it, and the Game Master
-// thinking under the lock is not waited for with every player's request
-// behind it. Never given by a write already inside an entry (the host taking a
-// device's reading: takeCountryStatSheet, takeMilitaryRatings for the host).
-const beginStatsWrite = async (campaign, signal, { inOrder = "" } = {}) => {
-  const entry = inOrder ? readingEntry(inOrder) : null;
-  if (entry) {
-    const leave = await entry;
-    beginSimulation();
+// (runtime/sharedReadings.js writeInHostOrder): the entry is this write, and
+// ends when it ends. `inEntry`: the caller is an entry of the host's queue
+// already (the host taking a device's reading: takeCountryStatSheet,
+// takeMilitaryRatings for the host); never given with `inOrder`, whose entry
+// would wait behind the one asking for it.
+//
+// Inside an entry of the host's queue the queue is the lock, taken at once: no
+// turn and no other write runs beside it, and a lock held outside the queue
+// (the Game Master thinking under it, a turn held for a Retry nobody can press
+// in the engine) is never waited for with every player's request and Start
+// behind it (the review of 2026-11-19). Anywhere else it is waited for and
+// taken in one step (simulationStatus.js enterSimulation), as ever.
+//
+// `fence`: inside an entry of the host's queue, the entry's
+// (multiplayer/host/worldQueue.js): `write({ inEntry, fence })` hands it to
+// every write it makes (gameState.js mutate* `fence`), so nothing of it lands
+// once the queue has let the entry go. The entry `inOrder` makes hands its own.
+// The lock taken for an entry is given back when the entry is let go (its
+// fence closes), whether or not its write ever comes back: held by a write the
+// game's server never answered, every reading and the Game Master waited on it.
+const statsWrite = async (campaign, signal, { inOrder = "", inEntry = false, fence = null } = {}, write) => {
+  const locked = async (entered, entryFence) => {
+    if (entered) beginSimulation();
+    else await enterSimulation({ signal });
+    let held = true;
+    const giveBack = () => {
+      if (!held) return;
+      held = false;
+      endSimulation();
+    };
+    entryFence?.onClose?.(giveBack);
     try {
       throwIfAborted(signal);
       assertCampaignUnchanged(campaign, activeCampaignId(), "stat sheet");
-    } catch (error) {
-      endSimulation();
-      leave();
-      throw error;
+      return await write({ inEntry: entered, fence: entryFence });
+    } finally {
+      giveBack();
     }
-    return leave;
-  }
-  // Waited for and taken in one step (simulationStatus.js enterSimulation): a
-  // turn, or a shared game's round, that began meanwhile is waited out, and
-  // two sheets do not both find the world free at once.
-  await enterSimulation({ signal });
-  try {
-    throwIfAborted(signal);
-    assertCampaignUnchanged(campaign, activeCampaignId(), "stat sheet");
-  } catch (error) {
-    endSimulation();
-    throw error;
-  }
-  return () => {};
+  };
+  if (inEntry) return locked(true, fence);
+  if (inOrder) return writeInHostOrder(inOrder, ({ inEntry: entered, fence: given = null }) => locked(entered, given));
+  return locked(false, null);
 };
 
 // A reading's write that takes no lock (it waited for the simulation to be
 // idle first), named: one entry of the host's queue while this engine hosts a
-// shared game (beginStatsWrite `inOrder`), at once anywhere else.
-const inReadingOrder = async (label, write) => {
-  const entry = readingEntry(label);
-  if (!entry) return write();
-  const leave = await entry;
-  try {
-    return await write();
-  } finally {
-    leave();
-  }
-};
+// shared game (statsWrite `inOrder`), at once anywhere else. `write({ fence })`.
+const inReadingOrder = (label, write) => writeInHostOrder(label, ({ fence = null }) => write({ fence }));
 
 // One in-flight promise per (campaign, kind, polity), so the pane re-opening
 // on the same polity, or a deploy right after the tab opened, does not ask
@@ -14017,25 +14019,26 @@ export const assessIntelligenceService = async (target, { signal, requestKind } 
 // again: a turn may have rated the service meanwhile (its number wins), and the
 // campaign in front of the player may have changed (then this belongs to
 // nobody).
-// `inOrder`: false for the host taking a device's sheet, whose write is in its
-// request's own entry already (beginStatsWrite).
-const storeFirstIntelligenceRating = async (name, assessment, { campaign, signal = null, inOrder = true } = {}) => {
+// `inEntry`: the host taking a device's sheet, whose write is in its request's
+// own entry already: the queue is the lock there (statsWrite), and nothing is
+// waited for.
+const storeFirstIntelligenceRating = async (name, assessment, { campaign, signal = null, inEntry = false, fence = null } = {}) => {
   const rating = normalizeIntelligenceRating(assessment?.intelligence);
   if (rating === null) throw new Error("The assessment carried no rating.");
-  await waitForSimulationIdle({ signal });
+  if (!inEntry) await waitForSimulationIdle({ signal });
   throwIfAborted(signal);
   if (activeCampaignId() !== campaign) throw new Error("The campaign changed while the service was being assessed.");
   // Applied to the world as it is inside the write queue: a turn may have
   // rated the service meanwhile, and its number wins.
   let ratedMeanwhile = null;
-  const write = () => mutateWorldState((latest) => {
+  const write = ({ fence: given = null } = {}) => mutateWorldState((latest) => {
     if (isIntelligenceRated(latest, name)) {
       ratedMeanwhile = intelligenceOf(latest, name);
       return null;
     }
     return { ...latest, intelligence: { ...(latest.intelligence ?? {}), [name]: rating } };
-  });
-  await (inOrder ? inReadingOrder("intelligence-rating", write) : write());
+  }, { fence: given });
+  await (inEntry ? write({ fence }) : inReadingOrder("intelligence-rating", write));
   if (ratedMeanwhile !== null) return ratedMeanwhile;
   const service = normalizeString(assessment?.service);
   logDebugEvent("espionage", `${name}'s intelligence service rated ${rating}/100 on first inspection${service ? ` (${service})` : ""}.`, {
@@ -14113,8 +14116,7 @@ export const ensureConflictBackends = (targets, { reason = "" } = {}) => {
     const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
     const read = readConflictBackends(response?.toolInput ?? extractJsonPayload(rawText), asked);
     if (read.length === 0) return null;
-    const leave = await beginStatsWrite(campaign, null, { inOrder: "conflict-figures" });
-    try {
+    return statsWrite(campaign, null, { inOrder: "conflict-figures" }, async ({ fence }) => {
       const kept = [];
       await mutateWorldState((latest) => {
         for (const { name, backend, customStats, military } of read) {
@@ -14131,13 +14133,10 @@ export const ensureConflictBackends = (targets, { reason = "" } = {}) => {
           kept.push(key);
         }
         return kept.length > 0 ? latest : null;
-      }, { emitEvents: false });
+      }, { emitEvents: false, fence });
       if (kept.length > 0) logDebugEvent("turn", `Backends for ${kept.length} countr${kept.length === 1 ? "y" : "ies"} in conflict with the player were worked out in one request.`, { countries: kept });
       return kept;
-    } finally {
-      endSimulation();
-      leave();
-    }
+    });
   });
 };
 
@@ -14164,8 +14163,10 @@ const triedKey = (name) => `${activeCampaignId()}|${name.toLowerCase()}`;
 // The figures a rating brought, kept on each one's sheet: only those it had none of, field by field, and its people
 // where nobody knew them, so a rating never writes over figures that stand (the host takes a device's this way too).
 // Resolves the sheets' keys it wrote. `inOrder`: a rating the game made by itself, written as one entry of
-// the host's queue while it hosts a shared game (beginStatsWrite); never for the host taking a device's, in its own.
-export const takeMilitaryRatings = async (read, { campaign = activeCampaignId(), inOrder = "" } = {}) => {
+// the host's queue while it hosts a shared game (statsWrite); `inEntry`: the host taking a rating in an entry of
+// its queue already (a device's, or its own AI's for a player's Stats pane), where the queue is the lock, and
+// `fence` that entry's, which the write carries (statsWrite).
+export const takeMilitaryRatings = async (read, { campaign = activeCampaignId(), inOrder = "", inEntry = false, fence = null } = {}) => {
   const kept = [];
   const rows = normalizeArray(read).map((entry) => ({
     name: normalizeString(entry?.name),
@@ -14173,8 +14174,7 @@ export const takeMilitaryRatings = async (read, { campaign = activeCampaignId(),
     population: Math.max(0, Math.round(Number(entry?.population) || 0)),
   })).filter((entry) => entry.name && (entry.military || entry.population > 0));
   if (rows.length === 0) return kept;
-  const leave = await beginStatsWrite(campaign, null, { inOrder });
-  try {
+  await statsWrite(campaign, null, { inOrder, inEntry, fence }, async ({ fence: given }) => {
     await mutateWorldState((latest) => {
       const own = militaryLookup(latest);
       let changed = false;
@@ -14189,11 +14189,8 @@ export const takeMilitaryRatings = async (read, { campaign = activeCampaignId(),
         changed = true;
       }
       return changed ? latest : null;
-    }, { emitEvents: false });
-  } finally {
-    endSimulation();
-    leave();
-  }
+    }, { emitEvents: false, fence: given });
+  });
   return kept;
 };
 export const ensureMilitaryFigures = (targets, { reason = "", commit = null } = {}) => {
@@ -14370,8 +14367,10 @@ export const hasCountryStatSheet = async (target) => {
 // assessed as of the host's own date and round, and the rating of its service
 // that came in the same request where nothing has rated it. The first sheet to
 // come is the sheet: one already there stands, and { taken: false } says so.
-// Rejects with the reason when what came is no whole sheet.
-export const takeCountryStatSheet = async ({ name: target, sheet, continuity = null, rating = null } = {}) => {
+// Rejects with the reason when what came is no whole sheet. `inEntry`: taken in
+// the request's own entry of the host's queue, where the queue is the lock, and
+// `fence` that entry's, which every write carries (statsWrite).
+export const takeCountryStatSheet = async ({ name: target, sheet, continuity = null, rating = null, inEntry = false, fence = null } = {}) => {
   const name = normalizeString(target);
   if (!name) throw new Error("There is no country to read.");
   const [world, definition] = await readStatSheetBasis();
@@ -14383,8 +14382,7 @@ export const takeCountryStatSheet = async ({ name: target, sheet, continuity = n
   }
   const campaign = activeCampaignId();
   let taken = false;
-  await beginStatsWrite(campaign);
-  try {
+  await statsWrite(campaign, null, { inEntry, fence }, async ({ fence: given }) => {
     const game = await readGameData();
     const date = normalizeString(game?.gameDate || game?.startDate);
     const round = Math.max(0, Math.trunc(Number(game?.round) || 0));
@@ -14398,12 +14396,10 @@ export const takeCountryStatSheet = async ({ name: target, sheet, continuity = n
       latest.countryStatsHistory = appendCountryStatHistorySample(latest.countryStatsHistory, name, next, { date, round });
       taken = true;
       return latest;
-    }, { emitEvents: false });
-  } finally {
-    endSimulation();
-  }
+    }, { emitEvents: false, fence: given });
+  });
   if (taken && normalizeIntelligenceRating(rating) !== null) {
-    await storeFirstIntelligenceRating(name, { intelligence: rating }, { campaign, inOrder: false }).catch((error) => {
+    await storeFirstIntelligenceRating(name, { intelligence: rating }, { campaign, inEntry, fence }).catch((error) => {
       logDebugEvent("espionage", `${name}: the rating that came with a player's stat sheet was not kept: ${error?.message || error}`);
     });
   }
@@ -14428,13 +14424,14 @@ export const ensureCountryAssessed = (target, options = {}) =>
 
 // ---- Stat sheets kept up to date after time skips ---------------------------
 //
-// The background refresh, at the pace the player picks in Settings, Off by
-// default and as one of the picker's choices (statsRefresh.js says what, when
-// and why). Started once a time skip is written
+// The background refresh, at the interval in game months the player picks in
+// the Stats pane's Advanced Statistics, 6 months unless they pick another or
+// Off (statsRefresh.js says what, when and why). Started once a time skip is written
 // (afterJumpWritten), and a request of its own, never the skip's: a first
 // reading like the others (background, under the day's cap, after whatever is
 // running, one at a time a campaign, silent when it fails). At most one
-// request every so many skips, for the stale sheets: the players' own first.
+// request a skip, and only once the interval has passed in game time since the
+// last, for the stale sheets: the players' own first.
 // What it is told goes through the same write as the Stats pane's Refresh
 // (persistStatSheet), held to the same continuity rules.
 //
@@ -14442,19 +14439,19 @@ export const ensureCountryAssessed = (target, options = {}) =>
 // answers for everyone (runtime/sharedReadings.js): with each player's own AI
 // the host's AI makes no background readings, and a guest's page never asks.
 export const refreshStaleStatSheets = ({ reason = "after a time skip" } = {}) => {
-  const every = readStatsRefreshEvery();
-  if (!every || inSharedGame() || !hostReadsFigures()) return Promise.resolve(null);
+  const months = readStatsRefreshMonths();
+  if (!months || inSharedGame() || !hostReadsFigures()) return Promise.resolve(null);
   return firstReading("stats refresh", "the stale stat sheets", reason, async () => {
     const campaign = activeCampaignId();
     await waitForSimulationIdle();
     const bundle = await readGameStateBundle({ force: true });
     const round = Math.max(0, Math.trunc(Number(bundle.game?.round) || 0));
+    const currentDate = normalizeString(bundle.game?.gameDate || bundle.game?.startDate);
     const storage = deviceStorage();
-    if (!statsRefreshRunDue({ every, round, lastRound: lastStatsRefreshRound(storage, campaign) })) return null;
+    if (!statsRefreshRunDue({ months, date: currentDate, lastDate: lastStatsRefreshDate(storage, campaign), startDate: normalizeString(bundle.game?.startDate) })) return null;
     const world = normalizeWorldState(bundle.world);
     const definition = await loadStatSheetDefinition();
     const keys = definition.custom ? statSheetKeys(definition) : [];
-    const currentDate = normalizeString(bundle.game?.gameDate || bundle.game?.startDate);
     const players = humanCountriesOf(bundle.game);
     // Every country with a whole sheet, and what has changed under it since.
     const groups = new Set(Object.keys(world.groups || {}).map((key) => key.toLowerCase()));
@@ -14481,7 +14478,7 @@ export const refreshStaleStatSheets = ({ reason = "after a time skip" } = {}) =>
         fresh = economic.unaccountedCount;
         looked.set(name, { previous, economic });
       }
-      candidates.push({ name, assessedRound: previous?.continuity?.assessedRound, fresh });
+      candidates.push({ name, assessedDate: normalizeString(previous?.continuity?.assessedDate), fresh });
     }
     // Those at war with a player come after the players' own.
     const playing = new Set(players.map((name) => normalizeString(name).toLowerCase()));
@@ -14493,7 +14490,7 @@ export const refreshStaleStatSheets = ({ reason = "after a time skip" } = {}) =>
         if (side.some((name) => playing.has(normalizeString(name).toLowerCase()))) opponents.push(...sides[1 - index]);
       });
     }
-    const names = pickStatsRefreshCountries({ candidates, players, opponents, round, every }).filter((name) => looked.has(name));
+    const names = pickStatsRefreshCountries({ candidates, players, opponents, date: currentDate, months }).filter((name) => looked.has(name));
     if (names.length === 0) return null;
     // The scenario's strategic indices, as the Stats pane's own sheet has them.
     const loadedRows = definition.custom ? [] : normalizeArray((await loadStatIndexDefinition({ definition }))?.rows);
@@ -14519,7 +14516,7 @@ export const refreshStaleStatSheets = ({ reason = "after a time skip" } = {}) =>
     });
     // Counted as the request is made: one whose answer is lost was still spent.
     if (!backgroundAiAllowance().allowed || activeCampaignId() !== campaign) return null;
-    rememberStatsRefreshRound(storage, campaign, round);
+    rememberStatsRefreshDate(storage, campaign, currentDate);
     const response = await callAIWithTaskLimit(systemPrompt, [{ role: "user", parts: [{ text: userMessage }] }], {
       reasoningEnabled: false,
       taskKey: "countryStatSheet",
@@ -14528,9 +14525,8 @@ export const refreshStaleStatSheets = ({ reason = "after a time skip" } = {}) =>
     const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
     const read = readStatsRefreshUpdates(response?.toolInput ?? extractJsonPayload(rawText), asked);
     if (read.length === 0) return null;
-    const leave = await beginStatsWrite(campaign, null, { inOrder: "stats-refresh" });
     const kept = [];
-    try {
+    const landed = await statsWrite(campaign, null, { inOrder: "stats-refresh" }, async ({ inEntry, fence }) => {
       // A skip that landed meanwhile wrote a world this answer never saw: it
       // is let go, and the refresh is due again on its own schedule.
       const latest = await readGameStateBundle({ force: true });
@@ -14572,13 +14568,14 @@ export const refreshStaleStatSheets = ({ reason = "after a time skip" } = {}) =>
           round,
           replaceComponents: !definition.custom,
           source: "stats-refresh",
+          inEntry,
+          fence,
         });
         kept.push(name);
       }
-    } finally {
-      endSimulation();
-      leave();
-    }
+      return kept;
+    });
+    if (landed === null) return null;
     if (kept.length > 0) logDebugEvent("turn", `Stat sheets kept up to date: ${kept.length} countr${kept.length === 1 ? "y" : "ies"} refreshed in one background request.`, { countries: kept });
     return kept;
   });
@@ -14628,13 +14625,13 @@ export const assessPoliticalLandscape = async (target, { signal, commit = null }
   if (activeCampaignId() !== campaign) throw new Error("The campaign changed while the parties were being compiled.");
   let folded = null;
   // (In the host's one order while this engine hosts a shared game: inReadingOrder.)
-  await inReadingOrder("parties", () => mutateWorldState((latest) => {
+  await inReadingOrder("parties", ({ fence }) => mutateWorldState((latest) => {
     const actors = latest?.politicalActors && typeof latest.politicalActors === "object" ? latest.politicalActors : {};
     const byPolity = actors.byPolity && typeof actors.byPolity === "object" ? actors.byPolity : {};
     const key = Object.keys(byPolity).find((entry) => entry.toLowerCase() === name.toLowerCase()) ?? actorKey;
     folded = foldLandscapeIntoActor(byPolity[key] ?? null, entry, { polityKey: key });
     return folded ? { ...latest, politicalActors: { ...actors, byPolity: { ...byPolity, [key]: folded } } } : null;
-  }));
+  }, { fence }));
   return folded;
 };
 
@@ -14652,7 +14649,8 @@ export const hasCompiledParties = async (target) => {
   const world = normalizeWorldState(await readWorldState({ force: true }));
   return partiesCompiled(politicalActorOf(world, target).actor);
 };
-export const takePoliticalLandscape = async ({ name: target, landscape } = {}) => {
+// `fence`: the entry of the host's queue it is taken in, which its write carries.
+export const takePoliticalLandscape = async ({ name: target, landscape, fence = null } = {}) => {
   const name = normalizeString(target);
   const entry = normalizePoliticalLandscape(landscape);
   if (!name || !entry) throw new Error("The answer named no government and no parties.");
@@ -14667,7 +14665,7 @@ export const takePoliticalLandscape = async ({ name: target, landscape } = {}) =
     if (!folded) return null;
     taken = true;
     return { ...latest, politicalActors: { ...actors, byPolity: { ...byPolity, [key]: folded } } };
-  });
+  }, { fence });
   return { taken };
 };
 
@@ -14719,17 +14717,23 @@ export const assessGoalProgress = async ({ signal, commit = null } = {}) => {
 // The write of a stat sheet, made by the Stats pane's Refresh (both the
 // standard sheet and a scenario's own) and by the background refresh after
 // skips (refreshStaleStatSheets): one writer. The caller holds the write
-// (beginStatsWrite). R2.40: the full-world save runs in the Stats worker,
+// (statsWrite). R2.40: the full-world save runs in the Stats worker,
 // which is handed only this one sheet, and the same-tab caches are patched
 // narrowly so nothing else on the page wakes; the main thread writes it when
 // the worker fails. Says so to the Stats pane (oh:country-stats-updated).
 // `replaceComponents`: the sheet carries the whole territorial ledger.
+// `inEntry`: written in an entry of the host's queue (the engine hosting a
+// shared game): the main thread's commit, at once. The worker's own read and
+// PUT took up to a minute when it was slow (COUNTRY_STATS_PERSIST_TIMEOUT_MS),
+// held the entry all that time, and Start and every player's request with it
+// (the review of 2026-11-19); the engine's window has no page to keep smooth.
+// `fence`: that entry's, which the commit carries (statsWrite).
 const announceStatSheet = (country, sheet, source) => {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent("oh:country-stats-updated", { detail: { country, sheet, source } }));
 };
-const persistStatSheet = async ({ code, sheet, continuity, date, round, signal = null, replaceComponents = false, source = "country-stats" } = {}) => {
-  try {
+const persistStatSheet = async ({ code, sheet, continuity, date, round, signal = null, replaceComponents = false, source = "country-stats", inEntry = false, fence = null } = {}) => {
+  if (!inEntry) try {
     const persisted = await persistCountryStatsBackground({ code, sheet, continuity, date, round, signal });
     if (persisted?.sheet && typeof persisted.sheet === "object") {
       await primeCountryStatsWorkerCommit({ country: code, sheet: persisted.sheet, historySeries: persisted.historySeries });
@@ -14745,7 +14749,7 @@ const persistStatSheet = async ({ code, sheet, continuity, date, round, signal =
     nextSheet = applyCountryStatPatchToWorld(world, code, sheet, { ...(replaceComponents ? { replaceComponents: true } : {}), continuity });
     world.countryStatsHistory = appendCountryStatHistorySample(world.countryStatsHistory, code, nextSheet, { date, round });
     return world;
-  }, { emitEvents: false });
+  }, { emitEvents: false, fence });
   announceStatSheet(code, nextSheet, `${source}-main-thread-persist`);
   return nextSheet;
 };
@@ -14839,16 +14843,10 @@ const generateScenarioCustomStatSheet = async ({
     // Existing saves have no custom fingerprint. Seal the current evidence
     // without silently revisiting three years of already-assessed history.
     if (decision.migrate && statCode) {
-      const leave = await beginStatsWrite(campaign, signal, { inOrder: "stat-sheet" });
-      try {
-        await mutateWorldState((world) => {
-          applyCountryStatPatchToWorld(world, statCode, {}, { continuity });
-          return world;
-        }, { emitEvents: false });
-      } finally {
-        endSimulation();
-        leave();
-      }
+      await statsWrite(campaign, signal, { inOrder: "stat-sheet" }, ({ fence }) => mutateWorldState((world) => {
+        applyCountryStatPatchToWorld(world, statCode, {}, { continuity });
+        return world;
+      }, { emitEvents: false, fence }));
     }
     console.info(`[stats custom] ${target}: reused persistent baseline (${decision.reason}); no AI request.`);
     return previous;
@@ -14911,13 +14909,7 @@ Reassess existing values only as a response to newly changed canonical evidence.
   if (!statCode || !sheet) return sheet;
   if (commit) return commit({ code: statCode, sheet, continuity });
 
-  const leave = await beginStatsWrite(campaign, signal, { inOrder: "stat-sheet" });
-  try {
-    return await persistStatSheet({ code: statCode, sheet, continuity, date: currentDate, round: currentRound, signal, source: "scenario-custom-stats" });
-  } finally {
-    endSimulation();
-    leave();
-  }
+  return statsWrite(campaign, signal, { inOrder: "stat-sheet" }, ({ inEntry, fence }) => persistStatSheet({ code: statCode, sheet, continuity, date: currentDate, round: currentRound, signal, source: "scenario-custom-stats", inEntry, fence }));
 };
 
 // Structured national stat sheet for the Stats tab, grounded in the same
@@ -14937,7 +14929,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
   // canon. Ahead of the perf timer, so waiting is not reported as preparation.
   await waitForSimulationIdle({ signal });
   // The campaign the sheet is read from; every write below checks it again
-  // (beginStatsWrite).
+  // (statsWrite).
   const campaign = activeCampaignId();
   const statsStartedAt = typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
   // Stats is a read-mostly panel. Use the already-canonical runtime bundle cache
@@ -15496,27 +15488,31 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
     };
     if (commit) return commit({ code: statCode, sheet: guarded.sheet, continuity });
 
-    const leave = await beginStatsWrite(campaign, signal, { inOrder: "stat-sheet" });
-    try {
-      // The same write as a scenario's own sheet and the refresh after skips
-      // (persistStatSheet): the Stats worker's, or the main thread's when it fails.
-      return await persistStatSheet({
-        code: statCode,
-        sheet: guarded.sheet,
-        continuity,
-        date: currentDate,
-        round: currentRound,
-        signal,
-        replaceComponents: true,
-        source: "native-country-stats",
-      });
-    } catch (error) {
-      if (signal?.aborted || error?.name === "AbortError") throw error;
-      console.warn("[ai] failed to persist native country stats:", error);
-    } finally {
-      endSimulation();
-      leave();
-    }
+    let persisted = null;
+    let written = false;
+    await statsWrite(campaign, signal, { inOrder: "stat-sheet" }, async ({ inEntry, fence }) => {
+      try {
+        // The same write as a scenario's own sheet and the refresh after skips
+        // (persistStatSheet): the Stats worker's, or the main thread's when it fails.
+        persisted = await persistStatSheet({
+          code: statCode,
+          sheet: guarded.sheet,
+          continuity,
+          date: currentDate,
+          round: currentRound,
+          signal,
+          replaceComponents: true,
+          source: "native-country-stats",
+          inEntry,
+          fence,
+        });
+        written = true;
+      } catch (error) {
+        if (signal?.aborted || error?.name === "AbortError") throw error;
+        console.warn("[ai] failed to persist native country stats:", error);
+      }
+    });
+    if (written) return persisted;
   }
 
   return guarded.sheet || finalized;
@@ -15915,6 +15911,11 @@ export const runChatActionBatch = async ({
   // Peace between the player and each AI participant at war with it (warStatsPrompt.js
   // describePeaceTalk), not in an institution's own business.
   // Nor where the turn is words alone: no peace is answered from there.
+  // Treaties among the governments the AI plays at an ordinary table (treatyTalk.js): never at an
+  // institution's, never in words alone.
+  const tableTreaties = stored.institutionId || stored.lifecycleInstitutionId || formalBusinessRequested || wordsOnly
+    ? ""
+    : describeTableTreaties({ governments: aiParticipants, people: [player, ...otherPeople] });
   const peaceTalks = stored.institutionId || stored.lifecycleInstitutionId || formalBusinessRequested || wordsOnly
     ? []
     : aiParticipants.map((speaker) => describePeaceTalk({ world: bundle.world, speaker, player, form: "field" })).filter(Boolean);
@@ -15978,6 +15979,10 @@ export const runChatActionBatch = async ({
       buildWarStatsBlock({ world: bundle.world, countries: aiParticipants, max: 2400 }),
       ...peaceTalks,
       documentKnowledge ? `[PRIVATE GOVERNMENT DOCUMENTS - COMPARTMENTALIZED]\n${documentKnowledge}` : "",
+      // Treaties the governments at the table make among themselves, in the shape every treaty has (treatyTalk.js).
+      tableTreaties,
+      // A participant that is a group speaks as one (groupDealTalk.js), not as a government.
+      ...(isActiveFeatureEnabled("groups") ? aiParticipants.map((speaker) => describeGroupLeaderBrief({ world: bundle.world, speaker, player })) : []),
       institutionLifecyclePrompt,
       formalInstitutionPrompt,
       "Return this turn's actions as JSON only.",
@@ -15995,7 +16000,11 @@ export const runChatActionBatch = async ({
     ...(typeof onRequest === "function" ? { onRequest } : {}),
   });
 
-  const known = mergePolityCatalog(await loadCountryNames(), bundle.world).map((entry) => entry.name).filter(Boolean);
+  const known = [
+    ...mergePolityCatalog(await loadCountryNames(), bundle.world).map((entry) => entry.name).filter(Boolean),
+    // A group may be brought into a conversation like a country (runtime/groupParties.js).
+    ...Object.keys(bundle.world?.groups && typeof bundle.world.groups === "object" ? bundle.world.groups : {}),
+  ];
   // A turn of words alone keeps what was said and drops everything else.
   const rawActions = normalizeArray(payload?.actions)
     .filter((action) => !wordsOnly || normalizeChatAction(action)?.type === "send_message");
@@ -16031,7 +16040,9 @@ export const runChatActionBatch = async ({
     if (lastMessage) lastMessage.memorySummary = memorySummary;
   }
   // Everything the governments decided, written in one step (`commit`).
-  const writeDecisions = async () => {
+  // `fence`: the entry of a shared game's host queue it is written in
+  // (engineMain.js tableTurn), which every write of it carries.
+  const writeDecisions = async ({ fence = null } = {}) => {
   // What each government decided of peace with the player, a line each
   // ("country | accept"), carried out by the game for a participant that was
   // told it may (peaceTalks), never for anyone else. Its offer is shown on its
@@ -16042,8 +16053,13 @@ export const runChatActionBatch = async ({
       const speaker = aiParticipants.find((name) => regionKey(name) === regionKey(who));
       if (!speaker || !said.length || !warsOf(bundle.world, speaker).length) continue;
       const lastSaid = [...outcome.events].reverse().find((event) => event.kind === "message" && regionKey(event.by) === regionKey(speaker));
-      await answerPeaceInChat({ speaker, line: said.join("|"), player, chatId: normalizeString(stored.id), messageId: normalizeString(lastSaid?.id) });
+      await answerPeaceInChat({ speaker, line: said.join("|"), player, chatId: normalizeString(stored.id), messageId: normalizeString(lastSaid?.id), fence });
     }
+  }
+  // The treaties the governments at the table agreed among themselves (treatyTalk.js), made with their
+  // effects; never one binding a person.
+  if (tableTreaties && normalizeString(payload?.[TREATIES_FIELD])) {
+    await makeTableTreaties(payload[TREATIES_FIELD], { governments: aiParticipants, date: turnTime, round: (bundle.savedGame ?? bundle.game)?.round, fence });
   }
   let committedInstitution = null;
   let committedLifecycle = null;
@@ -16058,6 +16074,7 @@ export const runChatActionBatch = async ({
       formalActions: partitioned.formal,
       cursors: nextCursors,
       expectedGameId: campaign,
+      fence,
     });
     // An AI sponsor's submit refused only for want of a charter voting rule
     // gets the one-time rule backfill and one more try
@@ -16072,7 +16089,8 @@ export const runChatActionBatch = async ({
           date: turnTime,
           command: stalledSubmit.command,
           expectedGameId,
-        }), { institutionId: stored.institutionId, proposalId: stalledSubmit.command.proposalId, expectedGameId });
+          fence,
+        }), { institutionId: stored.institutionId, proposalId: stalledSubmit.command.proposalId, expectedGameId, fence });
         committedInstitution = {
           ...committedInstitution,
           world: retried.world,
@@ -16097,6 +16115,7 @@ export const runChatActionBatch = async ({
       lifecycleActions,
       cursors: nextCursors,
       expectedGameId: campaign,
+      fence,
     });
     lifecycleRejected = committedLifecycle.rejected || [];
   }
@@ -16459,8 +16478,9 @@ const peaceRegionCatalog = () => loadRegionCatalog().catch(() => []);
 export const answerDiplomacy = async ({ op = "", ref = "", terms = null, to = "", chatId = "", messageId = "" } = {}) => {
   if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish.");
   const game = await readGameData();
-  // (A peace taken may annex a country or cede regions by name: they are found on the map.)
-  const regions = op === "accept" ? await peaceRegionCatalog() : [];
+  // (A peace taken may annex a country or cede regions by name, and refusing a
+  // call to arms may break a treaty with an area clause: they are found on the map.)
+  const regions = op === "accept" || op === "refuse" ? await peaceRegionCatalog() : [];
   let outcome = { error: "unknown", accepted: false, to: "" };
   await mutateWorldState((world) => {
     outcome = playerDiplomacy(world, {
@@ -16493,7 +16513,8 @@ export const answerDiplomacy = async ({ op = "", ref = "", terms = null, to = ""
 //   player      the person it answered (the game's own country when blank)
 //   chatId, messageId   the thread and the leader's message, where its offer is shown
 // Resolves { outcome, reason } (warAndPeace.js answerPeaceProposal).
-export const answerPeaceInChat = async ({ speaker = "", line = "", player = "", chatId = "", messageId = "" } = {}) => {
+// `fence`: the entry of a shared game's host queue it is written in (runChatActionBatch's `write({ fence })`).
+export const answerPeaceInChat = async ({ speaker = "", line = "", player = "", chatId = "", messageId = "", fence = null } = {}) => {
   const game = await readGameData();
   const person = normalizeString(player) || normalizeString(game?.country);
   const verdict = readPeaceVerdict(line, { from: speaker, to: person });
@@ -16513,11 +16534,187 @@ export const answerPeaceInChat = async ({ speaker = "", line = "", player = "", 
       regions: filterToRenderedRegions(regions, world),
     });
     return answer.outcome ? answer.world : null;
-  });
+  }, { fence });
   logDebugEvent("diplomacy", answer.outcome
     ? `${speaker} on peace with ${person}: ${verdict.verdict} (${answer.outcome}).`
     : `${speaker} said "${normalizeString(line)}" of peace with ${person}; nothing was done: ${answer.reason}.`);
   return answer;
+};
+
+// ---- treaties made in a chat (treatyTalk.js, agreementEngine.js) --------------------------------
+
+// The map's catalog, for an effect that moves a group's area (it names its region).
+const treatyRegions = async (world) => filterToRenderedRegions(await peaceRegionCatalog(), world);
+const resolveTreatyParty = (world) => (name) => canonicalDiplomaticPolity(name, world) || toCountryName(normalizeString(name)) || normalizeString(name);
+const resolveTreatyGroup = (world) => (name) => groupPartyKey(world, name) || normalizeString(name);
+const samePartyName = (a, b) => normalizeString(a).toLowerCase() === normalizeString(b).toLowerCase();
+const uniqueAgreementId = (existing, prefix, start = 0) => {
+  const taken = new Set(normalizeArray(existing).map((entry) => normalizeString(entry?.id)));
+  let index = Math.max(0, Math.trunc(Number(start) || 0));
+  while (taken.has(`${prefix}:${index}`)) index += 1;
+  return `${prefix}:${index}`;
+};
+const hasAreaEffect = (effects) => Boolean(effects && JSON.stringify(effects).includes('"type":"area"'));
+
+// What a leader decided of a treaty in its reply, its hidden TREATY line (treatyTalk.js), carried out:
+//   accept    the player's proposal, as the leader wrote it out, signed: an agreement of the world with its
+//             effects, its making carried out at once (agreementEngine.js)
+//   counter   the leader's own version put to the player, who signs or declines it
+//   refuse    kept as the player's proposal, declined, as the leader wrote it out
+//   break     an agreement in force between the two, by its exact title, broken by the leader
+// `proposal`: the player's words, where the line answers a proposal. No request.
+// Resolves { outcome, reason }: outcome "signed" | "countered" | "refused" | "broken" | "".
+export const answerTreatyInChat = async ({ speaker = "", line = "", player = "", chatId = "", proposal = "" } = {}) => {
+  const game = await readGameData();
+  const rawPerson = normalizeString(player) || normalizeString(game?.country);
+  const treaty = readTreaty(line);
+  if (!treaty) return { outcome: "", reason: "unread" };
+  const date = normalizeString(game?.gameDate || game?.startDate);
+  const round = game?.round;
+  let needsRegions = hasAreaEffect(treaty.effects);
+  if (!needsRegions && treaty.verdict === "break") {
+    const snapshot = await readWorldState({ force: true });
+    needsRegions = normalizeArray(snapshot?.agreements).some((agreement) =>
+      samePartyName(agreement?.title, treaty.title)
+      && ["active", "suspended"].includes(normalizeString(agreement?.status || "active"))
+      && hasAreaEffect(agreement?.effects));
+  }
+  const regions = needsRegions ? await treatyRegions(await readWorldState({ force: true })) : [];
+  let answer = { outcome: "", reason: "" };
+  let resolvedPerson = rawPerson;
+  await mutateWorldState((world) => {
+    const resolve = resolveTreatyParty(world);
+    const resolveGroup = resolveTreatyGroup(world);
+    const leader = resolve(speaker);
+    const person = resolve(rawPerson);
+    resolvedPerson = person;
+    if (treaty.verdict === "break") {
+      const found = normalizeArray(world?.agreements).find((agreement) => samePartyName(agreement?.title, treaty.title)
+        && ["active", "suspended"].includes(normalizeString(agreement?.status || "active"))
+        && normalizeArray(agreement?.parties).some((party) => samePartyName(party, leader))
+        && normalizeArray(agreement?.parties).some((party) => samePartyName(party, person)));
+      if (!found) {
+        answer = { outcome: "", reason: "none-in-force" };
+        return null;
+      }
+      const result = breakAgreement(world, { id: found.id, by: leader, date, round, regions });
+      answer = { outcome: result.agreement ? "broken" : "", reason: result.reason };
+      return result.agreement ? result.world : null;
+    }
+    if (treaty.verdict === "refuse") {
+      const draftedParties = treaty.parties.map(resolve);
+      const drafted = treaty.type
+        ? {
+          ...treaty,
+          parties: draftedParties,
+          ...(treaty.effects ? { effects: canonicalizeAgreementEffects(treaty.effects, resolve, { resolveGroup, parties: draftedParties }) } : {}),
+        }
+        : null;
+      answer = { outcome: "refused", reason: "" };
+      return drafted ? recordDraftedTreaty(world, { from: person, to: leader, status: "declined", treaty: drafted, proposal, chatId, date, round }).world : null;
+    }
+    const parties = [...new Set(treaty.parties.map(resolve).filter(Boolean))];
+    // A treaty of this one-on-one chat binds ONLY the two in it: the leader and the player.
+    if (
+      !parties.some((party) => samePartyName(party, leader))
+      || !parties.some((party) => samePartyName(party, person))
+      || !parties.every((party) => samePartyName(party, leader) || samePartyName(party, person))
+    ) {
+      answer = { outcome: "", reason: "parties" };
+      return null;
+    }
+    const effects = treaty.effects ? canonicalizeAgreementEffects(treaty.effects, resolve, { resolveGroup, parties }) : null;
+    const drafted = { ...treaty, parties, ...(effects ? { effects } : {}) };
+    if (treaty.verdict === "counter") {
+      answer = { outcome: "countered", reason: "" };
+      return recordDraftedTreaty(world, { from: leader, to: person, status: "open", treaty: drafted, proposal, chatId, date, round }).world;
+    }
+    const priorAgreements = normalizeArray(world?.agreements);
+    const id = uniqueAgreementId(priorAgreements, `treaty:${person.toLowerCase()}:${leader.toLowerCase()}:${Math.max(0, Math.trunc(Number(round) || 0))}`, priorAgreements.length);
+    const agreement = treatyAgreement(drafted, { id, date, round, resolve, resolveGroup });
+    if (!agreement) {
+      answer = { outcome: "", reason: "parties" };
+      return null;
+    }
+    const signed = settleAgreementStarts({ ...world, agreements: [agreement, ...priorAgreements] }, { date, round, regions }).world;
+    answer = { outcome: "signed", reason: "" };
+    return recordDraftedTreaty(signed, { from: person, to: leader, status: "signed", treaty: drafted, proposal, chatId, agreementId: id, date, round }).world;
+  });
+  logDebugEvent("diplomacy", answer.outcome
+    ? `${speaker} on a treaty with ${resolvedPerson}: ${treaty.verdict} (${answer.outcome}).`
+    : `${speaker}'s treaty line with ${resolvedPerson} was not carried out: ${answer.reason}.`, treaty, { verbose: true });
+  return answer;
+};
+
+// What the player does with a treaty between turns, no request:
+//   op "sign" | "decline"   a treaty a leader put to them (ref: the offer's id)
+//      "withdraw"           their own open offer
+//      "end"                break an agreement in force they are a party to (ref: the agreement's id)
+// Resolves { ok, reason }.
+export const playerTreaty = async ({ op = "", ref = "" } = {}) => {
+  const game = await readGameData();
+  const rawPerson = normalizeString(game?.country);
+  const date = normalizeString(game?.gameDate || game?.startDate);
+  const round = game?.round;
+  const regions = await treatyRegions(await readWorldState({ force: true })).catch(() => []);
+  let outcome = { ok: false, reason: "unknown" };
+  let resolvedPerson = rawPerson;
+  await mutateWorldState((world) => {
+    const person = resolveTreatyParty(world)(rawPerson);
+    resolvedPerson = person;
+    if (op === "sign" || op === "decline" || op === "withdraw") {
+      const result = answerTreaty(world, { op, ref, country: person, date, round });
+      outcome = { ok: !result.error, reason: result.error };
+      if (result.error) return null;
+      return op === "sign" ? settleAgreementStarts(result.world, { date, round, regions }).world : result.world;
+    }
+    if (op === "end") {
+      const result = breakAgreement(world, { id: ref, by: person, date, round, regions });
+      outcome = { ok: Boolean(result.agreement), reason: result.reason };
+      return result.agreement ? result.world : null;
+    }
+    return null;
+  });
+  logDebugEvent("diplomacy", outcome.ok ? `${resolvedPerson}: treaty ${op}.` : `${resolvedPerson}: treaty ${op} was not done: ${outcome.reason}.`);
+  return outcome;
+};
+
+// The treaties a group chat's governments agreed among themselves, written to the world (tableTreatiesWorld).
+// `fence`: the entry of a shared game's host queue it is written in.
+const makeTableTreaties = async (raw, { governments = [], date = "", round = 0, fence = null } = {}) => {
+  const needsRegions = normalizeString(raw).includes('"area"');
+  const regions = needsRegions ? await treatyRegions(await readWorldState({ force: true })).catch(() => []) : [];
+  return mutateWorldState((world) => tableTreatiesWorld(world, raw, { governments, date, round, regions }), { fence });
+};
+
+// The treaties a group chat's governments agreed among themselves (treatyTalk.js TREATIES_FIELD), made:
+// only between the governments that answered, never binding a person. Returns the world, or null for none.
+const tableTreatiesWorld = (world, raw, { governments = [], date = "", round = 0, regions = [] } = {}) => {
+  let parsed = [];
+  try {
+    parsed = JSON.parse(normalizeString(raw) || "[]");
+  } catch {
+    return null;
+  }
+  const resolve = resolveTreatyParty(world);
+  const resolveGroup = resolveTreatyGroup(world);
+  const priorAgreements = normalizeArray(world?.agreements);
+  const made = [];
+  for (const entry of normalizeArray(parsed).slice(0, 4)) {
+    const treaty = readTreaty({ ...entry, answer: "accept" });
+    if (!treaty) continue;
+    const parties = treaty.parties.map(resolve);
+    if (!parties.every((party) => governments.some((name) => samePartyName(name, party)))) continue;
+    const id = uniqueAgreementId(
+      [...priorAgreements, ...made],
+      `table-treaty:${parties.map((party) => party.toLowerCase()).join("+")}:${Math.max(0, Math.trunc(Number(round) || 0))}`,
+      priorAgreements.length + made.length,
+    );
+    const agreement = treatyAgreement({ ...treaty, parties }, { id, date, round, resolve, resolveGroup });
+    if (agreement) made.push(agreement);
+  }
+  if (!made.length) return null;
+  return settleAgreementStarts({ ...world, agreements: [...made.reverse(), ...priorAgreements] }, { date, round, regions }).world;
 };
 
 // A scene the player is in the middle of. A scene a time skip proposed before
@@ -19755,6 +19952,11 @@ const validateGameMasterPreviewPayload = async (candidate, {
   const territoryNotes = [];
   const worldChangeError = await validateGeneratedWorldChanges(candidate, world, {
     strictTransfers: true,
+    // One operation that cannot be applied (a unit or a structure it does not
+    // name, a project not on the board) is left out of the last answer with the
+    // administrator told, not the whole transaction refused; while the model can
+    // still answer again it is told why.
+    strictOps: !finalAttempt,
     resolvedRegionIdsOnly,
     playerCountry: game?.country || "",
     institutionLifecycleAuthority: "admin",
@@ -20252,7 +20454,9 @@ Retain all unaffected operations and the original authored event. Output only yo
 // Apply the EXACT already-previewed transaction. There is no AI call, no turn
 // simulation, no date advance and no round increment. The preview is revalidated
 // against a freshly-read canonical world immediately before any write.
-export const applyGameMasterPreview = async (preview) => {
+// `fence`: the entry of a shared game's host queue it is applied in
+// (multiplayer/host/gameHost.js "game-master"), which every write carries.
+export const applyGameMasterPreview = async (preview, { fence = null } = {}) => {
   const transactionId = normalizeString(preview?.id || preview?.transaction?.id);
   const mode = normalizeString(preview?.mode || preview?.transaction?.mode).toLowerCase();
   const request = normalizeString(preview?.request);
@@ -20273,7 +20477,15 @@ export const applyGameMasterPreview = async (preview) => {
   // transaction would be gone when it landed.
   assertNoTurnRunning();
 
+  // (Given back when a shared game's host lets its entry go, as statsWrite's is.)
   beginSimulation();
+  let held = true;
+  const giveBack = () => {
+    if (!held) return;
+    held = false;
+    endSimulation();
+  };
+  fence?.onClose?.(giveBack);
   try {
     const [bundle, colors] = await Promise.all([
       readGameStateBundle({ force: true }),
@@ -20501,6 +20713,17 @@ export const applyGameMasterPreview = async (preview) => {
       throw new Error(`A subordination change failed during the in-memory apply${first ? `: ${first.reason}` : ""}. Nothing was persisted; regenerate the preview.`);
     }
     nextWorld = diplomaticMerge.world;
+    // An agreement the Game Master made or broke takes effect now (agreementEngine.js), as one a chat signs.
+    if (agreementUpdatesForApply.length) {
+      const day = bundle.game.gameDate || bundle.game.startDate || "";
+      const gmTouchesGround = normalizeArray(nextWorld?.agreements)
+        .some((agreement) => hasAreaEffect(agreement?.effects) && agreement?.endApplied !== true);
+      const gmRegions = gmTouchesGround ? await treatyRegions(nextWorld).catch(() => []) : [];
+      nextWorld = settleAgreementEnds(
+        settleAgreementStarts(nextWorld, { date: day, round: bundle.game.round || 0, regions: gmRegions }).world,
+        { date: day, round: bundle.game.round || 0, regions: gmRegions },
+      ).world;
+    }
 
     const storylineUpdatesForApply = normalizeArray(transaction.storylineUpdates);
     const storylineMerge = storylineUpdatesForApply.length
@@ -20615,8 +20838,10 @@ export const applyGameMasterPreview = async (preview) => {
     const touchedColors = JSON.stringify(nextColors) !== JSON.stringify(colors);
 
     // Flags live outside the canonical generation, so they go first and are put
-    // back if the generation does not commit.
-    if (renamedFlags) await writeJson(JSON_URLS.flags, renamedFlags, { pretty: true });
+    // back if the generation does not commit: put back only while they are still
+    // what this wrote, so a flag anyone set since stands (and, the entry let go
+    // in a shared game, nothing of this one is left behind).
+    if (renamedFlags) await mutateFlagsState(() => renamedFlags, { pretty: true, fence });
     try {
       // One journaled generation (all or nothing), queued behind every other
       // canonical write. The fingerprint is checked again against the state it
@@ -20639,10 +20864,13 @@ export const applyGameMasterPreview = async (preview) => {
           // The one game write the GM console makes: the player's own polity was renamed.
           ...(renamedGame ? { game: renamedGame } : {}),
         };
-      }, { preserveApprovedEvents: true });
+      }, { preserveApprovedEvents: true, fence });
     } catch (error) {
-      if (renamedFlags) {
-        await writeJson(JSON_URLS.flags, flagsBefore ?? {}, { pretty: true })
+      // If the host's queue fence closed while the canonical write was in flight
+      // (OVERDUE), the server may already have persisted the rename; do not issue
+      // an unfenced flag rollback that would orphan the renamed polity's flags.
+      if (renamedFlags && error?.code !== "OVERDUE") {
+        await mutateFlagsState((current) => (JSON.stringify(current) === JSON.stringify(renamedFlags) ? (flagsBefore ?? {}) : null), { pretty: true })
           .catch((restoreError) => console.error("[GM] flags could not be restored.", restoreError));
       }
       throw new Error(`GM persistence failed; nothing was applied: ${error?.message || error}`);
@@ -20672,7 +20900,7 @@ export const applyGameMasterPreview = async (preview) => {
       statCountries: auditRecord.statCountries,
     };
   } finally {
-    endSimulation();
+    giveBack();
   }
 };
 

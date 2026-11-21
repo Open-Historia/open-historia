@@ -31,6 +31,7 @@ import {
   isPolityLandless,
   mutateWorldState,
   readEventsState,
+  readGameData,
   readWorldState,
 } from "../../runtime/gameState.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
@@ -257,8 +258,10 @@ const SearchIcon = () => (
 
 // Project costs and allowances are canonical 2026 USD, rendered in the same
 // player-selected display currency as National GDP. Never convert saved costs.
-const formatMoney = (value, displayCurrency) =>
-  formatEconomicDisplayValue(value, displayCurrency, { compact: true });
+const formatMoney = (value, displayCurrency) => {
+  const amount = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+  return formatEconomicDisplayValue(amount, displayCurrency, { compact: true });
+};
 
 const readableDate = (date) => formatGameDateReadable(date) || date || "";
 
@@ -1259,12 +1262,8 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const projectFundingMode = useRuntimeState("world", selectProjectFundingMode);
   const financing = useRuntimeState("world", world=>world?.projectFinance ?? null);
   const [financeOpen,setFinanceOpen]=useState(false);
-  const { country, gameDate, round, economicDisplayCurrency } = useRuntimeState("game", selectGameStamp);
+  const { country, gameDate, round } = useRuntimeState("game", selectGameStamp);
   const displayCurrency = useSyncExternalStore(subscribeEconomicDisplayCurrency, getActiveEconomicDisplayCurrency);
-  // The saved game (or shared seat override) is authoritative when entering a campaign.
-  useEffect(() => {
-    if (country) setActiveEconomicDisplayCurrency(economicDisplayCurrency);
-  }, [country, economicDisplayCurrency]);
   const [eventTitles, setEventTitles] = useState(() => new Map());
   const [hasLoaded, setHasLoaded] = useState(false);
   const [customFlags, setCustomFlags] = useState(() => ({}));
@@ -1330,6 +1329,13 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
     refreshRuntimeState(["world", "game"]).finally(() => {
       if (!cancelled) setHasLoaded(true);
     });
+    // The saved game (or shared seat override) is authoritative; sync from a
+    // forced read (coalesced with the refresh above) rather than cached store state.
+    readGameData({ force: true })
+      .then((game) => {
+        if (!cancelled && game) setActiveEconomicDisplayCurrency(game.economicDisplayCurrency);
+      })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, [isOpen]);
 

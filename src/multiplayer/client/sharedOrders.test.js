@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 
 import { ORDER_MAX_CHARS, PLAYER_REQUESTS } from "../game/messages.js";
 import { validate } from "../protocol/validate.js";
-import { orderRequestFor } from "./sharedOrders.js";
+import { orderRequestFor, rewordRequestFor } from "./sharedOrders.js";
 import { createGameClient, tooLongWords } from "./gameClient.js";
 
 const order = (fields) => validate(PLAYER_REQUESTS.order, { t: "order", id: "0123456789abcdef", ...fields });
@@ -60,4 +60,21 @@ test("an order longer than the host takes is refused whole, in words, and stays 
   client.close();
   const actions = readFileSync(new URL("../../Game/GameUI/actions.jsx", import.meta.url), "utf8");
   assert.match(actions, /maxLength=\{sharedGame \? ORDER_MAX_CHARS : undefined\}/, "the panel's box, in a shared game only");
+});
+
+const reword = (fields) => validate(PLAYER_REQUESTS.reword, { t: "reword", id: "0123456789abcdef", ...fields });
+
+test("an order edited in the Actions panel goes to the host by its id, with the parts given", () => {
+  const typed = { id: "action-1", title: "Hold the line.", text: "Hold the line.", kind: "action", status: "planned" };
+  const asked = rewordRequestFor(typed, { text: "Hold the river." });
+  assert.deepEqual(asked, { order: "action-1", text: "Hold the river." });
+  assert.equal(reword(asked).ok, true);
+  // A conversation's opening line goes with it; an order that opens none sends none.
+  const talks = { id: "s-8", kind: "chat", title: "Talks", text: "Open talks.", chatStarter: "Shall we talk?" };
+  assert.deepEqual(rewordRequestFor(talks, { title: "Trade talks", text: "Open trade talks.", chatStarter: "Shall we trade?" }),
+    { order: "s-8", title: "Trade talks", text: "Open trade talks.", chatStarter: "Shall we trade?" });
+  assert.equal(reword(rewordRequestFor(talks, { chatStarter: "Shall we trade?" })).ok, true);
+  assert.equal("chatStarter" in rewordRequestFor(typed, { text: "a", chatStarter: "b" }), false);
+  // An order with no id names nothing.
+  assert.equal(rewordRequestFor({ text: "a" }, { text: "b" }), null);
 });

@@ -8,6 +8,7 @@
 
 import { remoteRuntimeActive } from "./remoteRuntime.js";
 import { baseForRecord } from "./roundBase.js";
+import { playedCountriesOf, rosterOf, sameRoster } from "./seatRoster.js";
 
 let requester = null;
 let role = ""; // "host" | "guest" | "" (no shared game)
@@ -69,6 +70,38 @@ export const setSharedRoundDays = (days) => {
   if (next === roundDays) return;
   roundDays = next;
   for (const listener of [...roleListeners]) listener();
+};
+
+// The phase of the host's round (host/round.js: planning, countdown,
+// resolving, revealing), which says whether a queued order can be edited now
+// (runtime/actionEdit.js orderEditBlock): the host takes a change at once
+// except while it resolves a round. "" in no shared game. For
+// useSyncExternalStore, with the role's subscription.
+let roundPhase = "";
+export const sharedRoundPhase = () => roundPhase;
+export const setSharedRoundPhase = (phase) => {
+  const next = typeof phase === "string" ? phase.trim() : "";
+  if (next === roundPhase) return;
+  roundPhase = next;
+  for (const listener of [...roleListeners]) listener();
+};
+
+// Every seat of the host's lobby, with its player's name (client/seatRoster.js
+// rosterOf): the map's stars, the region card's "Played by" and the game
+// menu's Players read it. Setting the seats sets the countries people play
+// too, from the same rows, so the two never disagree. Empty in no shared game.
+// For useSyncExternalStore, with the role's subscription.
+let seats = NOBODY;
+export const sharedGameSeats = () => seats;
+export const setSharedGameSeats = (list) => {
+  const next = rosterOf(list);
+  const changed = !sameRoster(next, seats);
+  if (changed) seats = next;
+  // setSharedGamePeople tells the screens when the countries changed; the
+  // seats alone changing (a name, Away) is told here.
+  const before = people;
+  setSharedGamePeople(playedCountriesOf(next));
+  if (changed && before === people) for (const listener of [...roleListeners]) listener();
 };
 
 export const playedByPerson = (country) => {

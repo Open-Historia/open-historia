@@ -24,6 +24,12 @@ import { intelligenceOf } from "../../runtime/spycraft.js";
 import { bundledFlagUrl } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { REGION_SELECTED_EVENT } from "../Selection/Regions.jsx";
+import { requestDiplomaticChat } from "./chat.jsx";
+import { EffectList } from "./treatyCards.jsx";
+import { relationBetween } from "../../runtime/groupParties.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
+import { relationBandForScore } from "../../runtime/diplomaticStance.js";
+import { RELATION_CATEGORY_LABELS } from "../../runtime/diplomaticViews.js";
 import { assessPoliticalLandscape, ensureCountryAssessed, ensureIntelligenceRated, ensureMilitaryFigures, generateCountryStatSheet, pendingCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
 import { wantsRating } from "../AI/militaryRating.js";
 import { militaryLookup } from "../../runtime/militaryStats.js";
@@ -39,6 +45,8 @@ import { WarReportsList } from "./afterAction.jsx";
 import { institutionPortfolioForPolity } from "../../runtime/institutionLifecycleCore.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { inSharedGame, sharedGameRole, sharedRequestsHeld, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
+import { logSettingChange } from "../../runtime/debugLog.js";
+import { STATS_REFRESH_BATCH_MOST, STATS_REFRESH_MONTH_CHOICES, deviceStorage, readStatsRefreshMonths, writeStatsRefreshMonths } from "../AI/statsRefresh.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
 import {
     appendCountryStatHistorySample,
@@ -606,7 +614,7 @@ const DiplomacyMetric = ({ label, value, tone = "#e7e7e9" }) => (
 // groupsOnTerritory), or, for a player leading a group, that group's own area.
 // A row flies the map to the regions it counts. Not shown while groups are
 // switched off for this game.
-const GroupsOnTerritory = ({ world, targetCountry, isPlayer, mapRef }) => {
+const GroupsOnTerritory = ({ world, targetCountry, isPlayer, mapRef, viewer = "" }) => {
     const groupsOn = useActiveFeatures().groups?.enabled !== false;
     const rows = useMemo(() => {
         if (!groupsOn || !world || !targetCountry) return [];
@@ -644,15 +652,20 @@ const GroupsOnTerritory = ({ world, targetCountry, isPlayer, mapRef }) => {
             const count = row.regionIds.length;
             const held = count === 0 ? "Controls no area yet" : count === 1 ? "Controls 1 region" : `Controls ${count} regions`;
             const canShow = Boolean(row.bounds);
+            const viewerName = toCountryName(viewer);
+            const isOwnGroup = row.own || Boolean(viewerName && row.name.toLowerCase() === viewerName.toLowerCase());
+            // Its standing with the player, and a way to talk to its leadership (runtime/groupParties.js).
+            const relation = isOwnGroup ? null : relationBetween(world, row.name, viewerName);
+            const standing = isOwnGroup ? "" : relation ? RELATION_CATEGORY_LABELS[relationBandForScore(relation.score)] : RELATION_CATEGORY_LABELS.unknown;
             return (
+                <div key={row.name} style={{ alignItems: "center", borderTop: index ? "1px solid rgba(255,255,255,0.07)" : "none", display: "flex", gap: "0.35rem", paddingRight: "0.55rem" }}>
                 <button
-                key={row.name}
                 type="button"
                 className="oh-tap-row"
                 disabled={!canShow}
                 onClick={() => show(row.bounds)}
                 title={canShow ? "Show on the map" : undefined}
-                style={{ alignItems: "flex-start", background: "none", border: "none", borderTop: index ? "1px solid rgba(255,255,255,0.07)" : "none", color: "inherit", cursor: canShow ? "pointer" : "default", display: "flex", gap: "0.55rem", padding: "0.55rem 0.65rem", textAlign: "left", width: "100%" }}
+                style={{ alignItems: "flex-start", background: "none", border: "none", color: "inherit", cursor: canShow ? "pointer" : "default", display: "flex", flex: "1 1 auto", gap: "0.55rem", minWidth: 0, padding: "0.55rem 0.65rem", textAlign: "left" }}
                 >
                 <span aria-hidden="true" style={{ background: row.color, borderRadius: "2px", boxShadow: "0 0 0 1px rgba(0,0,0,0.55)", flexShrink: 0, height: "10px", marginTop: "0.2rem", width: "10px" }} />
                 <span style={{ flex: 1, minWidth: 0 }}>
@@ -662,8 +675,20 @@ const GroupsOnTerritory = ({ world, targetCountry, isPlayer, mapRef }) => {
                     <span style={{ WebkitBoxOrient: "vertical", WebkitLineClamp: 2, color: "rgba(255,255,255,0.38)", display: "-webkit-box", fontSize: "0.62rem", lineHeight: 1.4, marginTop: "0.2rem", overflow: "hidden" }}>{row.description}</span>
                 )}
                 </span>
-                {row.own && isPlayer && <span style={statusBadgeStyle("#2bc1f3")}>Our group</span>}
+                {isOwnGroup && <span style={statusBadgeStyle("#2bc1f3")}>Our group</span>}
+                {standing && <span style={{ color: "rgba(255,255,255,0.55)", flexShrink: 0, fontSize: "0.6rem", marginTop: "0.15rem" }}>{standing}</span>}
                 </button>
+                {!isOwnGroup && (
+                    <button
+                    type="button"
+                    className="oh-tap"
+                    data-group-talk="true"
+                    onClick={() => requestDiplomaticChat({ targetType: "private", name: row.name, code: "" })}
+                    title={`Talk to ${row.name}`}
+                    style={{ background: "var(--oh-ui-surface, rgba(255,255,255,0.06))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.16))", borderRadius: "8px", color: "var(--oh-ui-accent, #2bc1f3)", cursor: "pointer", flexShrink: 0, fontSize: "0.64rem", fontWeight: 760, minHeight: "2rem", padding: "0 0.55rem" }}
+                    >Talk</button>
+                )}
+                </div>
             );
         })}
         </div>
@@ -915,6 +940,8 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity, onPick
                     Updated {agreement.lastUpdatedDate}
                     </div>
                 )}
+                {/* What it does, as the AI that made it wrote it (treatyCards.jsx). */}
+                {agreement.effects && <div style={{ marginTop: "0.3rem" }}><EffectList compact effects={agreement.effects} /></div>}
                 </div>
                 <span style={statusBadgeStyle(tone)}>{prettyToken(agreement.status || "active")}</span>
                 </div>
@@ -1296,6 +1323,76 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
     );
 };
 
+// The auto-refresh cadence, where it was before 2026-11-07 and back since
+// 2026-11-18: "NO SETTING FOR IT, JUST IN THE ADVANCED STATS MENU YOU CAN
+// CHOOSE WHAT INTERVAL IT CHECKS AT AND YOU CAN SET THE INTERVAL TO OFF. BY
+// DEFAULT ITS 6 MONTHS" (the owner). How often, in game time, the stat sheets
+// are brought up to date after a time skip (AI/statsRefresh.js; the request is
+// gameplay.js refreshStaleStatSheets). On this device: in a shared game the
+// host's is the one that runs, so a guest is not shown it.
+// Whole phrases written in this screen's own file, so the language packs carry
+// them (built in countryStats.js they were never collected).
+const countryStatsTrackingIntervalLabel = (months) => {
+    const count = Math.max(0, Math.trunc(Number(months) || 0));
+    if (!count) return "Off";
+    return count === 1 ? "Every month" : `Every ${count} months`;
+};
+
+const StatsRefreshCadence = () => {
+    const [interval, setChosen] = useState(() => readStatsRefreshMonths());
+    const role = useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole);
+    const refreshMost = STATS_REFRESH_BATCH_MOST;
+    if (role === "guest") return null;
+    const choose = (next) => {
+        writeStatsRefreshMonths(deviceStorage(), next);
+        const stored = readStatsRefreshMonths();
+        setChosen(stored);
+        logSettingChange("Stats auto-refresh cadence", stored ? `every ${stored} game months` : "off");
+    };
+    return (
+        <div style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "12px", marginBottom: "1rem", padding: "0.75rem 0.8rem" }}>
+            <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.72rem", fontWeight: 800, marginBottom: "0.5rem" }}>Auto-refresh cadence</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                {STATS_REFRESH_MONTH_CHOICES.map((months) => {
+                    const active = interval === months;
+                    return (
+                        <button
+                        key={months}
+                        type="button"
+                        className="oh-tap-row"
+                        aria-pressed={active}
+                        onClick={() => choose(months)}
+                        style={{
+                            backgroundColor: active ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.04)",
+                            border: `1px solid ${active ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)"}`,
+                            borderRadius: "999px",
+                            color: active ? "#f4f4f5" : "rgba(255,255,255,0.68)",
+                            cursor: "pointer",
+                            fontSize: "0.68rem",
+                            fontWeight: active ? 800 : 700,
+                            padding: "0.4rem 0.65rem",
+                        }}
+                        >
+                            {months === 0 ? "Off" : `${months} months`}
+                        </button>
+                    );
+                })}
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.62rem", lineHeight: 1.45, marginTop: "0.55rem" }}>
+                Current setting: <span style={{ color: "#dbeafe" }}>{countryStatsTrackingIntervalLabel(interval)}</span>.
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.62rem", lineHeight: 1.45, marginTop: "0.3rem" }}>
+                {interval === 0
+                    ? "Off: a country's stat sheet changes only when a time skip changes it, or when you refresh it from its ↻ menu."
+                    : `After a time skip, once ${interval} months of game time have passed since the last refresh, one background request brings up to date the stat sheets the news has changed, for up to ${refreshMost} countries, yours first. A long skip still makes at most one such request. It stops at the day's cap of requests nobody pressed a button for.`}
+            </div>
+            {role === "host" ? (
+                <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.62rem", lineHeight: 1.45, marginTop: "0.3rem" }}>In a shared game this runs only on the host, and only while the host&apos;s AI answers for every player.</div>
+            ) : null}
+        </div>
+    );
+};
+
 const AdvancedStatsModal = ({
     open,
     onClose,
@@ -1449,6 +1546,7 @@ const AdvancedStatsModal = ({
                     </div>
 
                     <aside style={{ backgroundColor: "rgba(9,9,10,0.24)", borderLeft: "1px solid rgba(255,255,255,0.07)", minHeight: 0, overflowY: "auto", padding: "0.9rem 0.85rem 1rem", ...(isMobile ? { borderLeft: "none", borderTop: "1px solid rgba(255,255,255,0.07)", overflowY: "visible" } : null) }}>
+                        <StatsRefreshCadence />
                         <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.58rem", fontWeight: 900, letterSpacing: "0.08em", textTransform: "uppercase" }}>Time range</div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.5rem" }}>
                             {[['all', 'All'], ['1y', '1 year'], ['5y', '5 years'], ['10y', '10 years']].map(([key, label]) => <button key={key} type="button" className="oh-tap-row" onClick={() => setRange(key)} style={advancedRangeStyle(range === key)}>{label}</button>)}
@@ -2548,7 +2646,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 />
             )}
             {statsView === "politics" && (
-                <GroupsOnTerritory world={worldSnapshot} targetCountry={targetCountry} isPlayer={Boolean(player.code) && targetCountry === player.code} mapRef={mapRef} />
+                <GroupsOnTerritory world={worldSnapshot} targetCountry={targetCountry} isPlayer={Boolean(player.code) && targetCountry === player.code} mapRef={mapRef} viewer={player.code} />
             )}
 
             {statsView === "economy" && statSheetDefinitionError && (

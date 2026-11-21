@@ -4,25 +4,23 @@
 // 2026-11-18). It was removed on 2026-11-07, when it was a request after the
 // skip, counted inside the skip's own budget. It is back as a job of its own:
 //
-//   - No switch of its own: "dont bring back the background ai switch for
-//     the stats" (the owner, 2026-11-18). One picker says how often (Settings,
-//     AI requests), and Off is one of its choices: "there should be an off
-//     choise in the thing where you pick how often it refreshes". Off, the
-//     default, since every run is a request on a key where requests are what
-//     run out; or after every time skip, or every 2, 3, 5 or 10. Counted in
-//     skips, not in game
-//     months, because a skip is what the player presses and a skip's length
-//     varies from a week to years: "every N skips" is a cost the player can
-//     read (at most one request every N skips), where "every 6 months" was one
-//     request after every skip of half a year or more.
-//   - It runs AFTER a time skip has landed and been written, as a background
-//     request of its own (requestBudget.js BACKGROUND_REQUEST), never inside
-//     the skip's one request. It waits for the world to be idle, so it never
-//     runs while a skip or a sheet the player asked for is running.
+//   - "NO SETTING FOR IT, JUST IN THE ADVANCED STATS MENU YOU CAN CHOOSE WHAT
+//     INTERVAL IT CHECKS AT AND YOU CAN SET THE INTERVAL TO OFF. BY DEFAULT ITS
+//     6 MONTHS" (the owner, 2026-11-18). No switch and nothing in Settings: the
+//     Stats pane's Advanced Statistics carries the interval, in GAME months, as
+//     the old auto-refresh cadence did (Off, 3, 6, 12 or 24 months), 6 unless
+//     the player picks another.
+//   - It runs AFTER a time skip has landed and been written, once that much
+//     game time has passed since its last run in the campaign (or since the
+//     campaign began), as a background request of its own (requestBudget.js
+//     BACKGROUND_REQUEST), never inside the skip's one request. A skip of
+//     years is still one run: at most ONE request a skip. It waits for the
+//     world to be idle, so it never runs beside a skip or a sheet the player
+//     asked for.
 //   - ONE request a run, for at most STATS_REFRESH_BATCH_MOST countries: those
 //     whose sheets are stale, the players' own first, then the countries at war
 //     with them, then the longest unrefreshed. A sheet is stale when it was not
-//     assessed in the last N skips AND something it rests on has changed since
+//     assessed within the interval AND something it rests on has changed since
 //     (the same test the Stats pane's own Refresh makes before it spends a
 //     request: gameplay.js generateCountryStatSheet). Nothing stale, no request.
 //   - Under the day's cap for background work (backgroundAllowance), and never
@@ -34,19 +32,24 @@
 // the writing are gameplay.js refreshStaleStatSheets, which writes through the
 // same stat-sheet write the Stats pane's Refresh uses (persistStatSheet).
 
-// How often, in time skips. 0 is Off, the picker's first choice.
-export const STATS_REFRESH_EVERY_CHOICES = Object.freeze([0, 1, 2, 3, 5, 10]);
-export const STATS_REFRESH_DEFAULT_EVERY = 0;
+import { countryStatsTrackingMonthsElapsed } from "../../runtime/countryStats.js";
+import { diffGameDays } from "../../runtime/gameDates.js";
+
+// How often, in game months. 0 is Off. The old cadence's choices, so its
+// words are the ones the language packs already carry.
+export const STATS_REFRESH_MONTH_CHOICES = Object.freeze([0, 3, 6, 12, 24]);
+export const STATS_REFRESH_DEFAULT_MONTHS = 6;
 // The most countries one refresh asks of.
 export const STATS_REFRESH_BATCH_MOST = 6;
 // The most fresh developments shown for one country.
 export const STATS_REFRESH_EVIDENCE_MOST = 8;
 
-// Where it is kept, on this device (localStorage in the game).
+// Where it is kept, on this device (localStorage in the game): the interval
+// is the device's, so in a shared game the host's is the one that runs.
 export const STATS_REFRESH_KEYS = Object.freeze({
-  every: "ai_stats_refresh_every",
-  // { [campaign]: the round of the last run that asked }: the bound.
-  lastRun: "ai_stats_refresh_last_run",
+  months: "ai_stats_refresh_months",
+  // { [campaign]: the game date of the last run that asked }: the bound.
+  lastRun: "ai_stats_refresh_last_date",
 });
 const LAST_RUN_CAMPAIGNS_KEPT = 40;
 
@@ -60,14 +63,15 @@ const whole = (value) => {
   return Number.isFinite(number) ? number : null;
 };
 
-export const normalizeStatsRefreshEvery = (value) => {
+// Anything that is not one of the choices reads as the default.
+export const normalizeStatsRefreshMonths = (value) => {
   const number = whole(value);
-  return STATS_REFRESH_EVERY_CHOICES.includes(number) ? number : STATS_REFRESH_DEFAULT_EVERY;
+  return STATS_REFRESH_MONTH_CHOICES.includes(number) ? number : STATS_REFRESH_DEFAULT_MONTHS;
 };
 
-// --- The setting and the record of the last run --------------------------
+// --- The interval and the record of the last run ---------------------------
 //
-// Reads never throw: a browser that refuses storage runs on Off.
+// Reads never throw: a browser that refuses storage runs on the default.
 const read = (storage, key) => {
   try {
     return storage?.getItem?.(key) ?? null;
@@ -93,8 +97,8 @@ export const deviceStorage = () => {
   }
 };
 
-export const readStatsRefreshEvery = (storage = deviceStorage()) => normalizeStatsRefreshEvery(read(storage, STATS_REFRESH_KEYS.every));
-export const writeStatsRefreshEvery = (storage, value) => write(storage, STATS_REFRESH_KEYS.every, String(normalizeStatsRefreshEvery(value)));
+export const readStatsRefreshMonths = (storage = deviceStorage()) => normalizeStatsRefreshMonths(read(storage, STATS_REFRESH_KEYS.months));
+export const writeStatsRefreshMonths = (storage, value) => write(storage, STATS_REFRESH_KEYS.months, String(normalizeStatsRefreshMonths(value)));
 
 const readLastRuns = (storage) => {
   try {
@@ -105,17 +109,14 @@ const readLastRuns = (storage) => {
   }
 };
 
-export const lastStatsRefreshRound = (storage, campaign) => {
-  const round = whole(readLastRuns(storage)[clean(campaign)]);
-  return round === null || round < 0 ? null : round;
-};
+export const lastStatsRefreshDate = (storage, campaign) => clean(readLastRuns(storage)[clean(campaign)]) || null;
 
 // Remembered as the request is made, so a run whose answer is lost still
 // counts: the request was spent.
-export const rememberStatsRefreshRound = (storage, campaign, round) => {
+export const rememberStatsRefreshDate = (storage, campaign, date) => {
   const key = clean(campaign);
-  const value = whole(round);
-  if (!key || value === null) return false;
+  const value = clean(date);
+  if (!key || !value) return false;
   const runs = readLastRuns(storage);
   delete runs[key];
   runs[key] = value;
@@ -125,31 +126,37 @@ export const rememberStatsRefreshRound = (storage, campaign, round) => {
 
 // --- The schedule ----------------------------------------------------------
 //
-// Whether a run may ask now: not Off, a round to count from, and at
-// least `every` skips since the last run that asked. A record from a later
-// round than this one is from a future the player stepped back from, and does
-// not hold the refresh off.
-export const statsRefreshRunDue = ({ every = 0, round = 0, lastRound = null } = {}) => {
-  const step = normalizeStatsRefreshEvery(every);
-  const now = whole(round);
-  if (!step || now === null || now < 1) return false;
-  const last = whole(lastRound);
-  if (last === null || last > now) return true;
-  return now - last >= step;
+// Whether a run may ask after the skip that reached `date`: not Off, and at
+// least `months` of game time since the last run that asked (`lastDate`), or
+// since the campaign began (`startDate`) when none has. Asked once a skip,
+// however long the skip: a skip of years is one run. A record dated after the
+// game's date is from a future the player stepped back from, and does not
+// hold the refresh off.
+export const statsRefreshRunDue = ({ months = STATS_REFRESH_DEFAULT_MONTHS, date = "", lastDate = null, startDate = "" } = {}) => {
+  const step = normalizeStatsRefreshMonths(months);
+  const now = clean(date);
+  if (!step || !now) return false;
+  const last = clean(lastDate);
+  // By the day: an undo within the month (or across a month's end by less
+  // than a whole month) leaves a record that whole months would not see.
+  if (last && (diffGameDays(now, last) ?? 0) > 0) return true;
+  const from = last || clean(startDate);
+  if (!from) return false;
+  return countryStatsTrackingMonthsElapsed(from, now) >= step;
 };
 
 // The countries one run asks of.
-//   candidates  [{ name, assessedRound, fresh }]: every country with a whole
-//               sheet; `assessedRound` the round its sheet was last assessed
-//               in, `fresh` how many developments it rests on have changed
-//               since (0: nothing, and refreshing it would only cost)
+//   candidates  [{ name, assessedDate, fresh }]: every country with a whole
+//               sheet; `assessedDate` the game date its sheet was last
+//               assessed on ("" when it never was), `fresh` how many
+//               developments it rests on have changed since (0: nothing, and
+//               refreshing it would only cost)
 //   players     the countries people play
 //   opponents   the countries at war with them
-// Stale: not assessed in the last `every` skips, with something fresh. The
-// players' own first, then their opponents, then the longest unrefreshed.
-export const pickStatsRefreshCountries = ({ candidates = [], players = [], opponents = [], round = 0, every = 1, most = STATS_REFRESH_BATCH_MOST } = {}) => {
-  const step = Math.max(1, normalizeStatsRefreshEvery(every));
-  const now = whole(round) ?? 0;
+// Stale: not assessed within the interval, with something fresh. The players'
+// own first, then their opponents, then the longest unrefreshed.
+export const pickStatsRefreshCountries = ({ candidates = [], players = [], opponents = [], date = "", months = STATS_REFRESH_DEFAULT_MONTHS, most = STATS_REFRESH_BATCH_MOST } = {}) => {
+  const step = Math.max(1, normalizeStatsRefreshMonths(months));
   const playing = new Set(list(players).map(fold).filter(Boolean));
   const fighting = new Set(list(opponents).map(fold).filter(Boolean));
   const seen = new Set();
@@ -159,11 +166,13 @@ export const pickStatsRefreshCountries = ({ candidates = [], players = [], oppon
     if (!name || seen.has(fold(name))) continue;
     seen.add(fold(name));
     if (!(Number(entry?.fresh) > 0)) continue;
-    const assessed = whole(entry?.assessedRound) ?? 0;
-    if (assessed <= now && now - assessed < step) continue;
-    stale.push({ name, assessed, rank: playing.has(fold(name)) ? 0 : fighting.has(fold(name)) ? 1 : 2 });
+    const assessed = clean(entry?.assessedDate);
+    const futureAssessed = assessed && date && (diffGameDays(date, assessed) ?? 0) > 0;
+    const since = !assessed || futureAssessed ? Infinity : countryStatsTrackingMonthsElapsed(assessed, date);
+    if (since < step) continue;
+    stale.push({ name, since, rank: playing.has(fold(name)) ? 0 : fighting.has(fold(name)) ? 1 : 2 });
   }
-  stale.sort((a, b) => a.rank - b.rank || a.assessed - b.assessed || a.name.localeCompare(b.name));
+  stale.sort((a, b) => a.rank - b.rank || b.since - a.since || a.name.localeCompare(b.name));
   return stale.slice(0, Math.max(0, whole(most) ?? STATS_REFRESH_BATCH_MOST)).map((entry) => entry.name);
 };
 

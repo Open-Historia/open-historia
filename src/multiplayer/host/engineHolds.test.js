@@ -60,7 +60,7 @@ test("a skip that fails in the host's engine leaves no turn held, and the round 
   const rethrown = resolve.indexOf("throw error;", discard);
   assert.ok(jump > -1 && discard > jump, "a held turn is let go when the skip fails");
   assert.ok(rethrown > discard, "and the round is told it failed, so it is planned again");
-  assert.match(engine, /import \{ discardHeldTurns, endSimulation, enterSimulation \} from "\.\.\/\.\.\/Game\/AI\/simulationStatus\.js";/);
+  assert.match(engine, /import \{ beginSimulation, discardHeldTurns, endSimulation \} from "\.\.\/\.\.\/Game\/AI\/simulationStatus\.js";/);
 });
 
 // The review of 2026-11-18, core 2: the round lent every other player's open
@@ -85,10 +85,11 @@ test("a round never writes the players' boards lent: the skip lends them at its 
 
 // The owner, 2026-11-15: "never a canned turn". A shared round the AI could not
 // write fails and says why; the game's own canned turn is single player's.
-test("a shared round never lands as a canned turn, and takes the game's lock in turn for its whole run", () => {
+test("a shared round never lands as a canned turn, and takes the game's lock at once for its whole run (the queue is the lock)", () => {
   const resolve = engine.slice(engine.indexOf("resolveRound: async"), engine.indexOf("readCountry: async"));
   assert.match(resolve, /cannedTurn: false/);
-  const entered = resolve.indexOf("await enterSimulation({ signal });");
+  const entered = resolve.indexOf("beginSimulation();");
+  assert.equal(resolve.indexOf("enterSimulation"), -1, "an entry of the host's queue never waits on the lock");
   const jumped = resolve.indexOf("await simulateTimelineJump(");
   const ended = resolve.lastIndexOf("endSimulation();");
   assert.ok(entered > -1 && jumped > entered, "the lock is taken before the world is read");

@@ -179,6 +179,139 @@ const NEW_UPDATES = [
     ],
   },
   {
+    // Four player reports (2026-11-19), each a whole Game Master request failed over one change inside one event: board ops the
+    // projects rework had removed, still in its prompt; a building with no family, refused for the landmark the game itself
+    // writes; a building half nested. One change that cannot be made is now left out and said (answerImpactOps.js).
+    id: "2026-11-gm-one-change",
+    kind: "minor",
+    date: "2026-11-19",
+    channel: "beta",
+    banners: [
+      {
+        title: "Game Master requests that go through",
+        items: [
+          "When one change in a Game Master request is written wrong, only that change is left out, and the preview says so. The rest of the request still goes through.",
+          "Game Master requests that put up a building on the map work again.",
+          "The Game Master now opens, sets back, speeds up and ends projects the way the Projects board works today.",
+          "A building a time skip puts up keeps the kind of icon it was given, and stays under construction when it is still being built.",
+        ],
+      },
+    ],
+  },
+  {
+    // "make it so you can have diplomacy with them like cartels and shit" (the owner, 2026-11-19): a group is a party
+    // to relations and agreements like a country (runtime/groupParties.js), its leadership talks as the group it is,
+    // and the diplomatic map draws it. Then "dont have the numbers be hardcoded ... add a button to diplomacy chat to
+    // propose deal": every agreement's effects written by the AI (runtime/agreementEffects.js), and Propose deal.
+    id: "2026-11-back-channels",
+    kind: "major",
+    date: "2026-11-19",
+    channel: "beta",
+    banners: [
+      {
+        theme: "backChannels",
+        scene: "talk",
+        title: "Back Channels",
+        subtitle: "Talk to the cartels, the rebels and the militias",
+        lead: "Groups are now parties to diplomacy as countries are. Open a conversation with any group on the map, and its leadership answers as what it is.",
+        sections: [
+          {
+            heading: "Talking",
+            icon: "people",
+            items: [
+              "Start a conversation with a group from the Diplomacy panel's list, from its area on the map (Talk to their leadership), or from a country's Groups on its territory.",
+              "A cartel talks like a cartel and a rebel movement like rebels, from what the group is and wants.",
+              "Groups can sit in group chats beside countries, and can write to you after a time skip.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "backChannels",
+        scene: "deals",
+        title: "Deals Written in Full",
+        subtitle: "Propose any deal in your own words",
+        sections: [
+          {
+            heading: "Proposing a deal",
+            icon: "book",
+            items: [
+              "Every conversation with a country or a group has a parchment beside the message box: Propose deal. Write the deal out in your own words and send it.",
+              "Their leadership answers in the same reply, accepting, refusing or countering, and writes the treaty as the game keeps it: its kind, its parties, its term, its terms and what it does.",
+              "A counter-offer comes as a card you sign or decline. Every deal in force is listed in the conversation and in a country's dossier with what it does, and you can end it there, though breaking it costs what it says.",
+            ],
+          },
+          {
+            heading: "What deals do",
+            icon: "swords",
+            items: [
+              "No deal runs on fixed numbers: what a treaty does when it is signed, every month, when it ends and if it is broken is written by the AI from both sides' economies, their relation, their wars and the terms, and the game carries out exactly that.",
+              "That holds for every agreement, alliances and trade pacts as well as truces, protection money and crackdowns. The game only keeps a single deal from changing a country overnight.",
+              "Countries the AI plays make deals with each other and with groups the same way, in conversations and in the time skip.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "backChannels",
+        scene: "map",
+        title: "Groups on the Diplomatic Map",
+        subtitle: "Where every group stands with you",
+        sections: [
+          {
+            heading: "Relations view",
+            icon: "map",
+            items: [
+              "On the Diplomatic map's Relations view, each group's area is drawn in its standing with the focus country, a crackdown in a colour of its own.",
+              "The legend lists the groups apart from the countries, and a group's card shows its relation and its deals with you.",
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
+    // "add a button to edit your submitted actions instead of only being able to delete it" (the owner, 2026-11-19).
+    id: "2026-11-edit-orders",
+    kind: "minor",
+    date: "2026-11-19",
+    channel: "beta",
+    banners: [
+      {
+        title: "Edit your orders",
+        items: [
+          "Every order waiting in Your Submitted Actions has an Edit button beside Delete: change its words in place, then Save (or press Enter), or Cancel (or press Esc).",
+          "An edited order keeps its place in the queue and everything it carries, such as a troop move already on the map or whom a conversation invites.",
+          "Orders a time skip has carried out, or is carrying out, cannot be edited. In a shared game, orders are edited while the round is open.",
+        ],
+      },
+    ],
+  },
+  {
+    // After beta 0.0.147 (2026-11-18): the owner's reports of that evening (Start that did nothing, Current that did
+    // nothing, a guest left in a closed game) and his asks (a name to join with, a star on played countries, a
+    // Players menu, the lobby's standing text gone); and the stat sheet refresh moved to Advanced statistics. The
+    // shipped cards keep their words: what changed since is said here. Then the round bar made one slim line with the
+    // host's controls in a dropdown ("make this whole overlay thing not always be on screen"), in the player's theme.
+    id: "2026-11-shared-games-fixes",
+    kind: "minor",
+    date: "2026-11-19",
+    channel: "beta",
+    banners: [
+      {
+        title: "Shared games, smoother",
+        items: [
+          "Pick the name other players see you by when you join a shared game; a star marks every country a person plays (click it to see who), and the game menu has a Players list.",
+          "In a shared game the round bar is one slim line at the top, in your interface theme: the round, its clock, I'm ready and Players. Everything the host can do is under Host, and nothing else stays open over the map.",
+          "Start never waits for good: the lobby says what it waits for, a change the host's game takes more than two minutes over is stopped, and if the game cannot start the host is told why and can press Start again.",
+          "When a shared game ends for you (the host stops it, can no longer be reached, or sends you away), you are taken straight back to the main menu, which tells you why.",
+          "Current on your open shared game takes you back into it, and the lobby shows only what you can do in it.",
+          "The stat sheet refresh is set in a country's Advanced statistics: every 6 months of game time by default, or Off.",
+        ],
+      },
+    ],
+  },
+  {
     // "build C and D, and the host can choose, but no sending api keys" (the owner, 2026-11-15): who answers a player's message to a
     // country the AI plays is the host's choice (multiplayer/host/settings.js `replies`): the host's AI, or each player's own device.
     // "any issues should not be roughly patched or whackamoled, the core of the issue should be fixed archetecturally" (the owner,
@@ -382,7 +515,9 @@ const NEW_UPDATES = [
   {
     // "readd the background ai for refreshing the stats where you could set how often it runs" and "there should be
     // an off choise in the thing where you pick how often it refreshes" (the owner, 2026-11-18): removed on
-    // 2026-11-09 with the Background AI switch (bb37bd1e6); back as one picker, Off by default.
+    // 2026-11-09 with the Background AI switch (bb37bd1e6); back with no setting of its own: "JUST IN THE ADVANCED
+    // STATS MENU YOU CAN CHOOSE WHAT INTERVAL IT CHECKS AT AND YOU CAN SET THE INTERVAL TO OFF. BY DEFAULT ITS 6 MONTHS".
+    // (Its card keeps the words it shipped with; the card above says how it is now.)
     id: "2026-11-stats-refresh",
     kind: "minor",
     date: "2026-11-18",

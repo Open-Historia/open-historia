@@ -161,6 +161,7 @@ export const ensureInstitutionalChannel = async ({
   playerCountry = "",
   date = "",
   expectedGameId = "",
+  fence = null,
 } = {}) => {
   // In a shared game the host does this, for this player (sharedInstitutions.js).
   if (institutionsGoToHost()) return askHostForInstitution("channel", { institutionId });
@@ -180,6 +181,7 @@ export const ensureInstitutionalChannel = async ({
   }, {
     playerCountry,
     expectedGameId,
+    fence,
   });
   if (!result) throw new Error("Institutional channel was not committed.");
   const committedChats = committed.chat || committed.chats || result.chats;

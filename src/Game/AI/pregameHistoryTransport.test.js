@@ -262,7 +262,10 @@ test("native pregame directive and publication path use the semantic compiler, n
   assert.match(source, /eventIdsByRef: eventRefs\.map/);
   assert.match(source, /pregameBootstrapContractVersion: PREGAME_BOOTSTRAP_CONTRACT_VERSION/);
   assert.match(source, /mutateCanonicalTurnState\(\(current\) =>/);
-  assert.match(source, /protectedPathPrefixes: taskKey === "pregameHistory" \? \["\$\.canonicalUpdates"\] : \[\]/);
+  // Schema salvage never cuts Round Zero's canonical facts (answerImpactOps.js salvageTaskAnswer, which the runner calls).
+  assert.match(source, /salvageTaskAnswer\(taskKey, cloneValue\(parsed\), checkAnswer\)/);
+  const salvage = await readFile(new URL("./answerImpactOps.js", import.meta.url), "utf8");
+  assert.match(salvage, /protectedPathPrefixes: taskKey === "pregameHistory" \? \["\$\.canonicalUpdates"\] : \[\]/);
 
   const start = source.indexOf("export const maybeGeneratePregameHistory");
   const end = source.indexOf("// ---- Idle diplomacy drip", start);

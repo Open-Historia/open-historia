@@ -132,8 +132,11 @@ test("a structure an answer builds is drawn as the family it said, the same in e
   }
   assert.equal(withSaidFamily({ kind: "x", family: "castle" }).family, NEUTRAL_MARKER_FAMILY, "a family the game does not have is none");
   assert.equal(withSaidFamily(null), null);
-  // The answer's builds go through it, written or flat.
+  // The answer's builds go through it, written or flat (answerImpactOps.js
+  // settleMarkerOps, which the task runner calls on every answer with events).
+  const settle = fs.readFileSync(new URL("../Game/AI/answerImpactOps.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.ok(settle.includes('kept.push(kind === "build" ? { ...op, op: kind, marker: withSaidFamily(op.marker) } : { ...op, op: kind });'));
+  assert.ok(settle.includes('kept.push({ op: "build", marker: withSaidFamily(marker), ...(note == null ? {} : { note }) });'));
   const gameplay = fs.readFileSync(new URL("../Game/AI/gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
-  assert.ok(gameplay.includes('kept.push(kind === "build" ? { ...op, op: kind, marker: withSaidFamily(op.marker) } : { ...op, op: kind });'));
-  assert.ok(gameplay.includes('kept.push({ op: "build", marker: withSaidFamily(marker), ...(note == null ? {} : { note }) });'));
+  assert.ok(gameplay.includes("const markerOpsLeftOut = settleMarkerOps(parsed);"));
 });

@@ -15,14 +15,18 @@
 //   - every change is one entry in one queue (host/worldQueue.js), applied one at
 //     a time, the round's skip among them: nothing is applied between a skip's
 //     reading of the world and its saving of it, and whatever arrives meanwhile
-//     is applied straight after, as the next round's.
+//     is applied straight after, as the next round's;
+//   - an entry changes the game only through its own fence (`within`): its
+//     store, what it awaits, and so every message it sends and every change it
+//     makes in memory after them. One the queue lets go at its bound can change
+//     nothing more, so the queue goes on without it.
 //
 // Runtime-free: the game's documents come and go through `store`, messages
 // through `transport`, and time through `now` and `timers`, so this is tested
 // in node and the same code runs in the host's engine window.
 
 import { cancelledRound, createRoundMachine } from "./round.js";
-import { DROPPED, createWorldQueue } from "./worldQueue.js";
+import { DROPPED, OVERDUE, createWorldQueue, fencedStore } from "./worldQueue.js";
 import { BOUND_REFUSALS, SEAT_WAITING_MOST, advisorPastBound, createSeatBounds } from "./seatBounds.js";
 import { failureWords, guestFailureWords } from "./failureWords.js";
 import { stakeIn } from "./ownReadings.js";
@@ -47,6 +51,7 @@ import { applyProjectOpsToWorld, normalizeProjects } from "../../runtime/gameSta
 import { opsPlaceStructures, seatProjectOps } from "./seatProjects.js";
 import { deployFor, disbandFor, revertOrderFor } from "./forces.js";
 import { orderCapRefusal } from "./orderCap.js";
+import { rewordAction } from "../../runtime/actionEdit.js";
 import { huntSeenBy, opaqueId, withFleetOrdered, withLineGivenUp, withOrdersSeen, withRenamed } from "./onlyOrdered.js";
 import { agentOrderFor } from "./agents.js";
 import { institutionThreadRefusal } from "./institutions.js";
@@ -72,7 +77,7 @@ import { withAdvisorChanges } from "../game/advisorChanges.js";
 import { advisorOfSeat, withSeatAdvisor } from "../../runtime/seatAdvisors.js";
 import { createRequestWaits } from "./requestWaits.js";
 import { blindId, blindToken } from "../../runtime/blindIds.js";
-import { APPLIED_BEFORE, createRequestLedger, requestStamp } from "./requestLedger.js";
+import { APPLIED_BEFORE, requestStamp, requestStore } from "./requestLedger.js";
 
 export const MAX_ORDERS_PER_ROUND = 12;
 // Said to the host when a round began while the Game Master thought (control.gameMaster).
@@ -294,6 +299,10 @@ export const createGameHost = ({
   // peace or a treaty between players: host/worldWords.js worldWordsOf); English if none.
   worldWords = null,
   onStatus = () => {},
+  // What the host's queue is still applying when it has run long ({ label,
+  // seconds, waiting, overdue }), and null once it is not: for the host's log
+  // and the host's screen (host/worldQueue.js onSlow).
+  onBusy = () => {},
   // Seats that followed their people to a country they founded
   // (host/foundings.js): [{ from, to, host }], `host` when it was the host's own
   // (and the host's own when its country was gone and it took another).
@@ -302,10 +311,30 @@ export const createGameHost = ({
   now = () => Date.now(),
   timers = globalThis,
 } = {}) => {
-  // Every write goes through the store; a player's request's first one marks
-  // the request as applied in the same commit (host/requestLedger.js).
-  const ledger = createRequestLedger(givenStore);
-  const store = ledger.store;
+  // The game's documents are written inside an entry of the queue alone, and
+  // only through that entry's own fence (`within`, host/worldQueue.js
+  // fencedStore): an entry the queue has let go at its bound can change
+  // nothing more. Everything else the host does reads them (`store`, which has
+  // no writer: a write made outside an entry fails at once), and writes the
+  // session's own record (writeShared, no document of the game).
+  const store = Object.fromEntries(["read", "readShared", "writeShared"]
+    .filter((key) => typeof givenStore?.[key] === "function")
+    .map((key) => [key, (...args) => givenStore[key](...args)]));
+  // What an entry (the queue's `{ signal, fence }`) changes the game through:
+  // its store, each write's mutator run only while the entry lives; and
+  // `hold`, which everything else it awaits goes through, so that once it has
+  // been let go nothing comes back to it and the rest of its work never runs.
+  // `stamp`: a player's request, whose first write marks it as applied in the
+  // same commit (host/requestLedger.js).
+  const within = (entry, stamp = null) => ({
+    store: fencedStore(stamp ? requestStore(givenStore, stamp) : givenStore, entry.fence),
+    hold: (value) => entry.fence.hold(value),
+    fence: entry.fence,
+    signal: entry.signal,
+  });
+  // What a request answered at once, or one that only asks the AI, is given:
+  // the game to read, and nothing to write with.
+  const outside = { store, hold: (value) => value, fence: null, signal: null };
   const seats = createSeatBook({
     countries,
     maxPlayers: settings.seats,
@@ -428,6 +457,8 @@ export const createGameHost = ({
   let roundAbort = null;
   // Set when the host calls the round off (control.cancelRound).
   let roundCancelled = false;
+  // The game's start, pressed and waiting for its entry (control.start).
+  let starting = null;
   // Every player's view after anything is applied: one push for however many
   // changes landed together.
   let pushWanted = null;
@@ -440,7 +471,46 @@ export const createGameHost = ({
     }
     return pushWanted;
   };
-  const queue = createWorldQueue({ onSettled: () => { void schedulePush(); } });
+  // An entry that runs long is said, and one past its bound fails, with why,
+  // and is let go (host/worldQueue.js): Start waited silently behind one. The
+  // round is long by nature: it is logged, and its own bar says what it does.
+  // One let go is said on the host's screen until the next change is applied.
+  let busy = null;
+  const queue = createWorldQueue({
+    onSettled: (label) => {
+      if (busy && (busy.label === label || busy.passed)) {
+        log("info", "the host's queue is applying changes again", { after: busy.label, seconds: busy.seconds });
+        busy = null;
+        onBusy(null);
+      }
+      void schedulePush();
+    },
+    onSlow: ({ label, ms, waiting, long }) => {
+      const seconds = Math.round(ms / 1000);
+      if (long) {
+        log("info", `the ${label} has run ${seconds} s`, { waiting });
+        return;
+      }
+      // Said in the log once an entry is slow, and when it fails; the host's screen follows every report.
+      if (!busy || busy.label !== label) log("warn", `a change has been applied for ${seconds} s: ${label}`, { waiting });
+      busy = { label, seconds, waiting, overdue: queue.overdue, passed: false };
+      onBusy(busy);
+    },
+    onOverdue: ({ label, ms, waiting, passed }) => {
+      busy = { label, seconds: Math.round(ms / 1000), waiting, overdue: true, passed };
+      log("warn", passed
+        ? `a change ran past its bound and was stopped: ${label}; nothing more of it is applied, and the queue goes on`
+        : `a change ran past its bound and was failed: ${label}; what waits behind it waits until it has ended`, { seconds: busy.seconds, waiting });
+      onBusy(busy);
+    },
+    // A change let go at its bound whose work came back, or asked to write,
+    // after: nothing of it was applied (its fence), said once for the log.
+    onStale: ({ label, ms, passed }) => log("warn", passed
+      ? `a change stopped at its bound came back after ${Math.round(ms / 1000)} s: ${label}; nothing of it was applied after its bound`
+      : `a change stopped at its bound has ended after ${Math.round(ms / 1000)} s: ${label}; the queue goes on`),
+    timers,
+    now,
+  });
   // A request that waits for the round being resolved is said to at once, and
   // its page waits for its answer (host/requestWaits.js).
   const waits = createRequestWaits({ tell: (device, message) => answerDevice(device, message), thinking: THINKING });
@@ -732,10 +802,11 @@ export const createGameHost = ({
   // The game must know who people are: before the engine runs a round, and
   // from the lobby on, so that nothing ever answers a message for a country a
   // person has taken. Forgotten again when the game stops being shared (stop).
-  const recordHumans = () => (stopped
+  // Each of these is written in an entry, through its fence (`within`).
+  const recordHumans = ({ store }) => (stopped
     ? Promise.resolve()
     : store.updateGame((game) => ({ ...game, humanCountries: seats.humanCountries() })));
-  const forgetHumans = () => store.updateGame((game) => {
+  const forgetHumans = ({ store }) => store.updateGame((game) => {
     if (!list(game?.humanCountries).length) return null;
     const { humanCountries: _gone, ...rest } = game;
     return rest;
@@ -745,14 +816,14 @@ export const createGameHost = ({
   // others know of) is held apart, unseen and undone, and given back when the
   // session is taken up again, before anything else (host/heldSeats.js). The
   // people are every seat a person's device holds, the AI's while away too.
-  const holdForLater = () => store.updateGameDocs?.((docs) => {
+  const holdForLater = ({ store }) => store.updateGameDocs?.((docs) => {
     const people = seats.list().filter((seat) => seat.device).map((seat) => seat.country);
     const held = holdSeatRecords(docs, { host: hostCountry, readers: formerNamesOf(docs.game, hostCountry), people });
     if (!held.changed) return null;
     log("info", "what the other players left is held until the session is taken up again", { held: held.held });
     return { world: held.world, actions: held.actions, chats: held.chats, events: held.events };
   });
-  const giveBackHeld = () => store.updateGameDocs?.((docs) => {
+  const giveBackHeld = ({ store }) => store.updateGameDocs?.((docs) => {
     const back = returnSeatRecords(docs);
     if (!back.changed) return null;
     log("info", "what the other players left waiting is theirs again", { returned: back.returned });
@@ -807,8 +878,10 @@ export const createGameHost = ({
     },
     // The round is one entry in the queue: it starts once whatever was being
     // applied is done, and nothing else is applied until it has landed.
-    onResolve: ({ round: number }) => queue.run("round", async () => {
-      await recordHumans();
+    onResolve: ({ round: number }) => queue.run("round", async (entry) => {
+      const cx = within(entry);
+      const { store, hold } = cx;
+      await recordHumans(cx);
       const start = await store.read();
       const before = { eventIds: new Set(list(start.events).map((event) => clean(event?.id))), areas: { ...(start.world?.groupAreas ?? {}) } };
       // Saved before the skip: an engine closed after its turn is written, and
@@ -835,7 +908,7 @@ export const createGameHost = ({
           roundStep = next;
           announceRound();
         };
-        await resolveRound({ round: number, humanCountries: seats.humanCountries(), daysPerRound: settings.daysPerRound, signal: roundAbort.signal, onProgress, ...paying });
+        await hold(resolveRound({ round: number, humanCountries: seats.humanCountries(), daysPerRound: settings.daysPerRound, signal: roundAbort.signal, onProgress, ...paying }));
       } catch (error) {
         // A payer whose device was asked for this round has taken its turn,
         // landed or not: run again, the round is the next payer's. Before, the
@@ -882,7 +955,7 @@ export const createGameHost = ({
         payers.landed(payer);
         sessionChanged();
       }
-      await followSeats(before).catch((error) => log("warn", "a seat did not follow its country", { error: String(error?.message || error) }));
+      await followSeats(cx, before).catch((error) => log("warn", "a seat did not follow its country", { error: String(error?.message || error) }));
       // What was only ordered before the round is the world's now (host/onlyOrdered.js).
       await store.updateWorld(withOrdersSeen);
       // The campaign's round the skip wrote: the round machine names it from
@@ -912,7 +985,9 @@ export const createGameHost = ({
   // Master's, and a peace or a treaty landed (followLandings). A peace that
   // annexed a played country left its player seated on it until the next
   // round landed, giving orders the skip carried out for a country with no land.
-  const followSeats = async (before = null) => {
+  // `cx`: the entry it is run in (`within`).
+  const followSeats = async (cx, before = null) => {
+    const { store, hold } = cx;
     const docs = await store.read();
     const held = seats.list();
     const after = countriesOf ? countriesOf(docs).map(clean).filter(Boolean) : null;
@@ -957,7 +1032,7 @@ export const createGameHost = ({
       .filter((move) => seats.move(move.from, move.to));
     // Whose ground a structure or a line of a founder's stands on now, by the
     // host's own map (a rename moved all of them with the country already).
-    const chart = moves.some((move) => move.why === "founded") ? await Promise.resolve().then(readChart).catch(() => null) : null;
+    const chart = moves.some((move) => move.why === "founded") ? await hold(Promise.resolve().then(readChart).catch(() => null)) : null;
     for (const move of moves) {
       move.host = same(move.from, hostCountry);
       if (move.host) hostCountry = move.to;
@@ -995,7 +1070,7 @@ export const createGameHost = ({
       const seat = seats.vanish(country);
       if (!seat?.device) continue;
       changes.delete(seat.device);
-      await goneSeatOrders(country);
+      await goneSeatOrders(cx, country);
       log("info", "a seat's country is gone; its player watches", { country });
       for (const connection of connections.values()) {
         if (connection.device === seat.device) send(connection, notice("warn", `${country} is gone. You can take any free country under Players, or stay to watch.`, { about: "seat" }));
@@ -1006,37 +1081,37 @@ export const createGameHost = ({
       seats.setCountries(countriesNow);
     }
     if (moves.length) onSeatsMoved(moves.map(({ from, to, host }) => ({ from, to, host })));
-    if (moves.length || successions.gone.length || after || asked.renamed.length || asked.gone.length) await seatsChanged({ inEntry: true });
+    if (moves.length || successions.gone.length || after || asked.renamed.length || asked.gone.length) await seatsChanged({ entry: cx });
   };
   // A seat's country gone: the orders its player queued for it and had not
   // seen carried out are withdrawn, and what each moved on the map undone in
   // the same write, as their own "unorder" would (host/foundings.js
   // withSeatGone). They stayed planned under the gone name, and the next skip
   // read them among the live orders (FOLLOWUPS A3).
-  const goneSeatOrders = (country) => store.updateForces(({ world, actions }) => {
+  const goneSeatOrders = ({ store }, country) => store.updateForces(({ world, actions }) => {
     const out = withSeatGone({ actions }, { country, host: hostCountry });
     if (!out.withdrawn.length) return null;
     const at = new Date(now()).toISOString();
     return { actions: out.actions, world: out.withdrawn.reduce((next, order) => revertOrderFor(next, order, country, { at }), world) };
   });
   // A peace or a treaty landed between rounds may annex a country people play:
-  // the seats follow in the same entry (`landed`: the landings it told).
-  const followLandings = async (landed) => {
+  // the seats follow in the same entry (`cx`), `landed` the landings it told.
+  const followLandings = async (cx, landed) => {
     if (!list(landed).length) return;
-    await followSeats().catch((error) => log("warn", "a seat did not follow its country after a peace", { error: String(error?.message || error) }));
+    await followSeats(cx).catch((error) => log("warn", "a seat did not follow its country after a peace", { error: String(error?.message || error) }));
   };
 
   // Who plays what changed: the round counts its players again, everyone is
   // sent the lobby, and the game records who is human, in the queue's order.
-  // `inEntry`: called from inside an entry, which records it itself.
-  const seatsChanged = async ({ inEntry = false } = {}) => {
+  // `entry`: called from inside an entry (`within`), which records it itself.
+  const seatsChanged = async ({ entry = null } = {}) => {
     // A connection closing after the game stopped changes nothing.
     if (stopped) return;
     round.setPlayers(present());
     broadcastLobby();
     sessionChanged();
-    if (inEntry) await recordHumans();
-    else await queue.run("who-plays-what", recordHumans);
+    if (entry) await recordHumans(entry);
+    else await queue.run("who-plays-what", (made) => recordHumans(within(made)));
   };
 
   // A seat let go (host/foundings.js withSeatLetGo): the person's own queued
@@ -1044,8 +1119,9 @@ export const createGameHost = ({
   // as their own "unorder" would; their goal, advice and advisor's
   // conversation cleared; their conversations with other people closed.
   // What they had put to other people and nobody answered lapses (their
-  // treaties, their terms of peace). `people`: who played what before.
-  const seatLetGo = async (country, people) => {
+  // treaties, their terms of peace). `people`: who played what before. In the
+  // entry `cx`.
+  const seatLetGo = async ({ store }, country, people) => {
     await store.updateForces(({ world, actions, game }) => {
       const out = withSeatLetGo({ actions, world }, { country, people, round: game?.round });
       if (!out.withdrawn.length && JSON.stringify(out.world) === JSON.stringify(world)) return null;
@@ -1070,8 +1146,9 @@ export const createGameHost = ({
   // the game's own country (game.country), which the engine plays as the
   // host's from then on (onSeatsMoved). What the game kept as its player's
   // without naming it is written down as the old country's first
-  // (host/foundings.js withGameCountryChanged). In the pick's own entry.
-  const hostTakes = async (connection, wanted) => {
+  // (host/foundings.js withGameCountryChanged). In the pick's own entry, `cx`.
+  const hostTakes = async (cx, connection, wanted) => {
+    const { store } = cx;
     const from = hostCountry;
     const result = seats.claim(wanted, { device: connection.device, name: connection.name, approved: true });
     if (!result.ok) return result.reason;
@@ -1088,28 +1165,28 @@ export const createGameHost = ({
     onSeatsMoved([{ ...move, host: true }]);
     for (const other of connections.values()) if (isHost(other)) other.sent.clear();
     log("info", "the host's country is gone, and the host took a free one", move);
-    await seatsChanged({ inEntry: true });
+    await seatsChanged({ entry: cx });
     return "";
   };
   // A seat the host released (control.kick), or a player who watched a
   // country that is gone let go: freed and its records let go in one entry,
   // for the seat it was (`id`, wherever a rename has taken it since; nothing
   // when it has ended already), and its player told (`told`), who until now
-  // was not, and found the lobby's box back with no word why.
-  const releaseSeat = async ({ id = "", device, told = true }) => {
+  // was not, and found the lobby's box back with no word why. In the entry `cx`.
+  const releaseSeat = async (cx, { id = "", device, told = true }) => {
     const seat = id ? seats.seatById(id) : null;
     const watched = id ? "" : seats.watcherOf(device)?.was ?? "";
     const country = seat?.device === device ? seat.country : watched;
     if (!country) return;
     const people = seats.humanCountries();
     seats.release(country);
-    await seatLetGo(country, people);
+    await seatLetGo(cx, country, people);
     if (told) {
       answerDevice(device, notice("info", settings.allowMidGameJoin || !seats.started
         ? `The host released you from ${country}. You can take another free country under Players.`
         : `The host released you from ${country}.`, { about: "seat" }));
     }
-    await seatsChanged({ inEntry: true });
+    await seatsChanged({ entry: cx });
   };
 
   // --- Requests ------------------------------------------------------------------
@@ -1263,12 +1340,17 @@ export const createGameHost = ({
     return {};
   };
 
+  // Each request's handler, `(connection, message, seat, cx)`: one that changes
+  // the game is run as an entry, and `cx` is that entry's (`within`): it reads
+  // and writes the game through `cx.store`, and awaits anything else through
+  // `cx.hold`, so that once the queue has let it go nothing more of it runs.
+  // One answered at once, or that only asks the AI, is given `outside`.
   const handlers = {
     // A country taken. Once the game is under way a seated player's change of
     // country is asked of the host (the owner's decision 12): it waits in the
     // host's Players list; a player whose country is gone takes any free one.
-    pick: async (connection, { country }) => {
-      if (isHost(connection)) return seats.watcherOf(connection.device) ? hostTakes(connection, clean(country)) : "The host plays its own game's country.";
+    pick: async (connection, { country }, _seat, cx) => {
+      if (isHost(connection)) return seats.watcherOf(connection.device) ? hostTakes(cx, connection, clean(country)) : "The host plays its own game's country.";
       const wanted = clean(country);
       const mine = seats.seatOf(connection.device);
       if (seats.started && mine && !same(mine.country, wanted)) {
@@ -1285,15 +1367,15 @@ export const createGameHost = ({
       if (!result.ok) return result.reason;
       changes.delete(connection.device);
       connection.sent.clear();
-      await seatsChanged({ inEntry: true });
+      await seatsChanged({ entry: cx });
       return "";
     },
-    unpick: async (connection) => {
+    unpick: async (connection, _message, _seat, cx) => {
       if (isHost(connection)) return "The host plays its own game's country.";
       if (seats.started) return "Ask the host to change your country.";
       if (!seats.unclaim(connection.device)) return "You have no country to give back.";
       connection.sent.clear();
-      await seatsChanged({ inEntry: true });
+      await seatsChanged({ entry: cx });
       return "";
     },
     ready: async (connection, { value }, seat) => (round.setReady(seat.country, value) ? "" : "Not now: the round is not being planned."),
@@ -1304,7 +1386,7 @@ export const createGameHost = ({
       round.revealedBy(seat.country, message.round);
       return "";
     },
-    order: async (connection, { text, ref, title, source, kind, invitees, chatStarter }, seat) => {
+    order: async (connection, { text, ref, title, source, kind, invitees, chatStarter }, seat, { store }) => {
       if (!started()) return "Orders are taken while a round is being planned.";
       const body = clean(text).slice(0, ORDER_MAX_CHARS);
       if (!body) return "An order needs words.";
@@ -1346,28 +1428,36 @@ export const createGameHost = ({
       round.touch(seat.country);
       return refusal;
     },
-    // A queued order of the seat's own, given other words; nothing else of it
-    // changes (advisorBlocks.js planAdvisorActionEdits, as single player edits it).
-    reword: async (connection, { order, title, text }, seat) => {
+    // A queued order of the seat's own, given other words, in its place in the
+    // queue, by its id: as single player changes one (runtime/actionEdit.js
+    // rewordAction), so what was derived from the old words follows the new
+    // ones and nothing else of it changes. Like every request, one sent while a
+    // round is resolved waits for the round, which carries the order out as
+    // it was: it is then refused, in words.
+    reword: async (connection, { order, title, text, chatStarter }, seat, { store }) => {
       if (!started()) return "Orders are changed while a round is being planned.";
       const named = clean(title).slice(0, ORDER_TITLE_MAX);
       const body = clean(text).slice(0, ORDER_MAX_CHARS);
-      if (!named && !body) return "An order needs words.";
-      let found = false;
+      const opening = clean(chatStarter).slice(0, ORDER_MAX_CHARS);
+      if (!named && !body && !opening) return "An order needs words.";
+      let refusal = "That is not one of your queued orders.";
       await store.updateActions((actions) => {
         const all = list(actions);
-        const index = all.findIndex((action) =>
-          clean(action?.id) === clean(order) && same(action?.ownerCode, seat.country) && clean(action?.status || "planned") === "planned");
+        const index = all.findIndex((action) => clean(action?.id) === clean(order) && same(action?.ownerCode, seat.country));
         if (index < 0) return null;
-        found = true;
+        if (clean(all[index]?.status || "planned") !== "planned") {
+          refusal = "That order was carried out already.";
+          return null;
+        }
+        refusal = "";
         const next = [...all];
-        next[index] = { ...all[index], ...(named ? { title: named } : {}), ...(body ? { text: body } : {}) };
+        next[index] = rewordAction(all[index], { title: named, text: body, chatStarter: opening });
         return next;
       });
       round.touch(seat.country);
-      return found ? "" : "That is not one of your queued orders.";
+      return refusal;
     },
-    unorder: async (connection, { order }, seat) => {
+    unorder: async (connection, { order }, seat, { store }) => {
       if (!started()) return "Orders can be withdrawn while a round is being planned.";
       let found = false;
       // An order that raised or stood down a formation is undone on the map in
@@ -1386,10 +1476,10 @@ export const createGameHost = ({
     },
     // Raise a formation: it stands on the map as pending, and its Deploy
     // request rides with the next skip (host/forces.js).
-    deploy: async (connection, request, seat) => {
+    deploy: async (connection, request, seat, { store, hold }) => {
       if (!started()) return "Formations are raised while a round is being planned.";
       // Its place is held to the host's own map (host/forces.js deployPlaceRefusal).
-      const chart = await Promise.resolve().then(readChart).catch(() => null);
+      const chart = await hold(Promise.resolve().then(readChart).catch(() => null));
       let refusal = "";
       await store.updateForces(({ world, actions }) => {
         const result = deployFor({ world, actions }, seat.country, request, {
@@ -1408,7 +1498,7 @@ export const createGameHost = ({
       round.touch(seat.country);
       return refusal;
     },
-    disband: async (connection, { unit }, seat) => {
+    disband: async (connection, { unit }, seat, { store }) => {
       if (!started()) return "Formations are stood down while a round is being planned.";
       let refusal = "";
       await store.updateForces(({ world, actions }) => {
@@ -1432,8 +1522,8 @@ export const createGameHost = ({
     // it is taken at any time. A point Move names is held to the host's own map
     // (structurePlacement.js structureMoveRefusal): the structure's country's own
     // land, or the sea off it.
-    settle: async (connection, { marker, move, lng, lat }, seat) => {
-      const chart = move ? await Promise.resolve().then(readChart).catch(() => null) : null;
+    settle: async (connection, { marker, move, lng, lat }, seat, { store, hold }) => {
+      const chart = move ? await hold(Promise.resolve().then(readChart).catch(() => null)) : null;
       let refusal = "";
       await store.updateWorld((world) => {
         const found = list(world?.markers).find((entry) => clean(entry?.id) === clean(marker));
@@ -1452,7 +1542,7 @@ export const createGameHost = ({
     // whose troops they are is the seat's country and nothing the op says.
     // Nothing moves for it: the engine puts orders to the troops when the
     // round is resolved.
-    warroom: async (connection, { op }, seat) => {
+    warroom: async (connection, { op }, seat, { store }) => {
       const sent = cleanWarRoomOp(op);
       if (!sent) return "Nothing was asked.";
       let refusal = "";
@@ -1479,10 +1569,10 @@ export const createGameHost = ({
     // country's and a fleet must be, whatever the op says, and both are held
     // to the host's own map (readChart), read in the same entry as the write:
     // a line is built and a fleet sails as time passes.
-    fortify: async (connection, { op }, seat) => {
+    fortify: async (connection, { op }, seat, { store, hold }) => {
       const sent = cleanFortifyOp(op);
       if (!sent) return "Nothing was asked.";
-      const chart = sent.op === "fortify" ? await Promise.resolve().then(readChart).catch(() => null) : null;
+      const chart = sent.op === "fortify" ? await hold(Promise.resolve().then(readChart).catch(() => null)) : null;
       let refusal = "";
       await store.updateForces(({ world, game }) => {
         const date = clean(game?.gameDate);
@@ -1502,10 +1592,10 @@ export const createGameHost = ({
       round.touch(seat.country);
       return refusal;
     },
-    fleet: async (connection, { op }, seat) => {
+    fleet: async (connection, { op }, seat, { store, hold }) => {
       const sent = cleanFleetOp(op);
       if (!sent) return "Nothing was asked.";
-      const chart = ["station", "blockade", "escort"].includes(sent.op) ? await Promise.resolve().then(readChart).catch(() => null) : null;
+      const chart = ["station", "blockade", "escort"].includes(sent.op) ? await hold(Promise.resolve().then(readChart).catch(() => null)) : null;
       let refusal = "";
       await store.updateForces(({ world, game }) => {
         const result = applyFleetOp(world, sent, { player: seat.country, date: clean(game?.gameDate), round: game?.round, chart, at: new Date(now()).toISOString() });
@@ -1523,12 +1613,12 @@ export const createGameHost = ({
     // rule: the air unit must be the seat's country's, and a city struck is the
     // host's own map's, held to its chart, with as many people as the host's
     // world says live there. Flown when the round is resolved.
-    airstrike: async (connection, { op }, seat) => {
+    airstrike: async (connection, { op }, seat, { store, hold }) => {
       const sent = cleanAirStrikeOp(op);
       if (!sent) return "Nothing was asked.";
       const city = sent.op === "airstrike" && sent.kind === "city";
       const [chart, cityMap] = city
-        ? await Promise.all([Promise.resolve().then(readChart).catch(() => null), Promise.resolve().then(readCities).catch(() => null)])
+        ? await hold(Promise.all([Promise.resolve().then(readChart).catch(() => null), Promise.resolve().then(readCities).catch(() => null)]))
         : [null, null];
       let refusal = "";
       await store.updateForces(({ world, game }) => {
@@ -1545,7 +1635,7 @@ export const createGameHost = ({
     },
     // The Intelligence tab's orders (host/agents.js): the player's own agents,
     // and the foreign ones its own service has caught.
-    agent: async (connection, request, seat) => {
+    agent: async (connection, request, seat, { store }) => {
       if (!started()) return "Agents take orders while a round is being planned.";
       let refusal = "";
       await store.updateForces(({ world, game }) => {
@@ -1604,12 +1694,12 @@ export const createGameHost = ({
     // AI key for a country that had none. The first to come is the sheet; one
     // that comes after it is answered as written, and the page reads the one
     // its view holds.
-    ownSheet: async (connection, { country, sheet, continuity, rating }, seat) => {
+    ownSheet: async (connection, { country, sheet, continuity, rating }, seat, { hold, fence }) => {
       if (replies !== "own") return "The host's AI writes the figures in this game.";
       if (!readingLeftTo("sheet", country, seat)) return "Those figures were not left to your device.";
       ownReadings.delete(readingKey("sheet", country));
       try {
-        await takeSheet({ country: clean(country), sheet, continuity: continuity ?? null, rating: rating ?? null });
+        await hold(takeSheet({ country: clean(country), sheet, continuity: continuity ?? null, rating: rating ?? null, fence }));
       } catch (failure) {
         return clean(failure?.message || failure).slice(0, 280) || "The host could not take those figures.";
       }
@@ -1667,16 +1757,16 @@ export const createGameHost = ({
     // the countries left to it, each taken once, and only where the country
     // had none (gameplay.js takeMilitaryRatings): a device fills what is
     // missing and never writes over what stands.
-    ownRatings: async (connection, { ratings }, seat) => {
+    ownRatings: async (connection, { ratings }, seat, { hold, fence }) => {
       if (replies !== "own") return "The host's AI rates the figures in this game.";
       const left = list(ratings).filter((entry) => readingLeftTo("military", entry?.country, seat));
       if (!left.length) return "Those figures were not left to your device.";
       for (const entry of left) ownReadings.delete(readingKey("military", entry.country));
-      await takeRatings(left.map((entry) => ({
+      await hold(takeRatings(left.map((entry) => ({
         name: countriesNow.find((country) => same(country, entry.country)) || clean(entry.country),
         military: entry.military ?? null,
         population: Number(entry.population) || 0,
-      })));
+      })), { fence }));
       round.touch(seat.country);
       return "";
     },
@@ -1689,14 +1779,16 @@ export const createGameHost = ({
     // message says. A peace made lands at once, and is told: an event on the
     // timeline with the borders it moved, and a word to every player
     // (host/landings.js), in the same write.
-    peace: async (connection, { op, ref, terms, to }, seat) => {
+    peace: async (connection, { op, ref, terms, to }, seat, cx) => {
+      const { store, hold } = cx;
       let refusal = "";
       let landed = [];
-      // (A peace taken may annex a country or cede regions by name: they are found on the map.)
-      const map = op === "accept"
-        ? await Promise.all([import("../../runtime/assets.js"), import("../../Game/AI/promptContext.js")])
+      // (A peace taken may annex a country or cede regions by name, and refusing a
+      // call to arms may break a treaty with an area clause: they are found on the map.)
+      const map = op === "accept" || op === "refuse"
+        ? await hold(Promise.all([import("../../runtime/assets.js"), import("../../Game/AI/promptContext.js")])
           .then(async ([assets, context]) => ({ catalog: await assets.loadRegionCatalog(), rendered: context.filterToRenderedRegions }))
-          .catch(() => null)
+          .catch(() => null))
         : null;
       await store.updateForces(({ world, game, events }) => {
         const regions = map ? map.rendered(map.catalog, world) : [];
@@ -1711,7 +1803,7 @@ export const createGameHost = ({
         return told ? { world: told.world, events: told.events } : { world: outcome.world };
       });
       tellEveryone(landed);
-      await followLandings(landed);
+      await followLandings(cx, landed);
       round.touch(seat.country);
       return refusal;
     },
@@ -1720,7 +1812,8 @@ export const createGameHost = ({
     // country and nothing the message says. Signed, it is an agreement of the
     // world's, which every view, the wars and every prompt read, and it is told
     // as a peace is (host/landings.js).
-    treaty: async (connection, { op, ref, to, type, title, terms }, seat) => {
+    treaty: async (connection, { op, ref, to, type, title, terms }, seat, cx) => {
+      const { store } = cx;
       let refusal = "";
       let landed = [];
       await store.updateForces(({ world, game, events }) => {
@@ -1739,7 +1832,7 @@ export const createGameHost = ({
         return told ? { world: told.world, events: told.events } : { world: answer.world };
       });
       tellEveryone(landed);
-      await followLandings(landed);
+      await followLandings(cx, landed);
       round.touch(seat.country);
       return refusal;
     },
@@ -1751,7 +1844,7 @@ export const createGameHost = ({
     // which flags each new paper in it (the gap audit of 2026-11-18). It is
     // private counsel, so it may change at any time, and is in no one's view
     // but the seat's.
-    advisor: async (connection, { records, threads, receipts }, seat) => {
+    advisor: async (connection, { records, threads, receipts }, seat, { store }) => {
       if (typeof store.updateAdvisor !== "function") return "Your advisor's conversation is not kept here.";
       let refusal = "";
       try {
@@ -1771,7 +1864,7 @@ export const createGameHost = ({
       }
       return refusal;
     },
-    goal: async (connection, { text }, seat) => {
+    goal: async (connection, { text }, seat, { store }) => {
       // The game's own rule for a standing goal (runtime/playerGoal.js): the
       // same words again change nothing, and nothing is written.
       await store.updateWorld((world) => {
@@ -1788,7 +1881,7 @@ export const createGameHost = ({
     // many a round as the host allows each player (settings.postsPerRound):
     // the feed keeps its newest posts, and one player posting without end
     // pushed everyone else's out of it.
-    post: async (connection, { text, quote, choices }, seat) => {
+    post: async (connection, { text, quote, choices }, seat, { store }) => {
       if (!isActiveFeatureEnabled("socialMedia")) return "This game has no social media.";
       const allowed = Number(settings.postsPerRound) || DEFAULT_SETTINGS.postsPerRound;
       let refusal = "";
@@ -1829,12 +1922,12 @@ export const createGameHost = ({
     // host kept it: a page could write any entry's progress, or a plan that
     // took another player's land, and a board saved while a round resolved
     // replaced the progress the round had made (the gap audit of 2026-11-18).
-    projectOps: async (connection, { ops }, seat) => {
+    projectOps: async (connection, { ops }, seat, { store, hold }) => {
       const docs = await store.read();
       const date = clean(docs?.game?.gameDate);
       const turn = Number(docs?.game?.round) || 0;
       // A structure a plan builds is held to the host's own map (seatProjects.js).
-      const chart = opsPlaceStructures(list(ops)) ? await Promise.resolve().then(readChart).catch(() => null) : null;
+      const chart = opsPlaceStructures(list(ops)) ? await hold(Promise.resolve().then(readChart).catch(() => null)) : null;
       let refusal = "";
       await store.updateWorld((world) => {
         const mine = same(seat.country, hostCountry);
@@ -1923,7 +2016,7 @@ export const createGameHost = ({
     // A seat's own vote in a conversation's poll: once, by a choice the poll
     // has, and only by someone in it (runtime/chatThreads.js). No model ever
     // casts it for a person.
-    vote: async (connection, { thread, poll, option }, seat) => {
+    vote: async (connection, { thread, poll, option }, seat, { store }) => {
       const id = clean(thread);
       const gameDate = clean((await store.read())?.game?.gameDate);
       let refusal = "";
@@ -1991,14 +2084,14 @@ export const createGameHost = ({
       round.touch(seat.country);
       return "";
     },
-    ownParties: async (connection, { country, landscape }, seat) => {
+    ownParties: async (connection, { country, landscape }, seat, { hold, fence }) => {
       if (replies !== "own") return "The host's AI fills in the parties in this game.";
       const name = countriesNow.find((known) => same(known, country));
       if (!name) return "Unknown country.";
       if (!readingLeftTo("parties", name, seat)) return "Those parties were not left to your device.";
       ownReadings.delete(readingKey("parties", name));
       try {
-        await takeParties({ country: name, landscape });
+        await hold(takeParties({ country: name, landscape, fence }));
       } catch (failure) {
         return clean(failure?.message || failure).slice(0, 280) || "The host could not take those parties.";
       }
@@ -2008,7 +2101,7 @@ export const createGameHost = ({
     // How far the seat's own standing goal has come, read on its own device and
     // AI key: kept with that goal (runtime/playerGoal.js), which only its player
     // sees; a reading of a goal since reworded judged something else.
-    goalProgress: async (connection, { goal, reading }, seat) => {
+    goalProgress: async (connection, { goal, reading }, seat, { store }) => {
       let refusal = "";
       await store.updateForces(({ world, game }) => {
         const next = withGoalProgress(world, seat.country, clean(goal), { ...reading, asOf: clean(game?.gameDate), round: game?.round });
@@ -2023,7 +2116,7 @@ export const createGameHost = ({
     },
     // A country's flag, drawn on every map: a player's own country's, and the
     // host's for a country the AI plays (the owner, 2026-11-16: "Own + host").
-    flag: async (connection, { country, image }, seat) => {
+    flag: async (connection, { country, image }, seat, { hold, fence }) => {
       const name = countriesNow.find((known) => same(known, country));
       if (!name) return "Unknown country.";
       const ais = !seats.humanCountries().some((human) => same(human, name));
@@ -2034,7 +2127,7 @@ export const createGameHost = ({
       const turn = round.status().round;
       if (!isHost(connection) && bounds.spent("flags", seat.id, turn)) return BOUND_REFUSALS.flags;
       try {
-        await setFlag({ country: name, image: clean(image) });
+        await hold(setFlag({ country: name, image: clean(image), fence }));
       } catch (failure) {
         return clean(failure?.message || failure).slice(0, 280) || "The flag could not be changed.";
       }
@@ -2042,7 +2135,7 @@ export const createGameHost = ({
       round.touch(seat.country);
       return "";
     },
-    thread: async (connection, { op, thread, title, members }, seat) => {
+    thread: async (connection, { op, thread, title, members }, seat, { store }) => {
       const id = clean(thread);
       // A new name or new members is a line of the thread's log: so many a round (host/seatBounds.js).
       const counted = op !== "close" && !isHost(connection);
@@ -2117,7 +2210,7 @@ export const createGameHost = ({
       round.touch(seat.country);
       return "";
     },
-    say: async (connection, { thread, to, text, fromDraft, demand, poll }, seat) => {
+    say: async (connection, { thread, to, text, fromDraft, demand, poll }, seat, { store }) => {
       const body = clean(text);
       if (!body) return "A message needs words.";
       const recipients = list(to).map(clean).filter(Boolean);
@@ -2269,7 +2362,7 @@ export const createGameHost = ({
     // page's Retry used to send its line a second time at a group table, and at
     // a one-on-one table it asked the player's own key and threw the reply
     // away. Only while that line is still the thread's last, unanswered.
-    answer: async (connection, { thread }, seat) => {
+    answer: async (connection, { thread }, seat, { store }) => {
       const docs = await store.read();
       const chat = list(docs?.chat).find((entry) => clean(entry?.id) === clean(thread));
       const owner = chat ? clean(chat.player) || hostCountry : "";
@@ -2291,7 +2384,7 @@ export const createGameHost = ({
     // host gives each line its id and its date, as it does a person's own. No
     // key comes with it, and nothing a government "agrees" in it is carried
     // out here: the round's own skip reads the conversation, as it reads any.
-    reply: async (connection, { thread, line, lines }, seat) => {
+    reply: async (connection, { thread, line, lines }, seat, { store }) => {
       const waiting = ownLines.get(clean(line));
       if (!waiting || waiting.thread !== clean(thread) || waiting.seat !== seat.id) {
         return "That line is not waiting for an answer from your device.";
@@ -2413,24 +2506,25 @@ export const createGameHost = ({
         // And, an entry for a seat, it is kept with its effect: its first write
         // marks it applied, and finds it marked when it was applied before
         // the engine closed and its answer was never saved (host/requestLedger.js).
-        const apply = () => {
+        // `entry`: the queue's, for one that changes the game (`within`).
+        const apply = (entry = null) => {
           const acting = needsSeat ? seats.seatById(seat.id) : seat;
           if (needsSeat && acting?.device !== connection.device) return `You no longer play ${seat.country}.`;
-          return queued && needsSeat && id
-            ? ledger.during(requestStamp(connection.device, id), () => handler(connection, message, acting))
-            : handler(connection, message, acting);
+          const cx = entry ? within(entry, needsSeat && id ? requestStamp(connection.device, id) : null) : outside;
+          return handler(connection, message, acting, cx);
         };
         if (id && !AT_ONCE.has(message.t)) waits.begin({ device: connection.device, id, t: message.t, resolving: round.status().phase === "resolving" });
         // An entry is its device's (host/worldQueue.js), so what one player
         // has waiting is counted, and dropped when the host lets it go.
-        const outcome = await (queued ? queue.run(message.t, apply, { owner: connection.device }) : apply());
+        const outcome = await (queued ? queue.run(message.t, (entry) => apply(entry), { owner: connection.device }) : apply());
         if (outcome && typeof outcome === "object") {
           error = clean(outcome.error).slice(0, 300);
           result = outcome.result && Object.keys(outcome.result).length ? outcome.result : null;
         } else error = clean(outcome).slice(0, 300);
       } catch (failure) {
         // One the host let go of while it waited was never applied, and says why.
-        if (failure?.code === DROPPED) error = clean(failure.message).slice(0, 300);
+        // And one that ran past its bound was stopped, and nothing more of it is applied (host/worldQueue.js OVERDUE).
+        if (failure?.code === DROPPED || failure?.code === OVERDUE) error = clean(failure.message).slice(0, 300);
         // One applied before (its answer lost with the engine) is done: answered so, and applied once.
         else if (failure?.code === APPLIED_BEFORE) log("info", "a request sent again had been applied already", { t: message.t });
         else {
@@ -2469,7 +2563,7 @@ export const createGameHost = ({
       send(connection, roundMessage(round.status(), connection));
       // A paying device back on a new connection is sent the request again.
       payers.joined(player.device);
-      void seatsChanged();
+      void seatsChanged().catch(() => {});
     },
     leave(player) {
       const connection = connections.get(player.id);
@@ -2493,20 +2587,45 @@ export const createGameHost = ({
         return;
       }
       seats.left(connection.device);
-      void seatsChanged();
+      void seatsChanged().catch(() => {});
     },
     receive,
     // The host's own controls, from the host's own screen only.
     control: {
-      async start() {
-        if (seats.started) return;
-        seats.start();
-        // (What was ordered in the lobby stays its owner's until the first
-        // skip: host/onlyOrdered.js keeps it by its date, not by this moment.)
-        await queue.run("start", recordHumans);
-        // The campaign's own round: one number on every screen (host/round.js).
-        round.start(Number((await store.read())?.game?.round) || 0);
-        broadcastLobby();
+      // The game starts when its entry runs, not when Start is pressed: the
+      // game records who people are, and only once that is written is it
+      // started, its round begun, and every screen told. Before, it was
+      // marked started at the press, ahead of an entry that could wait: every
+      // screen showed a round that had not begun, picks were refused, and an
+      // entry that failed left it marked started for good, so Start could
+      // never be pressed again (the review of 2026-11-19, F3). A second press
+      // while it waits is the same start; one that fails starts nothing, and
+      // the host is told why (the engine's status) and can press it again.
+      start() {
+        if (seats.started) return Promise.resolve();
+        starting ??= queue.run("start", async (entry) => {
+          if (seats.started || stopped) return false;
+          const cx = within(entry);
+          // (What was ordered in the lobby stays its owner's until the first
+          // skip: host/onlyOrdered.js keeps it by its date, not by this moment.)
+          await recordHumans(cx);
+          // The campaign's own round: one number on every screen (host/round.js).
+          const campaignRound = Number((await cx.store.read())?.game?.round) || 0;
+          seats.start();
+          round.start(campaignRound);
+          return true;
+        }).then((began) => {
+          if (began) {
+            broadcastLobby();
+            sessionChanged();
+          }
+        }, (failure) => {
+          log("warn", "the game did not start", { error: String(failure?.message || failure) });
+          throw failure;
+        }).finally(() => {
+          starting = null;
+        });
+        return starting;
       },
       pause: () => round.pause(),
       resume: () => round.resume(),
@@ -2574,10 +2693,13 @@ export const createGameHost = ({
               // nothing is applied, and the host is told now, not after the round.
               const status = round.status();
               if (status.phase === "resolving" || status.round !== askedIn) throw new Error(GAME_MASTER_ROUND_BEGAN);
-              return queue.run("game-master", async () => {
-                const done = await apply();
+              // `apply({ fence, signal })`: the engine's, every write of it
+              // through this entry's fence.
+              return queue.run("game-master", async (entry) => {
+                const cx = within(entry);
+                const done = await cx.hold(apply({ fence: entry.fence, signal: entry.signal }));
                 // A country it renamed keeps its player (host/foundings.js).
-                await followSeats().catch((error) => log("warn", "a seat did not follow its country after the Game Master", { error: String(error?.message || error) }));
+                await followSeats(cx).catch((error) => log("warn", "a seat did not follow its country after the Game Master", { error: String(error?.message || error) }));
                 return done;
               });
             },
@@ -2644,7 +2766,7 @@ export const createGameHost = ({
         // release below, still for a seat its player held, and the release
         // waited behind it (the review of 2026-11-18, security S2).
         queue.drop(device, ban ? "The host has sent you away from this game." : "The host took your country back.");
-        void queue.run("seat-let-go", () => releaseSeat({ id: seat?.id ?? "", device, told: !ban }))
+        void queue.run("seat-let-go", (entry) => releaseSeat(within(entry), { id: seat?.id ?? "", device, told: !ban }))
           .catch((error) => log("warn", "a released seat was not let go", { error: String(error?.message || error) }));
         return device;
       },
@@ -2670,7 +2792,8 @@ export const createGameHost = ({
         // round before it may have renamed either country, host/seats.js), and
         // the country they leave, as their seat has it then.
         let change = found;
-        const done = await queue.run("change-of-country", async () => {
+        const done = await queue.run("change-of-country", async (entry) => {
+          const cx = within(entry);
           change = changes.get(found.device) ?? null;
           if (!change) return "gone";
           changes.delete(change.device);
@@ -2679,9 +2802,9 @@ export const createGameHost = ({
           const result = seats.claim(change.to, { device: change.device, name: change.name, approved: true });
           if (!result.ok) return result.reason;
           // Its player has left the country it played: what was theirs goes with them, and what is its government's stays.
-          if (leaving) await seatLetGo(leaving, people);
+          if (leaving) await seatLetGo(cx, leaving, people);
           for (const connection of connections.values()) if (connection.device === change.device) connection.sent.clear();
-          await seatsChanged({ inEntry: true });
+          await seatsChanged({ entry: cx });
           return "";
         });
         // (A request let go meanwhile, its country gone or its player released, was said where it was.)
@@ -2702,15 +2825,16 @@ export const createGameHost = ({
       // What the players left waiting while nobody shared it is theirs again
       // first, so their seats follow their countries with it.
       if (restored) {
-        void queue.run("session-taken-up", async () => {
-          await giveBackHeld();
-          await followSeats().catch((error) => log("warn", "a saved seat did not follow its country", { error: String(error?.message || error) }));
+        void queue.run("session-taken-up", async (entry) => {
+          const cx = within(entry);
+          await giveBackHeld(cx);
+          await followSeats(cx).catch((error) => log("warn", "a saved seat did not follow its country", { error: String(error?.message || error) }));
           // A release or a ban the host made is saved at once, and its seat let
           // go in the queue after: one the engine closed before it ran is let
           // go now.
           for (const seat of seats.list()) {
             if (seat.device && (banned.has(seat.device) || seats.releasedFrom(seat.country, seat.device))) {
-              await releaseSeat({ id: seat.id, device: seat.device, told: !banned.has(seat.device) });
+              await releaseSeat(cx, { id: seat.id, device: seat.device, told: !banned.has(seat.device) });
             }
           }
         }).catch((error) => log("warn", "a released seat was not let go", { error: String(error?.message || error) }));
@@ -2731,7 +2855,7 @@ export const createGameHost = ({
         for (const connection of connections.values()) {
           send(connection, notice("info", `${handed.join(", ")} ${handed.length === 1 ? "is" : "are"} now played by the AI.`));
         }
-        void seatsChanged();
+        void seatsChanged().catch(() => {});
       }, 15_000);
     },
     // The game is single player again: nobody is played by a person but the
@@ -2744,16 +2868,17 @@ export const createGameHost = ({
       roundAbort?.abort(new Error("The shared game was stopped."));
       payers.stop();
       await pushing.catch(() => {});
-      await queue.run("end", async () => {
+      await queue.run("end", async (entry) => {
+        const cx = within(entry);
         try {
-          await holdForLater();
+          await holdForLater(cx);
         } catch (error) {
           // The players stay recorded, so the host's game holds it when it
           // is next opened alone (runtime/seatsLeftBehind.js).
           log("warn", "what the other players left could not be held", { error: String(error?.message || error) });
           return;
         }
-        await forgetHumans();
+        await forgetHumans(cx);
       }).catch((error) => log("warn", "the shared game's players were not cleared", { error: String(error?.message || error) }));
       // The session once more, as it stands at the end: what changed since the
       // last write (a change of who answers made just before Stop) is kept.
@@ -2773,18 +2898,26 @@ export const createGameHost = ({
     isMember: (device) => Boolean(device) && !banned.has(device) && (device === hostSeat.device || Boolean(seats.seatOf(device)) || Boolean(seats.watcherOf(device))),
     // A change made outside a request (an AI government's answer being
     // written, an institution's business): applied in the queue's order, and
-    // every view follows. `fn({ told })`: a write that landed a peace or a
-    // treaty (host/landings.js) says so with `told(landed)`, and the seats
-    // follow it in the same entry, as a peace the "peace" request lands does.
-    // They followed in an entry of their own, queued after it: a request of
-    // the annexed country's player waiting between the two still acted for a
-    // country with no land (FOLLOWUPS A2).
-    write: (label, fn) => queue.run(label, async () => {
+    // every view follows. `fn({ told, fence, signal })`: a write that landed a
+    // peace or a treaty (host/landings.js) says so with `told(landed)`, and
+    // the seats follow it in the same entry, as a peace the "peace" request
+    // lands does. They followed in an entry of their own, queued after it: a
+    // request of the annexed country's player waiting between the two still
+    // acted for a country with no land (FOLLOWUPS A2).
+    // `fenced`: the engine says every write `fn` makes carries `fence`
+    // (gameState.js mutate* `fence`), so the queue may let it go at its bound
+    // and go on; one that does not say so is waited for until it ends
+    // (host/worldQueue.js), and what it would still write after is refused
+    // wherever it carries the fence.
+    write: (label, fn, { fenced = false } = {}) => queue.run(label, async (entry) => {
+      const cx = within(entry);
       const landed = [];
-      const out = await fn({ told: (events) => landed.push(...list(events)) });
-      if (!stopped) await followLandings(landed);
+      const work = fn({ told: (events) => landed.push(...list(events)), fence: entry.fence, signal: entry.signal });
+      // (One that is waited for must come back to end its entry: told, not held.)
+      const out = await (fenced ? cx.hold(work) : entry.fence.through(work));
+      if (!stopped) await followLandings(cx, landed);
       return out;
-    }),
-    status: () => ({ lobby: lobbyFor(null), round: round.status(), players: [...connections.values()].map((entry) => ({ id: entry.id, name: entry.name, seat: seatOf(entry)?.country ?? "" })) }),
+    }, { fenced }),
+    status: () => ({ lobby: lobbyFor(null), round: round.status(), starting: Boolean(starting), players: [...connections.values()].map((entry) => ({ id: entry.id, name: entry.name, seat: seatOf(entry)?.country ?? "" })) }),
   };
 };

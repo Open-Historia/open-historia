@@ -42,7 +42,6 @@ import { formatResetTime } from "../AI/fallbackRunner.js";
 import { readAdvisorGroupSettings, setAdvisorGroupSettings } from "../AI/advisorGroupSettings.js";
 import { useWorldBackground } from "../Map/useWorldState.js";
 import { announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings, requestsByTask, setNoRequestLimit } from "../AI/requestBudget.js";
-import { STATS_REFRESH_BATCH_MOST, STATS_REFRESH_EVERY_CHOICES, deviceStorage, readStatsRefreshEvery, writeStatsRefreshEvery } from "../AI/statsRefresh.js";
 import {
     AI_REQUEST_CONTROL_EVENT,
     cancelAllAiRequests,
@@ -81,6 +80,7 @@ import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
 const BasemapPicker = lazy(() => import("../../Editor/BasemapPicker.jsx"));
 import { getLibraryState, saveGame, useLibraryState } from "../../runtime/library.js";
 import { mutateGameData, readGameData } from "../../runtime/gameState.js";
+import { refreshRuntimeState } from "../../runtime/runtimeStore.js";
 import { ECONOMIC_DISPLAY_CURRENCIES, getActiveEconomicDisplayCurrency, normalizeEconomicDisplayCurrency, setActiveEconomicDisplayCurrency, subscribeEconomicDisplayCurrency } from "../../runtime/economicDisplayCurrency.js";
 import { DISCORD_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { CommunityTile, DISCORD_BLURPLE, DiscordMark, REDDIT_ORANGERED, RedditMark } from "./communityLogos.jsx";
@@ -1533,11 +1533,6 @@ const RequestBudgetSection = () => {
     const sharedNow = Boolean(useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole));
     const [groupAi, setGroupAi] = useState(() => readAdvisorGroupSettings());
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
-    // How often the stat sheets are kept up to date after time skips, on this
-    // device (AI/statsRefresh.js). No switch of its own: Off is the picker's
-    // first choice, and the default, since every run is a request.
-    const [statsRefreshEvery, setStatsRefreshEvery] = useState(() => readStatsRefreshEvery());
-    const refreshMost = STATS_REFRESH_BATCH_MOST;
 
     useEffect(() => {
         const refresh = () => setActiveAiRequests(getActiveAiRequestCount());
@@ -1703,37 +1698,6 @@ const RequestBudgetSection = () => {
             </div>
             {sharedNow ? <div style={settingsHelper}>In a shared game countries write only with each round, never between rounds.</div> : null}
 
-            {/* The background refresh of stat sheets (AI/statsRefresh.js): a
-                request of its own after a skip, never inside the skip's one. */}
-            <div style={fieldGroupStyle}>
-                <label style={labelStyle} htmlFor="ai-stats-refresh-every">Keep stat sheets up to date</label>
-                <select
-                id="ai-stats-refresh-every"
-                value={String(statsRefreshEvery)}
-                onChange={(event) => {
-                    writeStatsRefreshEvery(deviceStorage(), event.target.value);
-                    const next = readStatsRefreshEvery();
-                    setStatsRefreshEvery(next);
-                    logSettingChange("Keep stat sheets up to date", next ? `every ${next} time skip(s)` : "off");
-                }}
-                style={{ ...inputStyle, cursor: "pointer", maxWidth: "16rem" }}
-                >
-                    {STATS_REFRESH_EVERY_CHOICES.map((every) => (
-                        <option key={every} value={String(every)} style={{ color: "black" }}>
-                            {every === 0 ? "Off (default)" : every === 1 ? "After every time skip" : `Every ${every} time skips`}
-                        </option>
-                    ))}
-                </select>
-                <div style={helperStyle}>
-                    {statsRefreshEvery === 0
-                        ? "Off: a country's stat sheet changes when a time skip changes it, or when you refresh it from its ↻ menu in Stats."
-                        : statsRefreshEvery === 1
-                        ? `After each time skip has finished, one background request brings up to date the stat sheets that its news has changed, for up to ${refreshMost} countries, yours first: about one request every time skip. It stops at the day's cap of requests nobody pressed a button for.`
-                        : `After a time skip has finished, one background request brings up to date the stat sheets that the news has changed, for up to ${refreshMost} countries, yours first: about one request every ${statsRefreshEvery} time skips. It stops at the day's cap of requests nobody pressed a button for.`}
-                </div>
-                {sharedNow ? <div style={helperStyle}>In a shared game this runs only on the host, and only while the host&apos;s AI answers for every player.</div> : null}
-            </div>
-
             <Toggle
             label="Individual AI responses in group chats"
             enabled={groupAi.individual}
@@ -1822,14 +1786,19 @@ const SocialLinks = ({ discordUrl, redditUrl, githubUrl }) => {
 // in the glass finish and with the menu glyph.
 // `hidden` while the menu is open: the menu grows out of this button and
 // shrinks back into it, so the button itself steps aside meanwhile.
-const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false }) => {
+// `expanded`, in a shared game, says whether its drop-down is open
+// (GameMenuDropdown.jsx); undefined where the button opens the menu itself.
+const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false, expanded }) => {
     const isMobile = useIsMobile();
     return (
         <button
         type="button"
         aria-label="Open game menu"
         title="Game menu"
+        aria-haspopup={expanded === undefined ? undefined : "menu"}
+        aria-expanded={expanded}
         data-oh-theme-hud=""
+        data-oh-game-menu-button=""
         onClick={onToggle}
         style={{
             ...baseStyle,
@@ -3016,7 +2985,10 @@ const EconomicDisplayCurrencySetting = () => {
             // (multiplayer/client/seatWrites.js DEVICE_GAME_KEYS), and never
             // written into the game the host keeps, nor into the stand-in.
             if (inSharedGame()) await mutateGameData((game) => ({ ...game, economicDisplayCurrency: next }));
-            else await saveGame(activeGameId, { gamePatch: { economicDisplayCurrency: next } });
+            else {
+                await saveGame(activeGameId, { gamePatch: { economicDisplayCurrency: next } });
+                await refreshRuntimeState("game").catch(() => {});
+            }
             setActiveEconomicDisplayCurrency(next);
             logSettingChange("GDP display currency", next);
         } catch (reason) {

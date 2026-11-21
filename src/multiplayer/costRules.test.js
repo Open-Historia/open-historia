@@ -11,7 +11,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { ANSWERS_PER_ROUND_CHOICES, HOST_ANSWER_CHOICES, OWN_AGENT_LINE, PAYER_SEES_AND_CHANGES, costRulesOf, gameMasterRuleOf, ownAiUsesOf, payerLineOf, payersLinesOf, roundCostLinesOf } from "./costRules.js";
+import { ANSWERS_PER_ROUND_CHOICES, HOST_ANSWER_CHOICES, OWN_AGENT_LINE, PAYER_SEES_AND_CHANGES, costRulesOf, ownAiUsesOf, payerLineOf } from "./costRules.js";
 import { HOST_ANSWERS_MAX, normalizeSettings } from "./host/settings.js";
 
 const rules = (input, viewer) => costRulesOf(normalizeSettings(input).settings, viewer);
@@ -62,64 +62,12 @@ test("a player's AI set-up says everything its own AI does in this game, and not
   assert.match(uses({ payment: "cycle" }), /makes the round's request when it is your turn to pay/);
 });
 
-test("with players taking turns to pay, the lobby says who pays in turn, who is passed over, and tells a passed-over player why", () => {
-  const settings = normalizeSettings({ payment: "cycle" }).settings;
-  const seats = [
-    { country: "Republic of Latvia", status: "human", held: true, you: false, pays: true },
-    { country: "Russian Federation", status: "human", held: true, you: true, pays: false },
-    { country: "Republic of Estonia", status: "ai", held: false, you: false },
-    { country: "Kingdom of Prussia", status: "watching", held: true, you: false },
-  ];
-  assert.deepEqual(payersLinesOf(settings, seats), [
-    "Paying in turn: Republic of Latvia.",
-    "Passed over until their device has an AI that can make a round's request: Russian Federation.",
-    "Your device has no AI that can make a round's request now, so your turn to pay is passed over. Set one up under Settings, AI.",
-  ]);
-  assert.deepEqual(payersLinesOf(normalizeSettings({}).settings, seats), [], "nothing to say where the host pays");
-});
-
-test("the round's cost and its wait, by who pays for it", () => {
-  const host = normalizeSettings({}).settings;
-  const cycle = normalizeSettings({ payment: "cycle" }).settings;
-  assert.deepEqual(roundCostLinesOf({ difficulty: "normal", requests: 1, most: 8, stallMinutes: 15 }, host), [
-    "Each round is one request to the host's AI, up to 8 when it looks things up.",
-    "When an institution's members vote, the round makes one request more.",
-    "A round whose AI is silent for 15 minutes fails, and the host can run it again.",
-  ]);
-  assert.equal(roundCostLinesOf({ requests: 1, most: 1, stallMinutes: 0 }, host)[2], "A round waits for the host's AI as long as it takes, and the host can cancel it.");
-  // On the paying player's key, the host's own settings say nothing of what it spends.
-  const paid = roundCostLinesOf({ requests: 1, most: 8, stallMinutes: 0 }, cycle);
-  assert.match(paid[0], /one request to the paying player's AI; that player's own AI settings decide whether it may make more/);
-  assert.doesNotMatch(paid.join(" "), /host's AI/);
-  assert.equal(paid[2], "A round waits for the paying player's AI as long as it takes, and the host can cancel it.");
-  assert.equal(roundCostLinesOf({ requests: 1, most: 1, stallMinutes: 15 }, cycle)[2], "A round whose AI is silent for 15 minutes fails, and the host can run it again.", "the paying device's model at work puts it off, as an answer arriving does");
-  assert.deepEqual(roundCostLinesOf(null, host), []);
-});
-
-// "Limit AI generation" counts silence in two windows (idleDeadline.js): the line said only the first, so a round
-// stopped part-way failed ten minutes sooner than it said (the follow-ups of 2026-11-18, C6). The same in either
-// mode: on the paying player's AI the pieces are its device's word that its model writes (roundPayer.js payAlive).
-test("a round's wait on a silent AI says both of its windows, whoever pays", async () => {
-  const { roundRulesOf } = await import("./host/hostRules.js");
-  const limited = roundRulesOf({ limitGeneration: true });
-  const both = "A round fails when its AI has not begun to answer in 15 minutes, or has stopped for 5 minutes once it has begun, and the host can run it again.";
-  for (const settings of [normalizeSettings({}).settings, normalizeSettings({ payment: "cycle" }).settings]) {
-    assert.equal(roundCostLinesOf(limited, settings)[2], both);
-  }
-  const { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS } = await import("../Game/AI/idleDeadline.js");
-  assert.deepEqual([limited.stallMinutes, limited.quietMinutes], [AI_FIRST_BYTE_TIMEOUT_MS / 60_000, AI_IDLE_TIMEOUT_MS / 60_000], "the engine's own windows");
-  assert.match(roundCostLinesOf(roundRulesOf({}), normalizeSettings({}).settings)[2], /as long as it takes/);
-});
-
 test("a guest whose list holds only its own Agent is told why it is asked for an AI", () => {
   assert.match(OWN_AGENT_LINE, /^Your own Agent answers only what you start yourself and answer with \/answer;/);
   assert.match(OWN_AGENT_LINE, /set up an AI with an API key or a server of your own\.$/);
 });
 
-test("the Game Master's rule, and whose device pays the round, for the round bar", () => {
-  assert.match(gameMasterRuleOf(normalizeSettings({}).settings), /No Game Master in this game/);
-  assert.match(gameMasterRuleOf(normalizeSettings({ cheats: "host" }).settings), /Every change is told to every player/);
-  assert.match(gameMasterRuleOf(normalizeSettings({ cheats: "vote" }).settings), /No Game Master/, "a vote is not built");
+test("whose device pays the round, for the round bar", () => {
   assert.equal(payerLineOf({ payer: "" }), "");
   assert.equal(payerLineOf({ payer: "Russian Federation", me: "Russian Federation", phase: "resolving" }), "Your device is making this round's AI request, on your own AI.");
   assert.equal(payerLineOf({ payer: "Russian Federation", me: "Republic of Latvia", phase: "planning" }), "Russian Federation's device pays for this round's AI request.");

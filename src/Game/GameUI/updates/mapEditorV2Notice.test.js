@@ -25,7 +25,7 @@ test("a returning beta player sees Map Editor V2 at login, but a previous dismis
   assert.ok(previous,"keep historical notices");
   const due=pendingUpdates({seen:previous.id,keeps:true});
   const newerId = "2026-11-interactive-event-history";
-  assert.deepEqual(due.map(entry=>entry.id),[newerId,UPDATE_ID,"2026-11-project-currency-clarity"]);
+  assert.deepEqual(due.map(entry=>entry.id),[newerId,UPDATE_ID,"2026-11-project-currency-clarity","2026-11-gm-one-change"]);
   assert.equal(noticePages(due)[0].update.id,UPDATE_ID,"the major feature still opens before the newer minor notice");
   assert.deepEqual(pendingUpdates({seen:UPDATE_ID,keeps:true}).map(entry=>entry.id),[newerId]);
   assert.deepEqual(pendingUpdates({seen:newerId,keeps:true}),[]);

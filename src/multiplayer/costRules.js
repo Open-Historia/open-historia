@@ -74,67 +74,10 @@ export const costRulesOf = (settings = {}, { host = false } = {}) => {
   return lines;
 };
 
-// With players taking turns to pay: who takes a turn, and who cannot yet
-// (game/messages.js SEAT `pays`), and for this player, why theirs is passed
-// over. `seats`: the lobby's.
-export const payersLinesOf = (settings = {}, seats = []) => {
-  if (settings?.payment !== "cycle") return [];
-  const listed = (Array.isArray(seats) ? seats : []).filter((seat) => seat && seat.status !== "watching" && seat.held === true);
-  const paying = listed.filter((seat) => seat.pays === true).map((seat) => seat.country);
-  const passed = listed.filter((seat) => seat.pays === false).map((seat) => seat.country);
-  const lines = [];
-  if (paying.length) lines.push(`Paying in turn: ${paying.join(", ")}.`);
-  if (passed.length) lines.push(`Passed over until their device has an AI that can make a round's request: ${passed.join(", ")}.`);
-  if (listed.some((seat) => seat.you === true && seat.pays === false)) {
-    lines.push("Your device has no AI that can make a round's request now, so your turn to pay is passed over. Set one up under Settings, AI.");
-  }
-  return lines;
-};
-
-// What decides a round's cost and its wait, as the round's rules say it
-// (game/messages.js lobby `rules`, host/hostRules.js): on the host's AI, its
-// own settings' count; on the paying player's, that player's own settings
-// decide (Game/AI/roundCarrier.js carriedSkipRules). Both wait on a silent AI
-// for the host's "Limit AI generation", which the paying device's word that its
-// model is at work puts off, as an answer arriving does on the host's own.
-export const roundCostLinesOf = (rules = null, settings = {}) => {
-  if (!rules) return [];
-  const cycle = settings?.payment === "cycle";
-  const requests = Math.max(1, Math.trunc(Number(rules.requests) || 1));
-  const most = Math.max(requests, Math.trunc(Number(rules.most) || requests));
-  const lines = [];
-  if (cycle) {
-    lines.push("Each round is one request to the paying player's AI; that player's own AI settings decide whether it may make more, to look things up or to write a long round in segments.");
-  } else if (most > requests) {
-    lines.push(requests === 1
-      ? `Each round is one request to the host's AI, up to ${most} when it looks things up.`
-      : `Each round is ${requests} requests to the host's AI, up to ${most} when it looks things up.`);
-  } else {
-    lines.push(requests === 1 ? "Each round is one request to the host's AI." : `Each round is ${requests} requests to the host's AI.`);
-  }
-  lines.push("When an institution's members vote, the round makes one request more.");
-  // "Limit AI generation" counts silence in two windows (Game/AI/idleDeadline.js):
-  // a long one for an answer not yet begun, a short one between the pieces of
-  // one that has. The line said only the first, so a round that failed after a
-  // few quiet minutes of an answer under way failed sooner than it said (the
-  // follow-ups of 2026-11-18, C6). On the paying player's AI the pieces are its
-  // device's word that its model is writing (client/roundPayer.js payAlive).
-  if (rules.stallMinutes && rules.quietMinutes) {
-    lines.push(`A round fails when its AI has not begun to answer in ${rules.stallMinutes} minutes, or has stopped for ${rules.quietMinutes} minutes once it has begun, and the host can run it again.`);
-  } else if (rules.stallMinutes) lines.push(`A round whose AI is silent for ${rules.stallMinutes} minutes fails, and the host can run it again.`);
-  else lines.push(cycle ? "A round waits for the paying player's AI as long as it takes, and the host can cancel it." : "A round waits for the host's AI as long as it takes, and the host can cancel it.");
-  return lines;
-};
-
 // For the AI set-up of a guest whose list holds only its own Agent: why it is
 // asked (an Agent answers only what its player starts: providerConfig.js
 // entryServesCall). Its own sentence after ownAiUsesOf's, so each is translated whole.
 export const OWN_AGENT_LINE = "Your own Agent answers only what you start yourself and answer with /answer; for the rest, set up an AI with an API key or a server of your own.";
-
-// The lobby's word on the Game Master (decision 8: behind a visible notice).
-export const gameMasterRuleOf = (settings = {}) => (settings?.cheats === "host"
-  ? "The host may change the world with the Game Master. Every change is told to every player and listed here."
-  : "No Game Master in this game: nobody changes the world by hand.");
 
 // What a player's own AI is for in this game, for its AI set-up: everything
 // that is never the host's, and what the host's settings leave to each player.

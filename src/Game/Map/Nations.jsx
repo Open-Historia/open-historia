@@ -96,6 +96,8 @@ import PolityTextLayer, {
 import { buildPolityTextPtr1Records } from "./labels/polityTextRecords.js";
 import { polityLabelVisibilityFor } from "../../runtime/polityLabelVisibility.js";
 import { buildCountryTextSize, buildCountryTextOpacity, STOCK_LABEL_RAMP, CUSTOM_CURVED_LABEL_RAMP, LIVE_LABEL_RAMP } from "./labels/polityLabelPaint.js";
+import { withPlayerStars } from "./labels/playerStars.js";
+import { sharedGamePeople, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 import {
   buildOwnershipPresentationDelta,
   createPoliticalCartographyScheduler,
@@ -348,6 +350,10 @@ const WorldMap = ({ isGlobe = false }) => {
   const diplomaticHighlight = useDiplomaticMapState().highlight;
   const diplomaticViewRef = useRef(diplomaticView);
   diplomaticViewRef.current = diplomaticView;
+  // The Relations view draws each group's area in its standing with the focus (diplomaticViews.js `groups`).
+  const diplomaticGroupColors = useMemo(() => (diplomaticView?.view === "relations" && diplomaticView.groups?.length
+    ? Object.fromEntries(diplomaticView.groups.map((group) => [group.name, group.color]))
+    : null), [diplomaticView]);
   // A region a battlefield has taken in name but not yet in full is DRAWN as
   // its old holder's until all of it is held (frontOwnership.js). Everything
   // below that follows ownership (fills, borders, labels) reads this, and so
@@ -615,10 +621,18 @@ const WorldMap = ({ isGlobe = false }) => {
   // receives compact ready-to-render point/line collections; no polygon fitting
   // or territorial geometry work is allowed in React.
   const useLivePolityLabels = polityLabelCollections.labelData.features.length > 0;
-  const ptr1PolityTextRecords = useMemo(() => buildPolityTextPtr1Records({
+  const workerPolityTextRecords = useMemo(() => buildPolityTextPtr1Records({
     ptrLabelData: polityLabelCollections.ptrLabelData,
     labelData: polityLabelCollections.labelData,
   }), [polityLabelCollections.ptrLabelData, polityLabelCollections.labelData]);
+  // In a shared game the label of a country a person plays wears a star
+  // (labels/playerStars.js). The list changes only when the seats do, and in
+  // single player it is empty and the records go through untouched.
+  const sharedPeople = useSyncExternalStore(subscribeSharedGameRole, sharedGamePeople, sharedGamePeople);
+  const ptr1PolityTextRecords = useMemo(
+    () => withPlayerStars(workerPolityTextRecords, sharedPeople),
+    [workerPolityTextRecords, sharedPeople],
+  );
   const ptr1PolityTextRequested = Boolean(
     ptr1PolityTextEnabled
     && worldKnown
@@ -3569,7 +3583,7 @@ const WorldMap = ({ isGlobe = false }) => {
         </Source>
       )}
 
-      <GroupAreaLayers data={groupAreaData} visible={Boolean(customActive && worldKnown && groupsOn)} hasMapLayer={hasMapLayer} />
+      <GroupAreaLayers data={groupAreaData} visible={Boolean(customActive && worldKnown && groupsOn)} hasMapLayer={hasMapLayer} colorOf={diplomaticGroupColors} />
 
       <Source id="polity-boundaries-source" type="geojson" data={EMPTY_FEATURE_COLLECTION} tolerance={0.25}>
         <Layer

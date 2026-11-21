@@ -93,7 +93,10 @@ const DIFFICULTY_IDS = Object.freeze(DIFFICULTY_LEVELS.map((level) => level.id))
 // notices say what they answer and the Game Master's log its counts; the
 // lobby's settings gain `answersPerRound` and its rules `quietMinutes`; and the
 // map's checksum covers every fact of a region the game reads.
-export const SHARED_GAME_VERSION = "17";
+// Version 18: a player edits a queued order of their own in the Actions panel,
+// through "reword", which may give an order that opens a conversation a new
+// opening line (`chatStarter`).
+export const SHARED_GAME_VERSION = "18";
 
 // The documents a player's view holds: the game itself first (a screen that
 // asks for one before the first view arrives waits for it), then the three a
@@ -230,9 +233,10 @@ export const PLAYER_REQUESTS = Object.freeze({
     chatStarter: str(ORDER_MAX_CHARS),
   }, ["ref", "title", "source", "kind", "invitees", "chatStarter"]),
   unorder: obj({ t: literal("unorder"), id: REQUEST_ID, order: str(ORDER_ID_MAX, { min: 1 }) }),
-  // A queued order of one's own, given other words (an advisor's proposal to
-  // change it, approved by the player).
-  reword: obj({ t: literal("reword"), id: REQUEST_ID, order: str(ORDER_ID_MAX, { min: 1 }), title: str(ORDER_TITLE_MAX), text: str(ORDER_MAX_CHARS) }, ["title", "text"]),
+  // A queued order of one's own, given other words: edited in the Actions
+  // panel, or an advisor's proposal to change it, approved by the player.
+  // `chatStarter`: a conversation the order opens, its new opening line.
+  reword: obj({ t: literal("reword"), id: REQUEST_ID, order: str(ORDER_ID_MAX, { min: 1 }), title: str(ORDER_TITLE_MAX), text: str(ORDER_MAX_CHARS), chatStarter: str(ORDER_MAX_CHARS) }, ["title", "text", "chatStarter"]),
   goal: obj({ t: literal("goal"), id: REQUEST_ID, text: str(600) }),
   // A post on Rostra, the social network (runtime/socialFeed.js), as the leader
   // of the seat's own country, never one the message names; `quote` the id of

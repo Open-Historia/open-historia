@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { formatEconomicDisplayValue } from "../../runtime/economicDisplayCurrency.js";
 
 const panel = readFileSync(new URL("./projects.jsx", import.meta.url), "utf8");
+const settings = readFileSync(new URL("./settings.jsx", import.meta.url), "utf8");
 const planner = readFileSync(new URL("../AI/gameplay.js", import.meta.url), "utf8");
 const advisor = readFileSync(new URL("../AI/main.jsx", import.meta.url), "utf8");
 const schemas = readFileSync(new URL("../AI/gameplaySchemas.js", import.meta.url), "utf8");
@@ -16,8 +17,10 @@ test("Projects monetary examples use the same fixed USD accounting conversion as
 
 test("Projects currency display follows the live saved campaign preference in every money field", () => {
   assert.match(panel, /useSyncExternalStore\(subscribeEconomicDisplayCurrency, getActiveEconomicDisplayCurrency\)/);
-  assert.match(panel, /setActiveEconomicDisplayCurrency\(economicDisplayCurrency\)/);
-  assert.match(panel, /const formatMoney = \(value, displayCurrency\) =>\s*formatEconomicDisplayValue\(value, displayCurrency, \{ compact: true \}\)/);
+  assert.match(panel, /readGameData\(\{ force: true \}\)[\s\S]*?setActiveEconomicDisplayCurrency\(game\.economicDisplayCurrency\)/);
+  assert.doesNotMatch(panel, /setActiveEconomicDisplayCurrency\(economicDisplayCurrency\)/);
+  assert.match(settings, /saveGame\(activeGameId, \{ gamePatch: \{ economicDisplayCurrency: next \} \}\)[\s\S]*?refreshRuntimeState\("game"\)/);
+  assert.match(panel, /const formatMoney = \(value, displayCurrency\) => \{\s*const amount = typeof value === "string" && value\.trim\(\) !== "" \? Number\(value\) : value;\s*return formatEconomicDisplayValue\(amount, displayCurrency, \{ compact: true \}\);\s*\};/);
   assert.match(panel, /formatMoney\(means\.budget, displayCurrency\)/);
   assert.match(panel, /formatMoney\(means\.committed, displayCurrency\)/);
   assert.match(panel, /formatMoney\(dailyCostOf\(project\) \* DAYS_PER_MONTH, displayCurrency\)/);

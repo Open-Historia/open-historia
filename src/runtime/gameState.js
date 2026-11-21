@@ -19,6 +19,8 @@ import { AIR_ROLES as UNIT_AIR_ROLES, OPERATION_APPROACHES } from "./fronts/cons
 import { normalizeClimateZones, normalizeFortifications, normalizeFreezingRegions, normalizeTerrainAreas, normalizeZoneWeather } from "./warGeography.js";
 import { normalizeMilitaryShift, normalizeMilitaryStats, shiftedMilitary } from "./militaryStats.js";
 import { MAX_GROUPS, applyGroupOps, canRenameGroup, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
+import { GROUP_DEAL_TYPES, groupPartyKey } from "./groupParties.js";
+import { normalizeAgreementEffects } from "./agreementEffects.js";
 import { enqueueEventStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { MAX_PUPPETS as MAX_WORLD_PUPPETS, PUPPET_KINDS, PUPPET_SECRECY_LEVELS, PUPPET_STATUSES } from "./puppets.js";
@@ -506,7 +508,8 @@ const normalizeArray = (value) => (Array.isArray(value) ? value : []);
 
 // Canonical ledger vocabularies (AI/nativeWarLedger.js, AI/nativeDiplomaticDirector.js).
 const WORLD_RELATION_STATUS_SET = new Set(["friendly", "cordial", "neutral", "cautious", "strained", "hostile", "rival"]);
-const WORLD_AGREEMENT_TYPE_SET = new Set(["alliance", "mutual_defense", "guarantee", "non_aggression", "friendship_consultation", "trade_economic", "military_cooperation", "military_access", "neutrality", "peace_settlement", "other"]);
+// With the deals that fit a group (runtime/groupParties.js): a party may be a group.
+const WORLD_AGREEMENT_TYPE_SET = new Set(["alliance", "mutual_defense", "guarantee", "non_aggression", "friendship_consultation", "trade_economic", "military_cooperation", "military_access", "neutrality", "peace_settlement", "other", ...GROUP_DEAL_TYPES]);
 const WORLD_AGREEMENT_STATUS_SET = new Set(["active", "suspended", "ended", "expired"]);
 const WORLD_STORYLINE_STATUS_SET = new Set(["active", "dormant", "resolved"]);
 const MAX_WORLD_STORYLINES = 96;
@@ -4021,9 +4024,32 @@ const diplomaticIdentityIndexOf = (identityWorld) => {
   return index;
 };
 
+// A party to a relation or an agreement: a polity, or a group by its exact name
+// (runtime/groupParties.js). "group: X" stays prefixed when a polity shares the
+// same name so subsequent normalizations never rebind the record to the state;
+// a bare name is a polity's when one answers to it, else a group's, else kept as written.
 const resolveWorldDiplomaticPolity = (token, identityWorld) => {
   const raw = normalizeOptionalString(token);
   if (!raw) return "";
+  const named = groupPartyKey(identityWorld, raw);
+  if (named && /^\s*group\s*:/i.test(raw)) {
+    const colliding = resolvePolityIdentity(named, identityWorld, {
+      allowUnknown: false,
+      requireActive: false,
+      allowStockBase: true,
+      identityIndex: diplomaticIdentityIndexOf(identityWorld),
+    });
+    return colliding?.resolved ? `group: ${named}` : named;
+  }
+  if (named) {
+    const known = resolvePolityIdentity(raw, identityWorld, {
+      allowUnknown: false,
+      requireActive: false,
+      allowStockBase: true,
+      identityIndex: diplomaticIdentityIndexOf(identityWorld),
+    });
+    return normalizeOptionalString(known?.resolved) || named;
+  }
   const resolved = resolvePolityIdentity(raw, identityWorld, {
     allowUnknown: true,
     requireActive: false,
@@ -4126,6 +4152,21 @@ const normalizeWorldAgreement = (entry, identityWorld, index = 0) => {
     createdRound: Number.isFinite(Number(entry.createdRound)) ? Math.max(0, Math.trunc(Number(entry.createdRound))) : 0,
     updatedRound: Number.isFinite(Number(entry.updatedRound)) ? Math.max(0, Math.trunc(Number(entry.updatedRound))) : 0,
     ...(entry.migratedLegacy === true ? { migratedLegacy: true } : {}),
+    // What it does, as the AI that made it wrote it (runtime/agreementEffects.js),
+    // and how far the engine has carried it out (Game/AI/agreementEngine.js): its
+    // signing's effects, the months run, the days toward the next month, its end's
+    // effects, and who broke it.
+    ...(normalizeAgreementEffects(entry.effects) ? { effects: normalizeAgreementEffects(entry.effects) } : {}),
+    ...(entry.effectsApplied === true ? { effectsApplied: true } : {}),
+    ...(Number(entry.monthsRun) > 0 ? { monthsRun: Math.min(600, Math.trunc(Number(entry.monthsRun))) } : {}),
+    ...(Number(entry.carryDays) > 0 ? { carryDays: Math.min(3650, Math.round(Number(entry.carryDays))) } : {}),
+    ...(entry.endApplied === true ? { endApplied: true } : {}),
+    // Fractions of a point a relation, a standing or a group's figures are owed, banked between months.
+    ...(entry.figureCarry && typeof entry.figureCarry === "object" && !Array.isArray(entry.figureCarry)
+      && Object.keys(entry.figureCarry).length
+      ? { figureCarry: Object.fromEntries(Object.entries(entry.figureCarry).slice(0, 16).map(([key, value]) => [normalizeOptionalString(key).slice(0, 160), Math.max(-1, Math.min(1, Number(value) || 0))]).filter(([key, value]) => key && value)) }
+      : {}),
+    ...(normalizeOptionalString(entry.brokenBy) ? { brokenBy: normalizeOptionalString(entry.brokenBy) } : {}),
   };
 };
 
@@ -4724,7 +4765,8 @@ export const normalizeGameData = (game) => {
   return {
     ...GAME_DEFAULTS,
     ...restGame,
-    country: normalizeOptionalString(nextGame.country),
+    // Always store the player's country as its canonical full name, never an ISO-3 code.
+    country: toCountryName(normalizeOptionalString(nextGame.country)),
     difficulty: normalizeOptionalString(nextGame.difficulty) || GAME_DEFAULTS.difficulty,
     gameDate: canonicalizeDateString(nextGame.gameDate),
     language: normalizeOptionalString(nextGame.language) || GAME_DEFAULTS.language,
@@ -5104,17 +5146,29 @@ export const writeCanonicalTurnState = (state = {}, {
   return enqueueCanonicalGenerationWrite(() => commitCanonicalTurnPayload(payload, { emitEvents, startedAt }));
 };
 
+// A write made for an entry of the queue of a shared game's host (`fence`,
+// multiplayer/host/worldQueue.js): refused once that entry has been let go,
+// when it is asked, and again when its turn in this write queue comes, where
+// its mutator writes nothing (null) once the entry is gone. Rejects with the
+// fence's refusal when the entry was let go before the write came back. A
+// write with no fence is any other, as ever.
+const underFence = (fence, mutator, write) => {
+  if (!fence) return write(mutator);
+  return fence.through(fence.live ? fence.write(write, mutator) : undefined);
+};
+
 // Deterministic native read-modify-write against the latest canonical
 // generation. Provider/model calls do not belong in this seam: do any slow
 // reasoning first, then publish the small native mutation here. The read occurs
 // only after prior canonical/chat writes drain, which is what prevents an
 // institutional vote or player message queued during an AI call from being
-// overwritten by an older snapshot.
+// overwritten by an older snapshot. `fence`: see underFence.
 export const mutateCanonicalTurnState = (mutator, {
   expectedGameId = "",
   emitEvents = true,
   guardRuntimeGeneration = true,
   preserveApprovedEvents = false,
+  fence = null,
 } = {}) => {
   if (typeof mutator !== "function") {
     return Promise.reject(new TypeError("mutateCanonicalTurnState requires a mutator function."));
@@ -5128,7 +5182,7 @@ export const mutateCanonicalTurnState = (mutator, {
     }
   };
 
-  return enqueueCanonicalGenerationWrite(async () => {
+  return underFence(fence, mutator, (apply) => enqueueCanonicalGenerationWrite(async () => {
     assertRuntimeGeneration();
     const [actions, chats, events, game, world, colors] = await Promise.all([
       readActionsState({ force: true }),
@@ -5139,7 +5193,7 @@ export const mutateCanonicalTurnState = (mutator, {
       readJson(JSON_URLS.colors, { defaultValue: {}, force: true }),
     ]);
     const current = { actions, chats, events, game, world, colors };
-    const patch = await mutator(current);
+    const patch = await apply(current);
     assertRuntimeGeneration();
     if (!patch || typeof patch !== "object") {
       return { skipped: true, ...current, chat: current.chats, transactionId: "" };
@@ -5154,7 +5208,7 @@ export const mutateCanonicalTurnState = (mutator, {
     };
     const payload = buildCanonicalTurnPayload(next, { expectedGameId, preserveApprovedEvents });
     return commitCanonicalTurnPayload(payload, { emitEvents, startedAt });
-  });
+  }));
 };
 
 // One document's read-modify-write, on the same queue as the canonical
@@ -5170,7 +5224,7 @@ export const mutateCanonicalTurnState = (mutator, {
 // must stay native and quick: nothing it awaits may queue another canonical
 // write, or the queue waits on itself. Resolves to the saved value, or null
 // when nothing was written. Rejects, writing nothing, if the active campaign
-// changed after the call was made.
+// changed after the call was made. `fence`: see underFence.
 const RUNTIME_DOCUMENTS = {
   world: {
     read: () => readWorldState({ force: true }),
@@ -5204,6 +5258,15 @@ const RUNTIME_DOCUMENTS = {
     read: () => readJson(JSON_URLS.shared, { defaultValue: {}, force: true }),
     write: (value, options) => writeJson(JSON_URLS.shared, value && typeof value === "object" && !Array.isArray(value) ? value : {}, options),
   },
+  // The game's flags (runtime/polityFlags.js setPolityFlag, the Game Master's
+  // renames): written in this one order, so a flag set for an entry of a
+  // shared game's host is never written beside another's. Read with no
+  // default: the whole map is written back, so a read that failed must stop
+  // the write rather than pass for an empty file and erase every other flag.
+  flags: {
+    read: () => readJson(JSON_URLS.flags, { force: true }),
+    write: (value, options) => writeJson(JSON_URLS.flags, value && typeof value === "object" && !Array.isArray(value) ? value : {}, options),
+  },
   // The advisor's conversation: written by its panel, by document notices and
   // by a rollback, so all three meet here too.
   advisor: {
@@ -5216,6 +5279,7 @@ const RUNTIME_DOCUMENTS = {
 
 export const mutateRuntimeDocument = (key, mutator, {
   guardRuntimeGeneration = true,
+  fence = null,
   ...writeOptions
 } = {}) => {
   const document = RUNTIME_DOCUMENTS[key];
@@ -5229,14 +5293,14 @@ export const mutateRuntimeDocument = (key, mutator, {
       throw new Error(`Active campaign changed before the ${key} write could commit.`);
     }
   };
-  return enqueueCanonicalGenerationWrite(async () => {
+  return underFence(fence, mutator, (apply) => enqueueCanonicalGenerationWrite(async () => {
     assertRuntimeGeneration();
     const current = await document.read();
-    const next = await mutator(current);
+    const next = await apply(current);
     assertRuntimeGeneration();
     if (next === null || next === undefined) return null;
     return document.write(next, writeOptions);
-  });
+  }));
 };
 
 export const mutateWorldState = (mutator, options) => mutateRuntimeDocument("world", mutator, options);
@@ -5247,6 +5311,7 @@ export const mutateGameData = (mutator, options) => mutateRuntimeDocument("game"
 export const mutateInterceptsState = (mutator, options) => mutateRuntimeDocument("intercepts", mutator, options);
 export const mutateAdvisorState = (mutator, options) => mutateRuntimeDocument("advisor", mutator, options);
 export const mutateSharedSessionState = (mutator, options) => mutateRuntimeDocument("shared", mutator, options);
+export const mutateFlagsState = (mutator, options) => mutateRuntimeDocument("flags", mutator, options);
 
 // A write another thread performs, run while this page's write queue is held.
 // The country-stats worker reads world.json, merges one sheet in and PUTs the
@@ -6221,6 +6286,32 @@ export const applyEventImpactsToWorld = ({
           nextWorld.battlefields = renameInBattlefields(nextWorld.battlefields, change.from, change.name);
           nextWorld.transports = renameInTransports(nextWorld.transports, change.from, change.name);
         }
+        // A dissolved group cannot keep running recurring agreements with no UI to end them.
+        if (change.op === "dissolve" && Array.isArray(nextWorld.agreements) && nextWorld.agreements.length) {
+          const hasCollidingPolity = Boolean(resolvePolityIdentity(change.name, nextWorld, {
+            allowUnknown: false,
+            requireActive: false,
+            allowStockBase: true,
+            identityIndex: diplomaticIdentityIndexOf(nextWorld),
+          })?.resolved);
+          const groupTag = `group: ${change.name}`.toLocaleLowerCase();
+          const bareName = String(change.name ?? "").trim().toLocaleLowerCase();
+          nextWorld.agreements = nextWorld.agreements.map((agreement) => {
+            if (!["active", "suspended"].includes(String(agreement?.status || "active").toLowerCase())) return agreement;
+            const parties = Array.isArray(agreement?.parties) ? agreement.parties : [];
+            const involvesGroup = parties.some((party) => {
+              const folded = String(party ?? "").trim().toLocaleLowerCase();
+              return folded === groupTag || (!hasCollidingPolity && folded === bareName);
+            });
+            if (!involvesGroup) return agreement;
+            return {
+              ...agreement,
+              status: "ended",
+              endedDate: normalizeOptionalString(event?.date) || normalizeOptionalString(agreement?.endedDate),
+              lastUpdatedDate: normalizeOptionalString(event?.date) || normalizeOptionalString(agreement?.lastUpdatedDate),
+            };
+          });
+        }
         if (change.op === "refused") console.warn(`[groups] "${change.name}" was not created on event "${event.title}": the ${MAX_GROUPS}-group limit is reached.`);
       }
     }
@@ -6517,7 +6608,7 @@ const YIELD_CARRY_KEY = "yieldCarry";
 // A stat effect as a patch for mergeCountryStatPatch, against the sheet as it is:
 // { patch, applied } with `applied` the change actually made, or null where the
 // sheet has no such figure to move.
-const statEffectPatch = (sheet, effect, scale, share = 1) => {
+export const statEffectPatch = (sheet, effect, scale, share = 1) => {
   const measure = statMeasure(effect.stat);
   const current = statValueOf(sheet, effect.stat);
   if (!measure || !Number.isFinite(current)) return null;

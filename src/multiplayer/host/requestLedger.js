@@ -8,9 +8,9 @@
 // request sent again was applied twice (a second letter, a second post, a
 // formation raised twice: the review of 2026-11-18, core 12, FOLLOWUPS A4).
 //
-// So the request is kept with its effect. While a player's request is applied
-// (`during`), the first write it makes to the game's documents is made as one
-// commit of them (store.updateGameDocs, the game's own turn commit) that also
+// So the request is kept with its effect. Through the store a player's request
+// is applied through (`requestStore`), the first write it makes to the game's
+// documents is made as one commit of them (store.updateGameDocs, the game's own turn commit) that also
 // marks the request as applied in game.json (`sharedRequests`), and that
 // commit first looks for the mark: a request whose mark is there was applied
 // before, and nothing of it is applied again (the write rejects with
@@ -83,36 +83,28 @@ const KINDS = Object.freeze({
   updateGameDocs: async (fn, docs) => (await fn(docs)) || null,
 });
 
-// `store`: the host's. Returns { store, during }: the store every request's
-// handler writes through, and during(stamp, fn), which applies `fn` as the
-// request `stamp` marks. Without store.updateGameDocs, nothing is marked.
-export const createRequestLedger = (store) => {
-  let open = null;
+// The store a player's request `stamp` is applied through, over the host's
+// `store`: its first write is the commit that marks it. Each request has its
+// own: the marks were taken from one open slot of the host's, set while a
+// request was applied, and an entry that was still writing when the next one
+// began had its write marked as that one's (the review of 2026-11-19, F1). An
+// entry the queue has let go never writes again (host/worldQueue.js fence),
+// and nothing of its own is shared with the next. Without
+// store.updateGameDocs, nothing is marked.
+export const requestStore = (store, stamp) => {
+  let stamped = false;
   const marked = typeof store?.updateGameDocs === "function";
-  const first = (kind, fn) => {
-    const entry = open;
-    return store.updateGameDocs(async (docs) => {
-      if (appliedIn(docs.game, entry.stamp)) throw appliedBefore();
-      const patch = await KINDS[kind](fn, docs);
-      if (!patch) return null;
-      entry.stamped = true;
-      return { ...patch, game: withApplied(patch.game ?? docs.game, entry.stamp) };
-    });
-  };
+  const first = (kind, fn) => store.updateGameDocs(async (docs) => {
+    if (appliedIn(docs.game, stamp)) throw appliedBefore();
+    const patch = await KINDS[kind](fn, docs);
+    if (!patch) return null;
+    stamped = true;
+    return { ...patch, game: withApplied(patch.game ?? docs.game, stamp) };
+  });
   const wrapped = { ...store };
   for (const kind of Object.keys(KINDS)) {
     if (typeof store?.[kind] !== "function") continue;
-    wrapped[kind] = (fn) => (open && !open.stamped && marked ? first(kind, fn) : store[kind](fn));
+    wrapped[kind] = (fn) => (!stamped && marked ? first(kind, fn) : store[kind](fn));
   }
-  return {
-    store: wrapped,
-    async during(stamp, fn) {
-      open = { stamp, stamped: false };
-      try {
-        return await fn();
-      } finally {
-        open = null;
-      }
-    },
-  };
+  return wrapped;
 };
