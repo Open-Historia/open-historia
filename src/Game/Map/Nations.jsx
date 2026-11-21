@@ -40,7 +40,7 @@ import { publishGroupIndex, publishPolityIndex } from "../../runtime/placeSearch
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { summarizePolityLabelDiagnostics } from "./vnext/polityLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
-import { MAP_SETTING_KEYS, reduceMotionEnabled, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, reduceMotionEnabled, useMapSetting, useMapSettingValue, usePolityLabelMaxZoom } from "../../runtime/mapSettings.js";
 import { getFrontShownOwners, shownOwnerIds, subscribeFrontShownOwners, withShownOwners, withoutShownTransitions } from "./frontOwnership.js";
 import {
   CUSTOM_FILL_SOURCE,
@@ -67,7 +67,7 @@ import { getWorldStateSnapshot, useWorldState } from "./useWorldState.js";
 import { cityPopulationOverridesByTileName, effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import { buildProvinceOutlinePaint, PROVINCE_OUTLINE_MIN_ZOOM } from "./provinceOutlineStyle.js";
 import { TYPE_FILL_STATE, withTypeFillOpacity } from "./regionTypePaint.js";
-import { regionTypeFeatureState, regionTypeRenderStyles, regionTypeZoomKey } from "../../runtime/regionTypes.js";
+import { regionSelectionPolicy, regionTypeFeatureState, regionTypeRenderStyles, regionTypeZoomKey } from "../../runtime/regionTypes.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
 import {
   createOwnerRgbResolver,
@@ -94,7 +94,8 @@ import PolityTextLayer, {
   isPolityTextPtr1Enabled,
 } from "./labels/PolityTextLayer.jsx";
 import { buildPolityTextPtr1Records } from "./labels/polityTextRecords.js";
-import { POLITY_TEXT_MAX_ZOOM } from "./labels/polityTextLayout.js";
+import { polityLabelVisibilityFor } from "../../runtime/polityLabelVisibility.js";
+import { buildCountryTextSize, buildCountryTextOpacity, STOCK_LABEL_RAMP, CUSTOM_CURVED_LABEL_RAMP, LIVE_LABEL_RAMP } from "./labels/polityLabelPaint.js";
 import {
   buildOwnershipPresentationDelta,
   createPoliticalCartographyScheduler,
@@ -154,116 +155,6 @@ const ownershipTransitionVertexCount = (geometry) => {
 };
 const OWNERSHIP_FLOOD_MAX_VERTEX_COUNT = 24000;
 const OWNERSHIP_FLOOD_PREP_BUDGET_MS = 350;
-
-// Globe projection renders a label's own high-latitude countries oversized
-// relative to their outline — confirmed (issue #6) to be text-only (fills
-// stay correctly scaled) and tied to each FEATURE's own latitude, not the
-// camera's. cos(lat) undoes it; only applied in globe mode; flat/mercator
-// keeps the exact same sizing it always has (this factor is 1 at lat 0 and
-// visibly wrong in mercator at high latitude, so never enable it there).
-const GLOBE_LAT_CORRECTION = ["cos", ["*", ["coalesce", ["get", "lat"], 0], Math.PI / 180]];
-
-// How a country label is sized, and why its opacity is tied to that size.
-//
-// MapLibre draws a label from two sizes per tile — this expression evaluated at
-// the tile's zoom and at one level above — mixed by the zoom in between, and it
-// packs each of those sizes into 8 bits: 255 px is the most a glyph is ever
-// drawn at (symbol_size.ts MAX_GLYPH_ICON_SIZE). Two things follow.
-//
-// 1. The stops are every integer zoom, each the uncapped size at that zoom, so
-//    the two sizes the engine mixes are exactly one level and exactly 2× apart
-//    and a label doubles with the map, as if painted on it. The first version
-//    had stops four levels apart with a pixel cap inside them; the engine then
-//    mixed an honest z4 size toward a clamped z8 one across the whole interval,
-//    and every label crept while the map doubled — the field report "labels
-//    shrink as you zoom in". Dropping the app's cap changed nothing, because the
-//    engine's own 255 px clamp did the same to the z8 stop.
-//
-// 2. A label has to be GONE before its size reaches that clamp, or the clamp
-//    reappears as the same creep in its last level. So buildCountryTextOpacity
-//    ties text-opacity to the size this expression yields: a label fades out
-//    between LABEL_FADE_START_PX and LABEL_FADE_END_PX at whatever zoom it gets
-//    there, on top of each layer's own zoom ramp (which is how the small
-//    labels, which never grow that big, leave). Fading, never shrinking.
-const LABEL_FADE_START_PX = 140;
-const LABEL_FADE_END_PX = 230;
-const LABEL_SIZE_STOP_ZOOMS = Array.from({ length: 25 }, (_, zoom) => zoom);
-// Opacity is read by the engine at the tile's zoom and one above, so half-level
-// stops are as fine as it can use; each ramp's own stops are merged in by the
-// builder so no ramp corner is skipped.
-const LABEL_OPACITY_STOP_ZOOMS = Array.from({ length: 13 }, (_, index) => 2 + index * 0.5);
-
-const countryTextScale = (multiplier, correctForGlobe) =>
-  (correctForGlobe ? ["*", multiplier, GLOBE_LAT_CORRECTION] : multiplier);
-
-// The size at one zoom, as an expression over the feature's own scale property.
-const countryTextSizeAt = (zoom, multiplier, correctForGlobe, scaleProperty, { safe = false } = {}) => [
-  "*",
-  countryTextScale(multiplier, correctForGlobe),
-  ["*", safe ? ["coalesce", ["get", scaleProperty], 0] : ["get", scaleProperty], 2 ** (zoom - 16)],
-];
-
-const buildCountryTextSize = (
-  multiplier = 1,
-  correctForGlobe = false,
-  scaleProperty = "areaScale",
-) => [
-  "interpolate", ["exponential", 2], ["zoom"],
-  ...LABEL_SIZE_STOP_ZOOMS.flatMap((zoom) => [zoom, countryTextSizeAt(zoom, multiplier, correctForGlobe, scaleProperty)]),
-];
-
-// A [zoom, value, zoom, value, …] ramp read at one zoom: piecewise-linear, held
-// flat beyond its ends.
-const rampValueAt = (ramp, zoom) => {
-  if (zoom <= ramp[0]) return ramp[1];
-  for (let index = 2; index < ramp.length; index += 2) {
-    if (zoom <= ramp[index]) {
-      const fromZoom = ramp[index - 2];
-      const fromValue = ramp[index - 1];
-      const toZoom = ramp[index];
-      const toValue = ramp[index + 1];
-      return fromValue + ((toValue - fromValue) * (zoom - fromZoom)) / (toZoom - fromZoom);
-    }
-  }
-  return ramp[ramp.length - 1];
-};
-
-// text-opacity for a label layer: the layer's zoom ramp times a fade keyed to
-// the label's own size — the same expression as its text-size, so the two agree
-// — which has it transparent before the engine would clamp it.
-const buildCountryTextOpacity = (
-  ramp,
-  multiplier = 1,
-  correctForGlobe = false,
-  scaleProperty = "areaScale",
-) => {
-  const rampZooms = ramp.filter((_, index) => index % 2 === 0);
-  const zooms = [...new Set([...LABEL_OPACITY_STOP_ZOOMS, ...rampZooms])].sort((left, right) => left - right);
-  const fadeAt = (zoom) => [
-    "min", 1,
-    ["max", 0, [
-      "/",
-      ["-", LABEL_FADE_END_PX, countryTextSizeAt(zoom, multiplier, correctForGlobe, scaleProperty, { safe: true })],
-      LABEL_FADE_END_PX - LABEL_FADE_START_PX,
-    ]],
-  ];
-  return [
-    "interpolate", ["linear"], ["zoom"],
-    ...zooms.flatMap((zoom) => [zoom, ["*", Number(rampValueAt(ramp, zoom).toFixed(4)), fadeAt(zoom)]]),
-  ];
-};
-
-// Where polity names stop: every label layer below ends at this zoom and its
-// ramp fades toward it over the last half zoom, so a zoomed-in map is
-// provinces and cities rather than a country name across the viewport. The
-// polity text renderer shares the ceiling (POLITY_TEXT_MAX_ZOOM).
-const LABEL_MAX_ZOOM = POLITY_TEXT_MAX_ZOOM;
-// Each label layer's own zoom ramp (see buildCountryTextOpacity).
-const STOCK_LABEL_RAMP = Object.freeze([4, 0.98, 5.8, 0.90, 7.0, 0.52, LABEL_MAX_ZOOM, 0]);
-// The curved glyph layer on a custom map hands off from the live point labels
-// at z3.85–4.15.
-const CUSTOM_CURVED_LABEL_RAMP = Object.freeze([3.85, 0, 4.15, 0.98, 5.8, 0.90, 7.0, 0.52, LABEL_MAX_ZOOM, 0]);
-const LIVE_LABEL_RAMP = Object.freeze([2.0, 0.90, 3.2, 0.985, 5.8, 0.96, 6.95, 0.72, LABEL_MAX_ZOOM, 0]);
 
 // Palettes are owner -> [r,g,b]. Re-reading colors.json hands back a fresh object
 // every time; swapping identity for identical contents would rebuild every
@@ -444,6 +335,8 @@ const WorldMap = ({ isGlobe = false }) => {
     groups,
     groupAreas,
     regionTypes,
+    capitalNames,
+    retiredCapitalNames,
     labelFont,
     labelHaloColor,
     labelTextColor,
@@ -486,6 +379,8 @@ const WorldMap = ({ isGlobe = false }) => {
   // A player's own choice from Settings > Map. Empty means "whatever the
   // scenario author set", so it changes nothing until it is filled in.
   const labelFontOverride = useMapSettingValue(MAP_SETTING_KEYS.labelFont);
+  const labelMaxZoom = usePolityLabelMaxZoom();
+  const labelVisibility = useMemo(() => polityLabelVisibilityFor(labelMaxZoom), [labelMaxZoom]);
   // PTR-1.7 is the default polity-name renderer The old MapLibre
   // label stack remains mounted only as a last-resort fallback while PTR is
   // waiting for canonical records, if PTR fails to mount, or when explicitly
@@ -1045,6 +940,11 @@ const WorldMap = ({ isGlobe = false }) => {
     ["<=", ["coalesce", ["get", "curveMinZoom"], 99], currentLabelZoom],
   ], [currentLabelZoom, legacyPtrOwnerFilter, visibleDerivedOwnerFilter]);
 
+  const canSelectRegion = useMemo(
+    () => regionSelectionPolicy(regionTypes, customRegionMeta.records),
+    [regionTypes, customRegionMeta.records],
+  );
+
   const handleRegionClick = useCallback(async (event) => {
     const unitsAt = () =>
       map.getLayer("units-fill")
@@ -1091,6 +991,7 @@ const WorldMap = ({ isGlobe = false }) => {
         props,
         regionId,
         gid0,
+        selectable: canSelectRegion(props),
         owner: owner ?? "",
         regionName: resolveRegionName(regionId, props.NAME_1 ?? props.name ?? "", getWorldStateSnapshot()?.regionRenames),
         country: props.COUNTRY ?? toCountryName(gid0),
@@ -1117,7 +1018,7 @@ const WorldMap = ({ isGlobe = false }) => {
       const hostCountry = host?.owner || (host?.owner === "" ? "" : toCountryName(host?.gid0 ?? ""));
       // The region under it, as a region click hands it over: the card's Region
       // row opens that region's card (Selection/Features.jsx).
-      const hostRegion = host
+      const hostRegion = host?.selectable
         ? { GID_0: hostCountry, COUNTRY: host.country, NAME_1: host.regionName, GID_1: host.regionId, gid0: host.gid0, owner: host.owner, lngLat: { lng, lat } }
         : null;
       return hit.layer.id.startsWith("markers-shapes")
@@ -1227,7 +1128,7 @@ const WorldMap = ({ isGlobe = false }) => {
 
     dismissFeaturePopup();
     const hit = resolveRegionHit();
-    if (!hit) {
+    if (!hit?.selectable) {
       onOceanClicked();
       return;
     }
@@ -1252,7 +1153,7 @@ const WorldMap = ({ isGlobe = false }) => {
       isDisputed: Boolean(props._stripes || claimants.length > 0),
       lngLat: event.lngLat,
     });
-  }, [map, regionClaimants, scenarioOwnsRegionGeometryAtAllZooms]);
+  }, [map, regionClaimants, scenarioOwnsRegionGeometryAtAllZooms, canSelectRegion]);
 
   useEffect(() => {
     if (!map) return;
@@ -1280,7 +1181,7 @@ const WorldMap = ({ isGlobe = false }) => {
       const hit = present.length ? mapInstance.queryRenderedFeatures(event.point, { layers: present })[0] : null;
       const props = hit?.properties ?? {};
       const regionId = String(props.GID_1 ?? props.id ?? "");
-      const owner = regionId ? (ownerLookupRef.current.get(regionId) ?? props.owner ?? "") : "";
+      const owner = regionId && canSelectRegion(props) ? (ownerLookupRef.current.get(regionId) ?? props.owner ?? "") : "";
       setDiplomaticHover(owner ? { owner: String(owner), x: Math.round(event.point.x), y: Math.round(event.point.y) } : null);
     };
     const move = (event) => {
@@ -1301,7 +1202,7 @@ const WorldMap = ({ isGlobe = false }) => {
       if (frame) cancelAnimationFrame(frame);
       setDiplomaticHover(null);
     };
-  }, [diplomaticOnMap, map]);
+  }, [diplomaticOnMap, map, canSelectRegion]);
 
   // The palette is re-read whenever colors.json is written (every AI turn can mint
   // or recolour a polity, and the main menu's faction creator writes the player's
@@ -2416,15 +2317,16 @@ const WorldMap = ({ isGlobe = false }) => {
   // the cities file is read once a map, and only when there are lines to draw.
   const wantsSeats = Boolean(diplomaticView?.lines?.length);
   const [seatCities, setSeatCities] = useState({ records: null, cities: null });
+  const seatCapitalKey=capitalNames+"|"+retiredCapitalNames;
   useEffect(() => {
-    if (!wantsSeats || seatCities.records === customRegionMeta.records) return undefined;
+    if (!wantsSeats || (seatCities.records === customRegionMeta.records&&seatCities.capitalKey===seatCapitalKey)) return undefined;
     let cancelled = false;
     const records = customRegionMeta.records;
     readFrontCities(getWorldStateSnapshot() ?? {}, null)
-      .then((cities) => { if (!cancelled) setSeatCities({ records, cities: Array.isArray(cities) ? cities : [] }); })
-      .catch(() => { if (!cancelled) setSeatCities({ records, cities: [] }); });
+      .then((cities) => { if (!cancelled) setSeatCities({ records, capitalKey:seatCapitalKey, cities: Array.isArray(cities) ? cities : [] }); })
+      .catch(() => { if (!cancelled) setSeatCities({ records, capitalKey:seatCapitalKey, cities: [] }); });
     return () => { cancelled = true; };
-  }, [customRegionMeta.records, seatCities.records, wantsSeats]);
+  }, [customRegionMeta.records, seatCities.records, seatCities.capitalKey, seatCapitalKey, wantsSeats]);
   const diplomaticSeats = useMemo(() => (wantsSeats && seatCities.cities && seatCities.records === customRegionMeta.records
     ? seatsByCountry({ cities: seatCities.cities, records: customRegionMeta.records ?? [], ownerOf: (regionId) => ownerByRegionId.get(regionId) ?? "" })
     : null), [customRegionMeta.records, ownerByRegionId, seatCities, wantsSeats]);
@@ -3440,16 +3342,16 @@ const WorldMap = ({ isGlobe = false }) => {
   // scale property must match the layout's buildCountryTextSize call.
   const pointLabelLayerPaint = useMemo(() => ({
     ...labelPaintBase,
-    "text-opacity": buildCountryTextOpacity(STOCK_LABEL_RAMP, 0.72, isGlobe),
-  }), [isGlobe, labelPaintBase]);
+    "text-opacity": buildCountryTextOpacity(STOCK_LABEL_RAMP, 0.72, isGlobe, "areaScale", labelMaxZoom),
+  }), [isGlobe, labelPaintBase, labelMaxZoom]);
   const curvedStockLabelLayerPaint = useMemo(() => ({
     ...labelPaintBase,
-    "text-opacity": buildCountryTextOpacity(STOCK_LABEL_RAMP, 0.78, isGlobe),
-  }), [isGlobe, labelPaintBase]);
+    "text-opacity": buildCountryTextOpacity(STOCK_LABEL_RAMP, 0.78, isGlobe, "areaScale", labelMaxZoom),
+  }), [isGlobe, labelPaintBase, labelMaxZoom]);
   const curvedLabelLayerPaint = useMemo(() => ({
     ...labelPaintBase,
-    "text-opacity": buildCountryTextOpacity(CUSTOM_CURVED_LABEL_RAMP, 0.78, isGlobe),
-  }), [isGlobe, labelPaintBase]);
+    "text-opacity": buildCountryTextOpacity(CUSTOM_CURVED_LABEL_RAMP, 0.78, isGlobe, "areaScale", labelMaxZoom),
+  }), [isGlobe, labelPaintBase, labelMaxZoom]);
   const integratedLabelLayerPaint = useMemo(() => ({
     // Stronger atlas treatment: the polity name is a primary political layer,
     // not a faint annotation. Keep a crisp dark edge so large white serif text
@@ -3459,8 +3361,8 @@ const WorldMap = ({ isGlobe = false }) => {
     "text-halo-width": 1.62,
     "text-halo-blur": 0.20,
     // The live line and point layers both size 1 × fitScale.
-    "text-opacity": buildCountryTextOpacity(LIVE_LABEL_RAMP, 1, isGlobe, "fitScale"),
-  }), [isGlobe, labelHaloColor, labelTextColor]);
+    "text-opacity": buildCountryTextOpacity(LIVE_LABEL_RAMP, 1, isGlobe, "fitScale", labelMaxZoom),
+  }), [isGlobe, labelHaloColor, labelTextColor, labelMaxZoom]);
 
   return (
     <>
@@ -3719,6 +3621,7 @@ const WorldMap = ({ isGlobe = false }) => {
         )}
         mode={ptr1PolityTextEnabled ? "ptr1" : "ptr0"}
         records={ptr1PolityTextEnabled ? ptr1PolityTextRecords : []}
+        visibility={labelVisibility}
         fontFamilies={labelFontStack}
         textColor={labelTextColor || "rgba(250, 249, 244, 0.995)"}
         haloColor={labelHaloColor || "rgba(4, 6, 9, 0.96)"}
@@ -3735,7 +3638,7 @@ const WorldMap = ({ isGlobe = false }) => {
           id="country-curved-labels"
           type="symbol"
           minzoom={customFlag && useLivePolityLabels ? 3.85 : undefined}
-          maxzoom={LABEL_MAX_ZOOM}
+          maxzoom={labelMaxZoom}
           layout={curvedLabelLayerLayout}
           paint={customFlag && useLivePolityLabels ? curvedLabelLayerPaint : curvedStockLabelLayerPaint}
         />
@@ -3764,7 +3667,7 @@ const WorldMap = ({ isGlobe = false }) => {
             id="country-line-labels-live-world"
             source="country-live-polity-line-label-source"
             type="symbol"
-            maxzoom={LABEL_MAX_ZOOM}
+            maxzoom={labelMaxZoom}
             filter={liveWorldLineFilter}
             layout={{
               ...liveLineLabelLayerLayout,
@@ -3779,7 +3682,7 @@ const WorldMap = ({ isGlobe = false }) => {
             id="country-line-labels-live-detail"
             source="country-live-polity-line-label-source"
             type="symbol"
-            maxzoom={LABEL_MAX_ZOOM}
+            maxzoom={labelMaxZoom}
             filter={liveDetailLineFilter}
             layout={{
               ...liveLineLabelLayerLayout,
@@ -3805,7 +3708,7 @@ const WorldMap = ({ isGlobe = false }) => {
             id="country-labels-live-managed"
             source="country-live-polity-point-label-source"
             type="symbol"
-            maxzoom={LABEL_MAX_ZOOM}
+            maxzoom={labelMaxZoom}
             filter={livePointManagedFilter}
             layout={{
               ...livePointLabelLayerLayout,
@@ -3819,7 +3722,7 @@ const WorldMap = ({ isGlobe = false }) => {
             id="country-labels-live-overlap"
             source="country-live-polity-point-label-source"
             type="symbol"
-            maxzoom={LABEL_MAX_ZOOM}
+            maxzoom={labelMaxZoom}
             filter={livePointOverlapFilter}
             layout={{
               ...livePointLabelLayerLayout,
@@ -3837,7 +3740,7 @@ const WorldMap = ({ isGlobe = false }) => {
         <Layer
           id="country-labels"
           type="symbol"
-          maxzoom={LABEL_MAX_ZOOM}
+          maxzoom={labelMaxZoom}
           layout={pointLabelLayerLayout}
           paint={pointLabelLayerPaint}
         />

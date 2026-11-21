@@ -444,6 +444,7 @@ const Main = ({
     activeGame,
     playerName: activeCountryName || activeGame?.country || "",
     scenarioName: runtimeScenario?.name || "",
+    gameDate: liveGameDate,
     inMenu: mainMenuOpen || hasNoGames || !gameEntered,
   }));
   const [apiPromptAnsweredFor, setApiPromptAnsweredFor] = useState(() => {

@@ -65,6 +65,14 @@ const NEW_UPDATES = [
         "Read the accepted choices and responses of completed new scenes on their outcome cards.",
         "Browse earlier recorded events beyond the recent-turn picker, with search and category filters.",
       ],
+    }, {
+      title: "Finance your projects",
+      items: [
+        "Review signed loan terms and actual disbursements from recorded campaign events.",
+        "Earmark finite cash or supplier payments for eligible projects, with interest, repayments and arrears tracked separately.",
+        "Confirm accounting values and existing debt treatment before money enters your projects.",
+        "Available in single-player monetary campaigns; negotiated promises alone do not create funds.",
+      ],
     }],
   },
   {
@@ -151,6 +159,22 @@ const NEW_UPDATES = [
           },
         ],
         button: "Enter the Workshop",
+      },
+    ],
+  },
+  {
+    id: "2026-11-project-currency-clarity",
+    kind: "minor",
+    date: "2026-11-20",
+    channel: "beta",
+    banners: [
+      {
+        title: "Clearer Project finances",
+        items: [
+          "Project allowances, planned costs and recorded spending now display in your selected GDP currency.",
+          "Project planners distinguish the game's accounting amounts from each country's domestic currency.",
+          "Changing your display currency never changes existing Project costs or funding.",
+        ],
       },
     ],
   },

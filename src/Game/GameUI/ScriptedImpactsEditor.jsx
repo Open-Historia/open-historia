@@ -1,9 +1,12 @@
 /*! Open Historia — a scripted event's impacts, written as rows instead of prose © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React from "react";
+import React, {useEffect,useState} from "react";
+import { downloadScenarioJsonAsset } from "../../runtime/library.js";
+import { capitalCityOptions } from "../../runtime/capitalSeats.js";
 import {
   SCRIPTED_IMPACT_TYPES,
   scriptedImpactProblems,
   scriptedImpactType,
+  isNativeScriptedImpact,
 } from "../../../server/scriptedImpacts.js";
 import { regionNameList, scriptedEventPickerLabel, scriptedEventPickerValue } from "./scriptedEventAuthoring.js";
 
@@ -24,13 +27,23 @@ const TYPE_LABELS = {
   create: "A new country is founded",
   rename: "A country is renamed",
   leader: "New leader or government",
+  relocate_capital: "Change a polity capital",
+  start_war: "Start a war",
+  install_puppet: "Make a polity subordinate",
 };
 
 const fieldLabel = (type, field) => {
   if (field === "regions") return "Regions";
   if (field === "from") return "From (optional)";
   if (field === "color") return "Colour";
-  if (field === "actor") return "Attacker";
+  if (field === "actor") return type === "start_war" ? "Declaring country" : "Attacker";
+  if (field === "opponent") return "Opposing country";
+  if (field === "cityId") return "New capital";
+  if (field === "warTitle") return "War name (optional)";
+  if (field === "overlord") return "Overlord";
+  if (field === "kind") return "Relationship";
+  if (field === "loyalty") return "Loyalty (0-100)";
+  if (field === "secrecy") return "Visibility";
   if (field === "leader") return "New leader";
   if (field === "government") return "New government";
   if (field === "to") {
@@ -44,7 +57,7 @@ const fieldLabel = (type, field) => {
     if (type === "clear_country_claims") return "Only this claimant (optional)";
     return "Claimant";
   }
-  if (field === "polity") return "Country";
+  if (field === "polity") return type === "install_puppet" ? "Subordinate country" : "Country";
   if (field === "name") return type === "rename" ? "New name" : "New country's name";
   return field;
 };
@@ -60,8 +73,41 @@ const PolityInput = ({ ariaLabel, listId, options, styles, value, onChange }) =>
   />
 );
 
-const ScriptedImpactsEditor = ({ idPrefix, rows: rowsInput, polityOptions = [], styles, onChange, onPickRegions }) => {
+const CapitalCityInput=({value,cityName,options,loading,failed,styles,onChange})=>{
+ const [query,setQuery]=useState("");
+ const matches=options.filter(c=>c.name.toLowerCase().includes(query.toLowerCase())).slice(0,80);
+ const selected=options.find(c=>c.id===value);
+ const shown=selected&&!matches.some(c=>c.id===selected.id)?[selected,...matches]:matches;
+ return <div style={{display:"grid",gap:4}}>
+  <input aria-label="Search map cities" placeholder="Search map cities" style={styles.inputStyle} value={query} onChange={e=>setQuery(e.target.value)}/>
+  <select aria-label="New capital" style={{...styles.inputStyle,width:"100%"}} value={value||""} disabled={loading||failed} onChange={e=>{const c=options.find(city=>city.id===e.target.value);onChange({cityId:c?.id||"",cityName:c?.name||""});}}>
+   <option value="">{loading?"Loading cities...":failed?"Scenario city layer required":"Choose a city"}</option>
+   {value&&!selected&&<option value={value}>{cityName||value} (unresolved)</option>}
+   {shown.map(city=><option key={city.id} value={city.id} style={optionStyle}>{city.name} ({city.coordinates.map(n=>n.toFixed(2)).join(", ")})</option>)}
+  </select>
+  <span style={{fontSize:"0.62rem",color:"rgba(255,255,255,0.55)"}}>Uses the scenario map's city identity. Duplicate original names are not selectable.</span>
+ </div>;
+};
+const ScriptedImpactsEditor = ({ idPrefix, rows: rowsInput, polityOptions = [], citySource={}, styles, onChange, onPickRegions }) => {
   const rows = array(rowsInput);
+  const needsCities=rows.some(row=>row.type==="relocate_capital");
+  const {scenarioId="",renames}=citySource;
+  const [cities,setCities]=useState({options:[],loading:false,failed:false});
+  useEffect(()=>{
+    if(!needsCities)return;
+    let cancelled=false;
+    (async()=>{
+      setCities({options:[],loading:true,failed:false});
+      try{
+        // Only the scenario-owned city layer is an authoritative runtime city
+        // catalog. The global town seed includes cities not on this map.
+        const data=scenarioId?await downloadScenarioJsonAsset(scenarioId,"citiesGeojson"):null;
+        if(!data)throw new Error("City map unavailable");
+        if(!cancelled)setCities({options:capitalCityOptions(data,renames),loading:false,failed:false});
+      }catch{if(!cancelled)setCities({options:[],loading:false,failed:true});}
+    })();
+    return ()=>{cancelled=true;};
+  },[needsCities,scenarioId,renames]);
   const problems = scriptedImpactProblems(rows);
   const listId = `${idPrefix}-impact-polities`;
   const patchRow = (index, patch) => onChange(rows.map((row, at) => (at === index ? { ...row, ...patch } : row)));
@@ -73,6 +119,11 @@ const ScriptedImpactsEditor = ({ idPrefix, rows: rowsInput, polityOptions = [], 
     for (const field of definition.fields) {
       if (field === "regions") next.regions = array(current.regions);
       else if (current[field] !== undefined) next[field] = current[field];
+    }
+    if (type === "install_puppet") {
+      next.kind ||= "client";
+      next.loyalty ||= "50";
+      next.secrecy ||= "open";
     }
     onChange(rows.map((row, at) => (at === index ? next : row)));
   };
@@ -119,7 +170,27 @@ const ScriptedImpactsEditor = ({ idPrefix, rows: rowsInput, polityOptions = [], 
                     </div>
                   );
                 }
-                const polityField = ["to", "from", "actor", "claimant", "polity"].includes(field);
+                if(field==="cityId")return (
+                  <div key={field} style={{flex:"2 1 16rem",minWidth:0}}>
+                    <label style={styles.fieldLabelStyle}>{label}</label>
+                    <CapitalCityInput value={row.cityId} cityName={row.cityName} {...cities} styles={styles} onChange={patch=>patchRow(index,patch)}/>
+                  </div>
+                );
+                if (field === "kind" || field === "secrecy") {
+                  const values = field === "kind"
+                    ? [["client","Client state"],["protectorate","Protectorate"],["satellite","Puppet state"]]
+                    : [["open","Public"],["covert","Covert"]];
+                  return (
+                    <div key={field} style={{ flex: "1 1 10rem", minWidth: 0 }}>
+                      <label style={styles.fieldLabelStyle}>{label}</label>
+                      <select aria-label={label} style={{...styles.inputStyle,width:"100%"}} value={row[field] || ""} onChange={event=>patchRow(index,{[field]:event.target.value})}>
+                        <option value="">Select impact value</option>
+                        {values.map(([value,name])=><option key={value} value={value} style={optionStyle}>{name}</option>)}
+                      </select>
+                    </div>
+                  );
+                }
+                const polityField = ["to", "from", "actor", "claimant", "polity", "overlord", "opponent"].includes(field);
                 return (
                   <div key={field} style={{ flex: "1 1 10rem", minWidth: 0 }}>
                     <label style={styles.fieldLabelStyle}>{label}</label>
@@ -137,8 +208,19 @@ const ScriptedImpactsEditor = ({ idPrefix, rows: rowsInput, polityOptions = [], 
             </div>
             {missing.length > 0 && (
               <div style={{ color: "#fbbf24", fontSize: "0.62rem", lineHeight: 1.35, marginTop: "0.25rem" }}>
-                Still needed: {needed}. This impact is left out until it is complete.
+                {isNativeScriptedImpact(definition.type)
+                  ? <>Required or invalid: {needed}. An incomplete native outcome blocks the scripted event's turn.</>
+                  : <>Still needed: {needed}. This impact is left out until it is complete.</>}
               </div>
+            )}
+            {definition.type === "relocate_capital" && (
+              <div style={{color:"rgba(255,255,255,0.62)",fontSize:"0.67rem",marginTop:"0.25rem"}}>Moves the canonical capital and its map marker, not territory. The city must be held by the selected country when the event fires.</div>
+            )}
+            {definition.type === "start_war" && (
+              <div style={{color:"rgba(255,255,255,0.62)",fontSize:"0.67rem",marginTop:"0.25rem"}}>Creates an actual war between these two countries. No allies or territory changes are added by this impact. Use player-control conditions to protect player choices.</div>
+            )}
+            {definition.type === "install_puppet" && (
+              <div style={{color:"rgba(255,255,255,0.62)",fontSize:"0.67rem",marginTop:"0.25rem"}}>Creates a native subordination arrangement. Both countries must exist and the subordinate must retain land.</div>
             )}
             {repeated.length > 0 && (
               <div style={{ color: "#fbbf24", fontSize: "0.62rem", lineHeight: 1.35, marginTop: "0.25rem" }}>

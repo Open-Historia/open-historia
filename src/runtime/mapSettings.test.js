@@ -7,6 +7,8 @@ import {
     SITTING_ONLY_SETTINGS,
     SYSTEM_REDUCED_MOTION_QUERY,
     getMapSettingValue,
+    getPolityLabelMaxZoom,
+    setPolityLabelMaxZoom,
     reduceMotionEnabled,
     setMapSettingValue,
     systemPrefersReducedMotion,
@@ -114,4 +116,38 @@ test("one motion switch alone is not the whole Reduce motion switch", () => {
         assert.equal(reduceMotionEnabled(), false);
     });
     withBrowser({}, () => assert.equal(reduceMotionEnabled(), false));
+});
+
+test("N029: polity label cutoff is a validated persistent, live, local setting", () => {
+    assert.equal(getPolityLabelMaxZoom(), 6.2);
+    const key = MAP_SETTING_KEYS.polityLabelMaxZoom;
+    const stored = { [key]: "8.4" };
+    const actions = [];
+    const oldWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const oldStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    Object.defineProperty(globalThis, "window", { value: { dispatchEvent: (event) => { actions.push(event.detail); return true; } }, configurable: true, writable: true });
+    Object.defineProperty(globalThis, "localStorage", { value: {
+        getItem: (name) => stored[name] ?? null,
+        setItem: (name, value) => { stored[name] = value; },
+        removeItem: (name) => { delete stored[name]; },
+    }, configurable: true, writable: true });
+    try {
+        assert.equal(getPolityLabelMaxZoom(), 8.4, "read existing storage on a fresh load");
+        stored[key] = "broken";
+        assert.equal(getPolityLabelMaxZoom(), 6.2);
+        setPolityLabelMaxZoom("12");
+        assert.equal(stored[key], "9");
+        assert.equal(getPolityLabelMaxZoom(), 9);
+        assert.deepEqual(actions.at(-1), { key, value: "9" });
+        setPolityLabelMaxZoom("6.2");
+        assert.equal(stored[key], "6.2");
+        assert.equal(getPolityLabelMaxZoom(), 6.2);
+        assert.equal(SITTING_ONLY_SETTINGS.includes(key), false);
+    } finally {
+        setMapSettingValue(key, "");
+        if (oldWindow) Object.defineProperty(globalThis, "window", oldWindow);
+        else delete globalThis.window;
+        if (oldStorage) Object.defineProperty(globalThis, "localStorage", oldStorage);
+        else delete globalThis.localStorage;
+    }
 });

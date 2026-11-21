@@ -37,6 +37,7 @@
 
 import { addGameDays, diffGameDays, gameDateDayNumber, normalizeGameDate } from "./gameDates.js";
 import { treasuryFactor } from "./militaryFunding.js";
+import { openProjectFinanceClock } from "./projectFinance.js";
 import { nameKey, sameName } from "../../server/nameKey.js";
 
 // ---- the vocabulary ---------------------------------------------------------
@@ -566,7 +567,10 @@ export const normalizeAdjustment = (value) => {
 //
 // Nothing here applies an effect: the caller does that, once, from the
 // outcomes (gameState.js applyProjectOutcomesToWorld).
-export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate = "", host = "", round = 0 } = {}) => {
+// Finance is an explicit receipt-ledger input, not an unchecked world field.
+// The live turn writer must supply an authorized ledger and commit its result
+// atomically. Until that authority seam is connected, ordinary turns are unchanged.
+export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate = "", host = "", round = 0, finance } = {}) => {
   const start = gameDateDayNumber(fromDate);
   const end = gameDateDayNumber(toDate);
   // A copy deep enough to work on: the tick dates checkpoints and appends to
@@ -580,7 +584,11 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
     }
     : project));
   const outcomes = [];
-  if (start === null || end === null || end <= start) return { projects: board, outcomes, days: 0 };
+  const nonmonetary = projectFundingMode(world) === "nonmonetary";
+  if (finance !== undefined && nonmonetary) throw new Error("Project Finance is not available in non-monetary scenarios.");
+  const financeClock = finance === undefined ? null : openProjectFinanceClock(finance,{fromDate,toDate});
+  const financeOwners = new Set(financeClock?.borrowers ?? []);
+  if (start === null || end === null || end <= start) return { projects: board, outcomes, days: 0, ...(financeClock?{finance:financeClock.finish()}: {}) };
   const days = end - start;
 
   // The adjustments told before this turn take hold now, in the order told.
@@ -610,7 +618,6 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
 
   // Each owner's projects, in board order, with its means for the period.
   // Explicit non-monetary scenarios never book money; time/capacity govern work.
-  const nonmonetary = projectFundingMode(world) === "nonmonetary";
   const owners = new Map();
   board.forEach((project, index) => {
     if (!isRecord(project) || !ticks(project)) return;
@@ -626,6 +633,22 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
     owners.get(key).indexes.push(index);
   });
 
+  // Debt service is owed even when the borrower has no running project. The
+  // finance intake must use the same exact owner token as the board/sheets.
+  for (const owner of financeOwners) {
+    const key=nameKey(owner);
+    if (owners.has(key) && owners.get(key).owner!==owner) throw new Error("Project Finance borrower identity does not match the canonical board.");
+    if (!owners.has(key)) {
+      const sheet=sheetOf(world,owner), monthly=monthlyProjectBudget(sheet);
+      owners.set(key,{owner,daily:monthly===null?null:monthly/DAYS_PER_MONTH,capacity:capacityOf(sheet),indexes:[]});
+    }
+  }
+  const toMinor = amount => {
+    const cents=Math.floor(amount*100);
+    if(!Number.isSafeInteger(cents)||cents<0)throw new Error("Project Finance amount exceeds safe minor-unit accounting.");
+    return cents;
+  };
+  const hasFinance = owner => financeClock && financeOwners.has(owner);
   const paidThisPeriod = new Map();
   const dueThisPeriod = new Map();
   const note = (map, index, amount) => map.set(index, (map.get(index) ?? 0) + amount);
@@ -636,6 +659,10 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
       // Unknown GDP is not proof of unlimited public funds. With no assessed
       // allowance only work explicitly costing zero may advance.
       let pool = nonmonetary ? Infinity : daily === null ? 0 : daily;
+      const financed=hasFinance(owner);
+      // Service consumes only the already-authorized recurring envelope.
+      // No loan proceeds or unknown GDP can create a repayment.
+      if(financed)pool=Math.max(0,pool-financeClock.service(owner,date,toMinor(pool))/100);
       const working = indexes.filter((index) => {
         const project = board[index];
         return isOpen(project) && asText(project.status) === "active";
@@ -643,9 +670,15 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
       // The budget pays the best funded first, and shares what is left between
       // projects of one level by what each is due.
       const shareOf = new Map();
+      const creditOf = new Map();
+      if(financed)for(const index of working){
+        const project=board[index];
+        if(projectOwnerOf(project,host)!==owner)throw new Error("Project Finance project owner identity mismatch.");
+        creditOf.set(index,financeClock.fund(owner,project.id,date,toMinor(dailyCostOf(project)))/100);
+      }
       for (const level of PAYING_ORDER) {
         const tier = working.filter((index) => resolveFunding(board[index].funding) === level || (!resolveFunding(board[index].funding) && level === "normal"));
-        const due = tier.reduce((sum, index) => sum + dailyCostOf(board[index]), 0);
+        const due = tier.reduce((sum, index) => sum + Math.max(0,dailyCostOf(board[index])-(creditOf.get(index) ?? 0)), 0);
         const share = due <= 0 ? 1 : Math.min(1, pool / due);
         for (const index of tier) shareOf.set(index, share);
         if (due > 0) pool = Math.max(0, pool - due * share);
@@ -653,8 +686,10 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
       for (const index of working) {
         const project = board[index];
         const due = dailyCostOf(project);
-        const share = shareOf.get(index) ?? 1;
-        const paid = nonmonetary ? 0 : due * share;
+        const baseShare = shareOf.get(index) ?? 1;
+        const credit=creditOf.get(index) ?? 0;
+        const paid = nonmonetary ? 0 : credit + (due-credit)*baseShare;
+        const share = financed && due>0 ? within(paid/due,0,1) : baseShare;
         project.spent = round2((Number(project.spent) || 0) + paid);
         note(paidThisPeriod, index, paid);
         note(dueThisPeriod, index, due);
@@ -666,9 +701,13 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
         const project = board[index];
         if (asText(project.status) !== "stalled" || asText(project.stallReason) !== "funds") continue;
         const due = dailyCostOf(project);
-        if (due > 0 && pool < due * RESUME_SHARE) continue;
-        const paid = nonmonetary ? 0 : Math.min(due, pool);
-        pool = Math.max(0, pool - paid);
+        if(financed && projectOwnerOf(project,host)!==owner)throw new Error("Project Finance project owner identity mismatch.");
+        const available=financed?Math.min(toMinor(due),financeClock.available(owner,project.id,date))/100:0;
+        if (due > 0 && pool+available < due * RESUME_SHARE) continue;
+        const credit=financed?financeClock.fund(owner,project.id,date,toMinor(due))/100:0;
+        const basePaid = nonmonetary ? 0 : Math.min(Math.max(0,due-credit), pool);
+        const paid=basePaid+credit;
+        pool = Math.max(0, pool - basePaid);
         project.status = "active";
         project.stallReason = "";
         project.starvedDays = 0;
@@ -691,14 +730,16 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
     const project = board[index];
     project.paidShare = nonmonetary ? 1 : due > 0 ? round2(within((paidThisPeriod.get(index) ?? 0) / due, 0, 1)) : 1;
   }
-  for (const { capacity, indexes } of owners.values()) {
+  for (const { owner, capacity, indexes } of owners.values()) {
     for (const index of indexes) {
       const project = board[index];
       if (!isOpen(project) || project.plan?.ongoing) continue;
-      project.targetDate = expectedFinish(project, { from: toDate, capacity, share: Number(project.paidShare ?? 1) }) || "";
+      // A temporary credit stock cannot be extrapolated as a recurring flow.
+      // The live finance UI must calculate a bounded depletion forecast.
+      project.targetDate = hasFinance(owner) ? "" : expectedFinish(project, { from: toDate, capacity, share: Number(project.paidShare ?? 1) }) || "";
     }
   }
-  return { projects: board, outcomes, days };
+  return { projects: board, outcomes, days, ...(financeClock?{finance:financeClock.finish()}: {}) };
 };
 
 // One day's work on one project. Mutates the copy tickProjects made.

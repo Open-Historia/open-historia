@@ -370,3 +370,10 @@ test("scripted event normalization preserves weighted outcomes and new canonical
   assert.equal(saved[0].trigger.conditions[0].regionId, "R1");
   assert.equal(saved[0].trigger.conditions[1].outcomeId, "reform");
 });
+
+test("N031 player-control predicates survive scenario normalization",()=>{
+ const types=["polity_player_controlled","polity_not_player_controlled"];
+ const [e]=normalizeScriptedEvents([{id:"election-test",date:"1914-03-21",text:"Election",trigger:{mode:"rules",operator:"all",percent:100,conditions:types.map(type=>({type,polityId:"GER"}))}}]);
+ assert.deepEqual(e.trigger.conditions,types.map(type=>({type,polityId:"GER"})));
+ assert.deepEqual(normalizeScriptedEvents([e]),[e]);
+});

@@ -441,7 +441,7 @@ const Cities = () => {
     // world.customCities marks scenarios whose maps carry their own era-accurate
     // city set (presets, editor maps). Consumed from the shared world-state hook,
     // which follows world writes, rather than a read of its own.
-    const { customCities: customFlag, cityRenames, cityPopulations, capitalNames } = useWorldState();
+    const { customCities: customFlag, cityRenames, cityPopulations, capitalNames, retiredCapitalNames } = useWorldState();
     const [customData, setCustomData] = useState(null);
     // Whether the asset arrived, not whether it held any cities.
     const [customRead, setCustomRead] = useState(false);
@@ -449,8 +449,8 @@ const Cities = () => {
     const citiesGeojsonUrl = JSON_URLS.citiesGeojson;
     const pop = React.useMemo(() => cityPopulationExpr(cityPopulations, cityRenames), [cityPopulations, cityRenames]);
     // A city a country has made its capital is starred as the map's own are.
-    const stockCapital = React.useMemo(() => capitalExpr(capitalNames ? capitalNames.split("\n") : [], cityRenames, isStockCapital), [capitalNames, cityRenames]);
-    const customCapital = React.useMemo(() => capitalExpr(capitalNames ? capitalNames.split("\n") : [], cityRenames, ["any", AUTHORED_CAPITAL, isStockCapital]), [capitalNames, cityRenames]);
+    const stockCapital = React.useMemo(() => capitalExpr(capitalNames ? capitalNames.split("\n") : [], cityRenames, isStockCapital, retiredCapitalNames ? retiredCapitalNames.split("\n") : []), [capitalNames, cityRenames, retiredCapitalNames]);
+    const customCapital = React.useMemo(() => capitalExpr(capitalNames ? capitalNames.split("\n") : [], cityRenames, ["any", AUTHORED_CAPITAL, isStockCapital], retiredCapitalNames ? retiredCapitalNames.split("\n") : []), [capitalNames, cityRenames, retiredCapitalNames]);
     // Each city's population for the year, where the scenario gives it by year;
     // a population the AI set (cityPopulations, in `pop`) still wins.
     const gameYear = useGameYear();

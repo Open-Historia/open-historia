@@ -28,10 +28,20 @@ export const SCRIPTED_IMPACT_TYPES = [
   { type: "create", label: "A new country is founded", fields: ["name", "color"], required: ["name"] },
   { type: "rename", label: "A country is renamed", fields: ["polity", "name"], required: ["polity", "name"] },
   { type: "leader", label: "New leader or government", fields: ["polity", "leader", "government"], required: ["polity"] },
+  { type: "relocate_capital", label: "Change a polity capital", fields: ["polity", "cityId"], required: ["polity", "cityId"] },
+  { type: "start_war", label: "Start a war", fields: ["actor", "opponent", "warTitle"], required: ["actor", "opponent"] },
+  { type: "install_puppet", label: "Make a polity subordinate", fields: ["polity", "overlord", "kind", "loyalty", "secrecy"], required: ["polity", "overlord", "kind", "loyalty", "secrecy"] },
 ];
 
 const TYPE_BY_KEY = Object.fromEntries(SCRIPTED_IMPACT_TYPES.map((entry) => [entry.type, entry]));
 export const scriptedImpactType = (type) => TYPE_BY_KEY[text(type)] || null;
+// Structural outcomes use native ledger records, not ordinary event.impacts.
+export const isNativeScriptedImpact = (type) => ["start_war", "install_puppet", "relocate_capital"].includes(type);
+export const nativeScriptedImpactRows = (beat) => [
+  ...normalizeImpactRows(beat?.impactRows).map((row, index) => ({row, key: "event-" + index})),
+  ...normalizeImpactRows(array(beat?.outcomes).find(entry => entry?.id === beat?.selectedOutcomeId)?.impactRows)
+    .map((row, index) => ({row, key: "outcome-" + index})),
+].filter(({row}) => isNativeScriptedImpact(row.type));
 
 const regionList = (value) => {
   const seen = new Set();
@@ -58,6 +68,7 @@ export const normalizeImpactRow = (input) => {
     else if (field === "color") { const color = hexColor(source.color); if (color) row.color = color; }
     else row[field] = text(source[field], 160);
   }
+  if(row.type==="relocate_capital") row.cityName=text(source.cityName,160);
   return row;
 };
 
@@ -139,6 +150,11 @@ export const compileImpactRows = (rowsInput) => {
       out.polityChanges.push({ operation: "update", code: row.polity, stats });
       break;
     }
+    // These rows remain in impactRows and are bound to native ledgers by the
+    // time skip, not copied into a second writable set of impacts.
+    case "relocate_capital":
+    case "start_war":
+    case "install_puppet":
     default:
       break;
     }
@@ -154,7 +170,15 @@ export const impactRowProblems = (rowInput) => {
   const missing = definition.required.filter((field) => (field === "regions" ? !array(row.regions).length : !text(row[field])));
   if (row.type === "leader" && !text(row.leader) && !text(row.government)) missing.push("leader");
   if (row.type === "annex" && text(row.polity) && text(row.polity) === text(row.to)) missing.push("to");
-  return missing;
+  if (row.type === "relocate_capital" && !text(row.cityId).startsWith("city:")) missing.push("cityId");
+  if (row.type === "start_war" && text(row.actor) && text(row.actor) === text(row.opponent)) missing.push("opponent");
+  if (row.type === "install_puppet") {
+    if (text(row.polity) && text(row.polity) === text(row.overlord)) missing.push("overlord");
+    if (!["protectorate", "satellite", "client"].includes(row.kind)) missing.push("kind");
+    if (!["open", "covert"].includes(row.secrecy)) missing.push("secrecy");
+    if (!/^(0|[1-9][0-9]{0,2})$/.test(text(row.loyalty)) || Number(row.loyalty) > 100) missing.push("loyalty");
+  }
+  return [...new Set(missing)];
 };
 
 // The kinds of row that would fight over one region if both named it.

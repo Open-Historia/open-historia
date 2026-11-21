@@ -306,10 +306,10 @@ export const PolityMultiPicker = ({ value = "", onChange, polities = [], label =
   };
 
   return <div data-polity-multi-picker="true" style={{ position: "relative" }}>
-    <div style={{ display: "flex", flexWrap: "wrap", gap: ".3rem", minHeight: "2.15rem", alignItems: "center", border: "1px solid rgba(255,255,255,.1)", borderRadius: 8, background: "rgba(8,8,12,.72)", padding: ".28rem .36rem" }}>
-      {selected.map((polity) => <span key={polity} data-selected-polity={polity} style={{ display: "inline-flex", alignItems: "center", gap: ".28rem", maxWidth: "15rem", border: "1px solid var(--oh-grey-border)", borderRadius: 999, background: "rgba(255,255,255,.055)", color: "var(--oh-grey-text)", padding: ".22rem .38rem .22rem .46rem", fontSize: ".6rem", fontWeight: 720 }}>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: ".3rem", minHeight: "2.15rem", alignItems: "center", border: "1px solid var(--oh-grey-border)", borderRadius: 8, background: "var(--oh-grey-raised)", padding: ".28rem .36rem" }}>
+      {selected.map((polity) => <span key={polity} data-selected-polity={polity} style={{ display: "inline-flex", alignItems: "center", gap: ".28rem", maxWidth: "15rem", border: "1px solid var(--oh-grey-border)", borderRadius: 999, background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", padding: ".22rem .38rem .22rem .46rem", fontSize: ".6rem", fontWeight: 720 }}>
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{polity}</span>
-        <button className="oh-tap" type="button" aria-label={`Remove ${polity}`} onClick={() => remove(polity)} style={{ border: 0, background: "transparent", color: "rgba(255,255,255,.5)", padding: 0, cursor: "pointer", fontSize: ".7rem", lineHeight: 1 }}>×</button>
+        <button className="oh-tap" type="button" aria-label={`Remove ${polity}`} onClick={() => remove(polity)} style={{ border: 0, background: "transparent", color: "var(--oh-grey-muted)", padding: 0, cursor: "pointer", fontSize: ".7rem", lineHeight: 1 }}>×</button>
       </span>)}
       <input
         value={query}
@@ -322,16 +322,16 @@ export const PolityMultiPicker = ({ value = "", onChange, polities = [], label =
           if (event.key === "Backspace" && !query && selected.length) remove(selected[selected.length - 1]);
         }}
         placeholder={selected.length ? (multiple ? "Add another government…" : "Change government…") : label}
-        style={{ flex: "1 1 12rem", minWidth: "9rem", border: 0, outline: 0, background: "transparent", color: "rgba(255,255,255,.86)", padding: ".2rem .22rem", fontSize: ".64rem" }}
+        style={{ flex: "1 1 12rem", minWidth: "9rem", border: 0, outline: 0, background: "transparent", color: "var(--oh-grey-text)", padding: ".2rem .22rem", fontSize: ".64rem" }}
       />
     </div>
-    {open && matches.length > 0 && <div data-polity-picker-results="true" style={{ position: "absolute", zIndex: 30, left: 0, right: 0, top: "calc(100% + .28rem)", maxHeight: "12.5rem", overflowY: "auto", border: "1px solid var(--oh-grey-border)", borderRadius: 9, background: "rgba(20,20,25,.985)", boxShadow: "0 12px 30px rgba(0,0,0,.35)", padding: ".28rem" }}>
-      {matches.map((polity) => <button className="oh-tap-row" key={polity} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => choose(polity)} style={{ width: "100%", display: "flex", alignItems: "center", gap: ".45rem", border: 0, borderRadius: 7, background: "transparent", color: "rgba(255,255,255,.82)", padding: ".42rem .48rem", textAlign: "left", cursor: "pointer", fontSize: ".62rem" }} onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(255,255,255,.07)"; }} onMouseLeave={(event) => { event.currentTarget.style.background = "transparent"; }}>        <span style={{ width: ".42rem", height: ".42rem", borderRadius: 999, background: "rgba(231,231,234,.58)", flex: "0 0 auto" }} />
+    {open && matches.length > 0 && <div data-polity-picker-results="true" style={{ position: "absolute", zIndex: 30, left: 0, right: 0, top: "calc(100% + .28rem)", maxHeight: "12.5rem", overflowY: "auto", border: "1px solid var(--oh-grey-border)", borderRadius: 9, background: "var(--oh-grey-surface)", boxShadow: "0 12px 30px rgba(0,0,0,.35)", padding: ".28rem" }}>
+      {matches.map((polity) => <button className="oh-tap-row" key={polity} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => choose(polity)} style={{ width: "100%", display: "flex", alignItems: "center", gap: ".45rem", border: 0, borderRadius: 7, background: "transparent", color: "var(--oh-grey-text)", padding: ".42rem .48rem", textAlign: "left", cursor: "pointer", fontSize: ".62rem" }} onMouseEnter={(event) => { event.currentTarget.style.background = "var(--oh-ui-hover, var(--oh-grey-raised))"; }} onMouseLeave={(event) => { event.currentTarget.style.background = "transparent"; }}>        <span style={{ width: ".42rem", height: ".42rem", borderRadius: 999, background: "var(--oh-grey-muted)", flex: "0 0 auto" }} />
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{polity}</span>
-        {notes?.[lower(polity)] && <span data-polity-picker-note="true" style={{ marginLeft: "auto", flex: "0 0 auto", border: "1px solid var(--oh-grey-border)", borderRadius: 999, color: "rgba(255,255,255,.6)", padding: ".08rem .4rem", fontSize: ".6rem", fontWeight: 720 }}>{notes[lower(polity)]}</span>}
+        {notes?.[lower(polity)] && <span data-polity-picker-note="true" style={{ marginLeft: "auto", flex: "0 0 auto", border: "1px solid var(--oh-grey-border)", borderRadius: 999, color: "var(--oh-grey-muted)", padding: ".08rem .4rem", fontSize: ".6rem", fontWeight: 720 }}>{notes[lower(polity)]}</span>}
       </button>)}
     </div>}
-    {open && query && matches.length === 0 && <div style={{ position: "absolute", zIndex: 30, left: 0, right: 0, top: "calc(100% + .28rem)", border: "1px solid rgba(255,255,255,.08)", borderRadius: 9, background: "rgba(20,20,25,.985)", color: "rgba(255,255,255,.38)", padding: ".55rem .6rem", fontSize: ".6rem" }}>{allowUnlisted ? `No polity in this scenario matches “${query}”. Press Enter to add it as written.` : <>No canonical polity matches “{query}”.</>}</div>}
+    {open && query && matches.length === 0 && <div style={{ position: "absolute", zIndex: 30, left: 0, right: 0, top: "calc(100% + .28rem)", border: "1px solid var(--oh-grey-border)", borderRadius: 9, background: "var(--oh-grey-surface)", color: "var(--oh-grey-muted)", padding: ".55rem .6rem", fontSize: ".6rem" }}>{allowUnlisted ? `No polity in this scenario matches “${query}”. Press Enter to add it as written.` : <>No canonical polity matches “{query}”.</>}</div>}
   </div>;
 };
 

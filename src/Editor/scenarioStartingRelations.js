@@ -5,8 +5,11 @@
  */
 import { nameKey } from "../../server/nameKey.js";
 import { relationBandForScore } from "../runtime/diplomaticStance.js";
+import { hasMalformedRelationSummary } from "../runtime/relationSummary.js";
 
 export const MAX_STARTING_RELATIONS = 256;
+// The ordinary diplomatic AI context already includes up to 240 characters.
+export const MAX_STARTING_RELATION_SUMMARY = 240;
 const clean = (value) => String(value ?? "").trim();
 const reject = (reason) => ({ ok: false, reason });
 const isRow = (value) => value && typeof value === "object" && !Array.isArray(value);
@@ -68,7 +71,14 @@ export const validateStartingRelationEdit = (edit, keys) => {
   if (!Object.prototype.hasOwnProperty.call(edit, "score")) return reject("Enter an explicit score, or clear the existing score.");
   const score = edit.score === null ? null : scoreOf(edit.score);
   if (edit.score !== null && score === null) return reject("Diplomatic score must be a whole number from -100 to +100.");
-  return { ok: true, edit: { a, b, score } };
+  const checked = { a, b, score };
+  if (score !== null && Object.hasOwn(edit, "summary")) {
+    if (typeof edit.summary !== "string" || hasMalformedRelationSummary(edit.summary)) return reject("Enter a plain-text diplomatic description without a tilde (~).");
+    const summary = edit.summary.trim().replace(/\s+/g, " ");
+    if (summary.length > MAX_STARTING_RELATION_SUMMARY) return reject("Diplomatic description must be at most 240 characters.");
+    checked.summary = summary;
+  }
+  return { ok: true, edit: checked };
 };
 
 export const mergeStartingRelationEdit = (previous, edit) => {
@@ -114,10 +124,10 @@ export const applyStartingRelationEdits = (source, changes, choices) => {
       if (matches.length) rows = rows.filter((_, index) => index !== matches[0]);
     } else if (matches.length) {
       rows = rows.map((row, index) => index === matches[0]
-        ? { ...row, a, b, score, status: relationBandForScore(score) }
+        ? { ...row, a, b, score, status: relationBandForScore(score), ...(Object.hasOwn(checked.edit, "summary") ? { summary: checked.edit.summary } : {}) }
         : row);
     } else {
-      rows = [...rows, { a, b, score, status: relationBandForScore(score), summary: "" }];
+      rows = [...rows, { a, b, score, status: relationBandForScore(score), summary: checked.edit.summary ?? "" }];
     }
     if (rows.length > MAX_STARTING_RELATIONS) {
       return reject(`A scenario can hold at most ${MAX_STARTING_RELATIONS} bilateral relationship rows. Remove an existing row before adding another.`);
@@ -186,4 +196,36 @@ export const settleStartingRelationEdits = (document, savedEdits) => {
         .filter((entry) => !writtenObjects.has(entry)),
     },
   };
+};
+
+// List every existing row, even legacy or conflicting rows which cannot be
+// safely edited. Never normalize/dedupe the source merely to display it.
+export const startingRelationOverview = (source, choices) => {
+  const known = knownPolityKeys(choices);
+  const listed = (Array.isArray(source) ? source : []).flatMap((row,index) => {
+    if (!isRow(row)) return [];
+    const left = endpointOf(row.a, choices), right = endpointOf(row.b, choices);
+    const a = left.key, b = right.key;
+    const pair = relationPairKey(a,b);
+    const resolved = left.candidates.length === 1 && right.candidates.length === 1
+      && known.has(a) && known.has(b) && folded(a) !== folded(b);
+    return [{ row,index,a,b,pair,editable:resolved }];
+  });
+  const counts = new Map();
+  for(const item of listed)counts.set(item.pair,(counts.get(item.pair)||0)+1);
+  return listed.map(item=>({...item, editable:item.editable&&counts.get(item.pair)===1}));
+};
+
+// A manager submits one deliberate pair edit against the latest scenario.
+// Refuse an intervening change to that pair instead of overwriting it. Other
+// pairs and any metadata not named by the edit are preserved.
+export const planReviewedStartingRelationEdit = (source, edit, expectedRow, choices) => {
+  const checked = validateStartingRelationEdit(edit, choices);
+  if(!checked.ok)return checked;
+  const pair = relationPairKey(checked.edit.a,checked.edit.b);
+  const matches = startingRelationOverview(source,choices).filter(item=>item.pair===pair);
+  if(matches.length>1 || matches.some(item=>!item.editable))return reject("This relationship has unresolved or conflicting identities.");
+  const current = matches[0]?.row ?? null;
+  if(JSON.stringify(current)!==JSON.stringify(expectedRow??null))return reject("This relationship changed since review. Reopen it and review the latest values.");
+  return applyStartingRelationEdits(source,[checked.edit],choices);
 };

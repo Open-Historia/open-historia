@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ADVISOR_PERSONALITY_MAX_CHARS, ADVISOR_RECIPIENT_TYPES, ADVISOR_RECIPIENT_TYPE_LABELS, CHIEF_ADVISOR_THREAD, advisorRecipientType } from "../../runtime/advisorThreads.js";
+import { ADVISOR_PERSONALITY_MAX_CHARS, ADVISOR_RECIPIENT_TYPES, ADVISOR_RECIPIENT_TYPE_LABELS, CHIEF_ADVISOR_THREAD, advisorRecipientType, characterMayReadSimulationRules, CHARACTER_SIMULATION_RULES_MAX_CHARS } from "../../runtime/advisorThreads.js";
 
 const field = {
   background: "#112131", border: "1px solid rgba(133, 191, 219, .28)",
@@ -12,7 +12,7 @@ const button = {
   borderRadius: 5, color: "#d8e5ee", cursor: "pointer",
   fontFamily: "inherit", fontSize: "0.72rem", padding: "0.4rem 0.55rem",
 };
-const blank = () => ({ name: "", title: "", personality: "", recipientType: ADVISOR_RECIPIENT_TYPES.MINISTER, binding: null, officeKey: "" });
+const blank = () => ({ name: "", title: "", personality: "", recipientType: ADVISOR_RECIPIENT_TYPES.MINISTER, binding: null, officeKey: "", canReadSimulationRules:false });
 
 export default function AdvisorRecipients({
   contacts, groups = [], activeId, chiefProfile, offices, statusOf, busy = false, onSelect, onCreate, onRevise, onArchive, onReorder, onCreateGroup, onReviseGroup, onArchiveGroup, onSaveChief, onResetChief,
@@ -95,7 +95,7 @@ export default function AdvisorRecipients({
     setGroupEditor(null);
     if (busy || saving) return;
     setEditor(contact?.id || "new");
-    setDraft(contact ? { name: contact.name, title: contact.title, personality: contact.personality || "", recipientType: advisorRecipientType(contact) || "", binding: contact.binding || null, officeKey: "" } : blank());
+    setDraft(contact ? { name: contact.name, title: contact.title, personality: contact.personality || "", recipientType: advisorRecipientType(contact) || "", binding: contact.binding || null, officeKey: "", canReadSimulationRules:contact.canReadSimulationRules===true } : blank());
     setConfirmArchive("");
     setError("");
     setExpanded(true);
@@ -177,7 +177,7 @@ export default function AdvisorRecipients({
       {(selectedGroup || selected || chiefProfile) && <div className="oh-advisor-recipient-title">{selectedGroup ? `${selectedGroup.memberIds.length} group members · individual personalities` : selected ? selected.title : chiefTitle}{selected?.binding ? " · Political World" : ""}</div>}
       {selected && advisorRecipientType(selected) !== ADVISOR_RECIPIENT_TYPES.MINISTER && (
         <div role="status" style={{ ...subtle, marginTop: 5 }}>
-          This character uses only the public scenario timeline and their own conversation history. Private government records and diplomacy are not shared.
+          {characterMayReadSimulationRules(selected) ? "This character can also read authored scenario simulation rules and lore. Private government records and diplomacy are not shared." : "This character uses only the public scenario timeline and their own conversation history. Private government records and diplomacy are not shared."}
         </div>
       )}
       {expanded && (
@@ -313,7 +313,7 @@ export default function AdvisorRecipients({
               {editor !== "chief" && (
                 <label style={subtle}>Recipient type
                   <select style={field} value={draft.recipientType} disabled={busy || saving || Boolean(draft.binding)} onChange={(event) => setDraft((old) => ({
-                    ...old, recipientType: event.target.value, binding: null, officeKey: "",
+                    ...old, recipientType: event.target.value, binding: null, officeKey: "", canReadSimulationRules:false,
                   }))}>
                     {!ADVISOR_RECIPIENT_TYPE_LABELS[draft.recipientType] && <option value="">Unsupported recipient type</option>}
                     {Object.entries(ADVISOR_RECIPIENT_TYPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -344,8 +344,16 @@ export default function AdvisorRecipients({
                 </div>
               </label>
               {draft.binding && <div style={subtle}>Linked to {draft.binding.office === "headOfGovernment" ? "head of government" : "head of state"}: {draft.binding.name}. A replacement will not inherit this conversation.</div>}
-              {editor !== "chief" && draft.recipientType !== ADVISOR_RECIPIENT_TYPES.MINISTER && (
-                <div style={subtle}>You can speak with this character without a Political World office. Only public scenario information is available to them.</div>
+              {editor !== "chief" && ADVISOR_RECIPIENT_TYPE_LABELS[draft.recipientType] && draft.recipientType !== ADVISOR_RECIPIENT_TYPES.MINISTER && (
+                <div style={{...subtle,display:"grid",gap:6}}>
+                  <div>You can speak with this character without a Political World office.</div>
+                  <label style={{display:"flex",gap:6,alignItems:"flex-start"}}>
+                    <input type="checkbox" checked={draft.canReadSimulationRules===true} disabled={busy||saving} onChange={event=>setDraft(old=>({...old,canReadSimulationRules:event.target.checked}))}/>
+                    <span>Allow access to scenario simulation rules</span>
+                  </label>
+                  <div>Allows this character to read authored simulation rules and lore (up to {CHARACTER_SIMULATION_RULES_MAX_CHARS.toLocaleString()} characters). These may contain spoilers or hidden scenario instructions. No access to private government records or gameplay controls is granted.</div>
+                  <div>Turning this off removes rules from future context, but existing messages and conversation memory may retain what was learned.</div>
+                </div>
               )}
               {error && <div role="alert" style={{ color: "#fca5a5", fontSize: "0.72rem" }}>{error}</div>}
               <div style={{ display: "flex", gap: 7 }}>

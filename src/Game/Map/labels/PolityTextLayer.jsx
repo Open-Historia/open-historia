@@ -37,6 +37,7 @@ export default function PolityTextLayer({
   enabled,
   mode = "ptr0",
   records = [],
+  visibility = null,
   fontFamilies,
   textColor,
   haloColor,
@@ -49,6 +50,7 @@ export default function PolityTextLayer({
   const runtimeRef = useRef(null);
   const latestRecordsRef = useRef(records);
   latestRecordsRef.current = records;
+  const latestVisibilityRef = useRef(visibility);
 
   useEffect(() => {
     const mapInstance = map?.getMap ? map.getMap() : map;
@@ -100,6 +102,7 @@ export default function PolityTextLayer({
       mapInstance,
       mode,
       getRecords: () => latestRecordsRef.current,
+      getVisibility: () => latestVisibilityRef.current,
       fontFamilies,
       textColor,
       haloColor,
@@ -151,6 +154,13 @@ export default function PolityTextLayer({
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
   }, [debugBaseline, enabled, fontFamilies, haloColor, isGlobe, map, mode, onStatusChange, textColor]);
+
+  // The cutoff is presentation-only. Existing and pending entries read it at
+  // draw time; changing it never invalidates a placement solve or remounts PTR.
+  useEffect(() => {
+    latestVisibilityRef.current = visibility;
+    if (enabled && mode === "ptr1") (map?.getMap ? map.getMap() : map)?.triggerRepaint?.();
+  }, [enabled, map, mode, visibility]);
 
   // Record publications are incremental. Do not make them a dependency of the
   // mount effect: that was the source of the visible PTR -> legacy -> PTR flash

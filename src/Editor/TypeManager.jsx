@@ -10,7 +10,8 @@
 // restyles on the types prop changing). The types go to the game with the
 // scenario (world.regionTypes, runtime/regionTypes.js): the game map draws the
 // override colour, opacity, stroke and zoom band, and the unit and structure
-// directors are told the three flags as rules for moving and placing. Z-Index
+// directors are told the movement/water flags as rules for moving and placing.
+// Interactable controls territory selection in the game, not placement. Z-Index
 // and Included In Labels have no counterpart in the game, and the panel says
 // so. The official editor's Show To Default Prompt has no reader in the game,
 // so it is not offered here; a type keeps whatever value it had.
@@ -172,7 +173,7 @@ const TypeManager = ({ types, setTypes, usage = {}, onClose }) => {
                 <Row label="Pathfinding Speed" title="1 is the usual speed. Below 1 is slower, above 1 is faster, and 0 is impassable.">
                   <NumberField value={t.pathfindingSpeed} step={0.1} min={0} onChange={(v) => update(t.id, { pathfindingSpeed: v })} />
                 </Row>
-                <Row label="Interactable" title="Off: the AI places no units and builds no structures in these regions.">
+                <Row label="Interactable" title="Off: these regions cannot be selected on the game map. Units and structures can still be placed and selected according to their own rules.">
                   <Toggle value={t.interactable} onChange={(v) => update(t.id, { interactable: v })} />
                 </Row>
                 <Row label="Passable" title="Off: the AI moves no units into or through these regions.">

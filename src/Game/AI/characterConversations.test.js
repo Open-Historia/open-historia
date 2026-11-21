@@ -86,3 +86,25 @@ test("character context is bounded and rejects invalid or chief recipient profil
   assert.throws(() => buildCharacterSystemPrompt({ recipient: { ...george, recipientType: "undefined" } }), /Unsupported character recipient/);
   assert.throws(() => buildCharacterSystemPrompt({ recipient: { ...george, recipientType: ADVISOR_RECIPIENT_TYPES.MINISTER } }), /Unsupported character recipient/);
 });
+
+test("opted-in restricted character receives only bounded authored rules, never private context or authority",()=>{
+ const rule="SCENARIO LORE: an author plans a future crisis.";
+ for(const flag of [undefined,false,"true",1]){
+  const prompt=buildCharacterSystemPrompt({recipient:{...george,canReadSimulationRules:flag},simulationRules:rule});
+  assert.ok(!prompt.includes(rule));
+ }
+ const allowed={...george,canReadSimulationRules:true};
+ const prompt=buildCharacterSystemPrompt({recipient:allowed,simulationRules:rule,
+   worldData:{private:"PRIVATE WORLD SECRET"},actionData:[{text:"SECRET ACTION"}],
+   eventData:[{title:"Hidden movement",audience:["Germany"]},{title:"Public news"}]});
+ assert.match(prompt,/Opt-in scenario simulation rules and lore/);
+ assert.ok(prompt.includes(rule));
+ assert.match(prompt,/not proof that future events occurred/);
+ assert.match(prompt,/does not execute government actions/);
+ assert.match(prompt,/no access to private diplomatic correspondence/);
+ assert.doesNotMatch(prompt,/PRIVATE WORLD SECRET|SECRET ACTION|Hidden movement/);
+ assert.doesNotMatch(buildCharacterSystemPrompt({recipient:allowed,simulationRules:{secret:"HIDDEN OBJECT"}}),/HIDDEN OBJECT/);
+ const long=buildCharacterSystemPrompt({recipient:allowed,simulationRules:"x".repeat(12000)+"TRUNCATION SECRET"});
+ assert.match(long,/Author text truncated/);
+ assert.doesNotMatch(long,/TRUNCATION SECRET/);
+});

@@ -2131,6 +2131,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       )}
       {openPanel === "reference" && (
         <ReferencePanel
+          activeTool={d.activeTool}
           refImage={refImage}
           setRefImage={setRefImage}
           onRecenter={() => setRefPlaceNonce((n) => n + 1)}

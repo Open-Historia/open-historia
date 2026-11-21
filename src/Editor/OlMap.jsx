@@ -4329,14 +4329,15 @@ const OlMap = ({
   // free aspect so a distorted source map can still be aligned; Shift keeps
   // the picture's shape) and dragging inside moves. Mounted only while the
   // Reference panel is open, and added last so it wins the event race over
-  // the editing interactions. Locked, it is only an outline and every drag
-  // pans the map: a reference laid over the whole basemap covers the whole
-  // map, and unlocked it caught every drag.
+  // the editing interactions. Locked, or with the Hand tool selected, keep
+  // only the outline: navigation must never claim a reference-image drag.
+  const referencePan = activeTool === "pan";
   useEffect(() => {
     const map = mapRef.current;
     const dataUrl = referenceImage?.dataUrl;
     if (!map || !dataUrl || !referenceAdjust) return undefined;
     const locked = referenceImage?.locked === true;
+    const canAdjust = !locked && !referencePan;
 
     // wrapX off, as every other editor layer: otherwise the frame is drawn
     // again on the world copy beside it.
@@ -4371,7 +4372,7 @@ const OlMap = ({
       frameSource.clear();
       if (!extent) return;
       frameSource.addFeature(new Feature({ geometry: polygonFromExtent(extent) }));
-      if (locked) return;
+      if (!canAdjust) return;
       for (const corner of cornersOf(extent)) {
         frameSource.addFeature(new Feature({ geometry: new Point(corner) }));
       }
@@ -4382,7 +4383,7 @@ const OlMap = ({
     // picture (to move), or nothing.
     const grabAt = (pixel, coordinate) => {
       const extent = refImageExtentRef.current;
-      if (!extent || locked) return null;
+      if (!extent || !canAdjust || activeToolRef.current === "pan") return null;
       const corners = cornersOf(extent);
       for (let index = 0; index < corners.length; index += 1) {
         const corner = map.getPixelFromCoordinate(corners[index]);
@@ -4411,7 +4412,7 @@ const OlMap = ({
       },
       handleDragEvent: (event) => {
         const extent = refImageExtentRef.current;
-        if (!drag || !extent) return;
+        if (!drag || !extent || activeToolRef.current === "pan") return;
         if (drag.mode === "move") {
           const dx = event.coordinate[0] - drag.last[0];
           const dy = event.coordinate[1] - drag.last[1];
@@ -4440,7 +4441,7 @@ const OlMap = ({
         return false;
       },
     });
-    map.addInteraction(interaction);
+    if (canAdjust) map.addInteraction(interaction);
 
     // Added after the map's own pointermove (which sets the tool's cursor), so
     // over the picture this one has the last word.
@@ -4449,17 +4450,17 @@ const OlMap = ({
       const grab = grabAt(event.pixel, event.coordinate);
       if (grab) map.getTargetElement().style.cursor = cursorFor(grab);
     };
-    map.on("pointermove", showCursor);
+    if (canAdjust) map.on("pointermove", showCursor);
 
     return () => {
-      map.un("pointermove", showCursor);
+      if (canAdjust) map.un("pointermove", showCursor);
       map.getTargetElement().style.cursor = "";
-      map.removeInteraction(interaction);
+      if (canAdjust) map.removeInteraction(interaction);
       map.removeLayer(frameLayer);
       refImageFrameSourceRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [referenceAdjust, referenceImage?.dataUrl, referenceImage?.locked]);
+  }, [referenceAdjust, referenceImage?.dataUrl, referenceImage?.locked, referencePan]);
 
   return <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />;
 };

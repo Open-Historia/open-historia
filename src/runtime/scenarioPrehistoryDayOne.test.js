@@ -108,11 +108,16 @@ test("native compiler rejects unknown polity identities instead of silently acce
   assert.ok(check(unknown, { verifyWorld: true }).some((row) => /unresolved/i.test(row.problem)));
 });
 
-test("semantic fact count honors native 32-fact cap without trimming old records", () => {
+test("semantic fact count honors the shared expanded cap without trimming old records", () => {
   let draft = normalizeScenarioPrehistory({}, { draft: true });
   for (let index = 0; index < MAX_SEMANTIC_DAY_ONE_FACTS; index++) draft = insertManualDayOneFact(draft, "relation");
-  assert.equal(draft.updates.canonicalUpdates.length, 32);
-  assert.throws(() => insertManualDayOneFact(draft, "relation"), /32/);
+  assert.equal(draft.updates.canonicalUpdates.length, MAX_SEMANTIC_DAY_ONE_FACTS);
+  assert.equal(MAX_SEMANTIC_DAY_ONE_FACTS, 256);
+  assert.throws(() => insertManualDayOneFact(draft, "relation"), /256/);
+  const extra = {...draft,updates:{...draft.updates,canonicalUpdates:[...draft.updates.canonicalUpdates,{ref:"extra",kind:"relation"}]}};
+  const retained = normalizeScenarioPrehistory(extra,{draft:true});
+  assert.equal(retained.updates.canonicalUpdates.length,257);
+  assert.match(dayOneEditorProblems(retained)[0].problem,/256/);
 });
 
 test("existing generated semantic facts retain their event provenance and accepted decimal scores", () => {

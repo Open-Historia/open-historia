@@ -73,7 +73,8 @@ import { normalizePublicStatement, assertPublicStatementsRetained, normalizeCanc
 import { normalizeSpyOp, spyTasking } from "./spycraft.js";
 import { eventsFromLegacyChat, normalizeChatEvents, projectChatThread, withUnloggedMessages } from "./chatThreads.js";
 import { latestTurnEventIds, unseenEvents, withoutUnseenChats, withoutUnseenEvents, withoutUnseenReports } from "./unseenEvents.js";
-import { COUNTRY_STATS_EVENT_RESCALE_LIMIT, mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
+import { COUNTRY_STATS_EVENT_RESCALE_LIMIT, normalizeCountryStatSheet } from "./countryStats.js";
+import { financeWorldFields, mergeFinanceAwareCountryStat, refreshFinanceDebtRatios, settleFinanceClockWorld } from "./projectFinanceWorld.js";
 import { advanceCountryStatsInterval } from "./countryStatsProgression.js";
 import {
   canonicalInstitutionIdentity,
@@ -4378,6 +4379,7 @@ export const normalizeWorldState = (world) => {
     ...nextWorld,
     countryTags,
     countryStats,
+    ...financeWorldFields({ ...nextWorld, countryStats }),
     politicalActors: formerPolitics && typeof formerPolitics === "object" && Object.keys(formerPolitics).length > 0
       ? foldPoliticsIntoActors(nextWorld.politicalActors, formerPolitics)
       : normalizePoliticalActors(nextWorld.politicalActors),
@@ -5410,7 +5412,7 @@ export const applyCountryStatPatchToWorld = (world, canonicalName, patch, option
   if (!world || typeof world !== "object" || !canonicalName) return null;
   if (!world.countryStats || typeof world.countryStats !== "object") world.countryStats = {};
 
-  const next = mergeCountryStatPatch(world.countryStats[canonicalName], patch, options);
+  const next = mergeFinanceAwareCountryStat(world, canonicalName, patch, options);
   if (next && typeof next === "object") world.countryStats[canonicalName] = next;
   return next;
 };
@@ -6046,6 +6048,7 @@ export const applyEventImpactsToWorld = ({
       fromDate: statsCursor, toDate: date,
     });
     nextWorld.countryStats = settled.countryStats;
+    refreshFinanceDebtRatios(nextWorld);
     statsCursor = date;
   };
   // Every polity renamed by this apply, for gameplay.js to carry into what the
@@ -6305,6 +6308,14 @@ export const applyEventImpactsToWorld = ({
             nextWorld.regionRenames = { ...(nextWorld.regionRenames || {}), [cleanName]: op.newName };
           } else {
             nextWorld.cityRenames = { ...(nextWorld.cityRenames || {}), [cleanName]: op.newName };
+            // A selected capital follows its city, not the old displayed spelling.
+            for(const [country,sheet] of Object.entries(nextWorld.countryStats||{})){
+              const ref=sheet?.capitalMap?.current;
+              if(ref && [ref.baseName,sheet.capital].some(name=>String(name||"").trim().toLowerCase()===cleanName)){
+                nextWorld.cityRenames[String(ref.baseName).toLowerCase()]=op.newName;
+                applyCountryStatPatchToWorld(nextWorld,country,{capital:op.newName},{nativeCapitalMap:sheet.capitalMap});
+              }
+            }
           }
         }
         // Population is recorded in the override for EVERY city, matched or not.
@@ -6492,10 +6503,10 @@ export const applyProjectOpsToWorld = ({
 export const advanceProjectsInWorld = ({ baseWorld, world, fromDate = "", toDate = "", host = "", round = 0 } = {}) => {
   const base = normalizeWorldState(baseWorld ?? world);
   const after = normalizeWorldState(world);
-  const tick = tickProjects({ projects: base.projects, world: base, fromDate, toDate, host, round });
+  const tick = tickProjects({ projects: base.projects, world: base, fromDate, toDate, host, round, finance: base.projectFinance });
   if (!tick.days) return { world: after, outcomes: [], days: 0 };
   const merged = mergeTickedBoard({ base: base.projects, ticked: tick.projects, current: after.projects });
-  return { world: { ...after, projects: normalizeProjects(merged) }, outcomes: tick.outcomes, days: tick.days };
+  return { world: settleFinanceClockWorld(base, { ...after, projects: normalizeProjects(merged) }, tick.finance), outcomes: tick.outcomes, days: tick.days };
 };
 
 // The yields a programme that runs on has banked as fractions of a point, by

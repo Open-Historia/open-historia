@@ -21,6 +21,9 @@ import assert from "node:assert/strict";
 
 import {
     bboxOfGeometry,
+    distanceKm,
+    nearestInteriorPoint,
+    seasForMap,
     describeApproximatePlacement,
     describeOtherKind,
     hashText,
@@ -34,7 +37,9 @@ import {
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { createApplicationReceipt, noteReceipt } from "../../runtime/applicationReceipt.js";
 import { placementNote } from "../../runtime/receiptPlayerNotes.js";
-import { normalizeEvents } from "../../runtime/gameState.js";
+import { normalizeEvents, applyMarkerOps, applyUnitOpBatch } from "../../runtime/gameState.js";
+import { waterTypeIds } from "../../runtime/regionTypes.js";
+import { foldRegionKey } from "./regionMatch.js";
 import { seaShareOf } from "../../runtime/unitMotion.js";
 import { findUnitByRef, readNameRef, stripKindTags } from "./nameRefs.js";
 import { findEventPlaces } from "./eventPlaces.js";
@@ -341,4 +346,55 @@ test("an address the map answers only with its country goes to the region the op
 test("a region field naming another power's region does not take the address out of its country", async () => {
     const { region } = await marchHome("West");
     assert.equal(region?.owner, "Longland");
+});
+
+test("N033: authored non-interactable sea permits a fleet and an offshore platform through the real placement pipeline", async () => {
+    // Run the actual gameplay.js gazetteer beside the already extracted
+    // resolvePlacements pass: the sea remains named geometry but not land.
+    const first = source.indexOf("const buildPlacementGazetteer =");
+    assert.ok(first >= 0 && start > first);
+    const dependencies = {
+      foldRegionKey, normalizeArray: asArray, normalizeString: asText,
+      waterTypeIds, pointInGeometry, nearestInteriorPoint,
+      placementDistanceKm: distanceKm, seasForMap,
+      worldCities: null,
+      readWorldCities: async () => { throw new Error("Known region must not require world towns"); },
+    };
+    const keys = Object.keys(dependencies);
+    const build = new Function(...keys, source.slice(first, start) + "\nreturn buildPlacementGazetteer;")(...keys.map((key) => dependencies[key]));
+    const ocean = { id: "wet", name: "Test Sea", owner: "", typeId: "wet", geometry: box(10, 20) };
+    const shore = { id: "dry", name: "Test Coast", owner: "Longland", typeId: "land", geometry: box(0, 20) };
+    const rows = [ocean, shore].map((row) => ({ ...row, bbox: bboxOfGeometry(row.geometry) }));
+    const context = {
+      rows, ownerRows: new Map([["Longland", [rows[1]]]]), cityRows: [],
+      resolveOwner: (name) => name === "Longland" ? name : "",
+    };
+    let previous;
+    for (const interactable of [true, false]) {
+      const world = { regionTypes: [{ id: "wet", water: true, interactable, passable: false }] };
+      const gazetteer = build(context, world);
+      assert.equal(gazetteer.findRegionId("wet").id, "wet");
+      assert.equal(gazetteer.regionAt([15, 25]), null);
+      assert.equal(gazetteer.regionAt([5, 25]).id, "dry");
+      const fleet = spawn({ id: "n033-fleet", name: "Test Fleet", regionId: "wet" });
+      const rig = { op: "build", marker: { id: "n033-rig", name: "Test Oil Platform", kind: "oil platform", ownerCode: "Longland", lng: 15.5, lat: 25.5 } };
+      const impacts = { unitOps: [fleet], markerOps: [rig] };
+      const receipt = createApplicationReceipt();
+      await placementPass(gazetteer)([{ event: { title: "Offshore activity" }, impacts, path: "$.events[0]" }], world, { receipt });
+      const points = [[fleet.unit.lng, fleet.unit.lat], [rig.marker.lng, rig.marker.lat]];
+      for (const point of points) assert.ok(pointInGeometry(point, ocean.geometry), JSON.stringify(point));
+      assert.equal(receipt.notes.some((note) => note.kind === "dropped"), false);
+      const [event] = normalizeEvents([{ title: "Offshore activity", impacts }]);
+      assert.equal(event.impacts.unitOps.length, 1);
+      assert.equal(event.impacts.unitOps[0].unit.type, "naval");
+      const { units } = applyUnitOpBatch([], [], event.impacts.unitOps, { gameDate: "2024-01-01", round: 1 });
+      assert.equal(units.length, 1, "the spawn reaches canonical unit state");
+      assert.equal(units[0].type, "naval");
+      assert.ok(pointInGeometry([units[0].lng, units[0].lat], ocean.geometry));
+      const [built] = applyMarkerOps([], event.impacts.markerOps);
+      assert.equal(built?.name, "Test Oil Platform");
+      assert.ok(pointInGeometry([built.lng, built.lat], ocean.geometry));
+      if (previous) assert.deepEqual(points, previous, "Interactable must not influence placement");
+      previous = points;
+    }
 });

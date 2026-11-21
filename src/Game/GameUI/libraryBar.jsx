@@ -53,6 +53,8 @@ import { groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtim
 import FeaturesSectionEditor from "./FeaturesSectionEditor.jsx";
 import StatsSheetEditor, { normalizeStatsEditorValue } from "./StatsSheetEditor.jsx";
 import InstitutionAuthoringPanel from "./InstitutionAuthoringPanel.jsx";
+import DiplomaticRelationsAuthoringPanel from "./DiplomaticRelationsAuthoringPanel.jsx";
+import { authoringCardStyle } from "./scenarioAuthoringStyles.js";
 import PrehistoryPanel from "./PrehistoryPanel.jsx";
 import ScenarioFrontsPanel from "./ScenarioFrontsPanel.jsx";
 import ScenarioWarSettings from "./ScenarioWarSettings.jsx";
@@ -1971,13 +1973,7 @@ const EDITOR_SECTION_BLURBS = Object.freeze({
 
 const EDITOR_PANEL = "var(--oh-ui-surface, #12141a)";
 const EDITOR_NAV = "var(--oh-ui-header, #0d0f14)";
-const editorCardStyle = {
-  background: "var(--oh-ui-raised, #171a22)",
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: "16px",
-  marginBottom: "0.95rem",
-  padding: "1rem 1.05rem",
-};
+const editorCardStyle = authoringCardStyle;
 const editorCardTitleStyle = { color: "#fff", fontSize: "0.92rem", fontWeight: 800, letterSpacing: "-0.01em", marginBottom: "0.75rem" };
 
 const EditorSectionIcon = ({ kind, size = 17 }) => {
@@ -2515,6 +2511,7 @@ const EditorDrawer = ({
             details={details}
             onDetailsChange={onDetailsChange}
           />
+          <DiplomaticRelationsAuthoringPanel key={details?.scenario?.id} details={details} onDetailsChange={onDetailsChange} />
         </>
       )}
 

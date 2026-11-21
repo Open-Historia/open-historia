@@ -1,5 +1,7 @@
 /*! Open Historia — metric-preserving PTR layout math © 2026 Open Historia contributors, AGPL-3.0-or-later (see LICENSE). */
 
+import { POLITY_LABEL_DEFAULT_MAX_ZOOM, POLITY_LABEL_DEFAULT_FADE_START } from "../../../runtime/polityLabelVisibility.js";
+
 export const PTR_REFERENCE_ZOOM = 4;
 
 // Final visual scale for modern territory-fitted polity typography. Placement,
@@ -125,8 +127,8 @@ export const planTerritorialTextSupport = ({
 // Where polity text stops as the player zooms in — the same ceiling the
 // MapLibre label layers use (LABEL_MAX_ZOOM in Nations.jsx) — and where the
 // fade toward it begins. Past the ceiling the map is provinces and cities.
-export const POLITY_TEXT_MAX_ZOOM = 6.20;
-export const POLITY_TEXT_FADE_OUT_START_ZOOM = 5.00;
+export const POLITY_TEXT_MAX_ZOOM = POLITY_LABEL_DEFAULT_MAX_ZOOM;
+export const POLITY_TEXT_FADE_OUT_START_ZOOM = POLITY_LABEL_DEFAULT_FADE_START;
 
 export const polityTextOpacityAtZoom = ({
   zoom,

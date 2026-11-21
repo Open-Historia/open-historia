@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { humanCountriesOf, setHostingSharedGame } from "../../runtime/humanPolities.js";
 import { firstSkipIncludesScriptedOrigin, scriptedBeatsInSpan } from "./worldDirection.js";
 import {
   commitScriptedEventPlan,
@@ -300,4 +301,52 @@ test("a branch with no positive-weight outcome fails closed", () => {
   const plan = planScriptedEvents([branched], { world, random: () => 0 });
   assert.deepEqual(plan.eligible, []);
   assert.equal(plan.resolutions[0].outcome, "skipped");
+});
+
+test("N031 player-control conditions use canonical identities and fail closed",()=>{
+ const positive={type:"polity_player_controlled",polityId:"GER"};
+ const negative={...positive,type:"polity_not_player_controlled"};
+ const match=(condition,playerPolities)=>evaluateScriptedEventCondition(condition,world,{playerPolities}).matched;
+ assert.equal(match(positive,["German Empire"]),true);
+ assert.equal(match(negative,["German Empire"]),false);
+ assert.equal(match(negative,["France"]),true);
+ for(const seats of [undefined,[],["unknown-country"],["France","unknown-country"]]){
+  assert.equal(match(positive,seats),false);
+  assert.equal(match(negative,seats),false);
+ }
+ for(const polityId of ["","invented","GONE"]){
+  assert.equal(match({...negative,polityId},["France"]),false);
+  assert.equal(match({...positive,polityId},["France"]),false);
+ }
+ const custom={...world,customRegions:true};
+ assert.equal(evaluateScriptedEventCondition({...negative,polityId:"Japan"},custom,{playerPolities:["France"]}).matched,false);
+});
+test("N031 uses real shared host seats, not a saved stale multiplayer roster; skipped elections stay skipped",()=>{
+ const game={country:"France",humanCountries:["France","German Empire"]};
+ const beat=event("election",{mode:"rules",operator:"all",conditions:[{type:"polity_not_player_controlled",polityId:"GER"}],percent:100});
+ setHostingSharedGame(false);
+ assert.equal(planScriptedEvents([beat],{world,playerPolities:humanCountriesOf(game)}).eligible.length,1);
+ try{
+  setHostingSharedGame(true,{host:"France"});
+  const plan=planScriptedEvents([beat],{world,playerPolities:humanCountriesOf(game)});
+  assert.equal(plan.eligible.length,0);
+  const receipt=commitScriptedEventPlan({},plan,{throughDate:beat.date});
+  assert.equal(receipt.state.election.outcome,"skipped");
+  assert.equal(planScriptedEvents([beat],{world,playerPolities:["France"],resolvedState:receipt.state}).eligible.length,0);
+ }finally{setHostingSharedGame(false);}
+ const war=event("war",{mode:"rules",operator:"all",conditions:[
+  {type:"polity_not_player_controlled",polityId:"GER"},{type:"polity_not_player_controlled",polityId:"GBR"}],percent:100});
+ assert.equal(planScriptedEvents([war],{world,playerPolities:["FRA"]}).eligible.length,1);
+ assert.equal(planScriptedEvents([war],{world,playerPolities:["GBR"]}).eligible.length,0);
+});
+
+test("N031 exact owner identities work on legacy custom maps; dissolved and ambiguous registry identities fail closed",()=>{
+ const legacy={customRegions:true,ownerCodes:["Hill Kingdom","Valley Republic"],regionOwnershipOverrides:{"hill-1":"Hill Kingdom"}};
+ const condition={type:"polity_not_player_controlled",polityId:"Hill Kingdom"};
+ assert.equal(evaluateScriptedEventCondition(condition,legacy,{playerPolities:["Valley Republic"]}).matched,true);
+ assert.equal(evaluateScriptedEventCondition(condition,legacy,{playerPolities:["Hill Kingdom"]}).matched,false);
+ const dissolved={...legacy,polityOverrides:{"Hill Kingdom":{code:"Hill Kingdom",name:"Hill Kingdom",status:"dissolved"}}};
+ assert.equal(evaluateScriptedEventCondition(condition,dissolved,{playerPolities:["Valley Republic"]}).matched,false);
+ const ambiguous={...world,polityOverrides:{...world.polityOverrides,A:{name:"Shared name",status:"active"},B:{name:"Shared name",status:"active"}}};
+ assert.equal(evaluateScriptedEventCondition({...condition,polityId:"Shared name"},ambiguous,{playerPolities:["France"]}).matched,false);
 });

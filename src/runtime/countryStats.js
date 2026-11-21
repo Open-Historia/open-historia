@@ -1,3 +1,4 @@
+import { normalizeCapitalMap, mergeCapitalMap } from "./capitalSeats.js";
 import { astronomicalYear, compareGameDates, isGameDate, parseGameDate } from "./gameDates.js";
 import { STATS_BACKEND_FIELD, statsBackendPatch } from "./statsBackend.js";
 import { normalizeMilitaryStats } from "./militaryStats.js";
@@ -464,6 +465,8 @@ export const normalizeCountryStatSheet = (value, { indexKeys: expectedIndexKeys 
     copyTextField(value, out, key);
   }
 
+  const capitalMap=normalizeCapitalMap(value.capitalMap);
+  if(out.capital&&capitalMap)out.capitalMap=capitalMap;
   const stability = normalizePercent(value.stability);
   if (stability != null) out.stability = Math.round(stability);
 
@@ -520,6 +523,8 @@ export const finalizeCountryStatSheet = (value, { indexKeys: expectedIndexKeys }
   const out = {};
   for (const key of ["capital", "continent", "government", "leader"]) copyTextField(value, out, key);
 
+  const capitalMap=normalizeCapitalMap(value.capitalMap);
+  if(out.capital&&capitalMap)out.capitalMap=capitalMap;
   const stability = normalizePercent(value.stability);
   if (stability != null) out.stability = Math.round(stability);
 
@@ -984,7 +989,7 @@ const mergeComponentsByGeography = (base, patch) => {
 export const mergeCountryStatPatch = (
   baseValue,
   patchValue,
-  { replaceComponents = false, continuity = null, maxAggregateRescale = 0, allowPerCapitaRescale = true } = {},
+  { replaceComponents = false, continuity = null, maxAggregateRescale = 0, allowPerCapitaRescale = true, nativeCapitalMap } = {},
 ) => {
   const base = normalizeCountryStatSheet(baseValue) || {};
   const written = patchValue && typeof patchValue === "object" && !Array.isArray(patchValue)
@@ -1008,6 +1013,11 @@ export const mergeCountryStatPatch = (
         .filter(([, value]) => value),
     ),
   };
+
+  const capitalMap=mergeCapitalMap(base,patch,{nativeCapitalMap,replaceComponents});
+  if(replaceComponents&&base.capitalMap?.current&&nativeCapitalMap===undefined)merged.capital=base.capital;
+  if(capitalMap)merged.capitalMap=capitalMap;
+  else delete merged.capitalMap;
 
   const mergedContinuity = mergeCountryStatContinuity(
     base.continuity,

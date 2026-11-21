@@ -6,7 +6,8 @@
 // world.regionTypes (exportPreset.js buildGameSeed). The game reads them here:
 //
 //   - the map draws a type's fill colour, opacity, border and zoom range
-//     (regionTypeRenderStyles, regionTypeFeatureState; Nations.jsx);
+//     (regionTypeRenderStyles, regionTypeFeatureState; Nations.jsx), and
+//     regionSelectionPolicy decides whether the territory itself is clickable;
 //   - the unit and structure directors are told a type's rules for moving
 //     and placing (regionTypeRules; gameplay.js), inside requests they make
 //     anyway;
@@ -191,6 +192,23 @@ export const regionTypeFeatureState = (style, { owned = false, zoom = 0 } = {}) 
   };
 };
 
+// The region itself is selectable unless the author explicitly disabled its
+// type. Canonical catalog records also cover stock/repair/dispute layers that
+// do not carry typeId in every rendered feature. An entity standing in the
+// region is a separate hit target, and placement/movement do not read this.
+export const regionSelectionPolicy = (types, records) => {
+  const disabled = new Set(normalizeRegionTypes(types)
+    .filter((type) => type.interactable === false).map((type) => type.id));
+  if (!disabled.size) return () => true;
+  const byId = new Map((Array.isArray(records) ? records : [])
+    .map((record) => [text(record?.id), text(record?.typeId)]));
+  return (properties) => {
+    const id = text(properties?.GID_1 ?? properties?.id);
+    const typeId = byId.has(id) ? byId.get(id) : text(properties?.typeId);
+    return !disabled.has(typeId);
+  };
+};
+
 // ---------------------------------------------------------------------------
 // The AI
 // ---------------------------------------------------------------------------
@@ -203,7 +221,7 @@ export const regionTypeRuleText = (type) => {
   const speed = number(type?.pathfindingSpeed, 1, 0, 100);
   if (isWaterType(type)) {
     // (Whatever else it is set to: a sea made impassable to keep armies off it is still a sea to a fleet.)
-    rules.push("water: fleets and aircraft only; no land unit enters these regions and nothing is built in them");
+    rules.push("water: fleets and aircraft only; no land unit enters these regions; appropriate offshore structures such as oil platforms may be built here, not land-based structures");
   } else if (type?.passable === false || speed === 0) {
     rules.push("impassable: no unit enters or crosses these regions, so route around them");
   } else if (speed !== 1) {
@@ -211,7 +229,6 @@ export const regionTypeRuleText = (type) => {
       ? `slow going: units cross these regions at ${speed} times their usual speed`
       : `fast going: units cross these regions at ${speed} times their usual speed`);
   }
-  if (type?.interactable === false) rules.push("out of play: place no unit and build no structure in these regions");
   return rules;
 };
 

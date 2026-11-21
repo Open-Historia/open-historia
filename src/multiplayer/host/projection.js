@@ -132,6 +132,8 @@ export const HOST_ONLY_WORLD_KEYS = Object.freeze([
   // Projects deliberately shelved by the game owner are save-management
   // records, not public game intelligence; the archive may contain covert work.
   "projectSeatLoans", "projectRecoveryArchive",
+  // Finance V1 is single-player bookkeeping; never disclose the ledger or residual debt.
+  "projectFinance", "projectFinanceDebt",
   "storylines",
   // What a seat's person left waiting while nobody shared the game (heldSeats.js):
   // given back to the game before anything is sent, and never in a view.

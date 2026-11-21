@@ -7,6 +7,7 @@
 // that the war room does not load the simulation to read a list of cities.
 
 import { JSON_URLS, readJson } from "./assets.js";
+import { capitalCityId, capitalMapNames } from "./capitalSeats.js";
 import { effectiveCityPopulation } from "./cityPopulation.js";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
@@ -18,17 +19,24 @@ export const frontCitiesOf = (citiesGeojson, world, game) => {
   const date = clean(game?.gameDate || game?.startDate);
   const renames = isRecord(world?.cityRenames) ? world.cityRenames : {};
   const cities = [];
+  const {retired}=capitalMapNames(world);
+  const retiredNames=new Set(retired);
+  const selected=new Map(Object.entries(world?.countryStats||{})
+    .filter(([country,sheet])=>sheet?.capitalMap?.current&&world?.polityOverrides?.[country]?.status!=="dissolved")
+    .map(([country,sheet])=>[sheet.capitalMap.current.id,country]));
   for (const feature of asArray(citiesGeojson?.features)) {
     const props = isRecord(feature?.properties) ? feature.properties : {};
     const point = feature?.geometry?.type === "Point" ? feature.geometry.coordinates : null;
     const name = clean(props.city || props.name);
     if (!name || !Array.isArray(point) || !Number.isFinite(Number(point[0])) || !Number.isFinite(Number(point[1]))) continue;
+    const capitalOwner=selected.get(capitalCityId(name,point));
     cities.push({
       name: clean(renames[name.toLowerCase()]) || name,
       lng: Number(point[0]),
       lat: Number(point[1]),
       population: effectiveCityPopulation(props, { date, cityPopulations: world?.cityPopulations, name }),
-      capital: Boolean(clean(props.capital)) && !["false", "0", "no"].includes(fold(props.capital)),
+      capital: Boolean(capitalOwner)||(!retiredNames.has(fold(name))&&Boolean(clean(props.capital))&&!["false","0","no"].includes(fold(props.capital))),
+      ...(capitalOwner?{capitalOwner}:{}),
     });
   }
   return cities;

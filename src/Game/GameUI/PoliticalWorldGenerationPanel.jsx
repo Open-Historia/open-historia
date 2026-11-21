@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { authoringCardStyle, authoringOptionStyle } from "./scenarioAuthoringStyles.js";
 
 import { downloadScenarioJsonAsset, loadScenarioDetails, saveScenario } from "../../runtime/library.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
@@ -35,20 +36,14 @@ const normalizeProgressSampleError = (value) => {
   return { polityKey, errors };
 };
 
-const panelStyle = {
-  background: "rgba(255,255,255,0.03)",
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: "18px",
-  marginBottom: "0.95rem",
-  padding: "0.9rem",
-};
+const panelStyle = authoringCardStyle;
 
 const buttonStyle = {
   alignItems: "center",
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.1)",
+  background: "var(--oh-grey-raised)",
+  border: "1px solid var(--oh-grey-border)",
   borderRadius: "999px",
-  color: "rgba(246,246,248,0.94)",
+  color: "var(--oh-grey-text)",
   cursor: "pointer",
   display: "inline-flex",
   fontSize: "0.8rem",
@@ -59,20 +54,20 @@ const buttonStyle = {
 };
 
 const selectStyle = {
-  background: "rgba(255,255,255,0.05)",
+  background: "var(--oh-grey-raised)",
   colorScheme: "dark",
-  border: "1px solid rgba(255,255,255,0.1)",
+  border: "1px solid var(--oh-grey-border)",
   borderRadius: "10px",
-  color: "#f8fafc",
+  color: "var(--oh-grey-text)",
   minHeight: "2.2rem",
   padding: "0 0.6rem",
 };
 
 const textareaStyle = {
-  background: "rgba(0,0,0,0.2)",
-  border: "1px solid rgba(255,255,255,0.1)",
+  background: "var(--oh-grey-bg)",
+  border: "1px solid var(--oh-grey-border)",
   borderRadius: "12px",
-  color: "#e5e7eb",
+  color: "var(--oh-grey-text)",
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
   fontSize: "0.72rem",
   lineHeight: 1.45,
@@ -517,7 +512,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
   const politicalWorldTone = politicalWorldAbsent
     ? { background: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)", color: "#fde68a" }
     : politicalWorldSparse
-      ? { background: "rgba(255,255,255,0.035)", border: "var(--oh-grey-border)", color: "var(--oh-grey-text)" }
+      ? { background: "var(--oh-grey-raised)", border: "var(--oh-grey-border)", color: "var(--oh-grey-text)" }
       : { background: "rgba(34,197,94,0.09)", border: "rgba(74,222,128,0.24)", color: "#bbf7d0" };
   const selectedCount = rows.filter((row) => row.status === "valid" && row.selected).length;
   const pipelineBlocked = (pipelineResult?.blockingErrors?.length ?? 0) > 0;
@@ -1432,7 +1427,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       <div style={{ alignItems: "flex-start", display: "flex", gap: "0.75rem", justifyContent: "space-between" }}>
         <div>
           <div style={{ fontSize: "1rem", fontWeight: 800 }}>Political World</div>
-          <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.78rem", lineHeight: 1.55, marginTop: "0.3rem" }}>
+          <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.78rem", lineHeight: 1.55, marginTop: "0.3rem" }}>
             Give this scenario governments, Political Actors, domestic politics, institutions context and its starting geopolitical state. Generation is staged for review and does not change the scenario until you apply it.
           </div>
         </div>
@@ -1450,16 +1445,16 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       </div>
 
       <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: "0.85rem" }}>
-        <div style={{ background: "rgba(255,255,255,0.035)", borderRadius: 12, padding: "0.65rem" }}>
-          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.65rem", textTransform: "uppercase" }}>Start date</div>
+        <div style={{ background: "var(--oh-grey-raised)", borderRadius: 12, padding: "0.65rem" }}>
+          <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.65rem", textTransform: "uppercase" }}>Start date</div>
           <div style={{ fontSize: "0.82rem", fontWeight: 700, marginTop: "0.15rem" }}>{scenarioDate || "Not set"}</div>
         </div>
-        <div style={{ background: "rgba(255,255,255,0.035)", borderRadius: 12, padding: "0.65rem" }}>
-          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.65rem", textTransform: "uppercase" }}>Polities</div>
+        <div style={{ background: "var(--oh-grey-raised)", borderRadius: 12, padding: "0.65rem" }}>
+          <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.65rem", textTransform: "uppercase" }}>Polities</div>
           <div style={{ fontSize: "0.82rem", fontWeight: 700, marginTop: "0.15rem" }}>{polityCount}</div>
         </div>
-        <div style={{ background: "rgba(255,255,255,0.035)", borderRadius: 12, padding: "0.65rem" }}>
-          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.65rem", textTransform: "uppercase" }}>Political actors</div>
+        <div style={{ background: "var(--oh-grey-raised)", borderRadius: 12, padding: "0.65rem" }}>
+          <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.65rem", textTransform: "uppercase" }}>Political actors</div>
           <div style={{ fontSize: "0.82rem", fontWeight: 700, marginTop: "0.15rem" }}>{actorCount}</div>
         </div>
       </div>
@@ -1475,7 +1470,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
         </button>
         {busy && <button onClick={cancel} style={{ ...buttonStyle, background: "rgba(127,29,29,0.3)" }} type="button">Pause</button>}
       </div>
-      <div style={{ color: "rgba(255,255,255,0.52)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
+      <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
         {busy && runKind === "political-world-v2"
           ? "Progress is saved as you go. You can pause and continue later."
           : v2NeedsRetry
@@ -1487,10 +1482,10 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
                 : "Generation is staged for review and saves progress as it goes. Nothing is written to the scenario until Apply to Scenario succeeds."}
       </div>
 
-      <details style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, marginTop: "0.7rem", padding: "0.55rem 0.65rem" }}>
-        <summary style={{ color: "rgba(255,255,255,0.62)", cursor: "pointer", fontSize: "0.72rem", fontWeight: 700 }}>Advanced generation settings & repair tools</summary>
+      <details style={{ background: "var(--oh-grey-raised)", border: "1px solid var(--oh-grey-border)", borderRadius: 12, marginTop: "0.7rem", padding: "0.55rem 0.65rem" }}>
+        <summary style={{ color: "var(--oh-grey-muted)", cursor: "pointer", fontSize: "0.72rem", fontWeight: 700 }}>Advanced generation settings & repair tools</summary>
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", marginTop: "0.65rem" }}>
-          <label style={{ alignItems: "center", color: "rgba(255,255,255,0.58)", display: "inline-flex", fontSize: "0.68rem", gap: "0.35rem" }}>
+          <label style={{ alignItems: "center", color: "var(--oh-grey-muted)", display: "inline-flex", fontSize: "0.68rem", gap: "0.35rem" }}>
             Maximum AI requests this run
             <input
               disabled={busy || applying}
@@ -1502,17 +1497,17 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
               value={v2CallBudget}
             />
           </label>
-          <label style={{ alignItems: "center", color: "rgba(255,255,255,0.58)", display: "inline-flex", fontSize: "0.68rem", gap: "0.35rem" }}>
+          <label style={{ alignItems: "center", color: "var(--oh-grey-muted)", display: "inline-flex", fontSize: "0.68rem", gap: "0.35rem" }}>
             Generation mode
             <select disabled={busy || applying || Boolean(v2Checkpoint)} onChange={(event) => setMode(event.target.value)} style={selectStyle} value={mode}>
-              {MODE_OPTIONS.map((option) => <option key={option.id} style={{ background: "#2b2b30", color: "#f8fafc" }} value={option.id}>{option.label}</option>)}
+              {MODE_OPTIONS.map((option) => <option key={option.id} style={{ ...authoringOptionStyle }} value={option.id}>{option.label}</option>)}
             </select>
           </label>
           {mode === POLITICAL_WORLD_GENERATION_MODES.UNIFORM && (
-            <label style={{ alignItems: "center", color: "rgba(255,255,255,0.58)", display: "inline-flex", fontSize: "0.68rem", gap: "0.35rem" }}>
+            <label style={{ alignItems: "center", color: "var(--oh-grey-muted)", display: "inline-flex", fontSize: "0.68rem", gap: "0.35rem" }}>
               Detail for every active polity
               <select disabled={busy || applying || Boolean(v2Checkpoint)} onChange={(event) => setUniformDepth(event.target.value)} style={selectStyle} value={uniformDepth}>
-                {UNIFORM_DEPTH_OPTIONS.map((option) => <option key={option.value} style={{ background: "#2b2b30", color: "#f8fafc" }} value={option.value}>{option.label}</option>)}
+                {UNIFORM_DEPTH_OPTIONS.map((option) => <option key={option.value} style={{ ...authoringOptionStyle }} value={option.value}>{option.label}</option>)}
               </select>
             </label>
           )}
@@ -1523,30 +1518,30 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
           <button disabled={busy || applying || dateMismatch} onClick={() => restoreRunLogInputRef.current?.click()} style={{ ...buttonStyle, opacity: busy || applying || dateMismatch ? 0.55 : 1 }} type="button">Restore Run Log</button>
           {result && !busy && runKind !== "governing-alignment-repair" && runKind !== "political-world-unified" && <button disabled={applying || dateMismatch} onClick={recheckHistory} style={buttonStyle} type="button">Re-check Timeline Canon</button>}
           {result && !busy && runKind !== "political-world-unified" && <button onClick={downloadRunLog} style={buttonStyle} type="button">Download Run Log</button>}
-          {v2NeedsRetry && <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.66rem" }}>Use Continue Generation above to retry unfinished polities.</span>}
+          {v2NeedsRetry && <span style={{ color: "var(--oh-grey-muted)", fontSize: "0.66rem" }}>Use Continue Generation above to retry unfinished polities.</span>}
           {v2Checkpoint && <button onClick={downloadPoliticalWorldV2Diagnostic} style={buttonStyle} type="button">Download Generation Diagnostic</button>}
           {v2Checkpoint && <button disabled={busy} onClick={exportPoliticalWorldV2Checkpoint} style={{ ...buttonStyle, opacity: busy ? 0.55 : 1 }} type="button">Export Checkpoint</button>}
         </div>
-        <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.5rem" }}>
+        <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.5rem" }}>
           {MODE_OPTIONS.find((option) => option.id === mode)?.description}
         </div>
-        <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.35rem" }}>
+        <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.35rem" }}>
           Generation mode applies to Generate Political World and to Generate Missing Politics.
         </div>
         {mode === POLITICAL_WORLD_GENERATION_MODES.UNIFORM && (
-          <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.66rem", lineHeight: 1.5, marginTop: "0.35rem" }}>
+          <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.66rem", lineHeight: 1.5, marginTop: "0.35rem" }}>
             Full detail for every active polity can require many more AI calls and may reach the generation safety ceiling. This targets missing supported fields, not a guarantee of historical completeness.
           </div>
         )}
         {v2Checkpoint && (
-          <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem", marginTop: "0.35rem" }}>
+          <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.66rem", marginTop: "0.35rem" }}>
             Generation depth is locked while this saved checkpoint exists. Continue or apply the saved work before starting with another depth.
           </div>
         )}
-        <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.5rem" }}>
+        <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.5rem" }}>
           Repair Governing Alignment can only fill missing rulingPartyIds / coalitionPartyIds from party IDs that already exist and never runs the temporal verifier.
         </div>
-        <label style={{ alignItems: "flex-start", color: "rgba(255,255,255,0.56)", display: "flex", fontSize: "0.68rem", gap: "0.45rem", lineHeight: 1.45, marginTop: "0.65rem" }}>
+        <label style={{ alignItems: "flex-start", color: "var(--oh-grey-muted)", display: "flex", fontSize: "0.68rem", gap: "0.45rem", lineHeight: 1.45, marginTop: "0.65rem" }}>
           <input checked={allowRosterExpansion} disabled={busy || applying} onChange={(event) => setAllowRosterExpansion(event.target.checked)} type="checkbox" />
           <span><strong>Allow roster expansion proposals.</strong> This also affects the main Political World generation run. Leave it off for the safest preserve-authored-rosters behavior.</span>
         </label>
@@ -1558,41 +1553,41 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
         </div>
       )}
       {busy && progressInfo?.v2 && (
-        <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, marginTop: "0.7rem", padding: "0.65rem" }}>
+        <div style={{ background: "var(--oh-grey-raised)", border: "1px solid var(--oh-grey-border)", borderRadius: 12, marginTop: "0.7rem", padding: "0.65rem" }}>
           <div style={{ alignItems: "center", display: "flex", fontSize: "0.7rem", gap: "0.6rem", justifyContent: "space-between" }}>
             <span style={{ color: "rgba(255,255,255,0.76)", fontWeight: 700 }}>
               {progressReadyPolities} of {progressInfo.totalPolities ?? polityCount} polities ready
             </span>
-            <span style={{ color: "rgba(255,255,255,0.52)" }}>
+            <span style={{ color: "var(--oh-grey-muted)" }}>
               <AiRequestsUsed calls={progressInfo.modelCalls ?? 0} ceiling={progressInfo.totalModelCallCeiling} />
             </span>
           </div>
-          <div style={{ background: "rgba(255,255,255,0.08)", borderRadius: 999, height: 8, marginTop: "0.45rem", overflow: "hidden" }}>
-            <div style={{ background: "rgba(231,231,234,0.72)", borderRadius: 999, height: "100%", transition: "width 180ms ease", width: `${progressReadyPercent}%` }} />
+          <div style={{ background: "var(--oh-grey-raised)", borderRadius: 999, height: 8, marginTop: "0.45rem", overflow: "hidden" }}>
+            <div style={{ background: "var(--oh-ui-accent, var(--oh-grey-text))", borderRadius: 999, height: "100%", transition: "width 180ms ease", width: `${progressReadyPercent}%` }} />
           </div>
-          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
+          <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
             <LiveProgressCounts info={progressInfo} polityCount={polityCount} />
           </div>
         </div>
       )}
       {busy && progressTotal > 0 && !progressInfo?.v2 && (
-        <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, marginTop: "0.7rem", padding: "0.65rem" }}>
+        <div style={{ background: "var(--oh-grey-raised)", border: "1px solid var(--oh-grey-border)", borderRadius: 12, marginTop: "0.7rem", padding: "0.65rem" }}>
           <div style={{ alignItems: "center", display: "flex", fontSize: "0.7rem", gap: "0.6rem", justifyContent: "space-between" }}>
             <span style={{ color: "rgba(255,255,255,0.76)", fontWeight: 700 }}>
               {progressResolved} / {progressTotal} polities resolved
             </span>
-            <span style={{ color: "rgba(255,255,255,0.52)" }}>{progressPercent}%</span>
+            <span style={{ color: "var(--oh-grey-muted)" }}>{progressPercent}%</span>
           </div>
           <div
             aria-valuemax={progressTotal}
             aria-valuemin={0}
             aria-valuenow={progressResolved}
             role="progressbar"
-            style={{ background: "rgba(255,255,255,0.08)", borderRadius: 999, height: 8, marginTop: "0.45rem", overflow: "hidden" }}
+            style={{ background: "var(--oh-grey-raised)", borderRadius: 999, height: 8, marginTop: "0.45rem", overflow: "hidden" }}
           >
-            <div style={{ background: "rgba(231,231,234,0.72)", borderRadius: 999, height: "100%", transition: "width 180ms ease", width: `${progressPercent}%` }} />
+            <div style={{ background: "var(--oh-ui-accent, var(--oh-grey-text))", borderRadius: 999, height: "100%", transition: "width 180ms ease", width: `${progressPercent}%` }} />
           </div>
-          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
+          <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
             <BatchProgressDetails info={progressInfo} etaMs={progressEtaMs} />
           </div>
           {progressSampleError && (
@@ -1603,7 +1598,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
           )}
         </div>
       )}
-      {progress && <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.75rem", marginTop: "0.7rem" }}>{progress}</div>}
+      {progress && <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.75rem", marginTop: "0.7rem" }}>{progress}</div>}
       {v2Persistence?.durable === false && (
         <div style={{ background: "rgba(245,158,11,0.11)", border: "1px solid rgba(245,158,11,0.28)", borderRadius: 12, color: "#fde68a", fontSize: "0.75rem", marginTop: "0.7rem", padding: "0.65rem" }}>
           This device did not save the latest Political World progress. Reloading now would lose the work done since the last save.
@@ -1622,13 +1617,13 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
             <div style={{ color: v2Ready ? "#bbf7d0" : "var(--oh-grey-text)", fontSize: "0.78rem", fontWeight: 800 }}>
               {v2Ready ? "Political World ready" : (v2NeedsRetry ? "Generation paused" : "Generation progress saved")}
             </div>
-            <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem" }}>{v2Ready ? "ready" : (v2NeedsRetry ? "needs another attempt" : "saved")}</div>
+            <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.66rem" }}>{v2Ready ? "ready" : (v2NeedsRetry ? "needs another attempt" : "saved")}</div>
           </div>
-          <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.7rem", lineHeight: 1.55, marginTop: "0.3rem" }}>
+          <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.7rem", lineHeight: 1.55, marginTop: "0.3rem" }}>
             <CheckpointCounts checkpoint={v2Checkpoint} counts={v2Counts} ready={v2PolitiesReady} total={v2TotalPolities} needsRetry={v2NeedsRetry} retryCount={v2RetryPolityCount} unresolvedCount={v2UnresolvedPolityCount} />
           </div>
           {v2PartiallyApplied > 0 && (
-            <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.7rem", marginTop: "0.3rem" }}>
+            <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.7rem", marginTop: "0.3rem" }}>
               {v2PartiallyApplied === 1
                 ? "1 finished polity from this checkpoint is already in the scenario."
                 : `${v2PartiallyApplied} finished polities from this checkpoint are already in the scenario.`}
@@ -1637,7 +1632,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
           {v2Ready ? (
             <div style={{ color: "#bbf7d0", fontSize: "0.7rem", marginTop: "0.45rem" }}>Quality checks passed. The Political World is ready to apply to the scenario.</div>
           ) : (
-            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
+            <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
               {/* In an element of its own, so it is translated as the sentence it is. */}
               <span>{v2Checkpoint.pauseReason === "model-call-budget"
                 ? "Generation paused at this run's AI-request limit. Completed work is saved. Continue Generation continues unfinished polities."
@@ -1666,7 +1661,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       {pipelineResult && !busy && runKind === "political-world-unified" && (
         <div style={{ background: pipelineBlocked ? "rgba(127,29,29,0.12)" : "rgba(255,255,255,0.035)", border: `1px solid ${pipelineBlocked ? "rgba(248,113,113,0.28)" : "var(--oh-grey-border)"}`, borderRadius: 12, marginTop: "0.8rem", padding: "0.75rem" }}>
           <div style={{ color: pipelineBlocked ? "#fecaca" : "var(--oh-grey-text)", fontSize: "0.78rem", fontWeight: 800 }}>Political World review</div>
-          <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.7rem", lineHeight: 1.55, marginTop: "0.3rem" }}>
+          <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.7rem", lineHeight: 1.55, marginTop: "0.3rem" }}>
             Political Actors: {pipelineResult.politics?.generatedPolities ?? 0} accepted / {pipelineResult.politics?.failedPolities ?? 0} failed
             {pipelineResult.governingAlignment ? ` · Governing alignment: ${pipelineResult.governingAlignment.generatedPolities ?? 0} patch(es), ${pipelineResult.governingAlignment.governingAlignmentRepair?.nonPartisan?.length ?? 0} non-partisan, ${pipelineResult.governingAlignment.failedPolities ?? 0} failed` : ""}
             {pipelineResult.geopolitics ? ` · Geopolitics: ${pipelineResult.geopolitics.records?.length ?? 0} profiles, ${pipelineResult.geopolitics.institutionCatalog?.length ?? 0} institutions, ${pipelineResult.geopolitics.powerCalibration?.length ?? 0} power inputs, ${pipelineResult.geopolitics.agreements?.length ?? 0} agreements, ${pipelineResult.geopolitics.modelCalls ?? 0} AI call(s)` : ""}
@@ -1687,7 +1682,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
               Preview ready. No scenario data has been written yet. Review this summary, then use Apply to Scenario above.
             </div>
           )}
-          <button onClick={downloadPoliticalWorldDiagnostic} style={{ ...buttonStyle, background: "rgba(255,255,255,0.045)", marginTop: "0.55rem" }} type="button">Download Combined Diagnostic</button>
+          <button onClick={downloadPoliticalWorldDiagnostic} style={{ ...buttonStyle, background: "var(--oh-grey-raised)", marginTop: "0.55rem" }} type="button">Download Combined Diagnostic</button>
         </div>
       )}
 
@@ -1713,18 +1708,18 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
                 <div key={row.polityKey} style={{ background: failed ? "rgba(127,29,29,0.16)" : "rgba(255,255,255,0.035)", border: `1px solid ${failed ? "rgba(248,113,113,0.25)" : "rgba(255,255,255,0.08)"}`, borderRadius: 13, padding: "0.65rem" }}>
                   <div style={{ alignItems: "center", display: "flex", gap: "0.55rem" }}>
                     {!failed && <input checked={row.selected} onChange={(event) => updateRow(row.polityKey, { selected: event.target.checked })} type="checkbox" />}
-                    <button onClick={() => setExpandedPolity(expanded ? "" : row.polityKey)} style={{ background: "none", border: 0, color: "#fff", cursor: "pointer", flex: 1, padding: 0, textAlign: "left" }} type="button">
+                    <button onClick={() => setExpandedPolity(expanded ? "" : row.polityKey)} style={{ background: "none", border: 0, color: "var(--oh-grey-text)", cursor: "pointer", flex: 1, padding: 0, textAlign: "left" }} type="button">
                       <div style={{ alignItems: "center", display: "flex", gap: "0.4rem", justifyContent: "space-between" }}>
                         <span style={{ fontSize: "0.82rem", fontWeight: 800 }}>{row.polityKey}</span>
                         <span style={{ color: failed ? "#fca5a5" : "rgba(255,255,255,0.48)", fontSize: "0.64rem", textTransform: "uppercase" }}>{failed ? "failed" : `${row.depth} · ${row.confidence}`}</span>
                       </div>
-                      {!failed && <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", marginTop: "0.18rem" }}>{patchSummary(row.actorPatchText)}</div>}
+                      {!failed && <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.68rem", marginTop: "0.18rem" }}>{patchSummary(row.actorPatchText)}</div>}
                     </button>
                   </div>
 
                   {expanded && (
                     <div style={{ marginTop: "0.65rem" }}>
-                      <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", marginBottom: "0.45rem" }}>
+                      <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.68rem", marginBottom: "0.45rem" }}>
                         Needs: {row.needs.join(", ") || "none"}
                       </div>
                       {row.sourceErrors.length > 0 && (
@@ -1741,7 +1736,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
                             style={textareaStyle}
                             value={row.actorPatchText}
                           />
-                          <label style={{ alignItems: "center", color: "rgba(255,255,255,0.62)", display: "flex", fontSize: "0.7rem", gap: "0.45rem", marginTop: "0.5rem" }}>
+                          <label style={{ alignItems: "center", color: "var(--oh-grey-muted)", display: "flex", fontSize: "0.7rem", gap: "0.45rem", marginTop: "0.5rem" }}>
                             <input
                               checked={row.allowEntityExpansion}
                               onChange={(event) => updateRow(row.polityKey, { allowEntityExpansion: event.target.checked })}

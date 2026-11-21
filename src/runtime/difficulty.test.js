@@ -142,6 +142,7 @@ test("the tasks that decide nothing for the player are told nothing of the diffi
     "scenarioTranslation",
     // A chronicle describes recorded history without deciding outcomes.
     "campaignChronicle",
+    "projectFinanceReview",
   ].sort());
   for (const taskKey of TASKS_WITHOUT_DIFFICULTY) {
     const led = withDifficultyPriority({ systemPrompt: "The template.", taskKey, difficulty: "impossible", staticPrefixEnd: 5 });
