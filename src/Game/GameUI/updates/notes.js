@@ -54,6 +54,93 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Beta Map Editor V2 (N022): one player-facing major notice for the
+    // verified P12-P19B creator workflow. Date is the preview's staging date,
+    // to be rechecked against the actual distribution day before publication.
+    id: "2026-11-map-editor-v2",
+    kind: "major",
+    date: "2026-11-21",
+    channel: "beta",
+    banners: [
+      {
+        theme: "mapEditorV2",
+        scene: "draft",
+        title: "A World of Your Making",
+        subtitle: "THE MAP EDITOR, REIMAGINED",
+        lead: "A new cartographer's workshop puts the shape of the world, its borders and its places at your fingertips.",
+        sections: [
+          {
+            heading: "Shape the map",
+            icon: "map",
+            items: [
+              "Draw, split and repaint regions with clearer tools and precise close-up controls.",
+              "Find and select territory across large maps from a dedicated region workspace.",
+            ],
+          },
+          {
+            heading: "Find your tools",
+            icon: "gear",
+            items: [
+              "Dedicated workspaces bring together polities, territory, places, groups and war geography.",
+              "Search and edit from the map or the accompanying lists without hunting through scattered controls.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "mapEditorV2",
+        scene: "polities",
+        title: "Give Every Country a Name",
+        subtitle: "IDENTITY IS MORE THAN A BORDER",
+        lead: "Build countries that are more than coloured land: their identities, governments and place in the world matter.",
+        sections: [
+          {
+            heading: "Polity identities",
+            icon: "flag",
+            items: [
+              "Rename polities, manage their alternative names and keep their identities distinct.",
+              "Create countries before giving them territory, or preserve a polity that has no land.",
+            ],
+          },
+          {
+            heading: "Starting politics",
+            icon: "people",
+            items: [
+              "Edit government details and starting relations for the scenario's Political World.",
+              "Review the changes to your scenario separately from the map's working copy.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "mapEditorV2",
+        scene: "publish",
+        title: "Make History. Keep History.",
+        subtitle: "YOUR OLD WORLD STAYS YOURS",
+        lead: "Bring an entirely new world to life without sacrificing the scenario you were already building.",
+        sections: [
+          {
+            heading: "Create another world",
+            icon: "star",
+            items: [
+              "Generate a new world and publish it as its own scenario instead of replacing established historical politics.",
+              "Regions, cities and polity colours are saved with the new scenario.",
+            ],
+          },
+          {
+            heading: "Recover and play",
+            icon: "book",
+            items: [
+              "Verified recovery maps give you a way back before major world replacements.",
+              "Save the working map, apply changes to a scenario or start a game from the world you made.",
+            ],
+          },
+        ],
+        button: "Enter the Workshop",
+      },
+    ],
+  },
+  {
     // "build C and D, and the host can choose, but no sending api keys" (the owner, 2026-11-15): who answers a player's message to a
     // country the AI plays is the host's choice (multiplayer/host/settings.js `replies`): the host's AI, or each player's own device.
     // "any issues should not be roughly patched or whackamoled, the core of the issue should be fixed archetecturally" (the owner,
