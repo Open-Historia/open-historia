@@ -18,10 +18,11 @@
 //
 // Every write goes through applyProjectOpsToWorld with actor "player", the door
 // that lets a government touch its own programmes only.
-import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { APP_HEIGHT, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
 
 import { getNationFlags } from "../../runtime/assets.js";
+import { economicDisplayUnitLabel, formatEconomicDisplayValue, getActiveEconomicDisplayCurrency, setActiveEconomicDisplayCurrency, subscribeEconomicDisplayCurrency } from "../../runtime/economicDisplayCurrency.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { bundledFlagUrl, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import {
@@ -30,9 +31,11 @@ import {
   isPolityLandless,
   mutateWorldState,
   readEventsState,
+  readGameData,
   readWorldState,
 } from "../../runtime/gameState.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
+import { archiveClosedProjectsInWorld, restoreArchivedProjectInWorld } from "../../runtime/projectRecovery.js";
 import { refreshRuntimeState } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import {
@@ -251,16 +254,11 @@ const SearchIcon = () => (
 
 // ---- figures and words --------------------------------------------------------
 
-// Money as the sheet counts it, short: 1.2 billion is "1.2B" in English, as the
-// language writes it elsewhere (Intl's compact notation).
-const formatMoney = (value) => {
-  const amount = Number(value);
-  if (!Number.isFinite(amount) || amount <= 0) return "0";
-  try {
-    return new Intl.NumberFormat(undefined, { notation: "compact", maximumSignificantDigits: 3 }).format(amount);
-  } catch {
-    return String(Math.round(amount));
-  }
+// Project costs and allowances are canonical 2026 USD, rendered in the same
+// player-selected display currency as National GDP. Never convert saved costs.
+const formatMoney = (value, displayCurrency) => {
+  const amount = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+  return formatEconomicDisplayValue(amount, displayCurrency, { compact: true });
 };
 
 const readableDate = (date) => formatGameDateReadable(date) || date || "";
@@ -414,7 +412,7 @@ const FundingSwitch = ({ busy, onSelect, value }) => (
 
 // costShown: the card says the cost already (at the project's own funding), so
 // the plan's is left out.
-const PlanFacts = ({ plan, owner, costShown = false }) => {
+const PlanFacts = ({ plan, owner, costShown = false, displayCurrency }) => {
   if (!plan) return null;
   const effects = (plan.effects ?? []).map((effect) => describeEffectForPlayer(effect, owner)).filter(Boolean);
   const yields = (plan.yields ?? []).map((effect) => describeEffectForPlayer(effect, owner)).filter(Boolean);
@@ -422,7 +420,7 @@ const PlanFacts = ({ plan, owner, costShown = false }) => {
     <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginTop: "0.5rem" }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.8rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.8)" }}>
         <span>{uiString("{{days}} days of work", { days: plan.durationDays })}</span>
-        {!costShown && <span>{uiString("{{amount}} a month", { amount: formatMoney(plan.monthlyCost) })}</span>}
+        {!costShown && <span>{uiString("{{amount}} a month", { amount: formatMoney(plan.monthlyCost, displayCurrency) })}</span>}
         {plan.ongoing && <span>{uiString("Runs on once set up")}</span>}
       </div>
       {effects.length > 0 && (
@@ -468,7 +466,7 @@ const Milestones = ({ plan }) => {
 
 // ---- one card --------------------------------------------------------------
 
-const ProjectCard = memo(({ project, fundingMode, eventTitles, expanded, busy, error = "", playerCountry, playerLandless, ownerFlags, ownerNames, finish, planning, onToggleExpand, onAskAdvisor, onShowOnMap, onSetFunding, onSetSecrecy, onAbandon, onPlan }) => {
+const ProjectCard = memo(({ project, fundingMode, displayCurrency, eventTitles, expanded, busy, error = "", playerCountry, playerLandless, ownerFlags, ownerNames, finish, planning, onToggleExpand, onAskAdvisor, onShowOnMap, onSetFunding, onSetSecrecy, onAbandon, onPlan }) => {
   const flags = deriveProjectFlags(project);
   const open = isProjectOpen(project);
   const mine = isPlayerProject(project, playerCountry);
@@ -584,8 +582,8 @@ const ProjectCard = memo(({ project, fundingMode, eventTitles, expanded, busy, e
       )}
       {project.plan && fundingMode !== "nonmonetary" && (open || Number(project.spent) > 0) && (
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.45rem", fontSize: "0.7rem", color: "rgba(255,255,255,0.65)" }}>
-          {open && <span>{uiString("Planned cost: {{amount}} per month", { amount: formatMoney(dailyCostOf(project) * DAYS_PER_MONTH) })}</span>}
-          {Number(project.spent) > 0 && <span>{uiString("Actually paid to date: {{amount}}", { amount: formatMoney(project.spent) })}</span>}
+          {open && <span>{uiString("Planned cost: {{amount}} per month", { amount: formatMoney(dailyCostOf(project) * DAYS_PER_MONTH, displayCurrency) })}</span>}
+          {Number(project.spent) > 0 && <span>{uiString("Actually paid to date: {{amount}}", { amount: formatMoney(project.spent, displayCurrency) })}</span>}
           {flags.underfunded && (
             <Pill color="#fbbf24" bg="rgba(245,158,11,0.14)" title={uiString("Received {{share}}% of planned funding last period", { share: Math.round(Number(project.paidShare) * 100) })}>
               {uiString("Underfunded")}
@@ -594,7 +592,7 @@ const ProjectCard = memo(({ project, fundingMode, eventTitles, expanded, busy, e
         </div>
       )}
 
-      {project.plan && <PlanFacts costShown owner={ownerKey} plan={project.plan} />}
+      {project.plan && <PlanFacts costShown displayCurrency={displayCurrency} owner={ownerKey} plan={project.plan} />}
       {project.plan && <Milestones plan={project.plan} />}
 
       {project.lastUpdate && (
@@ -710,7 +708,7 @@ const ProjectCard = memo(({ project, fundingMode, eventTitles, expanded, busy, e
 
 // ---- a new project: a name, a goal, one request for its plan ------------------------
 
-const PlanCard = ({ draft, owner, fundingMode, busy, onStart, onDiscard }) => (
+const PlanCard = ({ draft, owner, fundingMode, displayCurrency, busy, onStart, onDiscard }) => (
   <div style={{ ...cardStyle, border: `1px solid ${ACCENT_EDGE}`, marginTop: "0.55rem" }}>
     <div style={{ alignItems: "baseline", display: "flex", gap: "0.4rem" }}>
       <span aria-hidden="true">{draft.kind === "operation" ? "⚔" : "🔬"}</span>
@@ -719,7 +717,7 @@ const PlanCard = ({ draft, owner, fundingMode, busy, onStart, onDiscard }) => (
     {draft.summary && (
       <p style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.75rem", lineHeight: 1.45, margin: "0.35rem 0 0" }}>{draft.summary}</p>
     )}
-    <PlanFacts plan={draft.plan} owner={owner} costShown={fundingMode === "nonmonetary"} />
+    <PlanFacts plan={draft.plan} owner={owner} displayCurrency={displayCurrency} costShown={fundingMode === "nonmonetary"} />
     <Milestones plan={draft.plan} />
     <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.65rem" }}>
       <button type="button" className="oh-tap-row" disabled={busy} style={{ ...accentButtonStyle, opacity: busy ? 0.5 : 1 }} onClick={onStart}>
@@ -732,7 +730,7 @@ const PlanCard = ({ draft, owner, fundingMode, busy, onStart, onDiscard }) => (
   </div>
 );
 
-const NewProject = ({ owner, fundingMode, onStarted, writeOps }) => {
+const NewProject = ({ owner, fundingMode, displayCurrency, onStarted, writeOps }) => {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [goal, setGoal] = useState("");
@@ -846,7 +844,7 @@ const NewProject = ({ owner, fundingMode, onStarted, writeOps }) => {
           <option value="covert">{uiString("Covert")}</option>
         </select>
       </label>
-      {draft && <PlanCard draft={draft} owner={owner} fundingMode={fundingMode} busy={saving} onStart={start} onDiscard={() => { setDraft(null); }} />}
+      {draft && <PlanCard draft={draft} owner={owner} fundingMode={fundingMode} displayCurrency={displayCurrency} busy={saving} onStart={start} onDiscard={() => { setDraft(null); }} />}
       {error && <div style={{ color: "#fca5a5", fontSize: "0.7rem" }}>{error}</div>}
     </div>
   );
@@ -1234,6 +1232,7 @@ const TagMenu = ({ maxHeight, onClear, onOpenChange, onToggle, open, selected, t
 // Store slices, so a world write that touched neither the board nor the polity
 // registry never reaches this panel.
 const selectProjects = (world) => (Array.isArray(world?.projects) ? world.projects : []);
+const selectArchivedProjects = (world) => (Array.isArray(world?.projectRecoveryArchive) ? world.projectRecoveryArchive : []);
 const selectPolities = (world) => world?.polityOverrides ?? {};
 const selectCountryStats = (world) => world?.countryStats ?? {};
 const selectProjectFundingMode = (world) => world?.projectFundingMode === "nonmonetary" ? "nonmonetary" : "gdp-proxy";
@@ -1253,10 +1252,13 @@ const SectionTitle = ({ children, count }) => (
 // `isOpen`: the Actions panel is open on this tab. Closing either is closing the board.
 const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const projects = useRuntimeState("world", selectProjects);
+  // Save-owner archive; never exposed by multiplayer guest-world projections.
+  const projectArchive = useRuntimeState("world", selectArchivedProjects);
   const polityOverrides = useRuntimeState("world", selectPolities);
   const countryStats = useRuntimeState("world", selectCountryStats);
   const projectFundingMode = useRuntimeState("world", selectProjectFundingMode);
   const { country, gameDate, round } = useRuntimeState("game", selectGameStamp);
+  const displayCurrency = useSyncExternalStore(subscribeEconomicDisplayCurrency, getActiveEconomicDisplayCurrency);
   const [eventTitles, setEventTitles] = useState(() => new Map());
   const [hasLoaded, setHasLoaded] = useState(false);
   const [customFlags, setCustomFlags] = useState(() => ({}));
@@ -1289,6 +1291,10 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const [pendingId, setPendingId] = useState("");
   const [planningId, setPlanningId] = useState("");
   const [planError, setPlanError] = useState("");
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveSelection, setArchiveSelection] = useState("");
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [archiveMessage, setArchiveMessage] = useState({ text: "", error: false });
   // A change of funding or an abandon that did not happen, on its own card:
   // { id, text }. It was swallowed, and the card simply stayed as it was, the
   // host's reason unsaid (the review of 2026-11-18, door 7).
@@ -1318,6 +1324,13 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
     refreshRuntimeState(["world", "game"]).finally(() => {
       if (!cancelled) setHasLoaded(true);
     });
+    // The saved game (or shared seat override) is authoritative; sync from a
+    // forced read (coalesced with the refresh above) rather than cached store state.
+    readGameData({ force: true })
+      .then((game) => {
+        if (!cancelled && game) setActiveEconomicDisplayCurrency(game.economicDisplayCurrency);
+      })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, [isOpen]);
 
@@ -1348,6 +1361,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
     if (isOpen) return;
     setExpandedId(null);
     setShowClosed(false);
+    setArchiveOpen(false);
     setTagMenuOpen(false);
   }, [isOpen]);
 
@@ -1371,6 +1385,11 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const abroad = useMemo(() => visible.filter((project) => !isPlayerProject(project, playerCountry)), [visible, playerCountry]);
 
   const closedCount = useMemo(() => known.filter(isProjectClosed).length, [known]);
+  // Only what the player knows of: the button never betrays a foreign power's closed covert work.
+  const hasClosedBoardRecords = useMemo(() => known.some(isProjectClosed), [known]);
+  const visibleArchive = useMemo(() => projectArchive.filter((entry) =>
+    entry?.board === "world" && entry?.project && isKnownToPlayer(entry.project, playerCountry)),
+  [projectArchive, playerCountry]);
   const openCount = known.length - closedCount;
   useEffect(() => {
     if (closedCount === 0) setShowClosed(false);
@@ -1465,6 +1484,52 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
     }
   }, [writeOps, failedOn]);
 
+  // Explicit save maintenance, never a project operation or an AI decision.
+  // Keep the complete closed records in the existing bounded archive. The
+  // canonical queue reads the CURRENT world so a time skip or another writer
+  // cannot be overwritten with a stale snapshot. Shared games use the owner
+  // recovery tool instead: this panel has no authority over guest seat boards.
+  const archiveClosed = useCallback(async () => {
+    if (inSharedGame() || archiveBusy) return;
+    if (!window.confirm(uiString("Archive all closed projects to free board slots? Their history will be preserved, and no running project will be affected."))) return;
+    setArchiveBusy(true);
+    setArchiveMessage({ text: "", error: false });
+    try {
+      let moved = 0;
+      await mutateWorldState((world) => {
+        const next = archiveClosedProjectsInWorld(world, { date: gameDate });
+        // Counted as the player knows the board: a foreign power's covert work is archived too, never told.
+        const kept = new Set(next.projects.map((project) => project?.id));
+        moved = (world.projects ?? []).filter((project) => !kept.has(project?.id) && isKnownToPlayer(project, playerCountry)).length;
+        return next;
+      });
+      await refreshRuntimeState(["world"]);
+      setArchiveMessage({ text: uiString("Archived {{count}} closed project records.", { count: moved }), error: false });
+    } catch (failure) {
+      setArchiveMessage({ text: String(failure?.message || failure), error: true });
+    } finally {
+      setArchiveBusy(false);
+    }
+  }, [archiveBusy, gameDate, playerCountry]);
+
+  const restoreArchived = useCallback(async () => {
+    if (inSharedGame() || archiveBusy || !archiveSelection) return;
+    setArchiveBusy(true);
+    setArchiveMessage({ text: "", error: false });
+    try {
+      await mutateWorldState((world) => restoreArchivedProjectInWorld(world, {
+        projectId: archiveSelection, date: gameDate,
+      }));
+      await refreshRuntimeState(["world"]);
+      setArchiveSelection("");
+      setArchiveMessage({ text: uiString("Archived project restored to the live board."), error: false });
+    } catch (failure) {
+      setArchiveMessage({ text: String(failure?.message || failure), error: true });
+    } finally {
+      setArchiveBusy(false);
+    }
+  }, [archiveBusy, archiveSelection, gameDate]);
+
   // A project the advisor opened without a plan: one request plans it, and it starts.
   const planEntry = useCallback(async (project) => {
     setPlanningId(project.id);
@@ -1504,6 +1569,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
       key={project.id}
       project={project}
       fundingMode={means.mode}
+      displayCurrency={displayCurrency}
       eventTitles={eventTitles}
       expanded={expandedId === project.id}
       onToggleExpand={toggleExpand}
@@ -1531,12 +1597,12 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
         : { display: "contents" }}
       >
       <div style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", flexDirection: "column", gap: "0.5rem", padding: "0.6rem 1rem 0.7rem" }}>
-        <NewProject owner={playerCountry} fundingMode={means.mode} writeOps={writeOps} onStarted={() => setShowClosed(false)} />
+        <NewProject owner={playerCountry} fundingMode={means.mode} displayCurrency={displayCurrency} writeOps={writeOps} onStarted={() => setShowClosed(false)} />
         <div
           style={{ color: "rgba(255,255,255,0.5)", display: "flex", flexWrap: "wrap", fontSize: "0.68rem", gap: "0.6rem" }}
           title={means.mode === "nonmonetary"
             ? uiString("Projects consume time and capacity, without claiming money or a national treasury.")
-            : uiString("The project allowance is an estimate from GDP, budget balance and public debt. Spending is not reconciled to a national treasury.")}
+            : `${uiString("The project allowance is an estimate from GDP, budget balance and public debt. Spending is not reconciled to a national treasury.")} ${economicDisplayUnitLabel(displayCurrency)}.`}
         >
           {means.mode === "nonmonetary" ? (
             <span>{uiString("Non-monetary project funding: time and capacity only; no GDP or cash payments required")}</span>
@@ -1544,8 +1610,8 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
             <span style={{ color: "#fbbf24" }}>{uiString("No native GDP baseline: paid projects cannot receive funding until assessed")}</span>
           ) : (
             <>
-              <span>{uiString("Estimated project allowance: {{amount}} per month", { amount: formatMoney(means.budget) })}</span>
-              <span>{uiString("Planned monthly commitments: {{amount}}", { amount: formatMoney(means.committed) })}</span>
+              <span>{uiString("Estimated project allowance: {{amount}} per month", { amount: formatMoney(means.budget, displayCurrency) })}</span>
+              <span>{uiString("Planned monthly commitments: {{amount}}", { amount: formatMoney(means.committed, displayCurrency) })}</span>
               {means.covered < 1 && <span style={{ color: "#fbbf24" }}>{uiString("Underfunded: planned costs exceed allowance")}</span>}
             </>
           )}
@@ -1590,6 +1656,42 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
           </>
         )}
       </div>
+
+      {!inSharedGame() && (hasClosedBoardRecords || visibleArchive.length > 0) && (
+        <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", flexWrap: "wrap", gap: "0.45rem", padding: "0.45rem 1rem" }}>
+          {hasClosedBoardRecords && (
+            <button type="button" disabled={archiveBusy} onClick={archiveClosed} style={{ ...selectStyle, cursor: archiveBusy ? "wait" : "pointer" }}>
+              {uiString("Archive closed projects")}
+            </button>
+          )}
+          {visibleArchive.length > 0 && (
+            <button type="button" disabled={archiveBusy} onClick={() => setArchiveOpen((value) => !value)} style={{ ...selectStyle, cursor: "pointer" }}>
+              {uiString("Archived projects ({{count}})", { count: visibleArchive.length })}
+            </button>
+          )}
+        </div>
+      )}
+      {!inSharedGame() && archiveOpen && visibleArchive.length > 0 && (
+        <div style={{ borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.45rem", padding: "0.5rem 1rem" }}>
+          <select aria-label={uiString("Archived project to restore")} value={archiveSelection} onChange={(event) => setArchiveSelection(event.target.value)} style={{ ...selectStyle, flex: 1, minWidth: "10rem" }}>
+            <option value="">{uiString("Select archived project...")}</option>
+            {visibleArchive.map((entry) => (
+              <option key={entry.id} value={entry.id}>{entry.project.name} ({entry.priorStatus || entry.project.status})</option>
+            ))}
+          </select>
+          <button type="button" disabled={archiveBusy || !archiveSelection || projects.length >= PROJECT_BOARD_LIMIT} onClick={restoreArchived} style={{ ...selectStyle, cursor: "pointer" }}>
+            {uiString("Restore selected")}
+          </button>
+          <span style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.65rem" }}>
+            {uiString("Restoration requires a free slot and does not replay missed progress.")}
+          </span>
+        </div>
+      )}
+      {archiveMessage.text && (
+        <div role={archiveMessage.error ? "alert" : "status"} style={{ color: archiveMessage.error ? "#fca5a5" : "#a7f3d0", fontSize: "0.7rem", padding: "0.4rem 1rem" }}>
+          {archiveMessage.text}
+        </div>
+      )}
 
       {nearLimit && (
         <div style={{

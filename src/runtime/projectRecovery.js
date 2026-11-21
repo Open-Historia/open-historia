@@ -147,3 +147,33 @@ export const prepareProjectRecoveryBundle = (bundle, { shelve = [], restore = []
     data: { ...bundle.data, world: repairedWorld },
   };
 };
+
+// In-play save maintenance for the single-player Projects panel. Reuse the
+// EXACT lossless recovery transaction and its archive/ID/board checks, but
+// return only its new canonical world, not a different campaign. Only CLOSED
+// entries are eligible: this can never stall a running programme. The panel
+// writes the result through mutateWorldState's serialized canonical queue.
+// The original restore points remain untouched and can undo the maintenance.
+const inPlaceBundle = (world, date) => ({
+  game: { name: "Campaign" },
+  data: { world, game: { gameDate: clean(date) } },
+});
+
+export const archiveClosedProjectsInWorld = (world, { date = "" } = {}) => {
+  const inspected = inspectProjectRecovery(world);
+  const main = inspected.boards.find((board) => board.key === "world");
+  const closed = main.rows.filter((row) => !row.open);
+  if (!closed.length) throw new Error("No closed projects are available to archive.");
+  return prepareProjectRecoveryBundle(inPlaceBundle(world, date), {
+    shelve: closed.map((row) => row.token),
+  }).data.world;
+};
+
+export const restoreArchivedProjectInWorld = (world, { projectId = "", date = "" } = {}) => {
+  const id = clean(projectId);
+  const inspected = inspectProjectRecovery(world);
+  if (!id || !inspected.archive.some((entry) => entry.id === id && entry.board === "world")) {
+    throw new Error("The selected project is not in this board's archived records.");
+  }
+  return prepareProjectRecoveryBundle(inPlaceBundle(world, date), { restore: [id] }).data.world;
+};

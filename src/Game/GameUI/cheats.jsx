@@ -3942,8 +3942,8 @@ const ToolView = ({ tool, header, busy, status, statusFailed, game, polities, re
                                     {gmPreview.date || "Current date"} · {gmPreview.mode} · source {gmPreview?.generation?.source || "unknown"}
                                 </div>
                             </div>
-                            <span style={{ border: "1px solid rgba(74,222,128,0.25)", borderRadius: 999, color: "#86efac", fontSize: "0.62rem", padding: "0.2rem 0.42rem" }}>
-                                {gmApplied ? "APPLIED" : "VALIDATED"}
+                            <span style={{ border: `1px solid ${gmNotes.length ? "rgba(251,191,36,0.4)" : "rgba(74,222,128,0.25)"}`, borderRadius: 999, color: gmNotes.length ? "#fbbf24" : "#86efac", fontSize: "0.62rem", padding: "0.2rem 0.42rem" }}>
+                                {gmApplied ? (gmNotes.length ? "APPLIED · PARTIAL" : "APPLIED") : (gmNotes.length ? "VALIDATED · PARTIAL" : "VALIDATED")}
                             </span>
                         </div>
 
@@ -4395,6 +4395,12 @@ const ToolView = ({ tool, header, busy, status, statusFailed, game, polities, re
                             disabled={busy || gmApplied}
                             title={gmApplied ? "This exact transaction has already been applied." : "Apply exactly the validated preview above. No second AI call."}
                             onClick={() => runBusy(async () => {
+                                // Native validation of the retained operations is not
+                                // proof that every requested change survived. Require
+                                // explicit acceptance of any omissions before Apply.
+                                if (gmNotes.length > 0 && !window.confirm("Some requested operations were left out of this preview. Apply the partial transaction anyway?")) {
+                                    return "Partial transaction not applied.";
+                                }
                                 const result = await applyGameMasterPreview(gmPreview);
                                 setGmApplyResult(result);
                                 // world.json writes already emit the canonical update consumed by

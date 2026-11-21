@@ -79,6 +79,7 @@ import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
 const BasemapPicker = lazy(() => import("../../Editor/BasemapPicker.jsx"));
 import { getLibraryState, saveGame, useLibraryState } from "../../runtime/library.js";
 import { mutateGameData, readGameData } from "../../runtime/gameState.js";
+import { refreshRuntimeState } from "../../runtime/runtimeStore.js";
 import { ECONOMIC_DISPLAY_CURRENCIES, getActiveEconomicDisplayCurrency, normalizeEconomicDisplayCurrency, setActiveEconomicDisplayCurrency, subscribeEconomicDisplayCurrency } from "../../runtime/economicDisplayCurrency.js";
 import { DISCORD_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { CommunityTile, DISCORD_BLURPLE, DiscordMark, REDDIT_ORANGERED, RedditMark } from "./communityLogos.jsx";
@@ -2943,7 +2944,10 @@ const EconomicDisplayCurrencySetting = () => {
             // (multiplayer/client/seatWrites.js DEVICE_GAME_KEYS), and never
             // written into the game the host keeps, nor into the stand-in.
             if (inSharedGame()) await mutateGameData((game) => ({ ...game, economicDisplayCurrency: next }));
-            else await saveGame(activeGameId, { gamePatch: { economicDisplayCurrency: next } });
+            else {
+                await saveGame(activeGameId, { gamePatch: { economicDisplayCurrency: next } });
+                await refreshRuntimeState("game").catch(() => {});
+            }
             setActiveEconomicDisplayCurrency(next);
             logSettingChange("GDP display currency", next);
         } catch (reason) {

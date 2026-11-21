@@ -54,6 +54,22 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-11-project-currency-clarity",
+    kind: "minor",
+    date: "2026-11-20",
+    channel: "beta",
+    banners: [
+      {
+        title: "Clearer Project finances",
+        items: [
+          "Project allowances, planned costs and recorded spending now display in your selected GDP currency.",
+          "Project planners distinguish the game's accounting amounts from each country's domestic currency.",
+          "Changing your display currency never changes existing Project costs or funding.",
+        ],
+      },
+    ],
+  },
+  {
     // Four player reports (2026-11-19), each a whole Game Master request failed over one change inside one event: board ops the
     // projects rework had removed, still in its prompt; a building with no family, refused for the landmark the game itself
     // writes; a building half nested. One change that cannot be made is now left out and said (answerImpactOps.js).

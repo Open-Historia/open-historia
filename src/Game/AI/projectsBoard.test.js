@@ -95,7 +95,7 @@ test("the board names the newest fifteen closed entries and counts the rest", as
   const newest = [...closed].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, CLOSED_PROJECTS_LISTED);
   assert.deepEqual(new Set(listed), new Set(newest), "the newest are the ones named");
   assert.match(text, /; and 25 more\./);
-  assert.match(text, /never open these again/);
+  assert.match(text, /Finished or abandoned\. Do not open these again unless the player asks for it or the story calls for it: /);
 });
 
 test("an entry is its name as it is, whatever language the name is in, and a quoted copy of it still finds it", async () => {
