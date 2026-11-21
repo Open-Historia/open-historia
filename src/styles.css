@@ -767,3 +767,34 @@ button:active:not(:disabled) {
   font: 650 9px/1.15 system-ui, sans-serif;
   letter-spacing: 0.15px;
 }
+
+
+/* P22: give narrow editor maps back their space. The full zoom readout stays
+   visible on desktop; only this editor control (not OL picker zooms) compacts. */
+@media (max-width: 600px) {
+  .ol-zoom.oh-editor-zoom-control {
+    width: 42px !important;
+    top: 0.5rem !important;
+    left: 0.5rem !important;
+    padding: 2px !important;
+    border-radius: 9px !important;
+  }
+  .ol-zoom.oh-editor-zoom-control button {
+    width: 36px !important;
+    height: 32px !important;
+    font-size: 18px !important;
+  }
+  .ol-zoom.oh-editor-zoom-control .oh-editor-zoom-readout {
+    width: 36px;
+    min-height: 18px;
+    padding: 1px 0;
+    gap: 0;
+  }
+  .ol-zoom.oh-editor-zoom-control .oh-editor-zoom-value {
+    font-size: 11px;
+    letter-spacing: -0.25px;
+  }
+  .ol-zoom.oh-editor-zoom-control .oh-editor-zoom-caption {
+    display: none;
+  }
+}

@@ -25,7 +25,7 @@ export const createEditorZoomControl = () => {
   const readout = document.createElement("div");
   readout.className = "oh-editor-zoom-readout";
   readout.setAttribute("aria-label", "Editor zoom level");
-  readout.title = "Map view zoom (maximum 24). Above level 7, each step is 0.7 zoom levels.";
+  readout.title = `Map view zoom (maximum 24). At zoom ${EDITOR_ZOOM_STEP_BREAK} and above, each step is ${EDITOR_FINE_ZOOM_STEP} zoom levels.`;
   const value = document.createElement("span");
   value.className = "oh-editor-zoom-value";
   const caption = document.createElement("span");

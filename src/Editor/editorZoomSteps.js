@@ -2,8 +2,8 @@
  * OpenHistoria Map Editor - progressive view zoom contract.
  * Map zoom is logarithmic: +1 doubles linear magnification.
  */
-export const EDITOR_ZOOM_STEP_BREAK = 7;
-export const EDITOR_FINE_ZOOM_STEP = 0.7;
+export const EDITOR_ZOOM_STEP_BREAK = 6;
+export const EDITOR_FINE_ZOOM_STEP = 0.63;
 export const EDITOR_COARSE_ZOOM_STEP = 1;
 export const EDITOR_WHEEL_UNITS_PER_NOTCH = 100;
 
@@ -13,7 +13,7 @@ export const editorZoomStep = (level) =>
     : EDITOR_COARSE_ZOOM_STEP;
 
 // Map zoom to a monotonic "wheel notch" position so + then - restores
-// the original view even when a click crosses the zoom-7 threshold.
+// the original view even when a click crosses the Z6 threshold.
 const toSteps = (level) =>
   level <= EDITOR_ZOOM_STEP_BREAK
     ? level / EDITOR_COARSE_ZOOM_STEP
