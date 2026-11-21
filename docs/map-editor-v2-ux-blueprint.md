@@ -133,3 +133,23 @@ Country Details + labelled editor navigation + complete theme treatment (includi
 Later batches: robust native identity/government transition; Undo and recoverable imports/generation/projection; complete War/terrain/asset and scenario readiness workflows. Each batch must have focused native regression tests, the full suite, production builds and disposable-scenario human playtests.
 
 **Release gate:** A visually coherent mockup is not a shipped feature. N022 stays Implementing / Partial / Not released until the real editor is integrated, validated, merged and published.
+
+## P17 - Implementation checkpoint against this UX blueprint (2026-11-21)
+
+The real Beta N022 Map Editor, not the earlier design prototype, now provides Scissors native line splitting with one Undo/Redo command and an isolated browser-verified Save/reload cycle. Country creation plus territory assignment and country rename also use prevalidated composite native history steps. Existing Photoshop-style icons remain in the compact dock; the primary workspace navigation is retained.
+
+Government form and ideology editing now stages explicit changes in Country Details while the scenario's Political World ledger remains the only owner. The isolated 1912 scenario Firefox QA verified canonical Save and real Apply & Play, preserving unrelated Political Actor records, borders and diplomatic relations. Saving clears accepted staged changes without treating internal working-map reconciliation as a new author edit.
+
+Destructive province imports and generated-map replacement require a separately verified recovery document. Pure regressions and real server recovery readback passed; full destructive browser acceptance, broad feature/UI/theme review, and human visual acceptance remain open. The detailed implementation, test state, verified artifacts, caveats and remaining N022 gates are tracked in map-editor-v2-product-design.md under its P17 checkpoint. P16 was committed as 6539002b1d0d8e41b1cc27e325bdaa8af6cc1758; P17 is still uncommitted and unreleased.
+
+## P18 - Import/generation acceptance and missing destination UX (2026-11-21)
+
+A real compiled Firefox workflow now verifies destructive province import, cancellation, a separate read-back recovery map and the target scenario's two-region Save. The generated-world flow likewise produced an actual 86-region/12-polity/340-city world, with verified recovery, successful Save into an empty-canon scenario and game creation.
+
+A live historical-clone test found that the old scenario Save would wrongly carry Political Actors, relations and history across a total generated-world replacement. The native P18 gate now blocks that Save before canonical publication while retaining the working generated map; it does not invent or delete historical state. The original 1912 data and P17 QA clone were preserved/recovered and hashes audited.
+
+The intended **destination decision** remains important: creators should be able to explicitly select "Create a new map/scenario" or "Replace current map" with an intelligible preview of consequences. The complete author-facing choice and independent-canon migration/reset are **not delivered by the safety guard**. Human creator acceptance and the M4 release gate remain open.
+
+### P18B - Save/Apply local-state lifecycle acceptance (2026-11-21)
+
+The pending working-map generated-world marker survived a successful scenario Save in an earlier test, because the map store merged metadata and Apply & Play could unmount before the debounced local settlement. Native source now writes an explicit null tombstone, forces settlement of accepted working-copy operations and persists it before game activation. Real Firefox tested both ordinary Save and Apply & Play on separate fresh generated-world scenarios and confirmed a cleared on-disk marker and correct canonical world. This corrects the earlier observed provenance-lifecycle defect without expanding the destination-choice UI or closing the remaining M4 creator/theme/release gates.

@@ -19,6 +19,7 @@ export const TOOL_GROUPS = [
     label: "Draw & edit borders",
     tools: [
       { id: "draw", icon: "split", label: "Draw region (click a border to trace along it)", hotkey: "D" },
+      { id: "scissors", icon: "scissors", label: "Scissors: select ONE region, then draw a line across it to split (double-click finishes; one Undo)", hotkey: "S" },
       { id: "modify", icon: "modify", label: "Edit vertices (select regions first; snap + undo enabled)", hotkey: "A" },
       { id: "border", icon: "merge", label: "Shared border precision (select exactly 2 neighbouring regions)", hotkey: "J" },
       { id: "dissolve", icon: "eraser", label: "Delete border (merge two regions)", hotkey: "E" },

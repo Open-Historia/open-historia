@@ -7,7 +7,7 @@ import { COUNTRY_DETAIL_TABS } from "./countryDetailTabs.js";
 const src = name => readFileSync(new URL(name, import.meta.url), "utf8");
 
 test("all original native map tools remain, plus the new rectangle marquee for regions", () => {
-  assert.equal(TOOLS.length, 18);
+  assert.equal(TOOLS.length, 19);
   assert.equal(TOOL_GROUPS.length, 5);
   const ids=TOOLS.map(x=>x.id);
   assert.equal(new Set(ids).size,ids.length);
@@ -16,7 +16,8 @@ test("all original native map tools remain, plus the new rectangle marquee for r
     "feature","marker","unit","feature-box","terrain","fortification","climate",
   ]) assert.ok(ids.includes(existing), "Lost original native tool: " + existing);
   assert.ok(ids.includes("region-box"));
-  assert.equal(new Set(TOOLS.map(x=>x.hotkey)).size, 18);
+  assert.ok(ids.includes("scissors"));
+  assert.equal(new Set(TOOLS.map(x=>x.hotkey)).size, 19);
   const dock=src("./EditorToolDock.jsx");
   const sidebar=src("./EditorSidebar.jsx");
   const map=src("./MapEditor.jsx");

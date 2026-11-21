@@ -53,7 +53,15 @@ test("new polity setup is accessible directly from Polities, even with a polity 
 test("new country only registers the validated, fully authored draft", () => {
   const planner = readFileSync(new URL("./countryCreationDraft.js", import.meta.url), "utf8");
   assert.match(source, /planCountryDraft\(\{/);
-  assert.match(source, /upsertPolity\(plan.key, plan.record\)/);
+  // A country must never pass through separate registry/appearance/region
+  // mutations. One validated document plan and one native history step are
+  // the accepted authoring seam.
+  const mapEditor = readFileSync(new URL("./MapEditor.jsx", import.meta.url), "utf8");
+  assert.match(source, /commitCountryDraft\(plan, plan\.assignSelectedRegions \? selection : \[\]\)/);
+  assert.match(mapEditor, /planMapPolityCreation\(before, plan\)/);
+  assert.match(mapEditor, /api\.setRegionAttrs\(ids, \{ owner: plan\.key \}, \{ deferHistory: true \}\)/);
+  assert.match(mapEditor, /api\.pushStep\(\{/);
+  assert.doesNotMatch(source, /upsertPolity\(plan\.key, plan\.record\)/);
   assert.match(planner, /aliases: configuredNames.aliases/);
   assert.match(planner, /name: key/);
   assert.match(planner, /formerNames: configuredNames.formerNames/);

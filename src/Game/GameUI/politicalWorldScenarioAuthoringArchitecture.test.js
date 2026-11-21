@@ -95,9 +95,30 @@ test("Workshop polity renames and removals are replayed into canonical Political
   const mapEditor = read("../../Editor/MapEditor.jsx");
 
   assert.match(mapEditor, /polityAuthoringOpsRef/);
-  assert.match(mapEditor, /op: "rename", from, to/);
+  assert.match(mapEditor, /planMapPolityRename\(/);
+  assert.match(mapEditor, /api\.renameOwner\?\.\(from, to, \{ deferHistory: true \}\)/);
+  assert.match(mapEditor, /op: "rename", from: oldKey, to: newKey/);
+  assert.match(mapEditor, /api\.pushStep\(\{/);
   assert.match(mapEditor, /op: "remove", key/);
   assert.match(mapEditor, /polityAuthoringOps:/);
   assert.match(library, /reconcileMapPolityAuthoringOps\(currentWorld, seed\.polityAuthoringOps\)/);
-  assert.match(library, /\.\.\.reconciledWorld/);
+  assert.match(library, /applyGovernmentEdits\(reconciledWorld, seed\.actorGovernmentEdits/);
+  assert.match(library, /\.\.\.governmentWorld/);
+  assert.match(library, /politicalActors: applied\.politicalActors/);
+  assert.match(mapEditor, /d\.settleActorGovernmentEdits\(actorGovernmentEdits\)/);
+  assert.match(mapEditor, /if \(applied\?\.politicalActors\) setSavedPoliticalActors\(applied\.politicalActors\)/);
+  assert.match(mapEditor, /beforePlay: async \(applied\) => \{/);
+  assert.match(mapEditor, /await finishAcceptedScenarioSave\(applied\)/);
+  assert.match(mapEditor, /await saveNowRef\.current\(\)/, "accepted Political World authoring must settle durably before Play can unmount");
+});
+
+test("working-copy bookkeeping cannot falsely declare a scenario edit after Save", () => {
+  const mapEditor = read("../../Editor/MapEditor.jsx");
+  const document = read("../../Editor/useMapDocument.js");
+  assert.match(document, /const \[authoredRevision, setAuthoredRevision\] = useState\(0\)/);
+  assert.match(document, /if \(!workingCopyOnly\) setAuthoredRevision/);
+  assert.match(document, /setSaveStatus\("dirty", \{ workingCopyOnly: true \}\)/);
+  assert.match(mapEditor, /\[scenarioMode, d\.authoredRevision\]/);
+  assert.match(mapEditor, /setScenarioDirty\(dRef\.current\.authoredRevision !== authoredAtSnapshot\)/);
+  assert.doesNotMatch(mapEditor, /scenarioMode && hydratedRef\.current && d\.saveStatus === "dirty"/);
 });

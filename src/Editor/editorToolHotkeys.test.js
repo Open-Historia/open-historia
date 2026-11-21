@@ -4,7 +4,7 @@ import { TOOL_GROUPS, TOOLS } from "./editorToolCatalog.js";
 import { toolForHotkey } from "./editorToolHotkeys.js";
 
 test("every native tool has a unique one-letter shortcut and its canonical ID is unchanged", () => {
-  assert.equal(TOOLS.length, 18, "17 existing modes plus region rectangle selection");
+  assert.equal(TOOLS.length, 19, "18 previous modes plus native region scissors");
   assert.equal(new Set(TOOLS.map((tool) => tool.id)).size, TOOLS.length);
   assert.equal(new Set(TOOLS.map((tool) => tool.hotkey)).size, TOOLS.length);
   assert.ok(TOOL_GROUPS.length >= 4);

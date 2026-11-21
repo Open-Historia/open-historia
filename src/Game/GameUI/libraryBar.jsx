@@ -92,6 +92,8 @@ import { createActivationHandOff } from "../../runtime/afterActivation.js";
 import { createWorkInProgress } from "../../runtime/workInProgress.js";
 import { buildScenarioCountryOptions, isOfferedCountry, seededWorldOf, worldWithFaction, worldWithPlayerGroup } from "../../runtime/newGameWorld.js";
 import { applyStartingRelationEdits, withoutStartingRelations } from "../../Editor/scenarioStartingRelations.js";
+import { applyGovernmentEdits } from "../../Editor/scenarioGovernmentEdits.js";
+import { assertGeneratedWorldScenarioSaveAllowed } from "../../Editor/scenarioWorldReplacement.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave, scenarioAfterWorkshopRenames } from "../../Editor/playerCountryAfterSave.js";
@@ -4207,6 +4209,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         // Read the existing diplomatic climate; writing the map must not
         // silently reset historical bilateral scores.
         relations: Array.isArray(world.relations) ? world.relations : [],
+        politicalActors: world.politicalActors && typeof world.politicalActors === "object" ? world.politicalActors : null,
         // Its region types, for the Region Types panel; null for a scenario
         // saved before they were, which opens with the default Land and Coastal.
         regionTypes: Array.isArray(world.regionTypes) && world.regionTypes.length ? world.regionTypes : null,
@@ -4298,7 +4301,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // player SEES the map right away — the stock country-level renderer can't show
   // per-region ownership, so every applied map ships its geometry and renders via
   // the custom GeoJSON layer.
-  const applyMapToScenario = async (scenario, seed, { play = true, renames = [] } = {}) => {
+  const applyMapToScenario = async (scenario, seed, { play = true, renames = [], beforePlay = null } = {}) => {
     if (!scenario || !seed) return;
     const scenarioId = scenario.id;
 
@@ -4306,18 +4309,24 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     // the library catalog on its own (and could rotate the running map's asset
     // token half-way through the save); now the catalog is rebuilt once, after
     // the last write.
-    const scenarioCountry = await withSingleLibraryRefresh(() => writeMapToScenario(scenarioId, seed, renames));
+    const applied = await withSingleLibraryRefresh(() => writeMapToScenario(scenarioId, seed, renames));
 
-    // A Workshop save is complete by itself; Apply & Play opts into the fresh-game
-    // flow below.
-    if (!play) return { saved: true, scenarioId };
-    await playAppliedMap(scenario, scenarioId, seed, scenarioCountry);
+    // Return the persisted canonical actor baseline for the still-open Workshop:
+    // only NEW authored transitions should remain queued for a later Save.
+    if (!play) return { saved: true, scenarioId, politicalActors: applied.politicalActors };
+    // Play activates a new game and unmounts the Workshop. Give its authoring
+    // bookkeeping a chance to persist locally BEFORE that transition.
+    await beforePlay?.(applied);
+    await playAppliedMap(scenario, scenarioId, seed, applied.scenarioCountry);
   };
 
   // Returns the scenario's player country as saved, for Apply & Play.
   const writeMapToScenario = async (scenarioId, seed, renames) => {
     const details = await loadScenarioDetails(scenarioId);
     const currentWorld = details?.data?.world ?? {};
+    // A generated map does not confer authority to erase or silently reuse
+    // independent political/history canon. Refuse before ANY scenario writes.
+    assertGeneratedWorldScenarioSaveAllowed(currentWorld, seed.generatedWorldReplacement);
     // The Workshop edits the polity registry, while Political World and several
     // other canonical ledgers live outside its map document. Its identity
     // operations are replayed onto the scenario's own world and game before the
@@ -4372,12 +4381,18 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       currentChoices,
     );
     if (!relationPlan.ok) throw new Error(relationPlan.reason);
+    // Political World is still the sole canonical owner of government state:
+    // apply explicit government transitions to the scenario's latest actor
+    // records, after identity renames and before the scenario is persisted.
+    const governmentWorld = applyGovernmentEdits(reconciledWorld, seed.actorGovernmentEdits, {
+      polityNames: currentChoices.map((row) => row.key),
+    });
 
     // The author's player country, not the seed's first owner (playerCountryAfterSave.js).
     const scenarioCountry = playerCountryAfterSave(currentGame.country, seed);
     const savedScenarioDetails = await saveScenario(scenarioId, {
       world: {
-        ...reconciledWorld,
+        ...governmentWorld,
         // No new score edits: preserve absence and every unchanged source row.
         ...(editedRelations.length || removedKeys.length ? { relations: relationPlan.relations } : {}),
         regionOwnershipOverrides: seed.world?.regionOwnershipOverrides ?? {},
@@ -4529,7 +4544,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     } else {
       await clearScenarioAsset(scenarioId, "ownBasemapsData", { refresh: false });
     }
-    return scenarioCountry;
+    return { scenarioCountry, politicalActors: savedScenarioDetails?.data?.world?.politicalActors };
   };
 
   const playAppliedMap = async (scenario, scenarioId, seed, scenarioCountry) => {

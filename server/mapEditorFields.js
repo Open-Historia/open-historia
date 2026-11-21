@@ -31,6 +31,7 @@ export const DOCUMENT_FIELDS = {
   // both desktop JSON and IndexedDB document create/reopen cycles.
   relations: array,
   relationEdits: array,
+  actorGovernmentEdits: array,
   // What the scenario draws on its map for war (src/runtime/warGeography.js).
   terrainAreas: array,
   fortifications: array,

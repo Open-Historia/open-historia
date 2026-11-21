@@ -25,6 +25,7 @@ import {
 import { regionsInRectangle } from "./regionSelectionTools.js";
 import { regionMoveInteractions } from "./regionMoveInteractions.js";
 import { restoreCarvedEdited } from "./regionCarveHistory.js";
+import { splitRegionFeature } from "./regionScissors.js";
 import { toolForHotkey } from "./editorToolHotkeys.js";
 import { useBrowserOnline } from "../runtime/networkStatus.js";
 import VectorLayer from "ol/layer/Vector";
@@ -1387,7 +1388,7 @@ const OlMap = ({
         layerFilter: isRegionLayer,
       });
       const tool = activeToolRef.current;
-      if (tool === "lasso" || tool === "region-box" || tool === "draw" || tool === "modify" || tool === "paint" || tool === "feature-box" || isWarTool(tool)) {
+      if (tool === "lasso" || tool === "region-box" || tool === "draw" || tool === "scissors" || tool === "modify" || tool === "paint" || tool === "feature-box" || isWarTool(tool)) {
         map.getTargetElement().style.cursor = "crosshair";
       } else if (tool === "feature" || tool === "marker" || tool === "delete" || tool === "unit") {
         // City-aware tools: pointer over an existing city (edit/remove target).
@@ -1488,6 +1489,27 @@ const OlMap = ({
           if (cmd) pushCmd(cmd);
         }
         return;
+      }
+      // The Scissors sketch is not a canonical region. Escape abandons it;
+      // Backspace undoes just the last sketch point, never deletes territory.
+      if (activeToolRef.current === "scissors" && activeDrawRef.current && !typing) {
+        if (e.key === "Escape" && placedPointsRef.current.length) {
+          e.preventDefault();
+          activeDrawRef.current.abortDrawing();
+          placedPointsRef.current = [];
+          return;
+        }
+        if (e.key === "Backspace" && placedPointsRef.current.length) {
+          e.preventDefault();
+          if (placedPointsRef.current.length > 1) {
+            activeDrawRef.current.removeLastPoint();
+            placedPointsRef.current.pop();
+          } else {
+            activeDrawRef.current.abortDrawing();
+            placedPointsRef.current = [];
+          }
+          return;
+        }
       }
       // Delete / Backspace removes the current selection
       if (e.key !== "Delete" && e.key !== "Backspace") return;
@@ -2274,7 +2296,7 @@ const OlMap = ({
       },
       // `patch.claimants` may be a function of the region's own list, so one
       // edit over a selection with differing claims keeps each region's rest.
-      setRegionAttrs: (ids, patch) => {
+      setRegionAttrs: (ids, patch, { deferHistory = false } = {}) => {
         const undos = [];
         for (const id of ids) {
           const f = regionSource.getFeatureById(id);
@@ -2298,7 +2320,7 @@ const OlMap = ({
         notifyRegions();
         if (undos.length) {
           const after = { ...patch };
-          pushCmd({
+          const step = {
             undo: () => undos.forEach(([f, b]) => Object.keys(b).forEach((k) => f.set(k, b[k]))),
             redo: () => undos.forEach(([f, , claimants]) => {
               if ("owner" in after) f.set("owner", after.owner || null);
@@ -2307,12 +2329,15 @@ const OlMap = ({
               if ("claimants" in after) f.set("claimants", claimants);
               if ("group" in after) f.set("group", after.group || null);
             }),
-          });
+          };
+          if (deferHistory) return step;
+          pushCmd(step);
         }
+        return null;
       },
       // Re-key an owner across the whole map (Polities panel rename): every
       // region owned by, or claimed for, `from` now says `to`, as ONE undo step.
-      renameOwner: (from, to) => {
+      renameOwner: (from, to, { deferHistory = false } = {}) => {
         const same = (value) => samePolityName(value, from);
         const undos = [];
         for (const f of regionSource.getFeatures()) {
@@ -2328,17 +2353,19 @@ const OlMap = ({
           f.set("claimants", after.claimants);
           undos.push([f, before, after]);
         }
-        if (!undos.length) return 0;
+        if (!undos.length) return deferHistory ? null : 0;
         const refresh = () => {
           restyleRegions();
           labelLayer.changed();
           notifyRegions();
         };
         refresh();
-        pushCmd({
+        const step = {
           undo: () => { undos.forEach(([f, b]) => { f.set("owner", b.owner); f.set("claimants", b.claimants); }); refresh(); },
           redo: () => { undos.forEach(([f, , a]) => { f.set("owner", a.owner); f.set("claimants", a.claimants); }); refresh(); },
-        });
+        };
+        if (deferHistory) return step;
+        pushCmd(step);
         return undos.length;
       },
       // Remove several owners from the map in one scan and one undo command.
@@ -3466,6 +3493,54 @@ const OlMap = ({
           previewSource?.clear();
         },
       });
+    } else if (activeTool === "scissors") {
+      // A true topological split: do not paint or remove a strip of land.
+      // Restrict to a single selected source region to avoid ever cutting
+      // an unintended neighbour (or trying to split the entire world).
+      const sketch = new Draw({
+        type: "LineString",
+        features: new Collection(), // preview only; never a canonical region
+        condition: (event) => {
+          const oe = event.originalEvent;
+          if (oe && (oe.ctrlKey || oe.metaKey || oe.altKey || oe.shiftKey)) return false;
+          placedPointsRef.current.push(event.coordinate);
+          return true;
+        },
+      });
+      activeDrawRef.current = sketch;
+      sketch.on("drawstart", () => {
+        placedPointsRef.current = placedPointsRef.current.slice(-1);
+      });
+      sketch.on("drawabort", () => { placedPointsRef.current = []; });
+      sketch.on("drawend", (event) => {
+        placedPointsRef.current = [];
+        const ids = [...selectedIdsRef.current];
+        if (ids.length !== 1) {
+          window.alert("Scissors needs exactly one selected region. Select a region first, then draw a line across both of its borders.");
+          return;
+        }
+        const target = source.getFeatureById(ids[0]);
+        const coordinates = event.feature.getGeometry()?.getCoordinates();
+        const step = splitRegionFeature(source, target, coordinates, () => newId("reg"));
+        if (!step) {
+          window.alert("The cut did not divide the selected region into two valid pieces. Draw a continuous line across it, from outside one border to outside the other. Nothing was changed.");
+          return;
+        }
+        onSelectionRef.current?.([step.retainedId, step.createdId]);
+        notifyRegions();
+        pushCmd({
+          undo: () => {
+            step.undo();
+            onSelectionRef.current?.([step.retainedId]);
+          },
+          redo: () => {
+            step.redo();
+            onSelectionRef.current?.([step.retainedId, step.createdId]);
+          },
+        });
+      });
+      added.push(sketch);
+      snapTolerance = 10;
     } else if (activeTool === "draw") {
       // trace: click a point on an existing border and the sketch FOLLOWS that
       // border as the cursor moves, instead of making the map-maker click every

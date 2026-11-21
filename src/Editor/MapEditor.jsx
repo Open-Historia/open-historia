@@ -10,6 +10,7 @@
 // tree, its own map instance) so it can't disturb the game's MapLibre map.
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
 import "ol/ol.css";
 import OlMap from "./OlMap.jsx";
 import EditorSidebar, { SIDEBAR_WIDTH } from "./EditorSidebar.jsx";
@@ -63,6 +64,7 @@ import { mapKm, mapMeasureOf } from "../../server/mapDistance.js";
 import { SCALE_TOOL, scaleLabelOf } from "./scaleLineLayer.js";
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
+import { createVerifiedMapRecovery } from "./mapRecoveryCheckpoint.js";
 import { createSaveRunner, isUnsavedStatus, saveRetryDelay, settleUnsavedWork } from "./documentSaving.js";
 import { OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
@@ -77,6 +79,11 @@ import FmgPanel from "./fmg/FmgPanel.jsx";
 import SuggestionReviewPanel, { useSuggestionMarkup, useSuggestionReview } from "./SuggestionReviewPanel.jsx";
 import { checkFmgAvailable, generateFmgWorld } from "./fmg/fmgDriver.js";
 import { fmgToEditorSeed } from "./fmg/fmgImport.js";
+import { planGeneratedMapReplacement } from "./fmgReplacementPlan.js";
+import { generatedWorldReplacementId, settleGeneratedWorldReplacement } from "./scenarioWorldReplacement.js";
+import {
+  planMapPolityCreation, planMapPolityRename, revertMapPolityCreation,
+} from "./polityIdentityTransaction.js";
 
 const hexToRgb = (value) => {
   const m = /^#?([a-f0-9]{6})$/i.exec(String(value || "").trim());
@@ -168,6 +175,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // loaded once it arrives, so never auto-seed the default world underneath it.
   const scenarioMode = Boolean(onApplyToScenario);
   const [api, setApi] = useState(null);
+  // The host sends back the scenario's just-saved Political World baseline.
+  // This is display-only while the Workshop stays open, not a rival registry.
+  const [savedPoliticalActors, setSavedPoliticalActors] = useState(null);
   const [openPanel, setOpenPanel] = useState(null); // 'types' | 'regions' | 'polities' | 'province-import' | 'layers' | 'features' | 'reference' | null
   const [paintOwner, setPaintOwner] = useState(""); // stable polity key assigned by the paint tool
   const [paintOnlyOwner, setPaintOnlyOwner] = useState("*"); // "*" | "__unowned__" | stable polity key
@@ -747,32 +757,38 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       const raw = await generateFmgWorld(params, fmgLogLine);
       fmgLogLine("Building regions, countries and cities…");
       const seed = fmgToEditorSeed(raw, { groupBy: params.useProvinces ? "province" : "state" });
-      api.loadRegions(seed.regions);
-      d.setFeatures(
-        seed.cities.features
-          .map((f) => ({
-            id: newId("feat"),
-            name: f.properties?.city || "",
-            type: "Coordinate",
-            symbol: "square",
-            coord: Array.isArray(f.geometry?.coordinates) ? f.geometry.coordinates.slice(0, 2) : null,
-            country: "",
-            owner: null,
-            regionId: null,
-            population: f.properties?.population || 0,
-            tags: f.properties?.capital === "primary" ? ["city", "capital"] : ["city"],
-          }))
-          .filter((f) => Array.isArray(f.coord)),
-      );
+      // All new canonical records must be validated before the old map moves.
+      const plan = planGeneratedMapReplacement(seed, d.doc);
+      const newBackground = rebuildPersistedBackground(plan.background, { persisted: false });
+      const confirmText = [
+        "Replace this map with the generated world?",
+        "",
+        "New: " + seed.stats.regions + " regions, " + seed.stats.polities + " polities, " + seed.stats.cities + " cities.",
+        "The old territory, registered polities, groups, flags, units, diplomatic relations and war geography will not be carried into the new world.",
+        "",
+        "Before replacement a complete recovery map will be saved and VERIFIED in Saved maps. This action cannot be undone through the map Undo button.",
+      ].join("\n");
+      if (!window.confirm(confirmText)) {
+        fmgLogLine("World replacement cancelled; the map was not changed.");
+        return;
+      }
+      fmgLogLine("Saving and verifying the full recovery map...");
+      const recovery = await createRecoverySnapshot("world generation");
+      fmgLogLine("Verified recovery in Saved maps: " + recovery.name);
+      // loadRegions validates and parses BEFORE it clears any existing source.
+      // The new document is applied as one canonical state replacement.
+      api.loadRegions(plan.regions);
+      d.setDoc(plan.document);
       d.mergeColors(seed.colors);
-      const savedBg = { kind: "vector", geojson: seed.background.geojson };
-      setCustomBg(rebuildPersistedBackground(savedBg, { persisted: false }));
-      d.patchMetadata({ customBackground: savedBg });
+      setCustomBg(newBackground);
+      d.setSelection([]);
+      // Old authoring ops refer to a different world; they may not be replayed.
+      polityAuthoringOpsRef.current = [];
       // Save the generated biome basemap to "Your basemaps" so it can be reused.
       try {
         const tmpl = params.template && params.template !== "random" ? params.template : "generated";
         const bmName = `${tmpl.charAt(0).toUpperCase()}${tmpl.slice(1)} world basemap`;
-        const bm = await addBackgroundToLibrary(savedBg, bmName, { author: d.author || "" });
+        const bm = await addBackgroundToLibrary(plan.background, bmName, { author: d.author || "" });
         if (bm?.id) fmgLogLine("Saved this basemap to “Your basemaps”.");
       } catch (e) {
         console.warn("[editor] save generated basemap to library failed:", e);
@@ -816,6 +832,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     // Both are required when reopening a working map before Apply & Play.
     relations: d.relations,
     relationEdits: d.relationEdits,
+    actorGovernmentEdits: d.actorGovernmentEdits,
     // What the scenario draws on its map for war (warGeographyDoc.js).
     terrainAreas: d.terrainAreas,
     fortifications: d.fortifications,
@@ -834,6 +851,25 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     ...buildDocumentFields(),
     regions: regions || api?.serializeRegions() || { type: "FeatureCollection", features: [] },
   });
+
+  // Destructive authoring must first persist and verify a DIFFERENT Saved map.
+  const createRecoverySnapshot = async (reason) => {
+    if (!api || (scenarioMode && !hydrated)) {
+      throw new Error("Cannot replace regions while the current scenario map is still loading.");
+    }
+    await runSaveRef.current?.idle();
+    const edits = d.editCount();
+    const checkpoint = await createVerifiedMapRecovery({
+      payload: buildPayload(),
+      reason,
+      save: saveDocument,
+      load: loadDocument,
+    });
+    if (d.editCount() !== edits) {
+      throw new Error("The map changed while its recovery checkpoint was saving. Nothing was replaced; retry after the current edit.");
+    }
+    return checkpoint;
+  };
 
   // Which clean a save is to run, asked of the author each time: "quick"
   // (cracks and slivers up to BORDER_CLEANUP.quickWidth, 500 m), "deep" (up
@@ -906,9 +942,13 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     const action = play ? "play" : closeAfter ? "save-exit" : "save";
     setScenarioAction(action);
     const note = await cleanBorders({ mode });
+    let canonicalSaved = false;
     try {
       const authoringOps = polityAuthoringOpsRef.current.slice();
       const startingRelationEdits = d.relationEdits.slice();
+      const actorGovernmentEdits = d.actorGovernmentEdits.slice();
+      const replacementId = generatedWorldReplacementId(d.doc);
+      const authoredAtSnapshot = d.authoredRevision;
       const seed = {
         ...buildGameSeed(
           d.doc,
@@ -918,29 +958,69 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         // The polities removed since the last save (removalsForScenario).
         polityAuthoringOps: removalsForScenario(authoringOps),
         startingRelationEdits,
+        actorGovernmentEdits,
+        generatedWorldReplacement: Boolean(generatedWorldReplacementId(d.doc)),
       };
       // The renames made since the last save, so the scenario's player country
       // and its name-keyed world records follow them (useMapDocument renamePolity).
       const renames = d.polityRenames;
-      await onApplyToScenario(seed, { play, renames });
-      d.settlePolityRenames(renames.length);
-      d.settleRelationEdits(startingRelationEdits);
-      // The scenario now owns these operations. A second Save from the same
-      // still-open Workshop must not replay one already applied; any made
-      // while the save ran stay for the next one, like the renames above.
-      polityAuthoringOpsRef.current = polityAuthoringOpsRef.current.slice(authoringOps.length);
-      // What the author decided about a suggestion's map changes is kept with
-      // the scenario only now that the map it decided about is saved into it.
-      if (reviewSource) {
-        try { await reviewSource.onSaved?.(review.decisionsForSave()); } catch (e) { console.warn("[editor] could not record the review:", e); }
-      }
-      setScenarioDirty(false);
+      const needsWorkingCopySettlement = Boolean(
+        renames.length || startingRelationEdits.length || actorGovernmentEdits.length || replacementId,
+      );
+      let settlementCompleted = false;
+      const finishAcceptedScenarioSave = async (applied) => {
+        canonicalSaved = true;
+        if (applied?.politicalActors) setSavedPoliticalActors(applied.politicalActors);
+        // All canonical writes have landed. Resolve only these accepted authoring
+        // operations against the latest React document before the next game can
+        // unmount the Workshop. Newer edits made during Save remain queued.
+        flushSync(() => {
+          d.settlePolityRenames(renames.length);
+          d.settleRelationEdits(startingRelationEdits);
+          d.settleActorGovernmentEdits(actorGovernmentEdits);
+          if (replacementId) {
+            d.setDoc((current) => settleGeneratedWorldReplacement(current, replacementId));
+          }
+          // Government settlement already marks the working copy dirty. Renames,
+          // relations and generated-world settlement must do so as well.
+          if (needsWorkingCopySettlement && !actorGovernmentEdits.length) {
+            d.setSaveStatus("dirty", { workingCopyOnly: true });
+          }
+        });
+        // These operations now belong to the scenario. Do not replay them on a
+        // later Save if a separate working-map write fails or activation aborts.
+        polityAuthoringOpsRef.current = polityAuthoringOpsRef.current.slice(authoringOps.length);
+        if (needsWorkingCopySettlement && !(await saveNowRef.current())) {
+          throw new Error("The scenario was saved, but its working-map authoring settlement could not be stored. Keep the Workshop open and retry the working-map Save.");
+        }
+        if (reviewSource) {
+          try { await reviewSource.onSaved?.(review.decisionsForSave()); } catch (e) { console.warn("[editor] could not record the review:", e); }
+        }
+        // Housekeeping does not create new scenario authoring, but an actual
+        // user edit during the write must still show as unsaved in the Workshop.
+        setScenarioDirty(dRef.current.authoredRevision !== authoredAtSnapshot);
+        settlementCompleted = true;
+      };
+      const accepted = await onApplyToScenario(seed, {
+        play,
+        renames,
+        beforePlay: async (applied) => {
+          // Apply & Play activates the game and unmounts us. Persist the local
+          // settlement first, including the explicit null metadata tombstone.
+          await finishAcceptedScenarioSave(applied);
+        },
+      });
+      if (!settlementCompleted) await finishAcceptedScenarioSave(accepted);
       setCleanupNote(note);
       if (!play && closeAfter) onClose?.();
       return true;
     } catch (e) {
-      console.warn("[editor] scenario save failed:", e);
-      window.alert(`Could not save the map into the scenario: ${e?.message || e}`);
+      console.warn("[editor] scenario save/follow-up failed:", e);
+      if (canonicalSaved) {
+        window.alert(`The scenario was saved, but the follow-up could not finish: ${e?.message || e}`);
+      } else {
+        window.alert(`Could not save the map into the scenario: ${e?.message || e}`);
+      }
       return false;
     } finally {
       // Apply & Play normally unmounts us before this matters; keeping the reset
@@ -1026,6 +1106,112 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // victim is the user's last edits. Refs re-point every render instead.
   const dRef = useRef(d);
   dRef.current = d;
+
+  // Country creation/rename is a single authoring transaction across the
+  // canonical document and the native region source. Every prospective
+  // identity is verified before the first region or registry is touched.
+  // The composite history command replays both together.
+  const createCountryAtomically = (plan, selectedIds = []) => {
+    if (!api?.pushStep) return { ok: false, reason: "The native map is not ready." };
+    let regionStep = null;
+    try {
+      const before = dRef.current.doc;
+      const next = planMapPolityCreation(before, plan);
+      const ids = [...new Set(selectedIds)];
+      if (plan.assignSelectedRegions && (!ids.length || ids.some((id) => !api.getRegionSummary?.(id)))) {
+        throw new Error("Starting territory is no longer selected or has disappeared.");
+      }
+      if (plan.assignSelectedRegions) {
+        regionStep = api.setRegionAttrs(ids, { owner: plan.key }, { deferHistory: true });
+        if (!regionStep) throw new Error("The native map rejected the country assignment.");
+      }
+      d.setDoc(next);
+      d.setSaveStatus("dirty");
+      api.pushStep({
+        undo: () => {
+          const reverse = revertMapPolityCreation(dRef.current.doc, plan.key, before);
+          regionStep?.undo();
+          d.setDoc(reverse);
+          d.setSaveStatus("dirty");
+        },
+        redo: () => {
+          const forward = planMapPolityCreation(dRef.current.doc, plan);
+          regionStep?.redo();
+          d.setDoc(forward);
+          d.setSaveStatus("dirty");
+        },
+      });
+      return { ok: true };
+    } catch (error) {
+      try { regionStep?.undo(); } catch (rollbackError) {
+        console.error("[editor] country creation rollback failed:", rollbackError);
+      }
+      return { ok: false, reason: error?.message || String(error) };
+    }
+  };
+
+  const renameCountryAtomically = (key, nextName) => {
+    const from = String(key || "").trim();
+    const to = String(nextName || "").trim();
+    if (!api?.pushStep || !from || !to || from === to) return false;
+    let regionStep = null;
+    try {
+      const names = [
+        ...Object.keys(dRef.current.doc?.polities || {}),
+        ...(api.listPolityUsage?.() || []).map((row) => row.key),
+      ];
+      const forward = planMapPolityRename(dRef.current.doc, from, to, names);
+      regionStep = api.renameOwner?.(from, to, { deferHistory: true }) || null;
+      d.setDoc(forward);
+      d.setSaveStatus("dirty");
+      const updatePaint = (oldKey, newKey) => {
+        setPaintOwner((current) => samePolityName(current, oldKey) ? newKey : current);
+        setPaintOnlyOwner((current) => current !== "*" && current !== "__unowned__" && samePolityName(current, oldKey) ? newKey : current);
+      };
+      const updateAuthoringOps = (oldKey, newKey) => {
+        const rows = polityAuthoringOpsRef.current;
+        const last = rows[rows.length - 1];
+        if (last?.op === "rename" && samePolityName(last.from, newKey) && samePolityName(last.to, oldKey)) {
+          rows.pop();
+        } else {
+          rows.push({ op: "rename", from: oldKey, to: newKey });
+        }
+      };
+      updatePaint(from, to);
+      updateAuthoringOps(from, to);
+      api.pushStep({
+        undo: () => {
+          const rollback = planMapPolityRename(dRef.current.doc, to, from, [
+            ...Object.keys(dRef.current.doc.polities || {}),
+            ...(api.listPolityUsage?.() || []).map((row) => row.key),
+          ]);
+          regionStep?.undo();
+          d.setDoc(rollback);
+          d.setSaveStatus("dirty");
+          updatePaint(to, from);
+          updateAuthoringOps(to, from);
+        },
+        redo: () => {
+          const repeated = planMapPolityRename(dRef.current.doc, from, to, [
+            ...Object.keys(dRef.current.doc.polities || {}),
+            ...(api.listPolityUsage?.() || []).map((row) => row.key),
+          ]);
+          regionStep?.redo();
+          d.setDoc(repeated);
+          d.setSaveStatus("dirty");
+          updatePaint(from, to);
+          updateAuthoringOps(from, to);
+        },
+      });
+      return true;
+    } catch (error) {
+      try { regionStep?.undo(); } catch (rollbackError) {
+        console.error("[editor] country rename rollback failed:", rollbackError);
+      }
+      window.alert(error?.message || String(error));
+      return false;
+    }
+  };
   const saveNowRef = useRef(saveNow);
   saveNowRef.current = saveNow;
 
@@ -1205,15 +1391,12 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   }, [api, d.saveStatus, docId, d.doc]);
 
 
-  // Standalone document autosave and scenario persistence are intentionally
-  // separate. Once a hydrated scenario is edited, remember that it still needs
-  // an explicit Save / Save & Exit / Apply & Play even if the editor document
-  // itself has already autosaved.
+  // The scenario warning tracks authoring, NOT the working-map autosave's
+  // dirty/saving/saved status. Settling a successfully applied government edit
+  // changes the local working copy but creates no new scenario mutation.
   useEffect(() => {
-    if (scenarioMode && hydratedRef.current && d.saveStatus === "dirty") {
-      setScenarioDirty(true);
-    }
-  }, [scenarioMode, d.saveStatus]);
+    if (scenarioMode && hydratedRef.current) setScenarioDirty(true);
+  }, [scenarioMode, d.authoredRevision]);
 
   // Don't let the tab close on unsaved work. The autosave debounce means up to
   // two seconds of edits exist only in memory at any moment, and on the website
@@ -1309,6 +1492,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     // Keep scenario-authoritative scores without re-generating them on map save.
     base.relations = Array.isArray(initialMap.relations) ? structuredClone(initialMap.relations) : [];
     base.relationEdits = [];
+    base.actorGovernmentEdits = [];
     // What it draws on its map for war, as its world has it, so a round trip
     // keeps every shape and every frozen lake (warGeographyDoc.js).
     Object.assign(base, warGeographyOf(initialMap));
@@ -1768,23 +1952,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           // Answers whether the rename happened, so the panel follows only an
           // accepted one. A clash is with a registered polity or an owner or
           // claimant already on the map.
-          renamePolity={(key, nextName) => {
-            const from = String(key || "").trim();
-            const to = String(nextName || "").trim();
-            if (!from || !to || from === to) return false;
-            const names = [...Object.keys(d.polities || {}), ...(api?.listPolityUsage?.() || []).map((row) => row.key)];
-            const clash = names.find((other) => samePolityName(other, to) && !samePolityName(other, from));
-            if (clash) {
-              window.alert(`“${to}” is already the name of another polity (“${clash}”). A rename cannot merge two countries.`);
-              return false;
-            }
-            api?.renameOwner?.(from, to);
-            d.renamePolity(from, to);
-            polityAuthoringOpsRef.current.push({ op: "rename", from, to });
-            if (paintOwner === from) setPaintOwner(to);
-            if (paintOnlyOwner === from) setPaintOnlyOwner(to);
-            return true;
-          }}
+          renamePolity={renameCountryAtomically}
+          commitCountryDraft={createCountryAtomically}
           removePolity={(key) => {
             const stableKey = String(key || "").trim();
             if (!stableKey) return;
@@ -1802,6 +1971,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           relations={d.relations}
           relationEdits={d.relationEdits}
           setRelationEdit={d.setRelationEdit}
+          governmentActors={savedPoliticalActors?.byPolity || initialMap?.politicalActors?.byPolity || {}}
+          governmentEdits={d.actorGovernmentEdits}
+          setGovernmentEdit={d.setActorGovernmentEdit}
+          polityRenames={d.polityRenames}
           // What its Military fields stand for left empty: the scenario's war
           // settings and era (libraryBar.jsx); none for a map opened on its own.
           militaryDefaults={initialMap?.militaryDefaults ?? null}
@@ -1839,6 +2012,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           importPolityRoster={d.importPolityRoster}
           importCityMarkers={d.importCityMarkers}
           currentPointFeatures={d.features}
+          createRecoverySnapshot={createRecoverySnapshot}
           onApplied={() => {
             d.setSelection([]);
             setRegionEpoch((n) => n + 1);

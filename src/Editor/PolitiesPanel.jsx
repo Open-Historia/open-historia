@@ -18,6 +18,7 @@ import CountryAliases from "./CountryAliases.jsx";
 import { planCountryDraft } from "./countryCreationDraft.js";
 import CountryCreationForm from "./CountryCreationForm.jsx";
 import StartingRelationsFields from "./StartingRelationsFields.jsx";
+import GovernmentIdentityFields from "./GovernmentIdentityFields.jsx";
 import { applyStartingRelationEdits, mergeStartingRelationEdit, startingRelationRowsFor } from "./scenarioStartingRelations.js";
 
 import CountryDetailsNavigation from "./CountryDetailsNavigation.jsx";
@@ -72,6 +73,7 @@ const PolitiesPanel = ({
   flags = {},
   tags = {},
   upsertPolity,
+  commitCountryDraft,
   renamePolity,
   removePolity,
   removePolities,
@@ -86,6 +88,10 @@ const PolitiesPanel = ({
   relations = [],
   relationEdits = [],
   setRelationEdit,
+  governmentActors = {},
+  governmentEdits = [],
+  setGovernmentEdit,
+  polityRenames = [],
   // What a military figure left empty stands for in the scenario whose map
   // this is (militaryForm.js militaryDefaultsFor); null for a map on its own.
   militaryDefaults = null,
@@ -166,6 +172,15 @@ const PolitiesPanel = ({
       });
   }, [bulkSelected, polities, usage]);
 
+  useEffect(() => {
+    // A composite Undo can remove or rename the currently focused country.
+    // Do not keep editing a phantom country whose stable key no longer exists.
+    if (selectedKey && !rows.some((row) => row.key === selectedKey)) {
+      setSelectedKey("");
+      setCountryListOpen(true);
+    }
+  }, [rows, selectedKey]);
+
   const current = selectedKey
     ? rows.find((row) => row.key === selectedKey) || {
         key: selectedKey,
@@ -216,23 +231,8 @@ const PolitiesPanel = ({
       relations, [...relationEdits, ...plan.relationEdits], [...polityChoices, { key: plan.key }],
     );
     if (!plannedRelations.ok) return plannedRelations;
-    if (plan.relationEdits.length && typeof setRelationEdit !== "function") {
-      return { ok: false, reason: "Starting diplomatic scores cannot be saved here." };
-    }
-    if (typeof upsertPolity !== "function") {
-      return { ok: false, reason: "Polity creation is unavailable in this editor." };
-    }
-    if (plan.color && typeof setColorOverride !== "function") {
-      return { ok: false, reason: "Map colour editing is unavailable." };
-    }
-    if (plan.flag && typeof setFlag !== "function") {
-      return { ok: false, reason: "Flag editing is unavailable." };
-    }
-    if (plan.tags.length && typeof setTags !== "function") {
-      return { ok: false, reason: "Polity traits cannot be saved here." };
-    }
-    if (plan.puppets && typeof setPuppets !== "function") {
-      return { ok: false, reason: "Polity relationships cannot be saved here." };
+    if (typeof commitCountryDraft !== "function") {
+      return { ok: false, reason: "Atomic country creation is unavailable in this editor." };
     }
     if (plan.assignSelectedRegions) {
       if (!selection.length || typeof api?.setRegionAttrs !== "function") {
@@ -245,20 +245,15 @@ const PolitiesPanel = ({
       const ok = window.confirm(
         `Create "${plan.key}" and assign ${selection.length.toLocaleString()} selected regions?` +
         oldOwnerText +
-        "\n\nThese map ownership changes might not be reversible with the Undo button.",
+        "\n\nCreating the country and assigning its territory becomes ONE Undo step.",
       );
       if (!ok) return { ok: false, reason: "Creation cancelled. The unfinished polity has not been added." };
     }
 
-    // The preflight has passed. Commit the authored record and its independent
-    // scenario settings through their ORIGINAL canonical state owners.
-    upsertPolity(plan.key, plan.record);
-    if (plan.color) setColorOverride?.(plan.key, plan.color);
-    if (plan.flag) setFlag?.(plan.key, plan.flag);
-    if (plan.tags.length) setTags?.(plan.key, plan.tags);
-    if (plan.puppets) setPuppets?.(plan.puppets);
-    for (const edit of plan.relationEdits) setRelationEdit?.(edit);
-    if (plan.assignSelectedRegions) api?.setRegionAttrs?.(selection, { owner: plan.key });
+    // All canonical document metadata and selected region ownership are
+    // committed together, then registered as one native Undo/Redo command.
+    const created = commitCountryDraft(plan, plan.assignSelectedRegions ? selection : []);
+    if (!created?.ok) return { ok: false, reason: created?.reason || "Country creation was refused." };
     setRefreshNonce((count) => count + 1);
     setSelectedKey(plan.key);
     setDetailsTab("overview");
@@ -770,6 +765,14 @@ const PolitiesPanel = ({
           )}
           {detailsTab === "governance" && (
             <div style={{ display: "grid", gap: 10 }}>
+
+          <GovernmentIdentityFields
+            polity={current.key}
+            actors={governmentActors}
+            edits={governmentEdits}
+            renames={polityRenames}
+            onSave={setGovernmentEdit}
+          />
 
           <PuppetFields
             polity={current.key}

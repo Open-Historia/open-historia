@@ -6,7 +6,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 import { flagImageUrlFromGid } from "../runtime/countryFlags.js";
-import { saveBlobToDisk } from "../runtime/saveFile.js";
 import { acceptFor } from "../runtime/fileAccept.js";
 import { resolveStockCountryCode } from "../runtime/polityIdentity.js";
 import { latestPopulation, populationByYearField } from "../runtime/cityPopulation.js";
@@ -21,16 +20,6 @@ const buttonStyle = (active = false) => ({
   fontWeight: 700,
   background: active ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.06)",
 });
-
-// runtime/saveFile.js: a download in a browser, Downloads/Open Historia in the app.
-const downloadGeoJSON = (fc, filename) =>
-  saveBlobToDisk(new Blob([JSON.stringify(fc)], { type: "application/geo+json" }), filename);
-
-const safeStamp = () => {
-  const d = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-};
 
 const validFeatureCollection = (value) =>
   value && value.type === "FeatureCollection" && Array.isArray(value.features);
@@ -696,7 +685,7 @@ const cityFeatureToGeoJSON = (feature) => {
   };
 };
 
-const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoster, importCityMarkers, currentPointFeatures = [], onClose, onApplied }) => {
+const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoster, importCityMarkers, currentPointFeatures = [], createRecoverySnapshot, onClose, onApplied }) => {
   const [mode, setMode] = useState("raster");
   const [rasterFile, setRasterFile] = useState(null);
   const [definitionFile, setDefinitionFile] = useState(null);
@@ -1016,36 +1005,20 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
     const ok = window.confirm(
       `Replace the current region geometry with ${count.toLocaleString()} imported regions?` +
       (cityCount ? `\nAlso import ${cityCount.toLocaleString()} city marker${cityCount === 1 ? "" : "s"}${replaceExistingCities ? " (replacing existing city markers)" : " (merging with existing city markers)"}.` : "") +
-      "\n\nThe importer will automatically download a GeoJSON backup of the current regions and city markers first. " +
-      "This is intentionally NOT kept in the in-memory Undo stack because whole-map imports can be very large.",
+      "\n\nA complete separate Saved maps recovery document will be created and read back before replacement. " +
+      "If the checkpoint cannot be verified, the import is blocked. Whole-map replacement is not kept in Undo.",
     );
     if (!ok) return;
 
     setBusy(true);
     setStatus("");
     try {
-      setProgress({ fraction: 0.1, message: "Backing up current regions…" });
-      const backup = api.serializeRegions?.();
-      if (backup) {
-        const pointBackups = (currentPointFeatures || []).map(cityFeatureToGeoJSON).filter(Boolean);
-        // Awaited: the import replaces the whole map with no undo, so a backup
-        // that failed to save (the app's file write can fail on a full disk, or
-        // run out of memory encoding a large map) has to stop it or be waved
-        // through knowingly.
-        try {
-          await downloadGeoJSON(
-            { ...backup, features: [...(backup.features || []), ...pointBackups] },
-            `open-historia-pre-province-import-${safeStamp()}.geojson`,
-          );
-        } catch (e) {
-          const reason = e?.message || String(e);
-          if (!window.confirm(`The backup of the current map could not be saved (${reason}). Replace the map anyway, with no backup and no undo?`)) {
-            setProgress({ fraction: 0, message: "" });
-            setStatus("Nothing was replaced: the backup of the current map could not be saved.", "error");
-            return;
-          }
-        }
+      setProgress({ fraction: 0.1, message: "Saving and verifying a recovery map..." });
+      if (typeof createRecoverySnapshot !== "function") {
+        throw new Error("Province import needs a verified recovery checkpoint provider. Nothing was replaced.");
       }
+      const recovery = await createRecoverySnapshot("province import");
+      if (!recovery?.id) throw new Error("Cannot verify recovery map. Nothing was replaced.");
 
       setProgress({ fraction: 0.45, message: "Replacing region geometry…" });
       api.clearProvinceImportPreview?.();
@@ -1068,7 +1041,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
         (polityImport?.flags ? `; ${polityImport.flags.toLocaleString()} standard flags stored in scenario` : "") +
         (cityImport?.count ? `; ${cityImport.count.toLocaleString()} city markers imported` : "") +
         (cityImport?.updated ? ` (${cityImport.updated.toLocaleString()} existing markers updated)` : "") +
-        ".",
+        ". Recovery checkpoint: " + recovery.name + " (Saved maps).",
       );
       onApplied?.({ ...applied, polityImport, cityImport });
       api.fitToData?.();
@@ -1356,7 +1329,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
         )}
 
         <div style={{ paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.1)", fontSize: 10.8, lineHeight: 1.45, color: "rgba(255,255,255,0.5)" }}>
-          <b>Safety:</b> Apply automatically downloads the current regions plus authored city markers as one mixed GeoJSON backup before replacement, and that backup can be re-imported from the GeoJSON tab. Whole-map import deliberately clears the in-memory region Undo stack instead of keeping two enormous worlds resident at once.
+          <b>Safety:</b> Apply creates and verifies a separate Saved maps recovery document before replacing anything. If the checkpoint fails, the import is blocked. Whole-map replacement clears the region Undo history; open the recovery map from Saved maps to recover.
         </div>
       </div>
     </div>
