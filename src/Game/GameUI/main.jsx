@@ -142,6 +142,8 @@ const LazyInteractivePanel = lazy(() =>
   import("./interactive.jsx").then((module) => ({ default: module.InteractivePanel })),
 );
 
+const LazyCampaignLorePanel = lazy(() => import("./campaignLore.jsx"));
+
 const checkWebGL = () => {
   try {
     const canvas = document.createElement("canvas");
@@ -329,6 +331,10 @@ const HUD_OUT_OF_SIGHT = Object.freeze({ display: "none" });
 
 // The country a game's own record names, or null while there is no record yet.
 const selectPlayedCountry = (game) => (game ? String(game.country ?? "").trim() : null);
+// Each time skip publishes game.json to the runtime store. Library entries
+// are not refreshed for every turn, so Rich Presence follows this date.
+const selectPlayedDate = (game) => (game ? String(game.gameDate || game.startDate || "") : null);
+const selectPlayedStartDate = (game) => String(game?.startDate || "");
 
 const Main = ({
   mapRef,
@@ -348,6 +354,7 @@ const Main = ({
   const [isDebugConsoleOpen, setIsDebugConsoleOpen] = useState(false);
   const [shouldLoadDebugConsole, setShouldLoadDebugConsole] = useState(false);
   const [isInteractiveOpen, setIsInteractiveOpen] = useState(false);
+  const [loreCampaignId, setLoreCampaignId] = useState("");
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
   const [isCountryOpen, setIsCountryOpen] = useState(false);
   const [isWarRoomOpen, setIsWarRoomOpen] = useState(false);
@@ -390,6 +397,8 @@ const Main = ({
   // names the country the game is really played as. Null until the record is
   // read; a game with no country says so with an empty name.
   const playedCountry = useRuntimeState("game", selectPlayedCountry);
+  const liveGameDate = useRuntimeState("game", selectPlayedDate);
+  const liveGameStartDate = useRuntimeState("game", selectPlayedStartDate);
   useEffect(() => {
     if (gameEntered && activeGame?.id && playedCountry !== null) setOpenGameCountry(activeGame.id, playedCountry);
   }, [gameEntered, activeGame?.id, playedCountry]);
@@ -790,6 +799,7 @@ const Main = ({
   useBackToClose(isCheatsOpen, () => setIsCheatsOpen(false));
   useBackToClose(isDebugConsoleOpen, () => setIsDebugConsoleOpen(false));
   useBackToClose(isInteractiveOpen, () => setIsInteractiveOpen(false));
+  useBackToClose(Boolean(loreCampaignId), () => setLoreCampaignId(""));
   useBackToClose(isSettingsOpen, () => {
     setSettingsInitialSection(null);
     setIsSettingsOpen(false);
@@ -969,6 +979,9 @@ const Main = ({
           />
         </Presence>
       </Suspense>
+      <Suspense fallback={null}>
+        {loreCampaignId && loreCampaignId === activeGame?.id && !sharedRole && gameEntered && !mainMenuOpen && <LazyCampaignLorePanel key={loreCampaignId} campaignId={loreCampaignId} gameName={activeGame?.name || ""} scenarioName={runtimeScenario?.name || ""} countryName={activeCountryName || activeGame?.country || ""} currentDate={liveGameDate || activeGame?.currentDate || ""} startDate={liveGameStartDate} onClose={() => setLoreCampaignId("")} />}
+      </Suspense>
       <GenerationRatingToast />
       <Presence open={showGameLoading} leaveMs={450}>
         <GameLoadingScreen
@@ -1023,6 +1036,7 @@ const Main = ({
             setIsSettingsOpen(false);
           }}
           onOpenGameManagement={() => openLibraryTab("games")}
+          onOpenCampaignLore={!sharedRole && gameEntered && !mainMenuOpen && activeGame?.id ? () => setLoreCampaignId(activeGame.id) : undefined}
           onOpenEvents={() => setActiveBottomPanel("history")}
           // The game master's tools write the game itself, which in a shared
           // game is the host's engine's alone: they are not offered there.

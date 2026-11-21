@@ -3469,6 +3469,7 @@ const SettingsMenu = ({
     onOpenDebugConsole,
     onOpenEvents,
     onOpenGameManagement,
+    onOpenCampaignLore,
     onClose,
     discordUrl,
     redditUrl,
@@ -3648,6 +3649,9 @@ const SettingsMenu = ({
                 <ContextSummaryCard context={context} />
                 {typeof onOpenGameManagement === "function" && (
                     <QuickAction title="Game Management" description="Switch, duplicate, import or manage campaigns" symbol="▦" onClick={() => runAndClose(onOpenGameManagement)} />
+                )}
+                {typeof onOpenCampaignLore === "function" && (
+                    <QuickAction title="Campaign Lore" description="Read and export your campaign’s recorded history" symbol="▤" onClick={() => runAndClose(onOpenCampaignLore)} />
                 )}
             </QuickMenuPanel>
         );
