@@ -23,7 +23,7 @@
 // records.
 
 import { GROUP_DEAL_TYPES, groupPartyKey } from "../../runtime/groupParties.js";
-import { normalizeAgreementEffects } from "../../runtime/agreementEffects.js";
+import { canonicalizeAgreementEffects, normalizeAgreementEffects } from "../../runtime/agreementEffects.js";
 import { normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { MAX_PUPPETS, PUPPET_COUP_LOYALTY, PUPPET_KINDS } from "../../runtime/puppets.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
@@ -1322,6 +1322,10 @@ export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = 
         continue;
       }
       const type = normalizeAgreementType(update.type);
+      const resolveEffectTarget = (name) => canonicalDiplomaticPolity(name, nextWorld) || name;
+      const effects = update.effects
+        ? canonicalizeAgreementEffects(update.effects, resolveEffectTarget, { parties })
+        : null;
       const agreement = {
         id: update.id,
         title: update.title,
@@ -1333,7 +1337,7 @@ export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = 
         lastUpdatedDate: observedDate,
         terms: update.terms,
         // What it does, as the skip wrote it (runtime/agreementEffects.js): the engine carries it out.
-        ...(update.effects ? { effects: update.effects } : {}),
+        ...(effects ? { effects } : {}),
         ...(type === "guarantee" && parties.length >= 2
           ? { guarantor: parties[0], beneficiary: parties[1] }
           : {}),
@@ -1367,6 +1371,10 @@ export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = 
     else if (update.op === "expire") status = "expired";
     else if (update.op === "break") status = "ended";
 
+    const resolveEffectTarget = (name) => canonicalDiplomaticPolity(name, nextWorld) || name;
+    const updatedEffects = update.effects && prior.effectsApplied !== true
+      ? canonicalizeAgreementEffects(update.effects, resolveEffectTarget, { parties })
+      : null;
     const agreement = {
       ...prior,
       // The agreement title is canonical identity metadata, not the title of the
@@ -1386,7 +1394,7 @@ export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = 
       // Who broke it, for its onBreak effects (Game/AI/agreementEngine.js).
       ...(breaker ? { brokenBy: breaker } : {}),
       // Effects written for one not yet carried out (an update before it took hold).
-      ...(update.effects && prior.effectsApplied !== true ? { effects: update.effects } : {}),
+      ...(updatedEffects ? { effects: updatedEffects } : {}),
     };
     if (type === "guarantee" && parties.length >= 2) {
       agreement.guarantor = parties[0];

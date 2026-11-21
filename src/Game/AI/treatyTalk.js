@@ -159,7 +159,7 @@ export const treatyAgreement = (treaty, { id = "", date = "", round = 0, resolve
   const parties = [...new Set(list(treaty?.parties).map((party) => clean(resolve(party), 120)).filter(Boolean))];
   if (parties.length < 2 || !treaty?.type) return null;
   const turn = Math.max(0, Math.trunc(Number(round) || 0));
-  const effects = treaty.effects ? canonicalizeAgreementEffects(treaty.effects, resolve, { resolveGroup }) : null;
+  const effects = treaty.effects ? canonicalizeAgreementEffects(treaty.effects, resolve, { resolveGroup, parties }) : null;
   return {
     id,
     title: clean(treaty.title, TREATY_TITLE_MOST) || treaty.type,

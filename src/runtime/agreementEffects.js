@@ -190,8 +190,9 @@ export const normalizeAgreementEffects = (value) => {
 };
 
 // Canonicalizes party and group names inside normalized agreement effects,
-// preserving the "breaker" placeholder.
-export const canonicalizeAgreementEffects = (value, resolve = (name) => name, { resolveGroup = null } = {}) => {
+// preserving the "breaker" placeholder. When `parties` is provided, drops any
+// effect targeting a party or group that is not a participant of the agreement.
+export const canonicalizeAgreementEffects = (value, resolve = (name) => name, { resolveGroup = null, parties = null } = {}) => {
   const normalized = normalizeAgreementEffects(value);
   if (!normalized) return null;
   const partyOf = (name) => {
@@ -205,6 +206,16 @@ export const canonicalizeAgreementEffects = (value, resolve = (name) => name, { 
     const fn = resolveGroup || resolve;
     return asText(fn(raw), 120) || raw;
   };
+  const allowed = Array.isArray(parties) && parties.length > 0
+    ? new Set(parties.map((party) => asText(party, 120).toLowerCase()).filter(Boolean))
+    : null;
+  const targetAllowed = (name, listName) => {
+    if (!allowed) return true;
+    const folded = asText(name, 120).toLowerCase();
+    if (!folded) return false;
+    if (listName === "onBreak" && folded === BREAKER) return true;
+    return allowed.has(folded);
+  };
   const mapEffect = (effect) => {
     const next = { ...effect };
     if (next.party) next.party = partyOf(next.party);
@@ -214,9 +225,30 @@ export const canonicalizeAgreementEffects = (value, resolve = (name) => name, { 
     if (next.group) next.group = groupOf(next.group);
     return next;
   };
+  const keepEffect = (effect, listName) => {
+    if (!allowed) return true;
+    switch (effect.type) {
+      case "stat":
+      case "reputation":
+      case "strength":
+        return targetAllowed(effect.party, listName);
+      case "relation":
+        return targetAllowed(effect.party, listName) && targetAllowed(effect.with, listName);
+      case "payment":
+        return targetAllowed(effect.from, listName) && targetAllowed(effect.to, listName);
+      case "area":
+        return targetAllowed(effect.group, listName);
+      case "war":
+        return true;
+      default:
+        return false;
+    }
+  };
   const out = { ...(normalized.months ? { months: normalized.months } : {}) };
   for (const listName of AGREEMENT_EFFECT_LISTS) {
-    if (normalized[listName]?.length) out[listName] = normalized[listName].map(mapEffect);
+    if (!normalized[listName]?.length) continue;
+    const kept = normalized[listName].map(mapEffect).filter((effect) => keepEffect(effect, listName));
+    if (kept.length) out[listName] = kept;
   }
   return normalizeAgreementEffects(out);
 };

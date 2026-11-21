@@ -16550,11 +16550,12 @@ export const answerTreatyInChat = async ({ speaker = "", line = "", player = "",
       return result.agreement ? result.world : null;
     }
     if (treaty.verdict === "refuse") {
+      const draftedParties = treaty.parties.map(resolve);
       const drafted = treaty.type
         ? {
           ...treaty,
-          parties: treaty.parties.map(resolve),
-          ...(treaty.effects ? { effects: canonicalizeAgreementEffects(treaty.effects, resolve, { resolveGroup }) } : {}),
+          parties: draftedParties,
+          ...(treaty.effects ? { effects: canonicalizeAgreementEffects(treaty.effects, resolve, { resolveGroup, parties: draftedParties }) } : {}),
         }
         : null;
       answer = { outcome: "refused", reason: "" };
@@ -16570,7 +16571,7 @@ export const answerTreatyInChat = async ({ speaker = "", line = "", player = "",
       answer = { outcome: "", reason: "parties" };
       return null;
     }
-    const effects = treaty.effects ? canonicalizeAgreementEffects(treaty.effects, resolve, { resolveGroup }) : null;
+    const effects = treaty.effects ? canonicalizeAgreementEffects(treaty.effects, resolve, { resolveGroup, parties }) : null;
     const drafted = { ...treaty, parties, ...(effects ? { effects } : {}) };
     if (treaty.verdict === "counter") {
       answer = { outcome: "countered", reason: "" };

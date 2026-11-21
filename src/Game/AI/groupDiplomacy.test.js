@@ -331,7 +331,7 @@ test("group-to-state payment caps against receiver GDP, and reputation works for
       id: "pay-rep",
       title: "Tribute",
       type: "protection",
-      parties: [CARTEL, "Mexico"],
+      parties: [CARTEL, "Mexico", "France"],
       status: "active",
       effects: {
         onSign: [
@@ -395,4 +395,123 @@ test("relationsView includes unknown groups in groupEntries and marks a group fo
   assert.equal(selfGroup?.category, "self");
   assert.equal(otherGroup?.category, "unknown");
   assert.ok(view.groupEntries.some((entry) => entry.id === "unknown" && entry.count === 1));
+});
+
+test("turnAgreements only accrues recurring effects for the days an agreement was actually active", () => {
+  const world = base({
+    agreements: [
+      {
+        id: "mid-turn",
+        title: "Autumn truce",
+        type: "truce",
+        parties: ["Mexico", CARTEL],
+        status: "active",
+        startedDate: "2026-10-01",
+        effects: { months: 6, perYear: [{ type: "payment", from: "Mexico", to: CARTEL, amount: 12_000_000_000 }] },
+      },
+      {
+        id: "last-day",
+        title: "New Year deal",
+        type: "truce",
+        parties: ["United States", CARTEL],
+        status: "active",
+        startedDate: "2027-01-01",
+        effects: { months: 6, perYear: [{ type: "payment", from: "United States", to: CARTEL, amount: 12_000_000_000 }] },
+      },
+      {
+        id: "pre-existing",
+        title: "Older pact",
+        type: "trade_economic",
+        parties: ["Mexico", "United States"],
+        status: "active",
+        startedDate: "2025-01-01",
+        effects: { months: 24, perYear: [{ type: "relation", party: "Mexico", with: "United States", change: 12 }] },
+      },
+    ],
+  });
+  // Full 365-day skip from 2026-01-01 to 2027-01-01.
+  const after = turnAgreements({ world, days: 365, date: "2027-01-01", round: 2 }).world;
+  const mid = after.agreements.find((a) => a.id === "mid-turn");
+  const last = after.agreements.find((a) => a.id === "last-day");
+  const older = after.agreements.find((a) => a.id === "pre-existing");
+
+  // 2026-10-01 -> 2027-01-01 is 92 days: 3 months run, 2 carryDays, NOT expired (term is 6 months).
+  assert.equal(mid.status, "active", "mid-turn agreement must not prematurely expire");
+  assert.equal(mid.monthsRun, 3);
+  assert.equal(mid.carryDays, 2);
+  // 3 months of $1B/mo on Mexico's $1T GDP = +0.3 publicDebt (not +1.2 for a full year).
+  assert.ok(Math.abs(after.countryStats.Mexico.economy.publicDebt - 50.3) < 1e-6, String(after.countryStats.Mexico.economy.publicDebt));
+
+  // Signed on the final day of the turn: 0 days active, 0 payments applied.
+  assert.equal(last.status, "active");
+  assert.equal(last.monthsRun ?? 0, 0);
+  assert.equal(after.countryStats["United States"].economy.publicDebt, 100);
+
+  // Pre-existing agreement still gets the full 365-day skip (12 months, 5 carryDays).
+  assert.equal(older.monthsRun, 12);
+  assert.equal(older.carryDays, 5);
+  assert.equal(relationBetween(after, "Mexico", "United States").score, 12);
+});
+
+test("agreement effects cannot mutate countries or groups outside the agreement's participants", () => {
+  const world = base({
+    countryStats: {
+      Mexico: { economy: { gdp: 1_000_000_000_000, publicDebt: 50 }, stability: 50 },
+      "United States": { economy: { gdp: 20_000_000_000_000, publicDebt: 100 }, stability: 70 },
+    },
+    groups: {
+      [CARTEL]: { description: "Cartel.", color: "#e11d48", military: { spending: 50 } },
+      [REBELS]: { description: "Rebels.", color: "#65a30d", military: { spending: 40 } },
+    },
+    groupAreas: { r1: CARTEL, r9: REBELS },
+    relations: [{ a: "Mexico", b: CARTEL, score: -20 }, { a: "United States", b: "Mexico", score: 40 }],
+    internationalReputation: { Mexico: 50, "United States": 60 },
+    agreements: [{
+      id: "rogue-effects",
+      title: "Bilateral truce with stray targets",
+      type: "truce",
+      parties: ["Mexico", CARTEL],
+      status: "active",
+      effects: {
+        onSign: [
+          { type: "stat", party: "United States", stat: "stability", change: -8 },
+          { type: "stat", party: "Mexico", stat: "stability", change: 4 },
+          { type: "payment", from: "United States", to: "Mexico", amount: 50_000_000_000 },
+          { type: "reputation", party: "United States", change: -10 },
+          { type: "relation", party: "United States", with: "Mexico", change: -20 },
+          { type: "relation", party: "Mexico", with: CARTEL, change: 10 },
+          { type: "strength", party: REBELS, figure: "spending", change: 10 },
+          { type: "area", group: REBELS, op: "release", region: "Texas" },
+        ],
+      },
+    }],
+  });
+  const settled = settleAgreementStarts(world, { date: "2026-03-01", regions: REGIONS }).world;
+  // Unrelated third parties are completely untouched.
+  assert.equal(settled.countryStats["United States"].stability, 70);
+  assert.equal(settled.countryStats["United States"].economy.publicDebt, 100);
+  assert.equal(settled.countryStats.Mexico.economy.publicDebt, 50);
+  assert.equal(settled.internationalReputation["United States"], 60);
+  assert.equal(relationBetween(settled, "United States", "Mexico").score, 40);
+  assert.equal(settled.groups[REBELS].military.spending, 40);
+  assert.equal(settled.groupAreas.r9, REBELS);
+  // Valid effects targeting the agreement's own participants still apply.
+  assert.equal(settled.countryStats.Mexico.stability, 54);
+  assert.equal(relationBetween(settled, "Mexico", CARTEL).score, -10);
+
+  // Ingestion (treatyAgreement & applyDiplomaticUpdates) strips third-party targets while keeping valid ones + onBreak breaker.
+  const built = treatyAgreement({
+    type: "truce",
+    parties: ["Mexico", CARTEL],
+    title: "Filtered truce",
+    effects: {
+      onSign: [
+        { type: "stat", party: "United States", stat: "stability", change: -5 },
+        { type: "relation", party: "Mexico", with: CARTEL, change: 5 },
+      ],
+      onBreak: [{ type: "reputation", party: "breaker", change: -5 }],
+    },
+  }, { id: "t-filtered", date: "2026-03-01" });
+  assert.deepEqual(built.effects.onSign, [{ type: "relation", party: "Mexico", with: CARTEL, change: 5 }]);
+  assert.deepEqual(built.effects.onBreak, [{ type: "reputation", party: "breaker", change: -5 }]);
 });

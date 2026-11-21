@@ -673,27 +673,27 @@ test("refusing a call to arms marks the broken alliance endApplied so onEnd does
   const state = world({
     groups: { "Border Guard": { description: "A local force.", color: "#22c55e" } },
     groupAreas: { r1: "Border Guard" },
-    relations: [{ a: "Aland", b: "Cisland", score: 50 }],
+    relations: [{ a: "Aland", b: "Border Guard", score: 50 }],
     agreements: [{
       id: "all-1",
       title: "Mutual Defense Pact",
       type: "alliance",
-      parties: ["Aland", "Cisland"],
+      parties: ["Aland", "Border Guard"],
       status: "active",
       effectsApplied: true,
       effects: {
         onBreak: [
-          { type: "relation", party: "Aland", with: "Cisland", change: -20 },
+          { type: "relation", party: "Aland", with: "Border Guard", change: -20 },
           { type: "area", group: "Border Guard", op: "release", region: "Border Valley" },
         ],
-        onEnd: [{ type: "relation", party: "Aland", with: "Cisland", change: -15 }],
+        onEnd: [{ type: "relation", party: "Aland", with: "Border Guard", change: -15 }],
       },
     }],
     callsToArms: [{
       id: "call-1",
       warId: "war-1",
       defender: "Aland",
-      ally: "Cisland",
+      ally: "Border Guard",
       aggressor: "Borduria",
       via: { kind: "agreement", id: "all-1", title: "Mutual Defense Pact" },
       status: "open",
@@ -703,12 +703,12 @@ test("refusing a call to arms marks the broken alliance endApplied so onEnd does
   const refused = answerCallToArms(state, "call-1", false, { date: "1914-04-05", round: 3, regions });
   const ended = refused.agreements.find((a) => a.id === "all-1");
   assert.equal(ended.status, "ended");
-  assert.equal(ended.brokenBy, "Cisland");
+  assert.equal(ended.brokenBy, "Border Guard");
   assert.equal(ended.endApplied, true, "broken agreement must not also fire onEnd on the next turn");
   assert.equal(refused.groupAreas.r1, undefined, "onBreak area effect ran with the passed region catalog");
-  const scoreAfterBreak = refused.relations.find((r) => [r.a, r.b].sort().join("|") === "Aland|Cisland")?.score;
+  const scoreAfterBreak = refused.relations.find((r) => [r.a, r.b].sort().join("|") === "Aland|Border Guard")?.score;
   assert.equal(scoreAfterBreak, 30);
   const afterTurn = turnAgreements({ world: refused, days: 30, date: "1914-05-05", round: 4, regions }).world;
-  const scoreAfterTurn = afterTurn.relations.find((r) => [r.a, r.b].sort().join("|") === "Aland|Cisland")?.score;
+  const scoreAfterTurn = afterTurn.relations.find((r) => [r.a, r.b].sort().join("|") === "Aland|Border Guard")?.score;
   assert.equal(scoreAfterTurn, 30, "onEnd did not double-fire after onBreak");
 });

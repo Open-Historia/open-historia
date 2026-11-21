@@ -24,6 +24,7 @@
 // Pure: takes a world and returns one.
 
 import { applyCountryStatPatchToWorld, statEffectPatch } from "../../runtime/gameState.js";
+import { diffGameDays } from "../../runtime/gameDates.js";
 import { applyGroupOps, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import { normalizeMilitaryStats } from "../../runtime/militaryStats.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
@@ -217,7 +218,16 @@ const withWar = (world, agreement, op, { date = "", round = 0 } = {}) => {
   }).world;
 };
 
+// Whether `name` resolves to one of the agreement's own participants.
+const isAgreementParty = (world, agreement, name) => {
+  const resolved = fold(resolveEffectParty(world, name));
+  if (!resolved) return false;
+  return list(agreement?.parties).some((party) => fold(resolveEffectParty(world, party)) === resolved);
+};
+
 // One effect carried out. `breaker`: who broke the agreement, for an onBreak effect naming "breaker".
+// Every target party/group must be a participant of `agreement` so a treaty can never mutate
+// an unrelated country's or group's canonical state.
 export const applyAgreementEffect = (world, agreement, effect, { scale = "once", date = "", round = 0, regions = [], breaker = "" } = {}) => {
   const who = (name) => (fold(name) === BREAKER ? clean(breaker) : clean(name));
   const named = {
@@ -229,14 +239,26 @@ export const applyAgreementEffect = (world, agreement, effect, { scale = "once",
     ...(effect.group ? { group: who(effect.group) } : {}),
   };
   switch (named.type) {
-    case "stat": return withStat(world, named, scale);
-    case "relation": return withRelationShift(world, named.party, named.with, named.change, { date, round });
-    case "reputation": return withReputation(world, named.party, named.change);
-    case "payment": return withPayment(world, named, scale);
-    case "strength": return withGroupFigure(world, named.party, named.figure, named.change);
-    case "area": return scale === "once" ? withArea(world, named, regions) : world;
-    case "war": return scale === "once" ? withWar(world, agreement, named.op, { date, round }) : world;
-    default: return world;
+    case "stat":
+      return isAgreementParty(world, agreement, named.party) ? withStat(world, named, scale) : world;
+    case "relation":
+      return isAgreementParty(world, agreement, named.party) && isAgreementParty(world, agreement, named.with)
+        ? withRelationShift(world, named.party, named.with, named.change, { date, round })
+        : world;
+    case "reputation":
+      return isAgreementParty(world, agreement, named.party) ? withReputation(world, named.party, named.change) : world;
+    case "payment":
+      return isAgreementParty(world, agreement, named.from) && isAgreementParty(world, agreement, named.to)
+        ? withPayment(world, named, scale)
+        : world;
+    case "strength":
+      return isAgreementParty(world, agreement, named.party) ? withGroupFigure(world, named.party, named.figure, named.change) : world;
+    case "area":
+      return scale === "once" && isAgreementParty(world, agreement, named.group) ? withArea(world, named, regions) : world;
+    case "war":
+      return scale === "once" ? withWar(world, agreement, named.op, { date, round }) : world;
+    default:
+      return world;
   }
 };
 
@@ -341,6 +363,19 @@ export const breakAgreement = (world, { id = "", by = "", date = "", round = 0, 
 
 // ---- the turn -----------------------------------------------------------------------------------
 
+// How many days of this turn's `period` an agreement was actually in force:
+// an agreement signed mid-turn only accrues from its `startedDate` through `date`,
+// never retroactively across the full skip duration.
+const activeDaysFor = (agreement, period, date) => {
+  const started = clean(agreement?.startedDate, 40);
+  const until = clean(date, 40);
+  if (!started || !until) return period;
+  const sinceStart = diffGameDays(started, until);
+  if (!Number.isFinite(sinceStart)) return period;
+  if (sinceStart <= 0) return 0;
+  return Math.min(period, sinceStart);
+};
+
 // What the end of a turn does with the agreements: the making of new ones, a month of effects for every
 // whole month each was in force, the term of each, and the end of those that ended.
 //   days      how long the period was
@@ -359,7 +394,9 @@ export const turnAgreements = ({ world = {}, days = 0, date = "", round = 0, reg
       const effects = normalizeAgreementEffects(original.effects);
       if (!effects) continue;
       let agreement = list(next.agreements).find((entry) => entry?.id === original.id) ?? original;
-      const carried = figure(agreement.carryDays) + period;
+      const elapsed = activeDaysFor(agreement, period, date);
+      if (elapsed <= 0) continue;
+      const carried = figure(agreement.carryDays) + elapsed;
       const run = figure(agreement.monthsRun);
       const term = figure(effects.months);
       const left = term > 0 ? Math.max(0, term - run) : Infinity;
