@@ -15,6 +15,7 @@ import {
 } from "../AI/gameplayPrompts.js";
 import { guidanceSegmentsFor, promptCharCount } from "../AI/promptGuidance.js";
 import { promptTranslationsVersion, subscribePromptTranslations } from "../../runtime/promptTranslations.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
 import {
   activateGame,
   clearGameAsset,
@@ -108,6 +109,7 @@ import {
   openSuggestionsOf,
 } from "./ScenarioSuggestions.jsx";
 import { CommunitySkeleton, LobbiesSkeleton, MenuCardSkeletons } from "./menuSkeleton.jsx";
+import { gameCardActions } from "./gameCardMenu.js";
 
 const UNIT_TYPE_LABELS = {
   infantry: "Infantry",
@@ -1354,6 +1356,16 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
 // face of the card. Three verbs compete for width with Play, and Play is the one a
 // player came to press; the other three are occasional, and none of them is
 // destructive, which is why Archive stays out here on its own.
+// Leaving the shared game a guest's stand-in card stands for, from the menu:
+// as its own Leave does (multiplayer/ui/SharedGameOverlay.jsx), every cache
+// back to this device's own game. Loaded only when pressed; the card is listed
+// only while a shared game is open, its code loaded already.
+const leaveSharedGameFromCard = async () => {
+  const { leaveSharedGame } = await import("../../multiplayer/client/sharedGame.js");
+  await leaveSharedGame();
+  window.location.reload();
+};
+
 const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete = null, onEdit, onExport, onRecover }) => {
   const cardImageUrl = game.coverImageUrl || DEFAULT_SCENARIO_COVER;
   const touch = useTouchPrimary();
@@ -1405,15 +1417,19 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
     }
   };
 
-  const cardMenuItems = [
-    ["Edit", () => { setCardMenuOpen(false); onEdit(game.id); }, false],
-    ["Clone", () => { setCardMenuOpen(false); onClone(game); }, false],
-    ["Recover Projects…", () => { setCardMenuOpen(false); onRecover(game); }, false],
-    [game.archived ? "Unarchive" : "Archive", () => { setCardMenuOpen(false); onArchive(game); }, false],
+  const cardMenuItemFor = {
+    edit: ["Edit", () => { setCardMenuOpen(false); onEdit(game.id); }, false],
+    clone: ["Clone", () => { setCardMenuOpen(false); onClone(game); }, false],
+    recover: ["Recover Projects…", () => { setCardMenuOpen(false); onRecover(game); }, false],
+    archive: [game.archived ? "Unarchive" : "Archive", () => { setCardMenuOpen(false); onArchive(game); }, false],
     // Offered everywhere, the Android app included: runtime/saveFile.js saves
     // the zip into Downloads/Open Historia there (runtime/native/fileSave.js).
-    [exporting ? "Exporting…" : "Export", runExport, exporting],
-  ];
+    export: [exporting ? "Exporting…" : "Export", runExport, exporting],
+    // A guest's stand-in: the shared game left, as its own Leave leaves it.
+    leave: ["Leave the shared game", () => { setCardMenuOpen(false); void leaveSharedGameFromCard(); }, false],
+  };
+  // What works on this card (gameCardMenu.js): a guest's stand-in offers only leaving.
+  const cardMenuItems = gameCardActions(game).map((action) => cardMenuItemFor[action]);
 
   return (
     <div
@@ -2965,7 +2981,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // itself: patched in a second request, after `setActive` had switched to
       // the game, the opening cover and the HUD named the scenario's default
       // country until it landed.
-      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
+      const canonicalCountry = toCountryName(countryCode);
+      const gamePatch = { ...(canonicalCountry ? { country: canonicalCountry } : null), ...(difficulty ? { difficulty } : null) };
       await createGame({
         name: `${scenario.name} Session`,
         scenarioId: scenario.id,
@@ -4612,7 +4629,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     if (!gid) return;
     setMenuOpen(false);
     try {
-      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
+      const canonicalCountry = toCountryName(countryCode);
+      const gamePatch = { ...(canonicalCountry ? { country: canonicalCountry } : null), ...(difficulty ? { difficulty } : null) };
       if (Object.keys(gamePatch).length) {
         await saveGame(gid, { gamePatch });
       }

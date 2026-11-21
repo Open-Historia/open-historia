@@ -150,9 +150,11 @@ test("the engine's one commit carries the event log, and a table's decisions are
   const engine = fs.readFileSync(new URL("./engineMain.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.match(engine, /updateForces: \(fn\) => mutateCanonicalTurnState\(\(\{ world, actions, game, events \}\) => fn\(\{ world, actions, game, events \}\) \|\| null\),/);
   // (Its entry told of what landed, so the seats follow in that entry: FOLLOWUPS A2.)
-  assert.match(engine, /commit: \(write\) => writeInOrder\("table-decided", \(entry\) => decidedAndTold\(write, landed, entry\)\),/);
+  // (And its every write carries that entry's fence: host/worldQueue.js.)
+  assert.match(engine, /commit: \(write\) => writeInOrder\("table-decided", \(entry\) => decidedAndTold\(write, landed, entry\), \{ fenced: true \}\),/);
   const told = engine.slice(engine.indexOf("const decidedAndTold = async"), engine.indexOf("const tableTurn = async"));
-  assert.ok(told.indexOf("readWorldState") < told.indexOf("await write()") && told.indexOf("tellLandings(") > told.indexOf("await write()"), "the world before the decisions, and after");
+  assert.ok(told.indexOf("readWorldState") < told.indexOf("await write({ fence })") && told.indexOf("tellLandings(") > told.indexOf("await write({ fence })"), "the world before the decisions, and after");
+  assert.match(told, /\}, \{ fence \}\);/, "what it tells is written through the entry's fence too");
   assert.match(told, /entry\?\.told\?\.\(fresh\);/, "its entry is told what landed");
   assert.match(engine, /return \{ unreachable: outcome\?\.generation\?\.source === "fallback", landed: list\(outcome\?\.landed\) \};/);
 });

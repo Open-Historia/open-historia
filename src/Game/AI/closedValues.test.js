@@ -214,10 +214,13 @@ test("a status's colour is the kind set with it, never read back out of its word
 });
 
 test("the task runner leaves out a structure op that is none of the five, says so, and asks nothing more for it", () => {
-  const block = gameplay.slice(gameplay.indexOf("const markerOpsLeftOut = [];"), gameplay.indexOf("// 8B.2.18: the Stats tool"));
+  // The block is answerImpactOps.js settleMarkerOps, which the runner calls on every answer.
+  assert.match(gameplay, /const markerOpsLeftOut = settleMarkerOps\(parsed\);/);
+  const settle = readFileSync(new URL("./answerImpactOps.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const block = settle.slice(settle.indexOf("export const settleMarkerOps"), settle.indexOf("export const impactOperationPath"));
   assert.ok(block.length > 200, "the block is where it was");
   assert.match(block, /markerOpKind\(written\)/);
-  assert.match(block, /markerOpsLeftOut\.push\(\{\s*kind: "item"/);
+  assert.match(block, /leftOut\.push\(\{\s*kind: "item"/);
   assert.doesNotMatch(block, /"found"|"destroy"/, "no English verb is read as an op");
   // The left-out ops reach the answer's removals: the skip's receipt, and the Game Master's notes.
   assert.match(gameplay, /let removedThisAttempt = \[\.\.\.markerOpsLeftOut\];/);

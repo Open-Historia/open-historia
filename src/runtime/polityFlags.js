@@ -7,7 +7,8 @@
  * assigned a custom flag.
  */
 import COUNTRY_NAMES from "./generated/countryNames.js";
-import { JSON_URLS, readJson, writeJson } from "./assets.js";
+import { JSON_URLS, readJson } from "./assets.js";
+import { mutateFlagsState } from "./gameState.js";
 import { flagImageUrlFromGid } from "./countryFlags.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity, resolveStockCountryCode } from "./polityIdentity.js";
 import { inSharedGame, requestFromHost } from "../multiplayer/client/sharedGameBridge.js";
@@ -243,7 +244,9 @@ export const resolveWritablePolityKey = (polity, world) => {
   return raw;
 };
 
-export const setPolityFlag = async ({ polity, world, dataUrl }) => {
+// `fence`: the entry of a shared game's host queue it is set in (the "flag"
+// request, multiplayer/host/gameHost.js), which its write carries.
+export const setPolityFlag = async ({ polity, world, dataUrl, fence = null }) => {
   const key = resolveWritablePolityKey(polity, world);
   if (!key) throw new Error("Cannot change a flag without a resolvable polity identity.");
 
@@ -269,18 +272,24 @@ export const setPolityFlag = async ({ polity, world, dataUrl }) => {
   // Read with no default: the whole map is written back, so a read that failed
   // must stop the write rather than pass for an empty file and erase every other
   // authored flag. A game without its own flags.json reads as {} and succeeds.
-  let current;
+  // Read and written in the game's one write order (gameState.js
+  // mutateFlagsState): a flag set beside another write of them was lost to it.
+  let next = null;
+  let read = false;
   try {
-    current = await readJson(JSON_URLS.flags, { force: true });
+    await mutateFlagsState((current) => {
+      read = true;
+      next = canonicalizeFlagMap(current, world);
+      const value = str(dataUrl);
+      if (value) next[key] = value;
+      else delete next[key];
+      return next;
+    }, { pretty: true, fence });
   } catch (error) {
+    // (A write refused for an entry its host let go is said as that.)
+    if (read || (fence && !fence.live)) throw error;
     console.warn("[flags] could not read flags.json; nothing was changed:", error);
     throw new Error("The game's flags could not be read, so nothing was changed. Try again.");
   }
-  const next = canonicalizeFlagMap(current, world);
-  const value = str(dataUrl);
-  if (value) next[key] = value;
-  else delete next[key];
-
-  await writeJson(JSON_URLS.flags, next, { pretty: true });
   return next;
 };

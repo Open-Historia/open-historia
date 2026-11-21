@@ -23,8 +23,10 @@ import { WAR_ENDINGS_FIELD, warOutcomeChoices } from "../../runtime/warEndings.j
 import { ANSWER_LEDGER_KEYS } from "./jumpAnswerShelves.js";
 import { CANON_KINDS } from "../../runtime/historyTiers.js";
 import { SOCIAL_POST_REACH } from "../../runtime/socialFeed.js";
-import { SAID_MARKER_FAMILIES } from "../../runtime/markerFamily.js";
+import { MARKER_FAMILIES, SAID_MARKER_FAMILIES } from "../../runtime/markerFamily.js";
 import { markerOpKind } from "../../runtime/markerOps.js";
+import { AGREEMENT_EFFECTS_SCHEMA } from "../../runtime/agreementEffects.js";
+import { GROUP_DEAL_TYPES } from "../../runtime/groupParties.js";
 const textSchema = (description) => ({
   type: "string",
   description,
@@ -495,7 +497,14 @@ const markerSchema = {
 // only (it is held to a size: foldedSkipSent.test.js); an answer is checked
 // with them on these too, so one written there is read and never costs a turn
 // (gameState.js normalizeMarkerOp reads both shapes).
-const MARKER_DRAWING_PROPERTIES = { family: markerSchema.properties.family, strategic: markerSchema.properties.strategic };
+// And every family an answer is checked against, the landmark's included: a
+// structure built with no family said is written as a landmark before the check
+// (runtime/markerFamily.js withSaidFamily, gameplay.js runJsonTask), and the
+// check refused the very word the game had written, which failed every Game
+// Master build (2026-11-19) and cut the family off a skip's builds. A model is
+// still OFFERED the said ones only (markerSchema): saying none is the landmark.
+const ANSWER_MARKER_FAMILY_SCHEMA = { ...markerSchema.properties.family, enum: [...MARKER_FAMILIES] };
+const MARKER_DRAWING_PROPERTIES = { family: ANSWER_MARKER_FAMILY_SCHEMA, strategic: markerSchema.properties.strategic };
 
 // The player's espionage orders, executed by the event that carries them: an
 // agent deployed to a country or recalled from it. Only the player's own
@@ -1135,6 +1144,10 @@ const withMarkerDrawingEverywhere = (schema) => ({
     ...schema.items,
     anyOf: schema.items.anyOf.map((branch) => {
       const op = branch.properties?.op?.enum?.[0];
+      const marker = branch.properties?.marker;
+      if (op === "build" && marker) {
+        return { ...branch, properties: { ...branch.properties, marker: { ...marker, properties: { ...marker.properties, family: ANSWER_MARKER_FAMILY_SCHEMA } } } };
+      }
       return (op === "build" && !branch.properties.marker) || op === "update"
         ? { ...branch, properties: { ...branch.properties, ...MARKER_DRAWING_PROPERTIES } }
         : branch;
@@ -2107,6 +2120,7 @@ export const CHAT_ACTIONS_SCHEMA = {
     // What a government at war with the player decides of peace, where a [Peace]
     // block asks for it (AI/warStatsPrompt.js describePeaceTalk).
     peaceAnswers: textSchema("Only where a [Peace] block asks: each government's decision on peace, a line each. Empty otherwise."),
+    treatiesJson: textSchema("Only where a [Treaties at the Table] block asks: the treaties agreed, as JSON. Empty otherwise."),
     lifecycleResponsesJson: textSchema(`Institution invitation/application decisions as JSON array text. Each object: {actorName, caseId, decision, reason?, terms?}. decision is ${INSTITUTION_LIFECYCLE_DECISIONS.slice(0, -1).join(", ")}, or ${INSTITUTION_LIFECYCLE_DECISIONS.at(-1)}. Use [] when this is not a lifecycle negotiation.`),
   },
   required: ["actions"],
@@ -2308,10 +2322,11 @@ const gmAgreementUpdateSchema = {
     id: nonEmptyTextSchema("Stable agreement id. Reuse an existing id for later lifecycle operations."),
     op: {
       type: "string",
-      enum: ["start", "update", "suspend", "resume", "end", "expire"],
+      enum: ["start", "update", "suspend", "resume", "end", "expire", "break"],
     },
     type: {
       type: "string",
+      // Every agreement type of the world, a group's deals among them (runtime/groupParties.js).
       enum: [
         "alliance",
         "mutual_defense",
@@ -2324,12 +2339,16 @@ const gmAgreementUpdateSchema = {
         "neutrality",
         "peace_settlement",
         "other",
+        ...GROUP_DEAL_TYPES,
       ],
     },
-    parties: stringArraySchema("Formal parties, using full canonical polity names."),
+    parties: stringArraySchema("Formal parties, using full canonical polity or group names; for break, the party breaking it."),
     eventIndexes: gmEventIndexesSchema,
     title: textSchema("Canonical agreement title; required when starting a new agreement."),
     terms: textSchema("Compact durable terms or lifecycle note."),
+    // What it does (runtime/agreementEffects.js): the one effects shape every request writes. Not
+    // required: an agreement written with none does nothing beyond what agreements always did.
+    effects: AGREEMENT_EFFECTS_SCHEMA,
   },
   required: ["id", "op", "type", "parties", "eventIndexes", "title", "terms"],
   additionalProperties: false,
@@ -2429,12 +2448,15 @@ const gmCountryStatPatchSchema = {
 // A GM-authored event carries the FULL impacts contract: unlike the jump, which
 // hands the Projects & Operations board to its own second call, the GM has no
 // second pass, so its events keep projectOps.
+// Its structures are read as a skip's are (withMarkerDrawingEverywhere): the
+// family and weight of a structure on the nested marker, beside a flat build or
+// on an update, and the landmark the game writes for a build that said none.
 const gameMasterEventSchema = {
   ...eventSchema,
   properties: {
     ...eventSchema.properties,
     quote: eventQuoteSchema,
-    impacts: impactsSchema,
+    impacts: { ...impactsSchema, properties: { ...impactsSchema.properties, markerOps: withMarkerDrawingEverywhere(impactsSchema.properties.markerOps) } },
   },
 };
 
@@ -4857,29 +4879,46 @@ const normalizeMarkerOperationShape = (entry) => {
 
   if (op === "build" || (!op && isPlainRecord(entry.marker))) {
     const source = isPlainRecord(entry.marker) ? entry.marker : entry;
+    // A field of the structure is read from `marker`, or, where `marker` does
+    // not have it, from beside `op`: a build written half nested (its name and
+    // family beside op, the rest under marker) is ONE structure written partly
+    // one level off, and was refused whole for it (2026-11-19, a Game Master
+    // answer). Where both places give a field, the structure's own (`marker`)
+    // is the one read.
+    const field = (keys) => {
+      const own = firstDefinedKey(source, keys);
+      return own !== undefined || source === entry ? own : firstDefinedKey(entry, keys);
+    };
     // Where it goes: in words (`at`, or the words a model reaches for instead),
     // or as coordinates. A coordinate that was never given is left OUT rather
     // than written as undefined — the schema reads an undefined `lng` as "not a
     // number" and would fail the op, and a build placed in words has none.
-    const where = firstDefinedKey(source, ["at", "place", "where", "location"]);
-    const lng = coordinateNumber(firstDefinedKey(source, ["lng", "lon", "longitude"]));
-    const lat = coordinateNumber(firstDefinedKey(source, ["lat", "latitude"]));
+    const where = field(["at", "place", "where", "location"]);
+    const lng = coordinateNumber(field(["lng", "lon", "longitude"]));
+    const lat = coordinateNumber(field(["lat", "latitude"]));
     const marker = {
-      ...(firstDefinedKey(source, ["id", "markerId"]) ? { id: firstDefinedKey(source, ["id", "markerId"]) } : {}),
-      name: firstDefinedKey(source, ["name", "title"]),
-      kind: firstDefinedKey(source, ["kind", "type"]) || "landmark",
-      ...(firstDefinedKey(source, ["ownerCode", "owner", "code"]) !== undefined
-        ? { ownerCode: firstDefinedKey(source, ["ownerCode", "owner", "code"]) }
+      ...(field(["id", "markerId"]) ? { id: field(["id", "markerId"]) } : {}),
+      name: field(["name", "title"]),
+      kind: field(["kind", "type"]) || "landmark",
+      ...(field(["ownerCode", "owner", "code"]) !== undefined
+        ? { ownerCode: field(["ownerCode", "owner", "code"]) }
         : {}),
+      // Its lifecycle state and how the map draws it, as written: the schema's
+      // own fields, which this rebuild once left behind, so a build said to be
+      // under construction stood finished, and the family the answer said was
+      // lost and drawn as a landmark.
+      ...(field(["status"]) !== undefined ? { status: field(["status"]) } : {}),
       ...(typeof where === "string" && where.trim() ? { at: where } : {}),
       ...(lng !== undefined ? { lng } : {}),
       ...(lat !== undefined ? { lat } : {}),
       ...(firstDefinedKey(source, ["note", "description"]) !== undefined
         ? { note: firstDefinedKey(source, ["note", "description"]) }
         : entry.note !== undefined ? { note: entry.note } : {}),
-      ...(firstDefinedKey(source, ["foundedAt", "date"]) !== undefined
-        ? { foundedAt: firstDefinedKey(source, ["foundedAt", "date"]) }
+      ...(field(["foundedAt", "date"]) !== undefined
+        ? { foundedAt: field(["foundedAt", "date"]) }
         : {}),
+      ...(field(["family"]) !== undefined ? { family: field(["family"]) } : {}),
+      ...(field(["strategic"]) !== undefined ? { strategic: field(["strategic"]) } : {}),
     };
     return { op: "build", marker };
   }
@@ -5086,6 +5125,25 @@ const withoutProjectIds = (ops) => ops.map((entry) => {
   const { id: _id, projectId: _projectId, ...op } = entry;
   return op;
 });
+// The Game Master's events are the skip's events, with the same impacts
+// contract, and are read through the same door (normalizeEventShape): a
+// structure's op written flat or half nested, an impacts list under a synonym,
+// a board op naming its project by an id. Its events were once checked as
+// written, so each of those failed the whole transaction where a skip's was
+// read (2026-11-19). Nothing else of the transaction is touched.
+const normalizeGameMasterShape = (value) => {
+  if (!isPlainRecord(value) || !Array.isArray(value.events)) return value;
+  return {
+    ...value,
+    events: value.events.map((entry) => {
+      const event = normalizeEventShape(entry);
+      return isPlainRecord(event) && isPlainRecord(event.impacts) && Array.isArray(event.impacts.projectOps)
+        ? { ...event, impacts: { ...event.impacts, projectOps: withoutProjectIds(event.impacts.projectOps) } }
+        : event;
+    }),
+  };
+};
+
 const normalizeProjectsShape = (value) => {
   if (!isPlainRecord(value) || !Array.isArray(value.projectOps)) return value;
   return { ...value, projectOps: withoutProjectIds(value.projectOps) };
@@ -5305,6 +5363,7 @@ export const normalizeGameplayPayload = (taskKey, value) => {
     return value;
   }
   if (taskKey === "countryStatSheet") return normalizeCountryStatSheetShape(value);
+  if (taskKey === "gameMaster") return normalizeGameMasterShape(value);
   if (taskKey !== "jumpForward" && taskKey !== "autoJumpForward") return value;
   // A bare list of events where the contract wants { events: [...] }: the
   // events, with the fields beside them empty. A player's log (2026-10-12) has

@@ -23,6 +23,12 @@ You can queue as many as you like, but three or four substantial orders per turn
 working number. Beyond that the world has to divide one turn's worth of attention among all of
 them, and each gets less.
 
+**✎** opens a queued order in place to change its words: **Save** (or Enter) keeps them in
+the same order, in the same place in the queue, and **Cancel** (or Esc) leaves it as it was. An
+order the last time skip carried out can no longer be edited, and nor can any while a time skip
+is running; in a shared game, orders are edited while the round is open, not while the host
+resolves it.
+
 **✕** removes an order you have changed your mind about. If the order was a troop
 deployment that already showed on the map, deleting it also reverts that.
 

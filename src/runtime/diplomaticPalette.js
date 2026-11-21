@@ -20,6 +20,8 @@ export const RELATION_COLORS = Object.freeze({
   overlord: "#5c4630",
   puppet: "#a8835a",
   war: "#a51c1c",
+  // A government's crackdown on a group (runtime/groupParties.js): open hostility short of a war.
+  crackdown: "#3a0a0e",
   ceasefire: "#c86a5a",
   alliance: "#1d4f91",
   guarantee: "#5a74a6",

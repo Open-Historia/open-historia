@@ -22,6 +22,8 @@
 // (multiplayer/host/projection.js). Pure, and loads in plain Node.
 
 import { warBetween } from "./peaceTerms.js";
+import { GROUP_DEAL_TYPES, isGroupDealType } from "./groupParties.js";
+import { normalizeAgreementEffects } from "./agreementEffects.js";
 
 // The agreements people may sign (runtime/gameState.js WORLD_AGREEMENT_TYPE_SET): not a guarantee, which binds one
 // way and names who, nor a peace settlement, which is a peace's own (world.peaceTreaties).
@@ -36,6 +38,8 @@ export const TREATY_TYPES = Object.freeze([
   "trade_economic",
   "other",
 ]);
+// Every agreement type of the world (runtime/gameState.js), which a drafted treaty may be.
+const DRAFTED_TYPES = Object.freeze([...TREATY_TYPES, "guarantee", "peace_settlement", ...GROUP_DEAL_TYPES]);
 export const TREATY_STATUSES = Object.freeze(["open", "signed", "declined", "withdrawn", "lapsed"]);
 // An offer nobody answered for this many rounds lapses.
 export const TREATY_OFFER_STANDS_ROUNDS = 4;
@@ -54,7 +58,9 @@ const normalizeTreatyOffer = (raw) => {
   const id = clean(raw?.id, 160);
   const from = clean(raw?.from);
   const to = clean(raw?.to);
-  const type = TREATY_TYPES.includes(raw?.type) ? raw.type : "";
+  // (A treaty a leader drafted in a chat, Game/AI/treatyTalk.js, may be of any of the world's types.)
+  const drafted = raw?.drafted === true;
+  const type = TREATY_TYPES.includes(raw?.type) || (drafted && DRAFTED_TYPES.includes(raw?.type)) ? raw.type : "";
   if (!id || !from || !to || fold(from) === fold(to) || !type) return null;
   const status = TREATY_STATUSES.includes(raw?.status) ? raw.status : "open";
   return {
@@ -69,6 +75,14 @@ const normalizeTreatyOffer = (raw) => {
     status,
     ...(status !== "open" && Number.isFinite(Number(raw?.answeredRound)) ? { answeredRound: whole(raw.answeredRound) } : {}),
     ...(status === "signed" && clean(raw?.agreementId, 160) ? { agreementId: clean(raw.agreementId, 160) } : {}),
+    // A treaty drafted by an AI leader in a chat (recordDraftedTreaty): its parties in their order (the one
+    // who gives first), its effects (runtime/agreementEffects.js), what the player proposed in their own
+    // words, and the chat it was drafted in.
+    ...(drafted ? { drafted: true } : {}),
+    ...(drafted && list(raw?.parties).length >= 2 ? { parties: [...new Set(list(raw.parties).map((party) => clean(party)).filter(Boolean))].slice(0, 12) } : {}),
+    ...(drafted && normalizeAgreementEffects(raw?.effects) ? { effects: normalizeAgreementEffects(raw.effects) } : {}),
+    ...(drafted && termsText(raw?.proposal) ? { proposal: termsText(raw.proposal) } : {}),
+    ...(clean(raw?.chatId, 160) ? { chatId: clean(raw.chatId, 160) } : {}),
   };
 };
 
@@ -88,8 +102,17 @@ export const normalizeTreatyOffers = (value) => {
   return all.filter((offer) => keep.has(offer));
 };
 
+const uniqueId = (existing, prefix, start = 0) => {
+  const taken = new Set(list(existing).map((entry) => clean(entry?.id, 160)));
+  let index = Math.max(0, Math.trunc(Number(start) || 0));
+  while (taken.has(`${prefix}:${index}`)) index += 1;
+  return `${prefix}:${index}`;
+};
+
+const pairKey = (a, b) => [fold(a), fold(b)].sort().join("|");
+
 const openBetween = (offers, a, b) => normalizeTreatyOffers(offers).find((offer) => offer.status === "open"
-  && [fold(offer.from), fold(offer.to)].sort().join("|") === [fold(a), fold(b)].sort().join("|")) ?? null;
+  && pairKey(offer.from, offer.to) === pairKey(a, b)) ?? null;
 
 // A country puts a treaty to another (a person's to a person's).
 //   from, to          the two countries
@@ -108,8 +131,9 @@ export const proposeTreaty = (world, { from = "", to = "", type = "", title = ""
   if (warBetween(world?.wars, from, to)) return nothing("at-war");
   if (openBetween(world?.treatyOffers, from, to)) return nothing("open");
   const turn = whole(round);
+  const existing = list(world?.treatyOffers);
   const offer = normalizeTreatyOffer({
-    id: `treaty-offer:${fold(from)}:${fold(to)}:${turn}:${list(world?.treatyOffers).length}`,
+    id: uniqueId(existing, `treaty-offer:${fold(from)}:${fold(to)}:${turn}`, existing.length),
     from: clean(from),
     to: clean(to),
     type,
@@ -119,8 +143,53 @@ export const proposeTreaty = (world, { from = "", to = "", type = "", title = ""
     round: turn,
     status: "open",
   });
-  return { world: { ...world, treatyOffers: normalizeTreatyOffers([...list(world?.treatyOffers), offer]) }, offer, reason: "" };
+  return { world: { ...world, treatyOffers: normalizeTreatyOffers([...existing, offer]) }, offer, reason: "" };
 };
+
+// A treaty an AI leader drafted in a chat (Game/AI/treatyTalk.js), kept for its card: one it puts to the
+// person ("open", a counter-offer the person signs or declines), or the person's own proposal as the
+// leader wrote it out ("signed" with the agreement it made, or "declined" when it refused).
+//   from, to    who put it, and to whom
+//   treaty      { type, parties, title, terms, effects }
+//   proposal    the person's own words, where the person proposed it
+// Returns { world, offer }.
+export const recordDraftedTreaty = (world, { from = "", to = "", status = "open", treaty = null, proposal = "", chatId = "", agreementId = "", date = "", round = 0 } = {}) => {
+  const turn = whole(round);
+  const pair = pairKey(from, to);
+  // A new open counter-offer or a signed deal between the same two supersedes
+  // any earlier open drafted counter-offer waiting between them.
+  const existing = list(world?.treatyOffers).map((entry) => (
+    (status === "open" || status === "signed")
+    && entry?.drafted === true
+    && entry?.status === "open"
+    && pairKey(entry.from, entry.to) === pair
+      ? { ...entry, status: "lapsed", answeredRound: turn }
+      : entry
+  ));
+  const offer = normalizeTreatyOffer({
+    id: uniqueId(existing, `treaty-draft:${fold(from)}:${fold(to)}:${turn}`, existing.length),
+    from,
+    to,
+    type: treaty?.type,
+    title: treaty?.title,
+    terms: treaty?.terms,
+    parties: treaty?.parties,
+    effects: treaty?.effects,
+    proposal,
+    chatId,
+    date,
+    round: turn,
+    status,
+    drafted: true,
+    ...(status !== "open" ? { answeredRound: turn } : {}),
+    ...(agreementId ? { agreementId } : {}),
+  });
+  if (!offer) return { world, offer: null };
+  return { world: { ...world, treatyOffers: normalizeTreatyOffers([...existing, offer]) }, offer };
+};
+
+// The open offer between two, either way round, or null.
+export const openOfferBetween = (offers, a, b) => openBetween(offers, a, b);
 
 // A country answers a treaty put to it, or withdraws its own.
 //   op        "sign" | "decline" (the one it was put to), "withdraw" (the one who put it)
@@ -146,27 +215,31 @@ export const answerTreaty = (world, { op = "", ref = "", country = "", date = ""
   if (fold(offer.to) !== fold(country)) return nothing("not-yours");
   if (op === "decline") return { world: { ...world, treatyOffers: normalizeTreatyOffers(marked("declined")) }, error: "", agreement: null };
   if (Array.isArray(players) && !players.some((name) => fold(name) === fold(offer.from))) return nothing("maker-gone");
-  if (warBetween(world?.wars, offer.from, offer.to)) {
+  // (A treaty drafted in a chat, a truce or a peace among them, is made in a war as well.)
+  if (!offer.drafted && !isGroupDealType(offer.type) && warBetween(world?.wars, offer.from, offer.to)) {
     return { world: { ...world, treatyOffers: normalizeTreatyOffers(marked("lapsed")) }, error: "at-war", agreement: null };
   }
   const day = clean(date, 40);
+  const priorAgreements = list(world?.agreements);
   const agreement = {
-    id: `treaty:${fold(offer.from)}:${fold(offer.to)}:${turn}:${list(world?.agreements).length}`,
+    id: uniqueId(priorAgreements, `treaty:${fold(offer.from)}:${fold(offer.to)}:${turn}`, priorAgreements.length),
     title: offer.title,
     type: offer.type,
     status: "active",
-    parties: [offer.from, offer.to],
+    // A drafted treaty's parties as drafted (the one who gives first); a person's treaty its two.
+    parties: offer.parties?.length >= 2 ? offer.parties : [offer.from, offer.to],
+    ...(offer.effects ? { effects: offer.effects } : {}),
     startedDate: day,
     lastUpdatedDate: day,
     terms: offer.terms,
-    ...(offer.type === "military_access" ? { reciprocalAccess: true } : {}),
+    ...(!offer.drafted && offer.type === "military_access" ? { reciprocalAccess: true } : {}),
     createdRound: turn,
     updatedRound: turn,
   };
   return {
     world: {
       ...world,
-      agreements: [...list(world?.agreements), agreement],
+      agreements: [agreement, ...priorAgreements],
       treatyOffers: normalizeTreatyOffers(marked("signed", { agreementId: agreement.id })),
     },
     error: "",
@@ -181,6 +254,8 @@ export const withTurnTreatyOffers = (offers, { wars = [], round = 0 } = {}) => {
   return normalizeTreatyOffers(list(offers).map((offer) => {
     if (offer?.status !== "open") return offer;
     const stale = turn - whole(offer.round) >= TREATY_OFFER_STANDS_ROUNDS;
-    return stale || warBetween(wars, offer.from, offer.to) ? { ...offer, status: "lapsed", answeredRound: turn } : offer;
+    // (A deal with a group is made in a war as well as out of one.)
+    const atWar = !offer.drafted && !isGroupDealType(offer.type) && warBetween(wars, offer.from, offer.to);
+    return stale || atWar ? { ...offer, status: "lapsed", answeredRound: turn } : offer;
   }));
 };

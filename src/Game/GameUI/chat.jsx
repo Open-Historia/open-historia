@@ -9,7 +9,11 @@ import { resolveStockCountryCode } from "../../runtime/polityIdentity.js";
 import OFFICIAL_COUNTRY_CODES_BY_NAME from "../../runtime/generated/officialCountryAliases.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
-import { SharedGameRefusal, answerPeaceInChat, checkDemandReply, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
+import { SharedGameRefusal, answerPeaceInChat, answerTreatyInChat, checkDemandReply, ensureCountryAssessed, playerTreaty, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
+import { AgreementsInForce, ProposalBox, ProposeDealButton, TreatyCard, treatyReasonText } from "./treatyCards.jsx";
+import { groupBannerDataUrl, pickableGroupsOf } from "./groupBanner.js";
+import { dealsBetween } from "../../runtime/groupParties.js";
+import { findGroupKey } from "../../runtime/groups.js";
 import { CallToArmsCard, PeaceOfferCard, PeaceTermsForm, sendPeaceAnswer } from "./warAndPeace.jsx";
 import { TreatyForm, TreatyOfferCard, sendTreaty, treatyOffersForThread } from "./treaties.jsx";
 import { describeTerms, warBetween } from "../../runtime/peaceTerms.js";
@@ -297,6 +301,9 @@ const resolveFlagImageUrl = ({ code, name } = {}) => {
             } catch {
                 /* fall through to the stock artwork */
             }
+            // A group (runtime/groups.js) has no flag: its banner, in its colour.
+            const groupKey = !code && name ? findGroupKey(world?.groups, name) : "";
+            if (groupKey) return groupBannerDataUrl(world.groups[groupKey]?.color);
             const builtIn = flagImageUrlFromGid(code) ?? flagImageUrlFromGid(name);
             if (builtIn) return builtIn;
             const scenarioFlag = code && flags?.[code];
@@ -1071,9 +1078,16 @@ const CountrySelectorModal = ({
     emptyLabel = "No countries selected yet",
     confirmLabel = (n) => n ? "Start conversation" : "Choose a recipient",
     single = false,
+    // The groups (runtime/groups.js) that may be talked to as well, listed apart: [{ name, code: "", color }].
+    groups = [],
 }) => {
     const [search, setSearch] = React.useState("");
     const [selected, setSelected] = React.useState([]);
+    const filteredGroups = useMemo(() => {
+        const query = search.trim().toLowerCase();
+        const list = Array.isArray(groups) ? groups : [];
+        return query ? list.filter((group) => group.name.toLowerCase().includes(query)) : list;
+    }, [groups, search]);
     // This picker also handles a HUMINT single-country target and additions to
     // an existing diplomatic group. Keep both selection contracts intact.
     const uniqueCountries = useMemo(() => dedupeByName(countries), [countries]);
@@ -1097,9 +1111,13 @@ const CountrySelectorModal = ({
     }, [uniqueCountries, search]);
     const filteredFlagUrls = useCountryFlagUrls(filtered);
     const selectedFlagUrls = useCountryFlagUrls(selected);
-    const isSelectedName = (name) => selected.some((entry) => entry.name === name);
-    const toggle = ({ name, code }) => setSelected((previous) => previous.some((entry) => entry.name === name)
-        ? previous.filter((entry) => entry.name !== name)
+    const groupColorByName = useMemo(
+        () => new Map((Array.isArray(groups) ? groups : []).map((group) => [group.name, group.color])),
+        [groups],
+    );
+    const isSelectedEntry = (name, code = "") => selected.some((entry) => entry.name === name && entry.code === code);
+    const toggle = ({ name, code }) => setSelected((previous) => previous.some((entry) => entry.name === name && entry.code === code)
+        ? previous.filter((entry) => !(entry.name === name && entry.code === code))
         : single ? [{ name, code }] : [...previous, { name, code }]);
 
     return (
@@ -1133,8 +1151,8 @@ const CountrySelectorModal = ({
                         {selected.length === 0
                             ? <span className="oh-diplomacy-picker-empty-selection">{emptyLabel}</span>
                             : selected.map((country) => (
-                                <button type="button" key={country.name} className="oh-diplomacy-picker-chip" onClick={() => toggle(country)} aria-label={"Remove " + country.name} title={"Remove " + country.name}>
-                                    <FlagImg url={selectedFlagUrls[country.name]} alt={country.name} size="0.9em" />
+                                <button type="button" key={`${country.code || "0"}:${country.name}`} className="oh-diplomacy-picker-chip" onClick={() => toggle(country)} aria-label={"Remove " + country.name} title={"Remove " + country.name}>
+                                    <FlagImg url={!country.code && groupColorByName.has(country.name) ? groupBannerDataUrl(groupColorByName.get(country.name)) : selectedFlagUrls[country.name]} alt={country.name} size="0.9em" />
                                     <span>{country.name}</span><span aria-hidden="true">×</span>
                                 </button>
                             ))}
@@ -1157,10 +1175,29 @@ const CountrySelectorModal = ({
                                 key={country.name}
                                 country={country.name}
                                 flagUrl={filteredFlagUrls[country.name] ?? null}
-                                isSelected={isSelectedName(country.name)}
+                                isSelected={isSelectedEntry(country.name, country.code)}
                                 onToggle={() => toggle(country)}
                             />
                         ))}
+                    </div>
+                )}
+                {!loading && filteredGroups.length > 0 && (
+                    <div data-diplomacy-picker-groups="true">
+                        <div className="oh-diplomacy-picker-results-heading" style={{ marginTop: ".6rem" }}>
+                            <span>Groups</span>
+                            <span className="oh-diplomacy-picker-results-count">{filteredGroups.length}</span>
+                        </div>
+                        <div className="oh-diplomacy-picker-grid">
+                            {filteredGroups.map((group) => (
+                                <CountryTile
+                                    key={`group:${group.name}`}
+                                    country={group.name}
+                                    flagUrl={groupBannerDataUrl(group.color)}
+                                    isSelected={isSelectedEntry(group.name, "")}
+                                    onToggle={() => toggle({ name: group.name, code: "" })}
+                                />
+                            ))}
+                        </div>
                     </div>
                 )}
             </div>
@@ -1429,6 +1466,24 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         : []), [peaceWithPerson, treatyOffersAll, playerCountry, peaceCounterpart]);
     const canProposeTreaty = peaceWithPerson && !peaceWar && !threadTreaties.some((offer) => offer.status === "open");
     const [treatyFormOpen, setTreatyFormOpen] = useState(false);
+    // TREATIES (treatyCards.jsx), in the one-on-one chat with a country or a group the AI plays, in single
+    // player: the treaties drafted in this thread at its foot, the agreements in force between the two with
+    // their effects, and the parchment left of the message box that opens a proposal.
+    const groupsOnHere = useActiveFeatures().groups?.enabled !== false;
+    const treatyCounterpart = peaceCounterpart && !peaceWithPerson && !inSharedGame() ? String(peaceCounterpart.name ?? "").trim() : "";
+    const threadTreatyDrafts = useMemo(() => {
+        if (!treatyCounterpart) return [];
+        const pair = [String(playerCountry ?? "").trim().toLowerCase(), treatyCounterpart.toLowerCase()].sort().join("|");
+        return (Array.isArray(treatyOffersAll) ? treatyOffersAll : [])
+            .filter((offer) => offer?.drafted)
+            .filter((offer) => [String(offer?.from ?? "").trim().toLowerCase(), String(offer?.to ?? "").trim().toLowerCase()].sort().join("|") === pair)
+            .filter((offer) => offer.status === "open" || String(offer.chatId ?? "") === String(chat?.id ?? ""))
+            .slice(-3);
+    }, [treatyCounterpart, treatyOffersAll, playerCountry, chat?.id]);
+    const agreementsInForce = useMemo(() => (treatyCounterpart ? dealsBetween(world, playerCountry, treatyCounterpart) : []), [treatyCounterpart, world, playerCountry]);
+    const [proposalOpen, setProposalOpen] = useState(false);
+    // The proposals the player sent from the box, by their words: the reply to one is asked as a proposal's.
+    const proposalsRef = useRef(new Set());
     const [demandBusy, setDemandBusy] = useState(false);
     const newThreadId = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -1770,7 +1825,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             const asked = [...messagesRef.current].reverse().find((msg) => msg.role === "user" && msg.text === playerMessage);
             const repliedOn = asked?.time || gameDate;
             try {
-                const { reply, reaction, memorySummary, peace } = await sendDiplomaticMessage(playerMessage, country.name, countries, { chatId: chat.id, catchUp: asked?.catchUp || "" });
+                const proposal = proposalsRef.current.has(playerMessage);
+                const { reply, reaction, memorySummary, peace, treaty } = await sendDiplomaticMessage(playerMessage, country.name, countries, { chatId: chat.id, catchUp: asked?.catchUp || "", proposal });
                 // The thread's rolling durable memory rides on the reply that
                 // produced it, so a reopened thread, the advisor's one-off sends
                 // and the world director read the same continuity. Its id is set
@@ -1817,6 +1873,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 if (peace && !isGroup) {
                     void answerPeaceInChat({ speaker: country.name, line: peace, chatId: chat.id, messageId: leaderMessage.id })
                         .catch((error) => logDebugEvent("diplomacy", `${country.name}'s word on peace could not be carried out.`, error));
+                }
+                if (proposal) proposalsRef.current.delete(playerMessage);
+                // What the leader decided of a treaty, its hidden TREATY line (AI/treatyTalk.js): the treaty
+                // written as the game models it, signed, put as a counter-offer, refused or broken. No request.
+                if (treaty && !isGroup) {
+                    void answerTreatyInChat({ speaker: country.name, line: treaty, chatId: chat.id, proposal: proposal ? playerMessage : "" })
+                        .catch((error) => logDebugEvent("diplomacy", `${country.name}'s word on a treaty could not be carried out.`, error));
                 }
             } catch (err) {
                 pushMessages([...messagesRef.current, {
@@ -2244,6 +2307,24 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             return "";
         };
 
+        // A deal the player writes out (ProposalBox): said in the thread as their own message, and answered as
+        // a proposal: the leader's one request answers it and writes the treaty (AI/treatyTalk.js).
+        const sendProposal = async (text) => {
+            if (!treatyCounterpart || isLoading) return treatyReasonText("not-open");
+            proposalsRef.current.add(text);
+            setProposalOpen(false);
+            await submitPlayerText(text);
+            return "";
+        };
+        const answerTreatyHere = async (op, offer) => {
+            const done = await playerTreaty({ op, ref: offer.id });
+            return done?.ok ? "" : treatyReasonText(done?.reason);
+        };
+        const endAgreementHere = async (agreement) => {
+            const done = await playerTreaty({ op: "end", ref: agreement.id });
+            return done?.ok ? "" : treatyReasonText(done?.reason);
+        };
+
         // A treaty put to the other player (TreatyForm): its card comes with the host's view. Resolves "" once it is
         // put, else why not.
         const proposeTreatyHere = async ({ type, title, terms }) => {
@@ -2643,6 +2724,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             {strandedDemands.map(renderDemandCard)}
             {strandedPeace.map(renderPeaceCard)}
             {threadTreaties.map((offer) => <TreatyOfferCard key={offer.id} offer={offer} viewer={playerCountry} />)}
+            {treatyCounterpart ? <AgreementsInForce agreements={agreementsInForce} onEnd={endAgreementHere} /> : null}
+            {threadTreatyDrafts.map((offer) => <TreatyCard key={offer.id} offer={offer} viewer={playerCountry} onAnswer={answerTreatyHere} />)}
             {threadCalls.stranded.map((call) => <CallToArmsCard key={call.id} call={call} viewer={playerCountry} />)}
             {isLoading && lifecycleGroupThinking
                 ? <LifecycleThinkingBubble count={lifecycleState.responseCases.length || countries.length} />
@@ -2732,6 +2815,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 )}
                 {canProposePeace && peaceFormOpen && <PeaceTermsForm viewer={playerCountry} enemy={peaceCounterpart?.name} person={peaceWithPerson} busy={isLoading} onSend={proposePeaceHere} onCancel={() => setPeaceFormOpen(false)} />}
                 {canProposeTreaty && treatyFormOpen && <TreatyForm busy={isLoading} onSend={proposeTreatyHere} onCancel={() => setTreatyFormOpen(false)} />}
+                {treatyCounterpart && proposalOpen && <ProposalBox counterpart={treatyCounterpart} busy={isLoading} onSend={sendProposal} onCancel={() => setProposalOpen(false)} />}
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     {canProposePeace && (
                         <button type="button" className="oh-tap" onClick={() => setPeaceFormOpen((open) => !open)} aria-pressed={peaceFormOpen} title={`Propose peace to ${peaceCounterpart?.name}`} style={{ background: peaceFormOpen ? "rgba(43,193,243,.16)" : "rgba(255,255,255,0.05)", border: `1px solid ${peaceFormOpen ? "rgba(43,193,243,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: peaceFormOpen ? "#2bc1f3" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Peace</button>
@@ -2752,6 +2836,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         style={{ background: makeDemand ? "rgba(234,179,8,0.22)" : "rgba(255,255,255,0.05)", border: `1px solid ${makeDemand ? "rgba(234,179,8,0.7)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: makeDemand ? "rgb(250,204,21)" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 700, height: "2.5rem", padding: "0 0.6rem" }}
                         >{makeDemand ? "⚑ Demand" : "⚑"}</button>
                     )}
+                    {treatyCounterpart && <ProposeDealButton open={proposalOpen} disabled={isLoading} onToggle={() => setProposalOpen((open) => !open)} />}
                     <textarea
                     ref={composerRef}
                     placeholder={canDemand && makeDemand ? `Your demand of ${countries[0]?.name}…` : isInstitutionCouncil ? "Address the council…" : isLifecycleConversation ? "Address the accession table…" : "Send a diplomatic message…"}
@@ -2785,6 +2870,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             <Presence open={showAddMemberModal}>
                 <CountrySelectorModal
                     countries={availableCountries.filter((c) => !countries.some((existing) => (existing?.name || "").toLowerCase() === (c?.name || "").toLowerCase()))}
+                    groups={groupsOnHere ? pickableGroupsOf(world, playerCountry).filter((group) => !countries.some((existing) => (existing?.name || "").toLowerCase() === group.name.toLowerCase())) : []}
                     title="Add Countries to Chat"
                     subtitle="Select one or more countries to join this diplomatic group"
                     confirmLabel={(n) => `Add ${n} ${n === 1 ? "country" : "countries"}`}
@@ -4308,6 +4394,12 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     }, [isOpen, hasLoadedInitialData]);
 
     const landHolders = useLandHolders(showSelector);
+    // The groups the player may talk to (groupBanner.js), while groups are on for this game.
+    const groupsOnHere = useActiveFeatures().groups?.enabled !== false;
+    const pickableGroups = useMemo(
+        () => (groupsOnHere ? pickableGroupsOf(worldSnapshot, playerCountry) : []),
+        [groupsOnHere, worldSnapshot, playerCountry],
+    );
     const availableCountries = useMemo(
         () => pickableCountries(countries, landHolders).filter(country => !countryMatchesIdentity(country, playerCountry)),
                                        [countries, landHolders, playerCountry]
@@ -4752,7 +4844,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 </div>
             ) : null}
 
-            <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
+            <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} groups={pickableGroups} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
             {activeChat && (!activeChat.institutionId || (activeChat.lifecycleInstitutionId && activeChat.lifecycleCaseIds?.length)) && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
                 <div className="oh-diplomacy-split" data-diplomacy-layout="responsive-split">

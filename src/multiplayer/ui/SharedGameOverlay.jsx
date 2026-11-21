@@ -5,26 +5,40 @@
 //     lobby has arrived, a player is told which step of joining they are on,
 //     and the host is told who is connecting and who could not
 //     (client/joinProgress.js);
-//   - once it has started, the round bar: where the round is, how long is left,
-//     who is ready, and the player's own Ready. The host also has pause and
-//     "end the round now", answers players who ask to change country, and
-//     releases or bans a seat a player holds (a seat is its player's device's
-//     until the host releases it). A player whose country is gone watches,
-//     and takes a free country under Players;
-//   - the host's notices: the newest for a moment on the bar, and every one
-//     kept, listed under Players (and in the lobby), those not yet read
-//     counted on the Players button; a refusal or answer said where the
-//     player acted too (Ready, Change, the country picker, the Game Master);
-//   - Leave, and for the host Stop, which asks once more: it ends the game
-//     for every player.
-// The bar is as wide as what it holds, up to the screen's width; on a phone
-// it is one row (the round, its clock, Ready and Players) and the rest is
-// under Players.
+//   - once it has started, the round bar. "Make this whole overlay thing not
+//     always be on screen ... a single bar at the top of the screen with a
+//     couple essential controls, and all the host controls should be
+//     accessible in a dropdown" (the owner, 2026-11-18). One slim row, in the
+//     HUD's glass and the player's interface theme, under the game's top
+//     edge: the round and its phase, its clock, the date it lands on, one
+//     short mark for a state out of the ordinary (roundBar.js barStatus), the
+//     player's own Ready, Players and, for the host, Host. Nothing else is
+//     open unless asked for;
+//   - Players, a dropdown: where the round is in words, who plays what (away
+//     and ready marks), a free country to take or ask for (a player whose
+//     country is gone watches, and takes one here), what the Game Master
+//     changed, the host's notices, and a player's Leave;
+//   - Host, a dropdown with every one of the host's controls: pause and
+//     resume, end the round now, cancel it or try it again, pay it itself,
+//     the players asking to change country, release or ban a seat a player
+//     holds (a seat is its player's device's until the host releases it), the
+//     invite code and its relays, whose AI answers and how often, the Game
+//     Master, and Stop sharing, which asks once more: it ends the game for
+//     every player;
+//   - the host's notices: the newest for a moment in one line under the bar,
+//     those not yet read counted on the Players button; a refusal or answer
+//     said where the player acted too (Ready, Change, the country picker, the
+//     Game Master).
+// The bar is as wide as what it holds on a desktop; on a phone it is the row
+// beside the game's ⌂ and the same five things at most (the round, its clock,
+// Ready, Players, Host), the rest in the dropdowns. Each dropdown closes on a
+// click outside it or Escape, which gives the focus back to its button.
 // Mounted by App.jsx outside the game's UI, so it survives the UI remounting
 // when the page switches to the shared game.
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  dismissEndedNotice,
   hostControl,
   leaveSharedGame,
   markNoticesRead,
@@ -35,12 +49,12 @@ import {
 import { OWN_MAP_NOTE, hostLines, joinStage, peopleOf } from "../client/joinProgress.js";
 import { roundDatesOf } from "../client/roundDates.js";
 import { latestNoticeAbout, unreadNotices } from "../client/threadNotes.js";
-import { failureText, readyText, roundClockText, unreadLabel, waitsForTheHost } from "./roundBar.js";
-import { languageDisplayName } from "../../runtime/i18n.js";
-import { difficultyMeta } from "../../runtime/difficulty.js";
+import { askingLabel, barStatus, failureText, readyText, roundClockText, unreadLabel, waitsForTheHost } from "./roundBar.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
-import { GameMasterBox, GameMasterMark, GameRules, PayItYourself, PayerLine } from "./GameRules.jsx";
-import { roundCostLinesOf } from "../costRules.js";
+import { SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
+import { GameMasterBox, GameMasterChanges, GameMasterMark, GameRules, HostAnswersSetting, PayItYourself, PayerLine } from "./GameRules.jsx";
+import { hostBusyLine } from "./hostBusy.js";
+import { RECONNECTING } from "../client/hostGone.js";
 
 const glass = {
   background: "rgba(19,19,21,0.86)",
@@ -50,13 +64,15 @@ const glass = {
   boxShadow: "0 12px 40px rgba(0,0,0,0.45)",
   color: "rgba(246,246,248,0.94)",
 };
+// The buttons and words take the player's interface theme (runtime/uiTheme.js),
+// as the HUD's do; Default's greys and the accent are the fallbacks.
 const button = {
-  alignItems: "center", background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "999px",
-  color: "rgba(246,246,248,0.94)", cursor: "pointer", display: "inline-flex", fontSize: "0.8rem", fontWeight: 650, gap: "0.35rem",
+  alignItems: "center", background: "var(--oh-ui-glass-chip, rgba(255,255,255,0.07))", border: "1px solid var(--oh-ui-glass-line, rgba(255,255,255,0.12))", borderRadius: "999px",
+  color: "var(--oh-ui-text, rgba(246,246,248,0.94))", cursor: "pointer", display: "inline-flex", fontFamily: "inherit", fontSize: "0.8rem", fontWeight: 650, gap: "0.35rem",
   justifyContent: "center", minHeight: "2rem", padding: "0 0.75rem",
 };
-const primary = { ...button, background: "rgba(43,193,243,0.2)", borderColor: "rgba(43,193,243,0.6)", color: "#e6f8ff" };
-const small = { color: "rgba(255,255,255,0.6)", fontSize: "0.76rem" };
+const primary = { ...button, background: "var(--oh-ui-glass-active, rgba(43,193,243,0.2))", border: "1px solid var(--oh-ui-glass-active-line, rgba(43,193,243,0.6))", color: "var(--oh-ui-glass-active-text, #e6f8ff)" };
+const small = { color: "var(--oh-ui-muted, rgba(255,255,255,0.6))", fontSize: "0.76rem" };
 const isolate = { unicodeBidi: "isolate" };
 const problemText = { color: "#fca5a5" };
 
@@ -146,16 +162,19 @@ const SeatActions = ({ country }) => {
   );
 };
 
-// Who plays what: the lobby's list, and the round bar's when it is opened ("how
+// The host's hand reaches a seat another player holds.
+const inHostsHand = (seat) => Boolean(seat.held && !seat.you && seat.status !== "watching");
+
+// Who plays what: the lobby's list, and the round bar's Players dropdown ("how
 // can I see who is playing?", a player asked mid-game). `ready` marks those
 // who are ready in the round; `host` gives the host its hand on each seat
-// another player holds.
-const SeatList = ({ seats, ready = [], host = false }) => (seats ?? []).map((seat) => (
+// another player holds; `handsOnly` lists those seats alone (the Host dropdown).
+const SeatList = ({ seats, ready = [], host = false, handsOnly = false }) => (seats ?? []).filter((seat) => !handsOnly || inHostsHand(seat)).map((seat) => (
   <div key={`${seat.status}:${seat.country}`} style={{ alignItems: "center", display: "flex", flexWrap: "wrap", fontSize: "0.86rem", gap: "0.5rem", padding: "0.2rem 0" }}>
     <span style={{ ...isolate, flex: 1 }}>{seat.country}</span>
-    <span style={{ ...isolate, color: "rgba(255,255,255,0.6)" }}>{seat.you ? `${seat.name} (you)` : seat.name}</span>
+    <span style={{ ...isolate, color: "var(--oh-ui-muted, rgba(255,255,255,0.6))" }}>{seat.you ? `${seat.name} (you)` : seat.name}</span>
     <span style={small}>{seatState(seat, ready)}</span>
-    {host && seat.held && !seat.you && seat.status !== "watching" ? <SeatActions country={seat.country} /> : null}
+    {host && inHostsHand(seat) ? <SeatActions country={seat.country} /> : null}
   </div>
 ));
 
@@ -219,7 +238,7 @@ const CountryPicker = ({ lobby, asking = false, notices = [] }) => {
 // Who answers a player's message to a country the AI plays (host/settings.js
 // `replies`). The host sets it, here too while the game runs; everyone else is
 // told when it is their own AI that answers, since they need one set up.
-const RepliesSetting = ({ shared }) => {
+const RepliesSetting = ({ shared, style = null }) => {
   if (!shared.lobby) return null;
   const mode = shared.lobby.settings?.replies === "own" ? "own" : "host";
   // A player is told under "Who pays" (ui/GameRules.jsx), with what the host's
@@ -229,8 +248,8 @@ const RepliesSetting = ({ shared }) => {
   // At the end of its row: during a game the Events panel lies over the start
   // of the round bar's lower rows, and covered the start of this one.
   return (
-    <label style={{ ...small, alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "flex-end", marginTop: "0.5rem" }}>
-      Countries the AI plays answer with
+    <label style={{ ...small, alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "flex-end", marginTop: "0.5rem", ...style }}>
+      AI countries answer with
       <select value={mode} onChange={(event) => hostControl("replies", { mode: event.target.value })} style={{ ...button, justifyContent: "flex-start" }}>
         <option value="host">Your AI key</option>
         <option value="own">Each player&apos;s own AI key</option>
@@ -239,48 +258,10 @@ const RepliesSetting = ({ shared }) => {
   );
 };
 
-// The language the world is written in, a rule of the game the host set in
-// the lobby (host/settings.js `language`), for everyone to see.
-const WorldLanguage = ({ shared }) => {
-  const code = String(shared.lobby?.settings?.language || "");
-  if (!code) return null;
-  return <div style={{ ...small, marginTop: "0.5rem", textAlign: "end" }}>{`The world is written in ${languageDisplayName(code)}.`}</div>;
-};
-
-// What decides every round, as the host states it (game/messages.js lobby
-// `rules`, host/hostRules.js): one difficulty for every player, what a round
-// costs and how long it waits on a silent AI, by who pays for it
-// (multiplayer/costRules.js roundCostLinesOf), how long a leaver's country
-// waits for them, and what a shared game does not do between rounds. On the
-// host's computer alone, these used to be nobody else's to see.
-const betweenRoundsLine = (features) => {
-  const letters = features?.idleDiplomacy?.enabled !== false;
-  const agents = features?.espionage?.enabled !== false;
-  if (letters && agents) return "Between rounds no country writes and no agent reports: both come with each round.";
-  if (letters) return "Between rounds no country writes: letters come with each round.";
-  if (agents) return "Between rounds no agent reports: reports come with each round.";
-  return "";
-};
-const RoundRules = ({ shared }) => {
-  const lobby = shared.lobby;
-  if (!lobby) return null;
-  const rules = lobby.rules;
-  const grace = Number(lobby.settings?.leaverGraceMinutes) || 0;
-  const lines = [
-    rules ? `Difficulty: ${difficultyMeta(rules.difficulty).label} for every player against the countries the AI plays; between players it favours nobody.` : "",
-    ...roundCostLinesOf(rules, lobby.settings),
-    grace
-      ? `A player who leaves keeps their country for ${grace} minutes; then the AI plays it until they are back.`
-      : "A player who leaves has their country played by the AI until they are back.",
-    betweenRoundsLine(lobby.features),
-  ].filter(Boolean);
-  return lines.map((line) => <div key={line} style={{ ...small, marginTop: "0.35rem", textAlign: "end" }}>{line}</div>);
-};
-
 // The host's invite code, its relays, and who is coming in or could not
-// (client/joinProgress.js): in the lobby, and under Players while the game
-// runs, where a game taken up again opens and its players need the code to
-// come back.
+// (client/joinProgress.js): in the lobby, and in the Host dropdown while the
+// game runs, which a game taken up again opens with: its players need the code
+// to come back.
 const HostInvite = ({ shared }) => {
   const { lobby, token, engine } = shared;
   const [copied, setCopied] = useState(false);
@@ -299,7 +280,7 @@ const HostInvite = ({ shared }) => {
     <div style={{ marginTop: "0.6rem" }}>
       <div style={small}>Invite code: anyone who has it can join, up to {lobby?.settings?.seats ?? 8} players.</div>
       <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginTop: "0.35rem" }}>
-        <code style={{ background: "rgba(255,255,255,0.06)", borderRadius: "8px", flex: 1, fontSize: "0.72rem", minWidth: 0, overflow: "hidden", padding: "0.45rem 0.6rem", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{token}</code>
+        <code style={{ background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.06))", borderRadius: "8px", flex: 1, fontSize: "0.72rem", minWidth: 0, overflow: "hidden", padding: "0.45rem 0.6rem", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{token}</code>
         <button type="button" style={button} onClick={copy}>{copied ? "✓ Copied!" : "Copy"}</button>
         <button type="button" style={button} onClick={() => hostControl("rotate")} title="A new code: the old one stops working">New code</button>
       </div>
@@ -342,9 +323,42 @@ const Lobby = ({ shared, me }) => {
   useEffect(() => {
     if (shared.notices?.length) markNoticesRead();
   }, [shared.notices]);
+  // Start pressed: said for as long as the engine says the start is under way
+  // (its entry waits for whatever the host's game is applying: busyLine says
+  // what), until the lobby says the game has started; one that failed says why
+  // (`error`) and can be pressed again. Until the engine's first word, the
+  // press itself, for a while.
+  const engineStarting = shared.engine?.starting === true;
+  const [pressed, setPressed] = useState(false);
+  const start = () => {
+    setPressed(true);
+    hostControl("start");
+  };
+  // Once the engine has said it, or failed fast with an error, the engine's word is followed.
+  const [saidStarting, setSaidStarting] = useState(engineStarting);
+  if (saidStarting !== engineStarting) {
+    setSaidStarting(engineStarting);
+    if (engineStarting) setPressed(false);
+  }
+  const [seenError, setSeenError] = useState(error);
+  if (seenError !== error) {
+    setSeenError(error);
+    if (error) setPressed(false);
+  }
+  useEffect(() => {
+    if (!pressed) return undefined;
+    const timer = setTimeout(() => setPressed(false), 15000);
+    return () => clearTimeout(timer);
+  }, [pressed]);
+  const starting = pressed || engineStarting;
+  const busyLine = role === "host" ? hostBusyLine(shared.engine?.busy) : "";
 
   return (
-    <div style={{ ...glass, left: "50%", maxHeight: "80vh", maxWidth: "min(34rem, calc(100vw - 2rem))", overflowY: "auto", padding: "1.2rem 1.3rem", position: "fixed", top: "12vh", transform: "translateX(-50%)", width: "100%", zIndex: 4000 }}>
+    // The box's actions (Stop sharing, Start the game) are pinned at its foot,
+    // and what is above them scrolls: a long player list or notices pushed
+    // them below the box's edge, where Start could not be reached.
+    <div style={{ ...glass, boxSizing: "border-box", display: "flex", flexDirection: "column", left: 0, marginInline: "auto", maxHeight: "min(80vh, calc(100dvh - 12vh - 1rem))", maxWidth: "min(34rem, calc(100vw - 2rem))", overflow: "hidden", position: "fixed", right: 0, top: "12vh", width: "100%", zIndex: 4000 }}>
+      <div style={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto", padding: "1.2rem 1.3rem 0.4rem" }}>
       <div style={{ fontSize: "1.15rem", fontWeight: 800, marginBottom: "0.2rem" }}><span style={isolate}>{lobby?.settings?.name || "Shared game"}</span></div>
       <div style={small}>
         {lobby ? <><span style={isolate}>{lobby.scenario?.name || "Scenario"}</span> · {lobby.settings?.roundMinutes} min rounds · {lobby.settings?.daysPerRound} days a round</> : stage || (role === "host" ? "Opening your shared game…" : "Finding the host…")}
@@ -357,9 +371,6 @@ const Lobby = ({ shared, me }) => {
         <div style={{ ...small, marginBottom: "0.35rem", textTransform: "uppercase" }}>Players</div>
         <SeatList seats={lobby?.seats} host={role === "host"} />
         <RepliesSetting shared={shared} />
-        <WorldLanguage shared={shared} />
-        {/* What decides every round (host/hostRules.js), then who pays for what and the Game Master (multiplayer/costRules.js). */}
-        <RoundRules shared={shared} />
         <GameRules shared={shared} />
       </div>
 
@@ -370,13 +381,12 @@ const Lobby = ({ shared, me }) => {
         <div style={{ ...small, marginTop: "1rem" }}>{REFUSAL_LABELS["game-started"]}</div>
       ) : null}
       {!me && lobby && role !== "host" && shared.standIn === "ready" && !closed ? <CountryPicker lobby={lobby} notices={shared.notices} /> : null}
-      {me && !lobby?.started ? (
+      {me && !lobby?.started && role !== "host" ? (
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "1rem" }}>
           {/* One sentence with the country in it, so a language puts the
-              country where its grammar wants it ("You play" and ". Start
-              when everyone is in." were pieces either side of it). */}
-          <span style={{ ...small, ...isolate }}>{role === "host" ? `You play ${country}. Start when everyone is in.` : `You play ${country}. Waiting for the host to start.`}</span>
-          {role !== "host" ? <button type="button" style={button} onClick={change}>Change</button> : null}
+              country where its grammar wants it. */}
+          <span style={{ ...small, ...isolate }}>{`You play ${country}. Waiting for the host to start.`}</span>
+          <button type="button" style={button} onClick={change}>Change</button>
         </div>
       ) : null}
       {changeRefused ? <div style={{ ...small, ...problemText, ...isolate, marginTop: "0.35rem" }}>{changeRefused}</div> : null}
@@ -385,51 +395,171 @@ const Lobby = ({ shared, me }) => {
 
       {/* What the host has said, kept (a refusal, a country gone, a change of country answered). */}
       <NoticeList notices={shared.notices} readAt={shared.noticesReadAt} limit={6} />
+      </div>
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "flex-end", marginTop: "1.1rem" }}>
-        <LeaveButton role={role} label="Stop sharing" />
-        {role === "host" && lobby && !lobby.started ? <button type="button" style={primary} onClick={() => hostControl("start")}>Start the game</button> : null}
+      <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", flex: "0 0 auto", padding: "0.7rem 1.3rem 0.9rem" }}>
+        {/* What the host's game is still busy with, which Start waits behind (host/worldQueue.js onSlow). */}
+        {busyLine ? <div style={{ ...small, ...problemText, marginBottom: "0.45rem", textAlign: "end" }}>{busyLine}</div> : null}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "flex-end" }}>
+          <LeaveButton role={role} label="Stop sharing" />
+          {role === "host" && lobby && !lobby.started ? (
+            <button type="button" style={primary} disabled={starting} onClick={start}>{starting ? "Starting…" : "Start the game"}</button>
+          ) : null}
+        </div>
       </div>
     </div>
   );
 };
 
-// The notices not yet read, counted on the Players button.
-const Unread = ({ count }) => (count ? (
+/// The bar's own look: the HUD's glass and the player's interface theme, as the
+// date widget and the session pill along the game's top edge take them
+// (Game/GameUI/time.jsx widgetSurface, libraryBar.jsx surfaceStyle), so it
+// reads as part of the same chrome and never as a slab of its own. Under
+// Default the HUD's own glass. No gradient, no motion.
+const barText = "var(--oh-ui-text, var(--oh-hud-text, #f8f8f9))";
+const barMuted = "var(--oh-ui-muted, var(--oh-hud-muted, rgba(233,233,236,0.64)))";
+const barSurface = {
+  backdropFilter: "var(--oh-hud-blur)",
+  WebkitBackdropFilter: "var(--oh-hud-blur)",
+  backgroundColor: "var(--oh-ui-glass-pill, var(--oh-hud-bg-strong))",
+  border: "1px solid var(--oh-hud-border)",
+  borderRadius: "12px",
+  boxShadow: "var(--oh-hud-shadow-soft)",
+  color: barText,
+};
+// A dropdown: the theme's floating panel, as the Events panel's (time.jsx panelSurface).
+const menuSurface = {
+  backdropFilter: "var(--oh-hud-blur)",
+  WebkitBackdropFilter: "var(--oh-hud-blur)",
+  backgroundColor: "var(--oh-ui-overlay-strong, rgba(19,19,21,0.94))",
+  border: "1px solid var(--oh-ui-line, var(--oh-hud-border))",
+  borderRadius: "14px",
+  boxShadow: "var(--oh-hud-shadow)",
+  color: barText,
+};
+const section = { borderTop: "1px solid var(--oh-ui-glass-line, rgba(255,255,255,0.08))", marginTop: "0.65rem", paddingTop: "0.6rem" };
+const heading = { ...small, marginBottom: "0.3rem", textTransform: "uppercase" };
+const lineOf = { ...small, ...isolate, lineHeight: 1.45 };
+const row = { alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem" };
+// What may not wrap, and gives way with "…" when the bar is short of room.
+const oneLine = { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+// Words a screen reader says that the screen shows as an icon.
+const unseen = { border: 0, height: "1px", margin: "-1px", overflow: "hidden", padding: 0, position: "absolute", whiteSpace: "nowrap", width: "1px" };
+
+// A count on a bar button: the notices not yet read on Players, the players
+// asking to change country on Host. The accent, sparingly.
+const Badge = ({ count, label }) => (count ? (
   <span
-    aria-label={unreadLabel(count)}
-    title={unreadLabel(count)}
-    style={{ background: "#2bc1f3", borderRadius: "999px", color: "#06141a", fontSize: "0.66rem", fontVariantNumeric: "tabular-nums", fontWeight: 800, lineHeight: 1, minWidth: "1.05rem", padding: "0.18rem 0.32rem", textAlign: "center" }}
+    aria-label={label}
+    title={label}
+    style={{ background: "var(--oh-ui-accent, #2bc1f3)", borderRadius: "999px", color: "var(--oh-ui-bg, #06141a)", fontSize: "0.64rem", fontVariantNumeric: "tabular-nums", fontWeight: 800, lineHeight: 1, minWidth: "1rem", padding: "0.16rem 0.3rem", textAlign: "center" }}
   >
     {count > 9 ? "9+" : String(count)}
   </span>
 ) : null);
 
+const PeopleIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+  </svg>
+);
+const Chevron = ({ open }) => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: open ? "rotate(180deg)" : "none" }}>
+    <path d="m6 9 6 6 6-6" />
+  </svg>
+);
+
+// A dropdown under the bar: a dialog that is not modal, which takes the focus
+// when it is opened from its button. On a phone it is as wide as the screen.
+const Dropdown = ({ id, label, compact, menuRef, children }) => (
+  <div
+    id={id}
+    ref={menuRef}
+    role="dialog"
+    aria-label={label}
+    tabIndex={-1}
+    style={{
+      ...menuSurface, boxSizing: "border-box", outline: "none", overflowY: "auto", overscrollBehavior: "contain",
+      padding: "0.75rem 0.9rem 0.85rem", position: "absolute", top: "calc(100% + 0.4rem)",
+      maxHeight: `calc(100dvh - 8rem - ${SAFE_TOP})`,
+      // The bar starts beside the game's ⌂ on a phone; its dropdowns span the screen from the left gutter.
+      ...(compact ? { left: `calc(-3.65rem - ${SAFE_LEFT})`, right: 0 } : { right: 0, width: "min(26rem, calc(100vw - 1rem))" }),
+    }}
+  >
+    {children}
+  </div>
+);
+
 // `watching`: the country of a player whose country is gone, who watches it
-// and may take any free country under Players.
-const RoundBar = ({ shared, me, watching = "" }) => {
+// and may take any free country under Players. `cutOff`: this page's
+// connection to the host is lost (client/hostGone.js), the whole sentence.
+const RoundBar = ({ shared, me, watching = "", cutOff = "" }) => {
   const { round, role, notices } = shared;
-  // A phone's width: one row, and the rest under Players.
+  const host = role === "host";
+  // A phone's width: the row beside the game's ⌂, five things at most.
   const compact = useIsMobile();
-  // Open from the start for a player who watches.
-  const [showPlayers, setShowPlayers] = useState(Boolean(watching));
-  // When the notices were read before the list was last opened: those after
+  // Which dropdown is open: "players", "host" or none. Players is open from
+  // the start for a player who watches.
+  const [open, setOpen] = useState(watching ? "players" : "");
+  // When the notices were read before Players was last opened: those after
   // it read as new while it is open.
   const [readBefore, setReadBefore] = useState(0);
-  // And for the host of a game taken up again, which opens paused: its players
-  // need the invite code to come back. Read from the first round status this
-  // bar is given, which may come after the bar itself.
+  // And Host for the host of a game taken up again, which opens paused: its
+  // players need the invite code to come back, and the game needs Resume.
+  // Read from the first round status this bar is given, which may come after
+  // the bar itself.
   const [roundSeen, setRoundSeen] = useState(false);
   if (!roundSeen && round) {
     setRoundSeen(true);
-    if (role === "host" && round.paused) setShowPlayers(true);
+    if (host && round.paused && !watching) setOpen("host");
   }
-  const togglePlayers = () => {
-    if (!showPlayers) setReadBefore(shared.noticesReadAt || 0);
-    setShowPlayers(!showPlayers);
+  const rootRef = useRef(null);
+  const playersButton = useRef(null);
+  const hostButton = useRef(null);
+  const menuRef = useRef(null);
+  // A dropdown opened from its button takes the focus; one opened by itself
+  // (above) leaves it where it is.
+  const focusMenu = useRef(false);
+  const toggle = (which) => {
+    if (open === which) {
+      setOpen("");
+      return;
+    }
+    if (which === "players") setReadBefore(shared.noticesReadAt || 0);
+    focusMenu.current = true;
+    setOpen(which);
   };
+  useEffect(() => {
+    if (!open || !focusMenu.current) return;
+    focusMenu.current = false;
+    menuRef.current?.focus();
+  }, [open]);
+  // Closed by a click anywhere outside the bar and its dropdown, or Escape,
+  // which gives the focus back to the dropdown's button.
+  useEffect(() => {
+    if (!open) return undefined;
+    const outside = (event) => {
+      if (!rootRef.current?.contains(event.target)) setOpen("");
+    };
+    const escape = (event) => {
+      if (event.key !== "Escape") return;
+      (open === "host" ? hostButton : playersButton).current?.focus();
+      setOpen("");
+    };
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+  const showPlayers = open === "players";
+  const showHost = host && open === "host";
   // Players asking the host to change country, for the host to answer.
-  const asking = role === "host" ? shared.lobby?.changes?.length ?? 0 : 0;
+  const asking = host ? shared.lobby?.changes?.length ?? 0 : 0;
   // The clock is read in the timer, never while rendering: the time left, the
   // moment it was read and when this round status came are state like any other.
   const [clockState, setClockState] = useState({ remaining: 0, at: 0, since: 0 });
@@ -448,11 +578,12 @@ const RoundBar = ({ shared, me, watching = "" }) => {
   const ready = Boolean(me && round?.ready?.includes(me));
   const elapsed = (Number(round?.elapsedMs) || 0) + Math.max(0, clockState.at - clockState.since);
   const clockText = roundClockText({ round, role, remaining: clockState.remaining, elapsed });
-  // The clock says who the round waits for, not a time.
+  // The clock says who the round waits for, not a time: in the dropdowns, and a mark on the bar.
   const clockInWords = waitingForRetry || Boolean(round?.paused && round?.hostAway && phase !== "resolving");
   // The game's date, and where the round lands (client/roundDates.js); while a
   // landed round is read, where the next one lands.
   const dates = roundDatesOf(shared.date, shared.lobby?.settings?.daysPerRound);
+  const datesText = !dates ? "" : !dates.lands ? dates.now : dates.days === 1 ? `${dates.now} → ${dates.lands} (1 day)` : `${dates.now} → ${dates.lands} (${dates.days} days)`;
   const latest = notices?.at(-1);
   const recent = latest && clockState.at - latest.at < NOTICE_SHOWN_MS ? latest : null;
   const unread = unreadNotices(notices, shared.noticesReadAt);
@@ -468,102 +599,191 @@ const RoundBar = ({ shared, me, watching = "" }) => {
     const answer = await sharedRequest("ready", { value: !ready });
     if (!answer.ok) setReadyRefused({ round: asked, text: answer.error || "The host did not take that." });
   };
-
-  const dateSpan = dates ? (
-    <span style={{ ...small, ...isolate }} title="The game's date now, and the date the round lands on">
-      {!dates.lands ? dates.now : dates.days === 1 ? `${dates.now} → ${dates.lands} (1 day)` : `${dates.now} → ${dates.lands} (${dates.days} days)`}
-    </span>
-  ) : null;
-  // Who is ready, while being ready counts for something.
-  const readySpan = round && planning && !waitingForRetry ? <span style={small}>{readyText(round)}</span> : null;
-  const hostControls = role === "host" ? (
-    <>
-      {planning && !waitingForRetry ? (
-        <>
-          <button type="button" style={button} onClick={() => hostControl(round?.paused ? "resume" : "pause")}>{round?.paused ? "Resume" : "Pause"}</button>
-          <button type="button" style={button} onClick={() => hostControl("resolveNow")}>End round now</button>
-        </>
-      ) : null}
-      {/* A round being resolved, called off by the host (gameHost.js cancelRound). */}
-      {phase === "resolving" ? <button type="button" style={button} onClick={() => hostControl("cancelRound")}>Cancel round</button> : null}
-    </>
-  ) : null;
+  const busyLine = host ? hostBusyLine(shared.engine?.busy) : "";
+  const watchingText = watching ? `${watching} is gone: you are watching. Take a free country under Players.` : "";
+  // The one short mark for a state out of the ordinary (roundBar.js), its sentence in its title and in the dropdown it opens.
+  const status = barStatus({ round, role, cutOff, watching: watchingText, busyLine });
   const step = phase === "resolving" && round?.step?.label ? round.step : null;
-  // A line under the bar's row, as wide as the row and no wider: its words
-  // wrap there (contain: inline-size), and never widen the bar to the screen's edge.
-  const row = { ...small, contain: "inline-size", textAlign: "center" };
-  // On a phone the bar's buttons are a little tighter, and its row never wraps:
-  // the round's name gives way first (it ends in "…"), never Ready or Players.
-  const barButton = compact ? { ...button, padding: "0 0.6rem" } : button;
+  // One short line under the bar, for a moment: the host's answer to Ready, or its newest notice.
+  const refused = readyRefused.text && readyRefused.round === round?.round && planning ? readyRefused.text : "";
+  const note = refused ? { text: refused, problem: true } : recent && !open ? { text: recent.text, problem: recent.level === "warn" } : null;
 
+  const barButton = { ...button, flexShrink: 0, fontSize: "0.76rem", minHeight: "1.75rem", padding: compact ? "0 0.45rem" : "0 0.7rem" };
+  const chosen = (on) => (on ? { ...barButton, ...primary, fontSize: barButton.fontSize, minHeight: barButton.minHeight, padding: barButton.padding } : barButton);
+  // The phone's row holds the round, a clock or the mark, Ready, Players and Host.
+  const showClock = Boolean(clockText) && !clockInWords && !(compact && status);
+
+  // Where the round is, in words: at the head of Players, for everyone.
+  const roundLines = (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+      {cutOff ? <span role="status" style={{ ...lineOf, ...problemText }}>{cutOff}</span> : null}
+      {round && planning && !waitingForRetry ? <span style={lineOf}>{readyText(round)}</span> : null}
+      {datesText ? <span style={lineOf}>{datesText}</span> : null}
+      {clockInWords && clockText ? <span style={lineOf}>{clockText}</span> : null}
+      {round?.failed ? <span style={{ ...lineOf, ...problemText }}>{failureText(round)}</span> : null}
+      {step?.detail ? <span style={lineOf}>{`${step.label} ${step.detail}`}</span> : null}
+      {/* Whose device makes this round's request, when players take turns to pay. */}
+      <PayerLine shared={shared} me={me} style={{ textAlign: "start" }} />
+      {watchingText ? <span style={lineOf}>{watchingText}</span> : null}
+      <span style={{ alignSelf: "flex-start" }}><GameMasterMark shared={shared} /></span>
+    </div>
+  );
+
+  const playersMenu = showPlayers ? (
+    <Dropdown id="oh-shared-players" label="Players" compact={compact} menuRef={menuRef}>
+      {roundLines}
+      <div style={section}>
+        <SeatList seats={shared.lobby?.seats} ready={round?.ready ?? []} />
+        {(!host || watching) && (me || watching) ? <CountryPicker lobby={shared.lobby} asking={Boolean(me)} notices={notices} /> : null}
+      </div>
+      <GameMasterChanges shared={shared} />
+      <NoticeList notices={notices} readAt={readBefore} />
+      {host ? null : (
+        <div style={{ ...section, display: "flex", justifyContent: "flex-end" }}>
+          <LeaveButton role={role} label="Leave" />
+        </div>
+      )}
+    </Dropdown>
+  ) : null;
+
+  // Every one of the host's controls, and nothing that is not one.
+  const hands = (shared.lobby?.seats ?? []).some(inHostsHand);
+  const settings = shared.lobby?.settings;
+  const hostMenu = showHost ? (
+    <Dropdown id="oh-shared-host" label="Host controls" compact={compact} menuRef={menuRef}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
+        {clockInWords && clockText ? <span style={lineOf}>{clockText}</span> : null}
+        {/* A round that could not be resolved, or was cancelled, said until one lands (round.js). */}
+        {round?.failed ? <span style={{ ...lineOf, ...problemText }}>{failureText(round)}</span> : null}
+        {/* What the host's game is still busy with, which every request waits behind (host/worldQueue.js onSlow). */}
+        {busyLine ? <span style={{ ...lineOf, ...problemText }}>{busyLine}</span> : null}
+        <div style={row}>
+          {planning && !waitingForRetry ? (
+            <>
+              <button type="button" style={round?.paused ? primary : button} onClick={() => hostControl(round?.paused ? "resume" : "pause")}>{round?.paused ? "Resume" : "Pause"}</button>
+              <button type="button" style={button} onClick={() => hostControl("resolveNow")}>End round now</button>
+            </>
+          ) : null}
+          {round?.failed && planning ? <button type="button" style={primary} onClick={() => hostControl("resolveNow")}>Try again now</button> : null}
+          {round?.failed ? <PayItYourself shared={shared} /> : null}
+          {/* A round being resolved, called off by the host (gameHost.js cancelRound). */}
+          {phase === "resolving" ? <button type="button" style={button} onClick={() => hostControl("cancelRound")}>Cancel round</button> : null}
+        </div>
+      </div>
+      {asking || hands ? (
+        <div style={section}>
+          <div style={heading}>Players</div>
+          <ChangeRequests changes={shared.lobby?.changes} />
+          <SeatList seats={shared.lobby?.seats} host handsOnly />
+        </div>
+      ) : null}
+      <div style={section}><HostInvite shared={shared} /></div>
+      <div style={section}>
+        <RepliesSetting shared={shared} style={{ justifyContent: "flex-start", marginTop: 0 }} />
+        {settings?.replies === "own" ? <HostAnswersSetting settings={settings} /> : null}
+        {/* The host's command to the Game Master, where the game allows it. */}
+        <div style={{ marginTop: "0.55rem" }}><GameMasterBox shared={shared} /></div>
+      </div>
+      <div style={{ ...section, display: "flex", justifyContent: "flex-end" }}>
+        <LeaveButton role={role} label="Stop sharing" />
+      </div>
+    </Dropdown>
+  ) : null;
+
+  const roundName = `Round ${round?.round ?? "–"} · ${PHASES[phase] ?? "…"}`;
   return (
     <div
+      ref={rootRef}
       style={{
-        ...glass, display: "flex", flexDirection: "column", gap: "0.35rem",
-        // As wide as what it holds, up to the screen's width, and centred. It
-        // was centred with left: 50% and a transform, which left it half the
-        // screen to lay out in: two or three rows on a desktop, and on a phone
-        // a narrow column of a dozen rows over the map.
-        left: 0, right: 0, marginInline: "auto", width: "fit-content", maxWidth: "calc(100vw - 1.5rem)", boxSizing: "border-box",
-        padding: compact ? "0.35rem 0.35rem 0.35rem 0.7rem" : "0.45rem 0.6rem 0.45rem 0.9rem",
-        position: "fixed", top: "calc(3.4rem + env(safe-area-inset-top, 0px))", zIndex: 3500,
+        boxSizing: "border-box", fontFamily: "inherit", position: "fixed",
+        // Under the game's top edge (the date widget and the session pill, 0.5rem from the top and 3.5rem tall), as
+        // wide as what it holds and centred; on a phone, the row beside the game's ⌂ (libraryBar.jsx), across to the
+        // screen's edge. Over the map and under the HUD, but an open dropdown over the panels it opens on.
+        top: compact ? `calc(4rem + ${SAFE_TOP})` : `calc(4.4rem + ${SAFE_TOP})`,
+        ...(compact
+          ? { left: `calc(4.15rem + ${SAFE_LEFT})`, right: `calc(0.5rem + ${SAFE_RIGHT})` }
+          : { left: 0, right: 0, marginInline: "auto", width: "fit-content", maxWidth: "calc(100vw - 1rem)" }),
+        zIndex: open ? 9998 : 3500,
       }}
     >
-      <div style={{ alignItems: "center", display: "flex", flexWrap: compact ? "nowrap" : "wrap", gap: compact ? "0.35rem" : "0.5rem", minWidth: 0 }}>
-        <span style={{ fontSize: "0.82rem", fontWeight: 750, ...(compact ? { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : null) }}>Round {round?.round ?? "–"} · {PHASES[phase] ?? "…"}</span>
-        {clockText && !(compact && clockInWords) ? <span style={{ flexShrink: 0, fontSize: "0.82rem", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", ...(waitingForRetry || round?.paused ? small : null) }}>{clockText}</span> : null}
-        {compact ? null : <>{dateSpan}{readySpan}<GameMasterMark shared={shared} /></>}
-        {planning && me && !waitingForRetry ? (
-          <button type="button" style={{ ...(ready ? { ...barButton, ...primary, padding: barButton.padding } : barButton), flexShrink: 0 }} onClick={sayReady}>{ready ? "Ready ✓" : compact ? "Ready" : "I'm ready"}</button>
-        ) : null}
-        {compact ? null : hostControls}
-        <button type="button" style={{ ...(showPlayers || asking ? { ...barButton, ...primary, padding: barButton.padding } : barButton), flexShrink: 0 }} aria-expanded={showPlayers} onClick={togglePlayers}>
-          {asking ? `Players (${asking} asking)` : "Players"}
-          <Unread count={showPlayers ? 0 : unread} />
-        </button>
-        {compact ? null : <LeaveButton role={role} label="Stop" />}
-      </div>
-      {/* On a phone, a clock that is words (who the round waits for) is a line of its own. */}
-      {compact && clockInWords && clockText ? <span style={row}>{clockText}</span> : null}
-      {/* What the round's skip is doing now, in single player's words (Game/AI/skipPhases.js). */}
-      {step ? (
-        <span style={{ ...row, display: "flex", flexWrap: "wrap", gap: "0.35rem", justifyContent: "center" }}>
-          <span>{step.label}</span>
-          {step.detail ? <span>{step.detail}</span> : null}
-        </span>
-      ) : null}
-      {readyRefused.text && readyRefused.round === round?.round && planning ? <span style={{ ...row, ...problemText, ...isolate }}>{readyRefused.text}</span> : null}
-      {round?.failed ? (
-        // A round that could not be resolved, or was cancelled, said until one lands (round.js).
-        <span style={{ ...row, ...problemText, alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "center" }}>
-          <span style={isolate}>{failureText(round)}</span>
-          {role === "host" && planning ? <button type="button" style={button} onClick={() => hostControl("resolveNow")}>Try again now</button> : null}
-          <PayItYourself shared={shared} />
-        </span>
-      ) : null}
-      {/* Whose device makes this round's request, when players take turns to pay. */}
-      <PayerLine shared={shared} me={me} />
-      {watching ? <span style={{ ...row, ...isolate }}>{`${watching} is gone: you are watching. Take a free country under Players.`}</span> : null}
-      {recent && !showPlayers ? <span style={{ ...row, ...isolate, ...(recent.level === "warn" ? problemText : null) }}>{recent.text}</span> : null}
-      {showPlayers ? (
-        <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", contain: "inline-size", maxHeight: compact ? "min(62vh, 34rem)" : "40vh", minWidth: compact ? 0 : "min(30rem, calc(100vw - 3rem))", overflowY: "auto", paddingTop: "0.3rem" }}>
-          {/* On a phone, what the bar's one row leaves out. */}
-          {compact ? (
-            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", paddingBottom: "0.45rem" }}>
-              {dateSpan}{readySpan}<GameMasterMark shared={shared} />{hostControls}<LeaveButton role={role} label="Stop" />
-            </div>
+      <div style={{ position: "relative" }}>
+        <div
+          role="toolbar"
+          aria-label="Shared game"
+          style={{
+            ...barSurface, alignItems: "center", boxSizing: "border-box", display: "flex", flexWrap: "nowrap",
+            gap: compact ? "0.25rem" : "0.45rem", minHeight: "2.3rem", minWidth: 0,
+            padding: compact ? "0.22rem 0.25rem 0.22rem 0.5rem" : "0.22rem 0.3rem 0.22rem 0.85rem",
+          }}
+        >
+          {/* On a phone the round alone: its phase is in the title, and in words at the head of Players. */}
+          <span style={{ ...oneLine, flexShrink: 1, fontSize: "0.78rem", fontWeight: 750 }} title={roundName}>{compact ? `Round ${round?.round ?? "–"}` : roundName}</span>
+          {showClock ? <span style={{ color: round?.paused ? barMuted : barText, flexShrink: 0, fontSize: "0.78rem", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{clockText}</span> : null}
+          {/* Where the round lands; the date now and the days between in its title and under Players. */}
+          {!compact && dates?.lands ? <span style={{ ...small, ...isolate, ...oneLine, flexShrink: 2, fontSize: "0.72rem" }} title={datesText}>{`Lands on ${dates.lands}`}</span> : null}
+          {/* What the round's skip is doing now, in single player's words (Game/AI/skipPhases.js). */}
+          {step ? <span style={{ ...small, ...oneLine, flexShrink: 3, fontSize: "0.72rem", maxWidth: compact ? "none" : "14rem" }} title={step.detail ? `${step.label} ${step.detail}` : step.label}>{step.label}</span> : null}
+          {status ? (
+            <button
+              type="button"
+              title={status.title}
+              aria-label={status.title}
+              onClick={() => (open === status.opens ? null : toggle(status.opens))}
+              style={{
+                ...button, ...oneLine, display: "inline-block", flexShrink: 1, fontSize: "0.7rem", fontWeight: 650, lineHeight: "1.45rem", minHeight: "1.5rem", padding: compact ? "0 0.45rem" : "0 0.55rem",
+                ...(status.problem ? { ...problemText, border: "1px solid rgba(252,165,165,0.45)" } : { color: barMuted }),
+              }}
+            >
+              {compact && status.short ? status.short : status.label}
+            </button>
           ) : null}
-          {role === "host" ? <ChangeRequests changes={shared.lobby?.changes} /> : null}
-          <SeatList seats={shared.lobby?.seats} ready={round?.ready ?? []} host={role === "host"} />
-          <NoticeList notices={notices} readAt={readBefore} />
-          {role === "host" ? <HostInvite shared={shared} /> : null}
-          {(role !== "host" || watching) && (me || watching) ? <CountryPicker lobby={shared.lobby} asking={Boolean(me)} notices={notices} /> : null}
-          <RepliesSetting shared={shared} />
-          <WorldLanguage shared={shared} />
-          <RoundRules shared={shared} />
-          <GameRules shared={shared} />
-          {/* The host's command to the Game Master, where the game allows it. */}
-          <div style={{ marginTop: "0.6rem" }}><GameMasterBox shared={shared} /></div>
+          {/* On a phone Ready, Players and Host keep to the right edge, where the thumb finds them each time. */}
+          {compact ? <span aria-hidden="true" style={{ flex: "1 1 0", minWidth: 0 }} /> : <GameMasterMark shared={shared} compact />}
+          {planning && me && !waitingForRetry ? (
+            <button type="button" style={chosen(ready)} aria-pressed={ready} onClick={sayReady}>{ready ? "Ready ✓" : compact ? "Ready" : "I'm ready"}</button>
+          ) : null}
+          <button
+            ref={playersButton}
+            type="button"
+            style={chosen(showPlayers)}
+            aria-expanded={showPlayers}
+            aria-haspopup="dialog"
+            aria-controls={showPlayers ? "oh-shared-players" : undefined}
+            title={compact ? "Players" : undefined}
+            onClick={() => toggle("players")}
+          >
+            {compact ? <><PeopleIcon /><span style={unseen}>Players</span></> : "Players"}
+            <Badge count={showPlayers ? 0 : unread} label={unreadLabel(unread)} />
+          </button>
+          {host ? (
+            <button
+              ref={hostButton}
+              type="button"
+              style={chosen(showHost)}
+              aria-expanded={showHost}
+              aria-haspopup="dialog"
+              aria-controls={showHost ? "oh-shared-host" : undefined}
+              onClick={() => toggle("host")}
+            >
+              Host
+              <Badge count={asking} label={askingLabel(asking)} />
+              {compact ? null : <Chevron open={showHost} />}
+            </button>
+          ) : null}
+        </div>
+        {playersMenu}
+        {hostMenu}
+      </div>
+      {note ? (
+        <div
+          role="status"
+          title={note.text}
+          style={{
+            ...barSurface, ...small, ...isolate, ...oneLine, borderRadius: "10px", boxSizing: "border-box", contain: "inline-size",
+            marginTop: "0.3rem", padding: "0.25rem 0.7rem", textAlign: "center", ...(note.problem ? problemText : null),
+          }}
+        >
+          {note.text}
         </div>
       ) : null}
     </div>
@@ -584,12 +804,33 @@ export function SharedGameView({ shared }) {
       <div style={{ ...glass, boxSizing: "border-box", left: 0, marginInline: "auto", maxWidth: "min(30rem, calc(100vw - 2rem))", padding: "1rem 1.2rem", position: "fixed", right: 0, top: "15vh", width: "fit-content", zIndex: 4000 }}>
         <div style={{ fontWeight: 750 }}>The shared game ended</div>
         <div style={{ ...small, margin: "0.4rem 0 0.8rem" }}>{shared.error || "The connection closed."}</div>
-        <button type="button" style={button} onClick={leave}>Back to my games</button>
+        {/* A game that ended: the page is out of it already, or being taken out (client/sharedGame.js endForThisPage), and
+            OK only puts the word away. Only the host's screen whose engine window stopped answering keeps its game open
+            (a busy window must not end it for every player): its host leaves itself. A page whose game is open has a role. */}
+        {shared.leaving ? null : shared.role ? (
+          <button type="button" style={button} onClick={leave}>Leave</button>
+        ) : (
+          <button type="button" style={button} onClick={dismissEndedNotice}>OK</button>
+        )}
       </div>
     );
   }
   const started = Boolean(shared.lobby?.started);
-  return started && (me || watching) ? <RoundBar shared={shared} me={me} watching={watching} /> : <Lobby shared={shared} me={me} />;
+  const inGame = started && (me || watching);
+  // Cut off from the host: said at once, over whatever the guest is doing
+  // (client/hostGone.js), until it is back in the game: a reconnection passes through "joining". Nothing it does is taken meanwhile.
+  // In the game, the round bar's mark says it; over the lobby, a line of its own.
+  const cutOff = shared.role === "guest" && shared.cutOff ? (
+    <div role="status" style={{ ...glass, ...small, ...problemText, boxSizing: "border-box", left: 0, marginInline: "auto", maxWidth: "calc(100vw - 2rem)", padding: "0.45rem 0.9rem", position: "fixed", right: 0, top: "calc(0.5rem + env(safe-area-inset-top, 0px))", width: "fit-content", zIndex: 4100 }}>
+      {RECONNECTING}
+    </div>
+  ) : null;
+  return (
+    <>
+      {inGame ? null : cutOff}
+      {inGame ? <RoundBar shared={shared} me={me} watching={watching} cutOff={cutOff ? RECONNECTING : ""} /> : <Lobby shared={shared} me={me} />}
+    </>
+  );
 }
 
 export default function SharedGameOverlay() {

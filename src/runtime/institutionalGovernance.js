@@ -1133,7 +1133,7 @@ const activeInstitutionalMemberForPlayer = (world, institutionId, playerCountry)
 };
 
 export const commitInstitutionalPlayerProposal = async ({
-  institutionId = "", playerCountry = "", date = "", expectedGameId = "", proposal = {},
+  institutionId = "", playerCountry = "", date = "", expectedGameId = "", proposal = {}, fence = null,
 } = {}) => {
   // In a shared game the host does this, for this player (sharedInstitutions.js).
   if (institutionsGoToHost()) return askHostForInstitution("proposal", { institutionId, proposal: { type: proposal?.type, title: proposal?.title, summary: proposal?.summary } });
@@ -1157,13 +1157,13 @@ export const commitInstitutionalPlayerProposal = async ({
       },
     });
     return { world: result.world, chats: result.chats, events: result.events };
-  }, { playerCountry, expectedGameId });
+  }, { playerCountry, expectedGameId, fence });
   if (!result || committed?.skipped) throw new Error("Institutional proposal was not committed.");
   return { ...result, world: committed.world, chats: committed.chat || result.chats, events: committed.events || result.events };
 };
 
 export const commitInstitutionalPlayerVoteRequest = async ({
-  institutionId = "", proposalId = "", playerCountry = "", date = "", expectedGameId = "",
+  institutionId = "", proposalId = "", playerCountry = "", date = "", expectedGameId = "", fence = null,
 } = {}) => {
   // In a shared game the host does this, for this player (sharedInstitutions.js).
   // A charter without a voting rule is given one there first, by the host's AI.
@@ -1188,14 +1188,14 @@ export const commitInstitutionalPlayerVoteRequest = async ({
       command: { type: "call-vote", proposalId, caller: player },
     });
     return { world: result.world, chats: result.chats, events: result.events };
-  }, { playerCountry, expectedGameId });
+  }, { playerCountry, expectedGameId, fence });
   if (!result || committed?.skipped) throw new Error("Institutional vote request was not committed.");
   return { ...result, world: committed.world, chats: committed.chat || result.chats, events: committed.events || result.events };
 };
 
 export const commitInstitutionGovernanceCommand = async ({
   institutionId = "", playerCountry = "", date = "", command = {}, expectedGameId = "",
-  expectedGameDate = "", expectedRound = null, externalConsequenceApplier = null,
+  expectedGameDate = "", expectedRound = null, externalConsequenceApplier = null, fence = null,
 } = {}) => {
   // In a shared game the host does this, for this player (sharedInstitutions.js).
   if (institutionsGoToHost()) return askHostForInstitution("governance", { institutionId, command });
@@ -1220,7 +1220,7 @@ export const commitInstitutionGovernanceCommand = async ({
       externalConsequenceApplier,
     });
     return { world: result.world, chats: result.chats, events: result.events };
-  }, { playerCountry, expectedGameId });
+  }, { playerCountry, expectedGameId, fence });
   if (!result || committed?.skipped) throw new Error("Institutional governance command was not committed.");
   return { ...result, world: committed.world, chats: committed.chat || result.chats, events: committed.events || result.events };
 };
@@ -1318,7 +1318,7 @@ export const applyInstitutionalPlayerMessage = ({
 };
 
 export const commitInstitutionalPlayerMessage = async ({
-  institutionId = "", playerCountry = "", text = "", date = "", expectedGameId = "",
+  institutionId = "", playerCountry = "", text = "", date = "", expectedGameId = "", fence = null,
 } = {}) => {
   // In a shared game the host does this, for this player (sharedInstitutions.js).
   if (institutionsGoToHost()) return askHostForInstitution("message", { institutionId, text });
@@ -1331,7 +1331,7 @@ export const commitInstitutionalPlayerMessage = async ({
       date: date || game?.gameDate || "",
     });
     return { world: result.world, chats: result.chats };
-  }, { playerCountry, expectedGameId });
+  }, { playerCountry, expectedGameId, fence });
   if (!result || committed?.skipped) throw new Error("Institutional player message was not committed.");
   const committedChats = committed.chat || committed.chats || result.chats;
   return {
@@ -1620,7 +1620,7 @@ export const applyInstitutionalChatGovernanceBatch = ({
 
 export const commitInstitutionalChatGovernanceBatch = async ({
   institutionId = "", playerCountry = "", date = "", chatEvents = [], formalActions = [], cursors = null,
-  expectedGameId = "", externalConsequenceApplier = null,
+  expectedGameId = "", externalConsequenceApplier = null, fence = null,
 } = {}) => {
   let result = null;
   const committed = await mutateCanonicalTurnState(({ world, chats, events, game }) => {
@@ -1632,7 +1632,7 @@ export const commitInstitutionalChatGovernanceBatch = async ({
       chatEvents, formalActions, cursors, externalConsequenceApplier,
     });
     return { world: result.world, chats: result.chats, events: result.events };
-  }, { expectedGameId });
+  }, { expectedGameId, fence });
   if (!result || committed?.skipped) throw new Error("Institutional chat turn was not committed.");
   const committedChats = committed.chat || committed.chats || result.chats;
   return {

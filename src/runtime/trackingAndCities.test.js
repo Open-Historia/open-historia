@@ -51,13 +51,15 @@ test("a player who turns it off has turned it off, and it stays off through ever
 // stuff relating to those things entirely", the owner), and with it the first
 // sheet asked for the player's country and the Stats pane's tracking list. A
 // save's countryStatsTracking still loads, and nothing reads it.
+// The refresh itself came back on 2026-11-18 (Game/AI/statsRefresh.js), with its interval in Advanced Statistics
+// ("Auto-refresh cadence"), but not the tracked-country list or a save's countryStatsTracking.
 test("nothing refreshes or asks for a tracked country's sheet after a skip, and the Stats pane has no tracking list", () => {
   const source = read("../Game/AI/gameplay.js");
   for (const gone of ["refreshTrackedCountryStatsIfDue", "requestTrackedBaseline", "normalizeCountryStatsTracking"]) {
     assert.equal(source.includes(gone), false, gone);
   }
   const stats = read("../Game/GameUI/stats.jsx");
-  assert.equal(/HistoricalTrackingModal|normalizeCountryStatsTracking|Auto-refresh/.test(stats), false);
+  assert.equal(/HistoricalTrackingModal|normalizeCountryStatsTracking|trackedPolities/.test(stats), false);
   assert.equal(read("../Game/AI/advisorLedgers.js").includes("countryStatsTracking"), false);
 });
 

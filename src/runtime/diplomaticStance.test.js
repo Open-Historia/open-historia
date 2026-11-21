@@ -67,16 +67,17 @@ test("every relation band is drawn, and a pair with no record is unknown, not ne
   assert.notEqual(categoryOf("Italy", { relations }), categoryOf("Portugal", { relations }));
 });
 
-test("all eleven agreement types are drawn", () => {
+test("every agreement type is drawn, a group's deals among them", () => {
   const types = Object.keys(AGREEMENT_CATEGORY);
-  assert.equal(types.length, 11);
+  // The eleven between states, and the nine that fit a group (groupParties.js).
+  assert.equal(types.length, 20);
   for (const type of types) {
     const agreements = [{ status: "active", type, parties: ["France", "Belgium"] }];
     assert.equal(categoryOf("Belgium", { agreements }), AGREEMENT_CATEGORY[type], type);
   }
   assert.deepEqual(
     [...new Set(Object.values(AGREEMENT_CATEGORY))].sort(),
-    ["access", "agreement", "alliance", "friendly", "guarantee", "nonAggression", "peace", "trade"],
+    ["access", "agreement", "alliance", "crackdown", "friendly", "guarantee", "nonAggression", "peace", "trade"],
   );
 });
 
@@ -116,8 +117,8 @@ test("precedence: the strongest tie wins, war over an old trade deal, any treaty
   assert.equal(categoryOf("Germany", { wars, agreements, relations }), "war");
   assert.equal(categoryOf("Spain", { agreements, relations }), "trade", "a trade deal outranks a friendly score");
   assert.equal(categoryOf("Poland", { agreements }), "alliance", "an alliance outranks a guarantee, whichever is listed first");
-  // The order itself: subordination, war, the treaties, then the climate.
-  assert.deepEqual(RELATION_PRECEDENCE.slice(0, 6), ["self", "overlord", "puppet", "war", "ceasefire", "alliance"]);
+  // The order itself: subordination, war (and a crackdown on a group), the treaties, then the climate.
+  assert.deepEqual(RELATION_PRECEDENCE.slice(0, 7), ["self", "overlord", "puppet", "war", "crackdown", "ceasefire", "alliance"]);
   for (const band of CLIMATE_BANDS) {
     assert.ok(relationRank(band, { kind: "relation" }) > relationRank("agreement"), band);
   }

@@ -458,9 +458,32 @@ let engineWindow = null;
 let engineCredential = "";
 
 const closeEngineWindow = () => {
-  if (engineWindow && !engineWindow.isDestroyed()) engineWindow.destroy();
+  const closing = engineWindow;
   engineWindow = null;
   engineCredential = "";
+  if (!closing || closing.isDestroyed()) return Promise.resolve();
+  // Its guests are told the game is closed before their connections drop
+  // (multiplayer/host/engineMain.js farewell): a window destroyed outright
+  // never sees its own pagehide, and a guest was left reconnecting to a host
+  // that was gone. A moment for the goodbyes to go out, and never longer.
+  const destroy = () => {
+    if (!closing.isDestroyed()) closing.destroy();
+  };
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(wait);
+      destroy();
+      resolve();
+    };
+    const wait = setTimeout(finish, 1500);
+    closing.webContents.executeJavaScript("window.__ohSharedGameFarewell ? (window.__ohSharedGameFarewell(), true) : false", true)
+      .then((told) => new Promise((done) => setTimeout(done, told ? 300 : 0)))
+      .catch(() => {})
+      .finally(finish);
+  });
 };
 
 const installSharedGameEngine = () => {
@@ -488,7 +511,10 @@ const installSharedGameEngine = () => {
         logMain("warn", "engine.gone", String(details?.reason || "unknown"));
         closeEngineWindow();
       });
+      const opened = engineWindow;
       engineWindow.on("closed", () => {
+        // (A window closed late, while its farewell went out, is not the one open now.)
+        if (engineWindow !== opened) return;
         engineWindow = null;
         engineCredential = "";
       });
@@ -1272,6 +1298,12 @@ if (!app.requestSingleInstanceLock()) {
   app.on("before-quit", () => {
     quitting = true;
     globalThis.__ohSystemSpeech?.stopAll();
+  });
+  app.on("before-quit", (event) => {
+    if (engineWindow && !engineWindow.isDestroyed()) {
+      event.preventDefault();
+      void closeEngineWindow().finally(() => app.quit());
+    }
   });
   ipcMain.handle("setup:cancel", () => app.quit());
   // "Download the beta" on the update screen: in the player's own browser, so
