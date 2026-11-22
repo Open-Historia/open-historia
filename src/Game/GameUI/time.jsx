@@ -87,6 +87,7 @@ import {
 import { prehistoryHasContent } from "../../runtime/scenarioPrehistory.js";
 import { SHARED_ROUND_LANDED, inSharedGame, requestFromHost, sharedRoundBase, sharedRoundDays, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 import { rememberSkipLength, scheduleFrontsPrethink, stopFrontsPrethink } from "../AI/frontPrethink.js";
+import { observerHere } from "./sandboxHere.js";
 
 dayjs.extend(advancedFormat);
 
@@ -3444,7 +3445,8 @@ const DateWidget = ({
 // Player focus the player just changed in Settings.
     const activeFeatures = useActiveFeatures();
     const playerCountryCode = gameData?.country || "";
-    const playerCountry = playerCountryCode
+    // An observer leads no one (runtime/sandbox.js).
+    const playerCountry = observerHere(gameData) ? "Observer" : playerCountryCode
     ? (worldState?.polityOverrides?.[playerCountryCode]?.name
         || polityLookup.get(playerCountryCode)
         || playerCountryCode)

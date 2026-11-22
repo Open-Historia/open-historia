@@ -1075,8 +1075,10 @@ export const buildActionHistoryText = (actions, { includeResolved = false, inclu
     // In a shared game every order names the polity that gave it.
     const kindLabel = `${action.kind === "chat" ? "chat" : "action"}${action.ownerCode ? `, ${action.ownerCode}` : ""}`;
     const statusLabel = action.status !== "planned" ? ` [${action.status}]` : "";
+    // Sandbox mode (runtime/sandbox.js): an order given for another polity says whose it is.
+    const actorLabel = `${action.actor ? ` (as ${action.actor})` : ""}${action.decree ? " (decree)" : ""}`;
     const id = ids && action.status === "planned" && action.id ? `[${action.id}] ` : "";
-    return `- ${id}(${kindLabel}) ${action.title}${statusLabel}: ${buildActionDisplayText(action)}`;
+    return `- ${id}(${kindLabel})${actorLabel} ${action.title}${statusLabel}: ${buildActionDisplayText(action)}`;
   };
 
   if (!includeResolved) {
