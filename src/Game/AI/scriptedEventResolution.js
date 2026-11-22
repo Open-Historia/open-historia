@@ -491,12 +491,18 @@ export const planScriptedEvents = (eventsInput, {
   return { eligible, resolutions, pendingState: pending };
 };
 
+const SCRIPTED_DEPENDENCY_TYPES = new Set([
+  "scripted_event_fired",
+  "scripted_event_skipped",
+  "scripted_outcome_selected",
+  "scripted_outcome_not_selected",
+]);
+
 const referencedScriptedEventIds = (event) => {
   const conditions = array(event?.trigger?.conditions);
   const refs = [];
   for (const cond of conditions) {
-    const type = lower(cond?.type);
-    if (type === "scripted_event_fired" || type === "scripted_event_skipped") {
+    if (SCRIPTED_DEPENDENCY_TYPES.has(lower(cond?.type))) {
       const targetId = text(cond?.eventId);
       if (targetId) refs.push(targetId);
     }
@@ -506,9 +512,9 @@ const referencedScriptedEventIds = (event) => {
 
 // When native outcome validation skips one or more beats in the current segment
 // due to world-state drift, re-evaluate any same-segment beats whose conditions
-// depend on scripted_event_fired / scripted_event_skipped for those beats while
+// depend on scripted_event_* / scripted_outcome_* for those beats while
 // preserving all unrelated cached pending rolls (and reusing cached dependent
-// rolls from `preservedPending` whenever their referenced outcomes match).
+// rolls from `preservedPending` whenever their referenced outcomes & branches match).
 export const replanAfterSkippedScriptedBeats = (eventsInput, plan, skippedEntries, {
   world = {},
   resolvedState = {},
@@ -529,11 +535,12 @@ export const replanAfterSkippedScriptedBeats = (eventsInput, plan, skippedEntrie
   const preserved = record(preservedPending);
   const nextPending = { ...record(plan?.pendingState) };
   for (const [beatId, reason] of skippedMap.entries()) {
-    nextPending[beatId] = { ...record(nextPending[beatId]), outcome: "skipped", reason };
+    const { selectedOutcomeId: _droppedBranch, ...rest } = record(nextPending[beatId]);
+    nextPending[beatId] = { ...rest, outcome: "skipped", reason };
   }
 
-  // Propagate through multi-hop chains so dependent beats re-evaluate against
-  // the skipped outcome without rerolling independent Chance beats.
+  // Phase 1: collect the complete transitive set of dependent event IDs first
+  // so out-of-order multi-dependency beats never read stale upstream state.
   const dirty = new Set(skippedMap.keys());
   let changed = true;
   while (changed) {
@@ -541,24 +548,36 @@ export const replanAfterSkippedScriptedBeats = (eventsInput, plan, skippedEntrie
     for (const event of events) {
       const id = text(event?.id);
       if (!id || dirty.has(id)) continue;
-      const refs = referencedScriptedEventIds(event);
-      if (refs.some((refId) => dirty.has(refId))) {
-        const preservedEntry = preserved[id];
-        const depsMatchPreserved = Boolean(preservedEntry)
-          && ["fired", "skipped"].includes(lower(preservedEntry.outcome))
-          && refs.every((refId) => {
-            const currentOutcome = lower(nextPending[refId]?.outcome || resolvedState?.[refId]?.outcome);
-            const preservedOutcome = lower(preserved[refId]?.outcome || resolvedState?.[refId]?.outcome);
-            return currentOutcome && currentOutcome === preservedOutcome;
-          });
-        if (depsMatchPreserved) {
-          nextPending[id] = { ...preservedEntry };
-        } else {
-          delete nextPending[id];
-        }
+      if (referencedScriptedEventIds(event).some((refId) => dirty.has(refId))) {
         dirty.add(id);
         changed = true;
       }
+    }
+  }
+
+  // Phase 2: update dependent entries in event order, reusing preservedPending
+  // when every referenced beat has the same outcome AND selectedOutcomeId.
+  for (const event of events) {
+    const id = text(event?.id);
+    if (!id || !dirty.has(id) || skippedMap.has(id)) continue;
+    const refs = referencedScriptedEventIds(event);
+    const preservedEntry = preserved[id];
+    const depsMatchPreserved = Boolean(preservedEntry)
+      && ["fired", "skipped"].includes(lower(preservedEntry.outcome))
+      && refs.every((refId) => {
+        const currentEntry = nextPending[refId] || resolvedState?.[refId];
+        const savedEntry = preserved[refId] || resolvedState?.[refId];
+        const currentOutcome = lower(currentEntry?.outcome);
+        const savedOutcome = lower(savedEntry?.outcome);
+        if (!currentOutcome || currentOutcome !== savedOutcome) return false;
+        const currentBranch = currentOutcome === "fired" ? text(currentEntry?.selectedOutcomeId) : "";
+        const savedBranch = savedOutcome === "fired" ? text(savedEntry?.selectedOutcomeId) : "";
+        return currentBranch === savedBranch;
+      });
+    if (depsMatchPreserved) {
+      nextPending[id] = { ...preservedEntry };
+    } else {
+      delete nextPending[id];
     }
   }
 

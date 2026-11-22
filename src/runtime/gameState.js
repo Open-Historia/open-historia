@@ -4942,8 +4942,8 @@ export const writeEventsState = async (events, options = {}) => {
   const normalized = preserveApprovedEvents
     ? dedupeEventLog(normalizedEvents, { keyOf: eventCanonicalKey })
     : dedupeEventLog(normalizedEvents);
-  assertInteractiveTranscriptsRetained(events, normalized);
-  assertPublicStatementsRetained(events, normalized);
+  assertInteractiveTranscriptsRetained(normalizedEvents, normalized);
+  assertPublicStatementsRetained(normalizedEvents, normalized);
   // A scenario's own events follow the UI language immediately (see above);
   // the AI's are written in it.
   enqueueEventStrings(normalized);

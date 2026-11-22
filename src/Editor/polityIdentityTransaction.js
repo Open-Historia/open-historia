@@ -56,11 +56,30 @@ export const planMapPolityCreation = (document, plan) => {
     (rows, edit) => mergeStartingRelationEdit(rows, edit),
     document.relationEdits || [],
   );
+  // Merge only puppet rows involving the newly created polity onto the current
+  // document.puppets so Redo never clobbers unrelated puppet edits made later.
+  let nextPuppets = document.puppets;
+  if (Array.isArray(plan.puppets)) {
+    const isLivePuppetRow = (row) => (text(row?.status) || "active") === "active";
+    const targetRows = plan.puppets.filter(
+      (row) => row && typeof row === "object" && (samePolityName(row.puppet, key) || samePolityName(row.overlord, key)),
+    );
+    const replacedPuppets = targetRows.filter(isLivePuppetRow).map((row) => text(row.puppet)).filter(Boolean);
+    const basePuppets = (Array.isArray(document.puppets) ? document.puppets : [])
+      .filter((row) => {
+        if (!row || typeof row !== "object") return false;
+        if (samePolityName(row.puppet, key) || samePolityName(row.overlord, key)) return false;
+        if (isLivePuppetRow(row) && replacedPuppets.some((puppet) => samePolityName(row.puppet, puppet))) return false;
+        return true;
+      })
+      .map((row) => ({ ...row }));
+    nextPuppets = [...basePuppets, ...targetRows.map((row) => ({ ...row }))];
+  }
   return {
     ...document,
     polities: { ...(document.polities || {}), [key]: { ...plan.record } },
     ...appearances,
-    puppets: plan.puppets ? plan.puppets : document.puppets,
+    puppets: nextPuppets,
     relationEdits,
   };
 };

@@ -1,7 +1,7 @@
 /*! Open Historia - completed interactive transcript persistence regressions. AGPL-3.0-or-later. */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeEvents, writeCanonicalTurnState } from "./gameState.js";
+import { normalizeEvents, writeCanonicalTurnState, writeEventsState } from "./gameState.js";
 import { JSON_URLS, readJson, setRuntimeAssetEndpoints } from "./assets.js";
 import { buildEventHistoryText } from "../Game/AI/promptContext.js";
 import { projectEvents } from "../multiplayer/host/projection.js";
@@ -70,4 +70,21 @@ test("N030: canonical turn commit publishes and reloads the transcript; a collid
   await writeCanonicalTurnState({ ...state, events: [original], game: { ...state.game, round: 19 } });
   assert.equal(payload.events.length, 1);
   assert.equal("interactiveTranscript" in payload.events[0], false);
+});
+
+test("N030: writeEventsState validates retention against normalizedEvents so stripped stray transcripts do not falsely throw", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let written = null;
+  globalThis.fetch = async (_url, init = {}) => {
+    written = JSON.parse(init.body);
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  };
+  setRuntimeAssetEndpoints({ token: "n030-write-events-test" });
+  const strayOnWorld = { id: "w1", kind: "world", date: "1912-02-01", title: "World", description: "Desc.", interactiveTranscript: transcript };
+  const malformedOnScene = { id: "i1", kind: "interactive", date: "1912-02-02", title: "Scene", description: "Desc.", interactiveTranscript: { bad: true } };
+  await assert.doesNotReject(() => writeEventsState([strayOnWorld, malformedOnScene, outcome]));
+  assert.equal(Array.isArray(written), true);
+  assert.equal(written.length, 3);
+  assert.deepEqual(written[2].interactiveTranscript, transcript);
 });

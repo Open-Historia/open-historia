@@ -184,10 +184,11 @@ const prepareSingleBeatOutcomes = (beat, startPreview, priorRequirements, { regi
 // The editor may retain incomplete rows while an author is working. An eligible
 // beat with such a row must never silently turn into prose-only history.
 export const prepareNativeScriptedOutcomes = (beats, world, options = {}) => {
+  const priorRequirements = list(options.priorRequirements);
   const requirements = [];
   let preview = world;
   for (const beat of [...list(beats)].sort((left, right) => compareGameDates(left.date, right.date))) {
-    const result = prepareSingleBeatOutcomes(beat, preview, requirements, options);
+    const result = prepareSingleBeatOutcomes(beat, preview, [...priorRequirements, ...requirements], options);
     preview = result.preview;
     requirements.push(...result.requirements);
   }
@@ -198,6 +199,7 @@ export const prepareNativeScriptedOutcomes = (beats, world, options = {}) => {
 // was already conquered, already at war, or already a puppet) skips that beat
 // cleanly instead of permanently soft-locking the campaign on every time skip.
 export const partitionPreparedNativeScriptedOutcomes = (beats, world, options = {}) => {
+  const priorRequirements = list(options.priorRequirements);
   const requirements = [];
   const eligibleBeats = [];
   const skippedBeats = [];
@@ -210,7 +212,7 @@ export const partitionPreparedNativeScriptedOutcomes = (beats, world, options = 
       continue;
     }
     try {
-      const result = prepareSingleBeatOutcomes(beat, preview, requirements, options);
+      const result = prepareSingleBeatOutcomes(beat, preview, [...priorRequirements, ...requirements], options);
       preview = result.preview;
       requirements.push(...result.requirements);
       eligibleBeats.push(beat);

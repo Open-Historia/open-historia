@@ -17574,6 +17574,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       let fixedNativeRequirements = [];
       let preSkippedNativeBeats = [];
       let reconciledPrePlan = null;
+      // Include native outcomes already committed in earlier segments of this
+      // multi-segment jump so per-turn limits (e.g. one capital relocation per
+      // polity per turn) are enforced before prompting instead of crashing commit.
+      const priorSegmentNativeOutcomes = normalizeArray(state.segmentPayloads)
+        .flatMap((entry) => normalizeArray(entry?.scriptedNativeOutcomes));
       if (initialNativeOutcomes) {
         // Run a bounded fixpoint over partitionPreparedNativeScriptedOutcomes and
         // replanAfterSkippedScriptedBeats in BOTH jump and auto modes so:
@@ -17589,6 +17594,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           const partitioned = partitionPreparedNativeScriptedOutcomes(workingPlan.eligible, ledgerWorld, {
             regionCatalog: scriptedRegionCatalog,
             cityContext: scriptedCityContext,
+            priorRequirements: priorSegmentNativeOutcomes,
           });
           fixedNativeRequirements = partitioned.requirements;
           scriptedBeats = partitioned.eligibleBeats;
@@ -17956,6 +17962,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
                 const partitioned = partitionPreparedNativeScriptedOutcomes(candidateDue, ledgerWorld, {
                   regionCatalog: scriptedRegionCatalog,
                   cityContext: scriptedCityContext,
+                  priorRequirements: priorSegmentNativeOutcomes,
                 });
                 requirements = partitioned.requirements;
                 due = partitioned.eligibleBeats;

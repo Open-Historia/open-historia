@@ -100,4 +100,9 @@ test("revertMapPolityCreation restores displaced puppet rows without clobbering 
   };
   const undoneAfterSave = revertMapPolityCreation(withSettledRelation, "C", before);
   assert.equal(undoneAfterSave.relations.some((row) => row.a === "C" || row.b === "C"), false);
+
+  // Redo after Undo must preserve unrelated puppet edits made after initial creation.
+  const redone = planMapPolityCreation(undone, plan);
+  assert.equal(redone.puppets.some((row) => row.puppet === "D" && row.overlord === "B" && row.loyalty === 90), true);
+  assert.equal(redone.puppets.some((row) => row.puppet === "A" && row.overlord === "C"), true);
 });

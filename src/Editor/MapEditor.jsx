@@ -1195,10 +1195,18 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           regionStep?.redo();
           d.setDoc(forward);
           d.setSaveStatus("dirty");
+          // Cancel the matching pending removal op even if another landless
+          // polity was removed between Undo and Redo.
           const ops = polityAuthoringOpsRef.current;
-          const last = ops[ops.length - 1];
-          if (last?.op === "remove" && samePolityName(last.key, plan.key)) {
-            ops.pop();
+          for (let i = ops.length - 1; i >= 0; i -= 1) {
+            const entry = ops[i];
+            if (entry?.op === "rename" && (samePolityName(entry.from, plan.key) || samePolityName(entry.to, plan.key))) {
+              break;
+            }
+            if (entry?.op === "remove" && samePolityName(entry.key, plan.key)) {
+              ops.splice(i, 1);
+              break;
+            }
           }
         },
       });

@@ -232,3 +232,70 @@ test("N031 replanAfterSkippedScriptedBeats preserves cached Chance/weighted roll
   assert.equal(committed.state["chance-after-early"].outcome, "fired");
   assert.equal(committed.state["drifted-late"], undefined);
 });
+
+test("N031 priorRequirements partitions cross-segment relocate_capital conflicts and replan handles scripted_outcome_selected chains", async () => {
+  const { replanAfterSkippedScriptedBeats } = await import("./scriptedEventResolution.js");
+  const { partitionPreparedNativeScriptedOutcomes } = await import("./scriptedNativeOutcomes.js");
+  const { capitalCityId } = await import("../../runtime/capitalSeats.js");
+  const { buildLookupContext } = await import("./lookupTools.js");
+
+  // 1) Cross-segment priorRequirements blocks a second relocate_capital for the same polity in segment 1.
+  const polygon = (x, y) => ({ type: "Polygon", coordinates: [[[x - 1, y - 1], [x + 1, y - 1], [x + 1, y + 1], [x - 1, y + 1], [x - 1, y - 1]]] });
+  const capRegions = [
+    { id: "berlin", country: "Germany", geometry: polygon(13, 52) },
+    { id: "munich", country: "Germany", geometry: polygon(11, 48) },
+    { id: "hamburg", country: "Germany", geometry: polygon(10, 53) },
+  ];
+  const capWorld = normalizeWorldState({
+    customRegions: true,
+    customCities: true,
+    polityOverrides: { Germany: { code: "Germany", name: "Germany", status: "active" } },
+    regionOwnershipOverrides: { berlin: "Germany", munich: "Germany", hamburg: "Germany" },
+    countryStats: { Germany: { capital: "Berlin" } },
+  });
+  const cityContext = buildLookupContext({
+    world: capWorld,
+    regions: capRegions,
+    cities: [
+      { name: "Berlin", aliases: [], coordinates: [13, 52], capital: "primary", population: 1000 },
+      { name: "Munich", aliases: [], coordinates: [11, 48], capital: "", population: 500 },
+      { name: "Hamburg", aliases: [], coordinates: [10, 53], capital: "", population: 900 },
+    ],
+  });
+  const seg0Beat = beat("move-munich", [{ type: "relocate_capital", polity: "Germany", cityId: capitalCityId("Munich", [11, 48]), cityName: "Munich" }], { date: "1914-03-10" });
+  const seg1Beat = beat("move-hamburg", [{ type: "relocate_capital", polity: "Germany", cityId: capitalCityId("Hamburg", [10, 53]), cityName: "Hamburg" }], { date: "1914-03-20" });
+  const seg0 = partitionPreparedNativeScriptedOutcomes([seg0Beat], capWorld, { regionCatalog: capRegions, cityContext });
+  assert.equal(seg0.eligibleBeats.length, 1);
+  assert.equal(seg0.requirements.length, 1);
+  const seg1 = partitionPreparedNativeScriptedOutcomes([seg1Beat], capWorld, {
+    regionCatalog: capRegions,
+    cityContext,
+    priorRequirements: seg0.requirements,
+  });
+  assert.equal(seg1.eligibleBeats.length, 0);
+  assert.equal(seg1.skippedBeats.length, 1);
+  assert.match(seg1.skippedBeats[0].reason, /Only one capital relocation/);
+
+  // 2) replanAfterSkippedScriptedBeats re-evaluates scripted_outcome_selected & scripted_outcome_not_selected.
+  const live = pipeline([beat("existing-war", [declaration])]).world;
+  const branchedDrifted = beat("branched-war", [], {
+    date: "1914-03-10",
+    outcomes: [
+      { id: "opt1", text: "War starts.", weight: 1, impactRows: [declaration] },
+    ],
+  });
+  const needsOpt1 = beat("after-opt1", [], {
+    date: "1914-03-12",
+    trigger: { mode: "conditional", operator: "all", conditions: [{ type: "scripted_outcome_selected", eventId: "branched-war", outcomeId: "opt1" }] },
+  });
+  const needsNotOpt1 = beat("after-not-opt1", [], {
+    date: "1914-03-12",
+    trigger: { mode: "conditional", operator: "all", conditions: [{ type: "scripted_outcome_not_selected", eventId: "branched-war", outcomeId: "opt1" }] },
+  });
+  const events = [branchedDrifted, needsOpt1, needsNotOpt1];
+  const initialPlan = planScriptedEvents(events, { world: live, random: () => 0 });
+  assert.deepEqual(initialPlan.eligible.map((e) => e.id), ["branched-war", "after-opt1"]);
+  const part = partitionPreparedNativeScriptedOutcomes(initialPlan.eligible, live, { regionCatalog });
+  const replanned = replanAfterSkippedScriptedBeats(events, initialPlan, part.skippedBeats, { world: live });
+  assert.deepEqual(replanned.eligible.map((e) => e.id), ["after-not-opt1"]);
+});

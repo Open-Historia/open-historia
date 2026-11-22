@@ -87,7 +87,8 @@ const RegionsPanel = ({ api, polities = {}, types = [], groups = {}, selection =
       if (!ok) return;
     }
     const live = liveRegionsRef.current;
-    const liveIds = live.selectedRows.map((r) => r.id);
+    const confirmedSet = new Set(ids);
+    const liveIds = live.selectedRows.map((r) => r.id).filter((id) => confirmedSet.has(id));
     if (!liveIds.length || !live.api?.setRegionAttrs) return;
     live.api.setRegionAttrs(liveIds, patch);
     setNote(`Updated ${label} for ${liveIds.length.toLocaleString()} region${liveIds.length === 1 ? "" : "s"}. Undo restores the previous values.`);

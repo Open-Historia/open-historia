@@ -108,12 +108,14 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
 
   const deleteSelected = async () => {
     if (!selectedCount || confirmingRef.current) return;
+    const confirmedIds = new Set(selectedSet);
     confirmingRef.current = true;
     try {
       if (!(await confirmDialog(`Delete ${selectedCount} selected feature${selectedCount === 1 ? "" : "s"}?`, { danger: true, confirmLabel: "Delete" }))) return;
       const latest = liveFeaturesRef.current;
-      if (!latest.selectedSet.size) return;
-      pushUndoStep(removeRowsStep(latest.features, setFeatures, (f) => latest.selectedSet.has(String(f.id))));
+      const targetIds = new Set([...confirmedIds].filter((id) => latest.selectedSet.has(id)));
+      if (!targetIds.size) return;
+      pushUndoStep(removeRowsStep(latest.features, setFeatures, (f) => targetIds.has(String(f.id))));
       setSelection?.([]);
     } finally {
       confirmingRef.current = false;
