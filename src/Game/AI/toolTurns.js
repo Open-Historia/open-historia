@@ -129,6 +129,25 @@ export const anthropicMessagesFromHistory = (history) => array(history).map((ent
   return { role: entry?.role === "model" ? "assistant" : "user", content: [{ type: "text", text: textOf(entry) }] };
 });
 
+// Prompt caching for a conversation that goes on (main.jsx
+// buildAnthropicSystemContent, `followUp`: lookups offered, or rounds already
+// answered). A breakpoint on the last block of the last message, so the next
+// request, the same conversation one round longer, reads all of this from the
+// cache instead of paying for it again. A reminder added after this
+// (anthropicToolChoice.js withToolCallReminder) sits past the breakpoint, so the
+// next request leaving it out does not break the cached prefix. An empty text
+// block cannot carry one, and is left as it is.
+export const withCachedHistory = (messages, { followUp = false } = {}) => {
+  const list = array(messages);
+  if (!followUp || !list.length) return list;
+  const last = list.at(-1);
+  const content = typeof last?.content === "string" ? [{ type: "text", text: last.content }] : array(last?.content);
+  const block = content.at(-1);
+  if (!block || typeof block !== "object") return list;
+  if (block.type === "text" && !clean(block.text)) return list;
+  return [...list.slice(0, -1), { ...last, content: [...content.slice(0, -1), { ...block, cache_control: { type: "ephemeral" } }] }];
+};
+
 export const lookupCallsFromAnthropic = (data, outputToolName) => array(data?.content)
   .filter((block) => block?.type === "tool_use" && clean(block.name) && clean(block.name) !== clean(outputToolName))
   .map((block) => ({ id: clean(block.id) || nextCallId(), name: clean(block.name), args: block.input && typeof block.input === "object" ? block.input : {} }));

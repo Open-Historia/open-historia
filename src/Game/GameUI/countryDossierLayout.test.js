@@ -52,7 +52,7 @@ test("political composition is still driven by the bounded public projection", (
   assert.match(politics, /buildPoliticalLandscapeViews\(profile\)/);
   assert.match(politics, /<GovernmentOverview profile=\{profile\}/);
   assert.match(politics, /className="oh-country-landscape-overview"/);
-  assert.match(politics, /landscape\.entries\.slice\(0, 4\)\.map/);
+  assert.match(politics, /landscape\.slices\.slice\(0, 4\)\.map/);
   assert.match(politics, /<PartyDonut/);
   assert.match(politics, /<PartyRow/);
   assert.match(politics, /<InstitutionPortfolio rows=\{institutions\}/);
@@ -123,7 +123,9 @@ test("Ranking ledger retains actual values, tie ranks, canonical flags and count
   assert.match(stats, /className="oh-country-ranking-flag"/);
   assert.match(stats, /className="oh-country-ranking-value"/);
   assert.match(stats, /row\.rank/);
-  assert.match(stats, /formatRankingValue\(metric, row\.value\)/);
+  assert.match(stats, /formatRankingValue\(metric, row\.value, displayCurrency\)/);
+  assert.match(stats, /if \(metric\.stat\) return formatCustomStatValue\(metric\.stat, value, \{ economicDisplayCurrency: displayCurrency \}\)/,
+    "ranking values must preserve the campaign GDP display currency for scenario-defined GDP metrics");
   assert.match(stats, /const flagUrl = resolvePolityFlag\(\{ polity: \{ name: row\.label, code: row\.key \}, world: world \|\| \{\}, flags: flags \|\| \{\}, identityIndex: flagIdentityIndex \}\)\.imageUrl/);
   assert.match(stats, /onClick=\{\(\) => onPick\(row\.key\)\}/);
   assert.match(stats, /aria-current=\{open \? "true" : undefined\}/);

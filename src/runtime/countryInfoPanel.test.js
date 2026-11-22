@@ -119,53 +119,62 @@ test("the panel resolves a click to the polity's stable key and current name", (
 
 // ---- related events --------------------------------------------------------
 
-const matcherFor = (key, name = key, world = {}, aliases = []) =>
-  createEventMatcher({ key, name, aliases, knownNames: knownPolityNames(world) });
+const matcherFor = (key, name = key, aliases = [], formerNames = []) =>
+  createEventMatcher({ key, name, aliases, formerNames });
 
-const prose = (title, description = "") => ({ title, description, impacts: {} });
+const prose = (title, description = "", fields = {}) => ({ title, description, impacts: {}, ...fields });
+const about = (concerns, title = "An event") => prose(title, "", { concerns });
 
-test("text matching: Niger is not Nigeria", () => {
+// An event is about a polity when it says so (its `concerns`), when the
+// polity fights in it, or when the polity is among its places as a country:
+// exact names, case and spacing aside. Its words are never read for a name.
+test("an event is about the polities it says it concerns, by their exact names: Niger is not Nigeria", () => {
   const niger = matcherFor("Niger");
-  assert.equal(niger(prose("Nigeria holds elections")), false);
-  assert.equal(niger(prose("Coup in Niger")), true);
-  assert.equal(niger(prose("Niger's junta expels envoys")), true);
-  assert.equal(matcherFor("Nigeria")(prose("Coup in Niger")), false);
+  assert.equal(niger(about(["Nigeria"])), false);
+  assert.equal(niger(about(["Niger"])), true);
+  assert.equal(niger(about(["  NIGER "])), true, "case and spacing aside");
+  assert.equal(matcherFor("Nigeria")(about(["Niger"])), false);
+  assert.equal(matcherFor("Sudan")(about(["South Sudan"])), false);
+  assert.equal(matcherFor("Sudan")(about(["South Sudan", "Sudan"])), true);
+  assert.equal(matcherFor("Guinea")(about(["Papua New Guinea", "Equatorial Guinea", "Guinea-Bissau"])), false);
+  assert.equal(matcherFor("Côte d'Ivoire")(about(["CÔTE D'IVOIRE"])), true);
 });
 
-test("text matching: Sudan is not South Sudan, but both named counts", () => {
-  const sudan = matcherFor("Sudan");
-  assert.equal(sudan(prose("South Sudan declares independence")), false);
-  assert.equal(sudan(prose("Border talks", "South Sudan and Sudan agree on Abyei.")), true);
-  assert.equal(matcherFor("South Sudan")(prose("South Sudan declares independence")), true);
+test("its words name nothing: in English or in French, only what it says it concerns counts", () => {
+  const germany = matcherFor("Germany");
+  // Words alone: nobody's, in any language (the panel used to list the first
+  // and never the second).
+  assert.equal(germany(prose("Germany signs the pact", "Berlin agrees.")), false);
+  assert.equal(germany(prose("L'Allemagne signe le pacte", "Berlin accepte.")), false);
+  // The same event said to concern Germany, in each language: listed alike.
+  assert.equal(germany(prose("Germany signs the pact", "", { concerns: ["Germany"] })), true);
+  assert.equal(germany(prose("L'Allemagne signe le pacte", "", { concerns: ["Germany"] })), true);
+  // A US state written about is not the country of the same name.
+  assert.equal(matcherFor("Georgia")(prose("Storms hit Georgia", "Atlanta floods.", { concerns: ["United States"] })), false);
 });
 
-test("text matching: Guinea is not Papua New Guinea, Equatorial Guinea or Guinea-Bissau", () => {
-  const guinea = matcherFor("Guinea");
-  assert.equal(guinea(prose("Papua New Guinea hosts a summit")), false);
-  assert.equal(guinea(prose("Oil found off Equatorial Guinea")), false);
-  assert.equal(guinea(prose("Guinea-Bissau votes")), false);
-  assert.equal(guinea(prose("Bauxite strike in Guinea")), true);
+test("who fights in it and the countries among its places count, and an old event has only those", () => {
+  const poland = matcherFor("Republic of Poland");
+  assert.equal(poland(prose("Battle", "", { combatants: ["Republic of Poland", "German Reich"] })), true);
+  assert.equal(poland(prose("A summit", "", { places: [{ kind: "country", name: "Republic of Poland" }] })), true);
+  // A city or a region found on the map names no polity of its own.
+  assert.equal(poland(prose("A summit", "", { places: [{ kind: "city", name: "Republic of Poland", lng: 21, lat: 52 }] })), false);
+  assert.equal(poland(prose("Republic of Poland votes")), false);
 });
 
-test("text matching ignores case and handles accented names", () => {
-  const ivory = matcherFor("Côte d'Ivoire");
-  assert.equal(ivory(prose("CÔTE D'IVOIRE signs the accord")), true);
-  assert.equal(ivory(prose("Côte d'Ivoirean exporters")), false);
-  assert.equal(matcherFor("Chad")(prose("Chadian troops advance")), false);
+test("the names a world knows are its polities' keys, names and aliases, and every real country", () => {
+  const names = knownPolityNames({ polityOverrides: { Germany: { name: "Third Reich", aliases: ["Reich"] } } });
+  for (const name of ["Germany", "Third Reich", "Reich", "France"]) assert.ok(names.includes(name), name);
 });
 
-test("a longer name belonging to the polity itself does not hide it", () => {
-  const world = { polityOverrides: { Sudan: { name: "Sudan", aliases: ["Republic of the Sudan"] } } };
-  const sudan = matcherFor("Sudan", "Sudan", world, ["Republic of the Sudan"]);
-  assert.equal(sudan(prose("The Republic of the Sudan protests")), true);
-});
-
-test("a renamed polity matches its key and its new name", () => {
-  const world = { polityOverrides: { Germany: { name: "Third Reich" }, "East Germany": { name: "East Germany" } } };
-  const matcher = matcherFor("Germany", "Third Reich", world);
-  assert.equal(matcher(prose("The Third Reich remilitarises the Rhineland")), true);
-  assert.equal(matcher(prose("Germany signs the pact")), true);
-  assert.equal(matcher(prose("East Germany signs the pact")), false);
+test("a polity's declared aliases and the names it had before a rename are its own", () => {
+  const sudan = matcherFor("Sudan", "Sudan", ["Republic of the Sudan"]);
+  assert.equal(sudan(about(["Republic of the Sudan"])), true);
+  const reich = matcherFor("Germany", "Third Reich", [], ["Weimar Republic"]);
+  assert.equal(reich(about(["Third Reich"])), true);
+  assert.equal(reich(about(["Germany"])), true);
+  assert.equal(reich(about(["Weimar Republic"])), true);
+  assert.equal(reich(about(["East Germany"])), false);
 });
 
 test("every impact kind that names a polity matches it exactly", () => {

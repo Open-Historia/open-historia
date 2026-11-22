@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 
 import { renameInTransports } from "../../../server/battlefieldNames.js";
 import { renamePolityInWorld } from "../../../server/polityRename.js";
-import { PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
+import { FILTERED_WORLD_KEY_NAMES, PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
 import { applyEventImpactsToWorld, normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { syntheticMap } from "../../runtime/fronts/syntheticMap.js";
@@ -74,12 +74,16 @@ test("a line of orders sends a transporter: ship, rail or airlift, with what car
   assert.deepEqual(TRANSPORT_ORDERS, { ship: "sea", rail: "land", airlift: "air" });
   const [ship, train, drop, plain, bare, lost] = decodeFrontOrders([
     "Operation Tide~Aland~ship~~2~city: Port~~major~troop convoy~12~600",
-    "The Eastern Front~Aland~by rail~~1~region: Eastmark~~~armoured trains~6",
-    "Operation Sky~Aland~Airdrop~~~country: Borduria",
+    "The Eastern Front~Aland~Rail~~1~region: Eastmark~~~armoured trains~6",
+    "Operation Sky~Aland~AIRLIFT~~~country: Borduria",
     "The Border~Aland~advance~all~1",
-    "Operation Tide~Aland~convoy~~1~city: Port~~~~many~fast",
+    "Operation Tide~Aland~ship~~1~city: Port~~~~many~fast",
     "Operation Nowhere~Aland~ship",
   ].join("\n"));
+  // The rules' words only: "by rail" or "convoy" is no transporter, nor is "par bateau".
+  for (const word of ["by rail", "convoy", "Airdrop", "par bateau", "Lufttransport"]) {
+    assert.match(decodeFrontOrders([`Operation Tide~Aland~${word}~~1~city: Port`])[0].problem, /is not an order/, word);
+  }
   assert.deepEqual([ship.order, ship.battlefield, ship.side, ship.objective, ship.effort, ship.carrier, ship.strength, ship.speed, ship.eventIndexes], ["ship", "Operation Tide", "Aland", "city: Port", "major", "troop convoy", 12, 600, [1]]);
   assert.deepEqual([train.order, train.carrier, train.strength, train.speed], ["rail", "armoured trains", 6, undefined], "a speed that is not given is the year's usual");
   assert.deepEqual([drop.order, drop.objective, drop.carrier, drop.strength], ["airlift", "country: Borduria", undefined, undefined]);
@@ -198,13 +202,16 @@ test("what is told of transporters: the period's voyages by date, those on the w
   assert.match(account, /2024-03-06 troops of Borduria came ashore at city: Alba/);
 });
 
-test("the world keeps its transporters, shows them to everyone in a shared game, and renames their owners with everything else", () => {
+test("the world keeps its transporters, shows them to everyone in a shared game once under way, and renames their owners with everything else", () => {
   const sent = orderTransport([], { medium: "sea", owner: "Aland", to: { lng: 28.4, lat: 51.5, name: "city: Port" }, raise: 6, by: "Aland" }, { date: "2024-03-01", year: 2024 }).transports;
   const hunted = sent.map((entry) => ({ ...entry, status: "moving", hunters: ["Borduria"], attacks: ["Neutralia"] }));
   const world = normalizeWorldState({ transports: [...hunted, { id: "junk" }, null, hunted[0]] });
   assert.deepEqual(world.transports.map((entry) => [entry.id, entry.status, entry.owner]), [["t1", "moving", "Aland"]], "what is not a transporter is not kept, and each is kept once");
   assert.deepEqual(normalizeWorldState({}).transports, []);
-  assert.ok(PUBLIC_WORLD_KEYS.includes("transports"));
+  // In a shared game one only ordered is its owner's until the skip (the owner's decision 6): a key of its own
+  // filter (multiplayer/host/projection.js), not a public one.
+  assert.ok(FILTERED_WORLD_KEY_NAMES.includes("transports"));
+  assert.equal(PUBLIC_WORLD_KEYS.includes("transports"), false);
   const renamed = renameInTransports(hunted, "aland", "The Aland Republic");
   assert.deepEqual([renamed[0].owner, renamed[0].by, renamed[0].hunters, renamed[0].attacks], ["The Aland Republic", "The Aland Republic", ["Borduria"], ["Neutralia"]]);
   assert.deepEqual(renameInTransports(hunted, "Borduria", "Bordureich")[0].hunters, ["Bordureich"]);

@@ -16,6 +16,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { createRequire } from "node:module";
+
+// The menus and dialogs go through uiWord (electron/uiWords.cjs): unconfigured, it is the English.
+const { uiWord } = createRequire(import.meta.url)("../electron/uiWords.cjs");
 
 const source = fs.readFileSync(new URL("../electron/main.cjs", import.meta.url), "utf8");
 const start = source.indexOf("const pageGoneWording = ");
@@ -40,8 +44,9 @@ const load = ({ appName = "Open Historia", response = 0 } = {}) => {
     "logMain",
     "app",
     "APP_NAME",
+    "uiWord",
     `${source.slice(start, end)}\nreturn { handlePageGone };`,
-  )(dialog, logMain, app, appName);
+  )(dialog, logMain, app, appName, uiWord);
   return { handlePageGone, logs, dialogs, quits };
 };
 

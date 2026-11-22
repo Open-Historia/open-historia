@@ -62,6 +62,24 @@ test("recall keeps the record, frees the slot, and a redeploy gets a new id", ()
   assert.notEqual(activeSpies(world, P)[0].id, first.id);
 });
 
+test("agents sent to countries named in another script have ids of their own, as their English twins do", () => {
+  // An agent's id is made from its owner and its target. Cut to a-z and 0-9,
+  // two agents sent to two countries named in Cyrillic or Chinese had one id,
+  // and recalling one recalled the other.
+  assert.equal(deploySpy({}, "Germany", { playerPolity: P })[0].id, "spy-france-germany-1", "as it always was");
+  for (const [owner, first, second] of [[P, "Germany", "Italy"], ["Франция", "Германия", "Италия"], ["法国", "德国", "意大利"]]) {
+    let world = { spies: deploySpy({}, first, { playerPolity: owner }) };
+    world = { spies: deploySpy(world, second, { playerPolity: owner }) };
+    const [one, two] = activeSpies(world, owner);
+    assert.notEqual(one.id, two.id, `${owner}: two agents, one id`);
+    world = { spies: recallSpy(world, one.id) };
+    assert.deepEqual(activeSpies(world, owner).map((spy) => spy.target), [second], `${owner}: a recall recalls its own agent only`);
+  }
+  // Nor is an id another agent holds ever minted again.
+  const held = [{ id: "spy-france-germany-1", owner: P, target: "germany", status: "recalled" }];
+  assert.notEqual(deploySpy({ spies: held }, "Germany", { playerPolity: P }).at(-1).id, "spy-france-germany-1");
+});
+
 test("the player's answers to a caught foreign agent: expel, or turn with a cover story", () => {
   let world = { spies: [{ id: "g1", owner: "Germany", target: P, status: "discovered" }] };
   assert.equal(foreignSpies(world, P)[0].status, "discovered");
@@ -241,6 +259,9 @@ test("what the simulator is told, and what a foreign leader is told", () => {
   assert.match(brief, /Italy has a live agent in France/);
   assert.match(brief, /Poland publicly expelled a France agent on 1938-02-01/);
   assert.match(brief, /PLANTED \(false.*Germany↔Italy on Austria: Germany: Nothing planned\./);
+  // Whose service it was planted on, by name: a programme opened from it is that
+  // service's belief (believedBy), never Germany's real work.
+  assert.match(brief, /PLANTED \(false, fed to France's turned agent\)/);
 
   // Italy, live agent: gets the material, redacted by its clarity against France.
   const italy = foreignAgentBrief(world, "Italy", { playerPolity: P, material: "France plans to garrison the Rhine in May." });

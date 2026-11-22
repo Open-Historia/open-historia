@@ -46,5 +46,32 @@ export const humanCountriesOf = (game) => {
 
 export const isSharedGame = (game) => humanCountriesOf(game).length > 1;
 
+// Two things the institution code once held in one "playerCountry": who acts
+// now (a seat, with its player's authority) and the people, whom no model
+// ever votes, decides, answers, accepts or withdraws for, and whom a ballot
+// waits for. A guest's ballot was cast by the AI because only the acting seat
+// was spared. This is the people, the one acting now first: a seat acting for
+// itself is a person, whatever the list holds yet. In single player it is the
+// player alone, as it always was.
+export const humanCountriesWith = (game, actor = "") => {
+  const names = humanCountriesOf(game);
+  const name = clean(actor);
+  if (!name) return names;
+  return [name, ...names.filter((other) => other.toLocaleLowerCase() !== name.toLocaleLowerCase())];
+};
+
+// A thread made for a person is theirs. While this engine hosts a shared game
+// a thread that names no owner is the host's (multiplayer/host/projection.js
+// threadOwner), so one made for another person names them (chat.player): an
+// AI's invitation of a guest, made in the host's skip, was the host's thread
+// and reached the guest as nobody's. In single player, and for the host,
+// nothing is added; a thread that names its owner keeps it.
+export const ownedByPerson = (chat, person = "") => {
+  const name = clean(person);
+  if (!chat || !hosting || !name || clean(chat.player)) return chat;
+  if (name.toLocaleLowerCase() === hostCountry.toLocaleLowerCase()) return chat;
+  return { ...chat, player: name };
+};
+
 // Who gave an order: its ownerCode, or the player when it names none.
 export const orderOwner = (action, game) => clean(action?.ownerCode) || clean(game?.country);

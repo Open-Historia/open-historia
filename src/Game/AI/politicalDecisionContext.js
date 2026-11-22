@@ -257,12 +257,16 @@ const selectEntityRows = (actor, limits) => {
     return weight(right) - weight(left);
   };
 
+  // A power bloc governs when the head of state or the head of government
+  // leads it: the same name in both records, case and spacing aside. Never by
+  // the words of its name, kind or status ("Royal", "Military", "Ruling"),
+  // which named nothing in another language.
+  const headKey = (value) => lower(officeholderName(value));
+  const heads = new Set([government.headOfState, government.headOfGovernment].map(headKey).filter(Boolean));
   const governing = [
     ...governingParties.sort(sortByVisibleWeight).map((entry) => entityRow(entry, "party")),
     ...powerBlocs
-      .filter((bloc) => /government|ruling|royal|court|military|presidium|leadership/i.test(
-        `${clean(bloc?.status)} ${clean(bloc?.kind)} ${clean(bloc?.name)}`,
-      ))
+      .filter((bloc) => heads.has(headKey(bloc?.leader)))
       .sort(sortByVisibleWeight)
       .map((entry) => entityRow(entry, "power_bloc")),
   ].filter((entry) => entry.name).slice(0, limits.governingEntities);
@@ -712,123 +716,12 @@ const compactJoined = (values, { limit = 2, itemChars = 150 } = {}) => array(val
   .slice(0, limit)
   .join("; ");
 
-// Tight capsules cannot carry every strategic sentence. When the caller knows
-// the concrete decision currently being made (for example the player's newest
-// diplomatic proposal), use that text only to choose which already-canonical
-// actor goals/fears/pressures survive the native character budget. This is a
-// projection concern, not political reasoning: it never rewrites or scores the
-// actor itself, and falls back to authored order when there is no lexical signal.
-const DECISION_FOCUS_STOPWORDS = new Set([
-  "about", "after", "again", "against", "also", "among", "because", "been", "before",
-  "being", "both", "could", "does", "from", "have", "into", "more", "must", "near",
-  "only", "other", "over", "same", "should", "their", "there", "these", "they", "this",
-  "those", "through", "under", "very", "while", "with", "would", "your", "ours", "them",
-  "than", "then", "that", "such", "will", "shall", "were", "what", "when", "where",
-  "which", "whose", "between", "within", "without", "government", "state", "polity",
-]);
-
-const decisionFocusTokens = (value) => clean(value)
-  .toLocaleLowerCase()
-  .normalize("NFKD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .match(/[\p{L}\p{N}]+/gu) || [];
-
-const decisionFocusStems = (value) => {
-  const out = new Set();
-  const add = (term) => {
-    if (term.length >= 4 && !DECISION_FOCUS_STOPWORDS.has(term)) out.add(term);
-  };
-  for (const raw of decisionFocusTokens(value)) {
-    add(raw);
-    if (raw.length >= 7) {
-      if (raw.endsWith("ies")) add(`${raw.slice(0, -3)}y`);
-      for (const suffix of ["ments", "ment", "ations", "ation", "ingly", "ing", "edly", "ed", "es", "s"]) {
-        if (raw.endsWith(suffix) && raw.length - suffix.length >= 4) {
-          add(raw.slice(0, -suffix.length));
-          break;
-        }
-      }
-    }
-  }
-  return out;
-};
-
-const sameDecisionFocusFamily = (left, right) => {
-  const a = clean(left);
-  const b = clean(right);
-  if (!a || !b) return false;
-  if (a === b) return true;
-  if (a.length < 5 || b.length < 5) return false;
-  return a.startsWith(b) || b.startsWith(a);
-};
-
-const removeIgnoredDecisionFocusTerms = (terms, ignoredTerms) => {
-  if (!terms?.size || !ignoredTerms?.size) return terms;
-  for (const term of [...terms]) {
-    if ([...ignoredTerms].some((ignored) => sameDecisionFocusFamily(term, ignored))) terms.delete(term);
-  }
-  return terms;
-};
-
-const decisionFocusScore = (candidate, focusTerms, ignoredTerms = null) => {
-  if (!focusTerms?.size) return 0;
-  const candidateTerms = removeIgnoredDecisionFocusTerms(decisionFocusStems(candidate), ignoredTerms);
-  if (!candidateTerms.size) return 0;
-  let exact = 0;
-  let near = 0;
-  for (const term of candidateTerms) {
-    if (focusTerms.has(term)) {
-      exact += 1;
-      continue;
-    }
-    if (term.length < 5) continue;
-    for (const focus of focusTerms) {
-      if (focus.length < 5) continue;
-      if (term.startsWith(focus) || focus.startsWith(term)) {
-        near += 1;
-        break;
-      }
-    }
-  }
-  return exact * 10 + near * 3;
-};
-
-const decisionRelevantRows = (values, focusText, limit, ignoredFocusTerms = null) => {
-  const cap = Math.max(0, Number(limit) || 0);
-  const rows = array(values)
-    .map((value, index) => ({ index, text: clippedText(value, 320) }))
-    .filter((entry) => entry.text);
-  if (!cap || !rows.length) return [];
-
-  const focusTerms = removeIgnoredDecisionFocusTerms(
-    decisionFocusStems(clippedText(focusText, 6000)),
-    ignoredFocusTerms,
-  );
-  if (!focusTerms.size) return rows.slice(0, cap).map((entry) => entry.text);
-
-  const ranked = rows
-    .map((entry) => ({ ...entry, score: decisionFocusScore(entry.text, focusTerms, ignoredFocusTerms) }))
-    .filter((entry) => entry.score > 0)
-    .sort((left, right) => right.score - left.score || left.index - right.index);
-
-  if (!ranked.length) return rows.slice(0, cap).map((entry) => entry.text);
-
-  const selected = ranked.slice(0, cap);
-  const selectedIndexes = new Set(selected.map((entry) => entry.index));
-  for (const entry of rows) {
-    if (selected.length >= cap) break;
-    if (selectedIndexes.has(entry.index)) continue;
-    selected.push({ ...entry, score: 0 });
-    selectedIndexes.add(entry.index);
-  }
-  return selected.map((entry) => entry.text);
-};
-
-const compactDecisionRelevantJoined = (values, focusText, { limit = 2, itemChars = 150, ignoredFocusTerms = null } = {}) =>
-  decisionRelevantRows(values, focusText, limit, ignoredFocusTerms)
-    .map((value) => clippedText(value, itemChars))
-    .filter(Boolean)
-    .join("; ");
+// Tight capsules cannot carry every strategic sentence: the first goals,
+// fears, ambitions and pressures are kept, in the order the actor's record
+// lists them. They used to be re-ranked by the words they shared with the
+// decision at hand (the player's proposal), with English stopwords and
+// suffixes stripped: in another language nothing was shared, and in English a
+// stray word promoted the wrong goal.
 
 const compactDispositionLine = (disposition) => {
   const labels = [
@@ -891,17 +784,13 @@ const appendBoundedLine = (lines, line, cap, { reserve = 0 } = {}) => {
 // decision-first capsule instead: behavior and governing motives are placed
 // before descriptive detail, and optional rows are omitted whole rather than
 // cutting the document at an arbitrary section boundary.
-const formatCompactDecisionContextText = (context, { maxChars, decisionFocusText = "" }) => {
+const formatCompactDecisionContextText = (context, { maxChars }) => {
   const cap = Math.max(900, Number(maxChars) || DEFAULT_POLITICAL_DECISION_SET_PER_ACTOR_MAX_CHARS);
   const marker = "[Native bounded political capsule; lower-priority detail omitted]";
   const government = context.political.government;
   const system = context.political.politicalSystem;
   const counterpart = context.counterpartPolity;
   const decisionAuthority = context.political.decisionAuthority;
-  const ignoredFocusTerms = new Set([
-    ...decisionFocusStems(context.actorPolity),
-    ...decisionFocusStems(context.counterpartPolity),
-  ]);
   const lines = [
     `[Political Decision Context v${POLITICAL_DECISION_CONTEXT_VERSION} — ${context.actorPolity || "Unknown polity"}]`,
     "PRIVATE ACTOR CAPSULE: beliefs may be wrong; do not transfer hidden state to other actors. Objective diplomacy/war canon remains reality.",
@@ -949,9 +838,9 @@ const formatCompactDecisionContextText = (context, { maxChars, decisionFocusText
   const governing = context.political.entities.governing?.[0];
   appendBoundedLine(lines, compactGoverningEntityLine(governing), cap, { reserve: marker.length + 2 });
 
-  appendBoundedLine(lines, `Goals: ${compactDecisionRelevantJoined(context.political.goals, decisionFocusText, { limit: 2, itemChars: 145, ignoredFocusTerms }) || "none"}`, cap, { reserve: marker.length + 2 });
-  appendBoundedLine(lines, `Fears: ${compactDecisionRelevantJoined(context.political.fears, decisionFocusText, { limit: 1, itemChars: 145, ignoredFocusTerms }) || "none"}`, cap, { reserve: marker.length + 2 });
-  appendBoundedLine(lines, `Ambitions: ${compactDecisionRelevantJoined(context.political.ambitions, decisionFocusText, { limit: 1, itemChars: 145, ignoredFocusTerms }) || "none"}`, cap, { reserve: marker.length + 2 });
+  appendBoundedLine(lines, `Goals: ${compactJoined(context.political.goals, { limit: 2, itemChars: 145 }) || "none"}`, cap, { reserve: marker.length + 2 });
+  appendBoundedLine(lines, `Fears: ${compactJoined(context.political.fears, { limit: 1, itemChars: 145 }) || "none"}`, cap, { reserve: marker.length + 2 });
+  appendBoundedLine(lines, `Ambitions: ${compactJoined(context.political.ambitions, { limit: 1, itemChars: 145 }) || "none"}`, cap, { reserve: marker.length + 2 });
 
   // Counterpart-focused and first-ranked perceptions are already selected by
   // native relevance logic. Keep up to two if they fit.
@@ -960,7 +849,7 @@ const formatCompactDecisionContextText = (context, { maxChars, decisionFocusText
   }
 
   if (context.political.domesticPressures.length) {
-    appendBoundedLine(lines, `Domestic pressure: ${compactDecisionRelevantJoined(context.political.domesticPressures, decisionFocusText, { limit: 1, itemChars: 160, ignoredFocusTerms })}`, cap, { reserve: marker.length + 2 });
+    appendBoundedLine(lines, `Domestic pressure: ${compactJoined(context.political.domesticPressures, { limit: 1, itemChars: 160 })}`, cap, { reserve: marker.length + 2 });
   }
 
   // The native pressure ledger, strongest first (selectPressureIssues): the
@@ -1048,9 +937,9 @@ const formatCompactDecisionContextText = (context, { maxChars, decisionFocusText
   return lines.join("\n").slice(0, cap);
 };
 
-const formatDecisionContextText = (context, { maxChars, decisionFocusText = "" }) => {
+const formatDecisionContextText = (context, { maxChars }) => {
   const cap = Math.max(800, Number(maxChars) || DEFAULT_POLITICAL_DECISION_MAX_CHARS);
-  if (cap <= 2600) return formatCompactDecisionContextText(context, { maxChars: cap, decisionFocusText });
+  if (cap <= 2600) return formatCompactDecisionContextText(context, { maxChars: cap });
   return formatVerboseDecisionContextText(context, { maxChars: cap });
 };
 
@@ -1078,7 +967,6 @@ export const buildPoliticalDecisionContext = (
     counterpartPolity = "",
     knowledgeLevel = POLITICAL_KNOWLEDGE_LEVELS.PUBLIC,
     intelligenceAssessment = null,
-    decisionFocusText = "",
     limits: requestedLimits = {},
     maxChars = DEFAULT_POLITICAL_DECISION_MAX_CHARS,
   } = {},
@@ -1178,7 +1066,7 @@ export const buildPoliticalDecisionContext = (
     },
   };
 
-  context.text = formatDecisionContextText(context, { maxChars, decisionFocusText });
+  context.text = formatDecisionContextText(context, { maxChars });
   return context;
 };
 
@@ -1201,7 +1089,6 @@ const buildDecisionContextSet = (
     perActorMaxChars = DEFAULT_POLITICAL_DECISION_SET_PER_ACTOR_MAX_CHARS,
     maxTotalChars = DEFAULT_POLITICAL_DECISION_SET_MAX_CHARS,
     limits = {},
-    decisionFocusText = "",
   } = {},
 ) => {
   const contexts = [];
@@ -1234,7 +1121,6 @@ const buildDecisionContextSet = (
       : "";
     const context = buildPoliticalDecisionContext(worldLike, polity, {
       counterpartPolity: counterpart,
-      decisionFocusText,
       limits,
       maxChars: perActorMaxChars,
     });

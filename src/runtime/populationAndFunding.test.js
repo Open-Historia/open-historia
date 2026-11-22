@@ -37,15 +37,22 @@ const sheet = ({ people = 50e6, gdp = 1e12, balance = 0, debt = 40 } = {}) => ({
 
 test("a population is read as its author types it", () => {
   assert.equal(readPopulationFigure("12,500,000"), 12500000);
-  assert.equal(readPopulationFigure("12.5 million"), 12500000);
-  assert.equal(readPopulationFigure("850k"), 850000);
-  assert.equal(readPopulationFigure("1.4 Billion"), 1400000000);
+  // Digits grouped the way any language groups them, and never a word: the
+  // English scale words were read and the same figure in French or German was not.
+  for (const grouped of ["12500000", "12.500.000", "12 500 000", "12'500'000", "12 500 000"]) {
+    assert.equal(readPopulationFigure(grouped), 12500000, grouped);
+  }
+  for (const worded of ["12.5 million", "850k", "1.4 Billion", "12,5 millions", "12,5 Millionen", "1250万"]) {
+    assert.equal(readPopulationFigure(worded), 0, worded);
+  }
+  assert.equal(readPopulationFigure("12,5"), 0, "a decimal comma is no grouping, and no whole number of people");
+  assert.equal(readPopulationFigure("12,500.000"), 0, "one separator throughout");
   assert.equal(readPopulationFigure(4000000.4), 4000000);
   for (const nothing of ["", "many", "-5", "12 goats", null, undefined, 0, NaN]) assert.equal(readPopulationFigure(nothing), 0, String(nothing));
-  assert.equal(readPopulationFigure("900 billion"), POPULATION_FIGURE_MOST);
+  assert.equal(readPopulationFigure("900000000000"), POPULATION_FIGURE_MOST);
   assert.equal(formatPopulationFigure(12500000), "12,500,000");
   assert.equal(formatPopulationFigure(""), "");
-  assert.equal(populationFigureOf({ population: "3 million" }), 3000000);
+  assert.equal(populationFigureOf({ population: "3,000,000" }), 3000000);
   assert.equal(populationFigureOf(null), 0);
 });
 
@@ -57,7 +64,7 @@ test("the Workshop has the field for a country and for a group, and the figure i
   assert.ok(groups.includes("Population when the scenario begins"));
   assert.ok(groups.includes("patchRecord(current, { population: people > 0 ? people : undefined });"));
   // A group's record keeps it; one with none carries no such key.
-  assert.deepEqual(normalizeGroups({ "The Cartel": { description: "x", population: "250k" }, "The League": { description: "y" } }), {
+  assert.deepEqual(normalizeGroups({ "The Cartel": { description: "x", population: "250,000" }, "The League": { description: "y" } }), {
     "The Cartel": { name: "The Cartel", description: "x", color: normalizeGroups({ "The Cartel": {} })["The Cartel"].color, population: 250000 },
     "The League": { name: "The League", description: "y", color: normalizeGroups({ "The League": {} })["The League"].color },
   });

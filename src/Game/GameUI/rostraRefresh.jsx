@@ -12,11 +12,11 @@
 import React, { useState } from "react";
 
 import { inSharedGame } from "../../multiplayer/client/sharedGameBridge.js";
+import { RS } from "./rostraLooks.js";
 import { generateRostraPosts } from "../AI/gameplayLazy.js";
 
-const INK = "#f4f4f5";
-const INK_SOFT = "rgba(244,244,245,0.56)";
-const INK_FAINT = "rgba(244,244,245,0.34)";
+// Colours from Rostra's look (rostraLooks.js).
+const { INK, INK_SOFT, INK_FAINT, WASH, WASH_FAINT, EDGE, SCREEN, WARN } = RS;
 
 export const RefreshIcon = ({ size = 15 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -35,7 +35,7 @@ export const RefreshButton = ({ busy = false, disabled = false, onClick }) => (
       className="oh-tap-row"
       onClick={onClick}
       disabled={busy || disabled}
-      style={{ alignItems: "center", background: INK, border: "none", borderRadius: "999px", color: "#0b0b0d", cursor: busy || disabled ? "default" : "pointer", display: "inline-flex", fontFamily: "inherit", fontSize: "0.78rem", fontWeight: 800, gap: "0.4rem", marginTop: "0.65rem", opacity: disabled ? 0.5 : 1, padding: "0.42rem 1.05rem" }}
+      style={{ alignItems: "center", background: INK, border: "none", borderRadius: "999px", color: SCREEN, cursor: busy || disabled ? "default" : "pointer", display: "inline-flex", fontFamily: "inherit", fontSize: "0.78rem", fontWeight: 800, gap: "0.4rem", marginTop: "0.65rem", opacity: disabled ? 0.5 : 1, padding: "0.42rem 1.05rem" }}
     >
       <RefreshIcon />
       <span>{busy ? "Refreshing…" : "Refresh"}</span>
@@ -76,7 +76,7 @@ const EmptyFeedRefresh = ({ canPost = true }) => {
             Refresh to see what the people who make the news are posting.
           </div>
           <RefreshButton busy={busy} disabled={!canPost} onClick={() => void refresh()} />
-          {error && <div role="alert" data-no-translate style={{ color: "rgba(253,186,116,0.95)", fontSize: "0.72rem", lineHeight: 1.4, marginTop: "0.6rem", overflowWrap: "anywhere" }}>{error}</div>}
+          {error && <div role="alert" data-no-translate style={{ color: WARN, fontSize: "0.72rem", lineHeight: 1.4, marginTop: "0.6rem", overflowWrap: "anywhere" }}>{error}</div>}
         </>
       )}
     </div>

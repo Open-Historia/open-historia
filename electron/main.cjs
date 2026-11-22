@@ -26,6 +26,8 @@ const { createPayloadUpdater } = require("./payloadUpdate.cjs");
 const payloadBoot = require("./payloadBoot.cjs");
 const { clearOtherPortsCaches } = require("./staleCaches.cjs");
 const { fetchAppFileOnce } = require("./appFile.cjs");
+const { INSTALL_OPTIONS_FILE, readInstallOptions } = require("./installOptions.cjs");
+const { configureUiWords, uiWord } = require("./uiWords.cjs");
 
 // The map is drawn with WebGL, and without it the game is a black window with
 // "WebGL Not Available" on it (seen on a player's Mac, 2026-10-12, in the middle
@@ -87,6 +89,14 @@ const BETA_UPDATE_MANIFEST =
 const BETA_DOWNLOAD_URL = process.platform === "win32"
   ? "https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-Setup.exe"
   : "https://github.com/Open-Historia/open-historia/releases/tag/desktop-beta";
+// The native app (the Godot build), offered on the same screen and recommended
+// there ("make it say native or beta ... with the native button being
+// highlighted"): its installer for this system, as the website links it.
+const NATIVE_DOWNLOAD_URL = process.platform === "win32"
+  ? "https://github.com/Open-Historia/open-historia/releases/download/native-experimental/Open-Historia-Native-Setup.exe"
+  : process.platform === "darwin"
+    ? "https://github.com/Open-Historia/open-historia/releases/download/native-experimental/Open-Historia-Native-macOS.dmg"
+    : "https://github.com/Open-Historia/open-historia/releases/download/native-experimental/Open-Historia-Native-Linux-x86_64.tar.gz";
 
 // Everything the app writes lives under Electron's per-user data directory.
 // Program Files is read-only for a normal user and the app bundle is read-only
@@ -121,12 +131,21 @@ const ASSETS_DIR = IS_BETA && app.isPackaged
 // the stable app's, so the map never rendered however often it downloaded.
 process.env.OH_DATA_DIR = DATA_DIR;
 process.env.OH_ASSETS_DIR = ASSETS_DIR;
+// The menus and dialogs of this process, in the language the player chose in
+// the game (electron/uiWords.cjs), from the packs the server serves the page.
+configureUiWords({ dataDir: DATA_DIR, langDirs: [path.join(__dirname, "..", "dist", "lang"), path.join(__dirname, "..", "public", "lang")] });
 
 // Read by server.js, which startServer() imports into THIS process, so setting it
 // here is enough — there is no second process to pass it to. A stable build sets
 // neither and server.js keeps its own defaults.
 process.env.OH_CHANNEL = CHANNEL;
 if (IS_BETA) process.env.OH_DESKTOP_UPDATE_URL = BETA_UPDATE_MANIFEST;
+
+// What the player switched off on the Windows installer's privacy page
+// (electron/installOptions.cjs); everything is on without it. Update checks off
+// also quiets the page's update banner, whose feed server.js fetches.
+const INSTALL_OPTIONS = readInstallOptions(fs, path.join(USER_ROOT, INSTALL_OPTIONS_FILE));
+if (!INSTALL_OPTIONS.checkUpdates) process.env.OH_UPDATE_CHECKS = "0";
 
 // Main-process crashes are the ones that reach the player as a bare "A
 // JavaScript error occurred in the main process" dialog with nothing to act on —
@@ -393,8 +412,8 @@ const installAutoUpdater = () => {
             : setUpdateState({
                 state: "error",
                 error: result
-                  ? "No newer version in the update feed."
-                  : "This build cannot replace itself in place.",
+                  ? uiWord("No newer version in the update feed.")
+                  : uiWord("This build cannot replace itself in place."),
               }),
         )
         .catch((error) => setUpdateState({ state: "error", error: String(error?.message || error) }));
@@ -431,18 +450,49 @@ let setupWindow = null;
 // Reachable from the page the same way the updater is: server.js runs in THIS
 // process and serves /api/multiplayer/engine/{open,close} straight off the handle
 // published below, with no preload on either window.
+//
+// While it is open, the game it hosts is written by it alone (server/oneWriter.js):
+// its writes carry a credential minted here when it opens, handed to it alone in
+// its address, and forgotten when it closes.
 let engineWindow = null;
+let engineCredential = "";
 
 const closeEngineWindow = () => {
-  if (engineWindow && !engineWindow.isDestroyed()) engineWindow.destroy();
+  const closing = engineWindow;
   engineWindow = null;
+  engineCredential = "";
+  if (!closing || closing.isDestroyed()) return Promise.resolve();
+  // Its guests are told the game is closed before their connections drop
+  // (multiplayer/host/engineMain.js farewell): a window destroyed outright
+  // never sees its own pagehide, and a guest was left reconnecting to a host
+  // that was gone. A moment for the goodbyes to go out, and never longer.
+  const destroy = () => {
+    if (!closing.isDestroyed()) closing.destroy();
+  };
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(wait);
+      destroy();
+      resolve();
+    };
+    const wait = setTimeout(finish, 1500);
+    closing.webContents.executeJavaScript("window.__ohSharedGameFarewell ? (window.__ohSharedGameFarewell(), true) : false", true)
+      .then((told) => new Promise((done) => setTimeout(done, told ? 300 : 0)))
+      .catch(() => {})
+      .finally(finish);
+  });
 };
 
 const installSharedGameEngine = () => {
   globalThis.__ohSharedGameEngine = {
     status: () => ({ open: Boolean(engineWindow && !engineWindow.isDestroyed()) }),
+    credential: () => (engineWindow && !engineWindow.isDestroyed() ? engineCredential : ""),
     open: async () => {
       if (engineWindow && !engineWindow.isDestroyed()) return { open: true };
+      engineCredential = crypto.randomBytes(24).toString("base64url");
       const port = process.env.PORT || 3000;
       const origin = `http://localhost:${port}`;
       engineWindow = new BrowserWindow({
@@ -461,10 +511,14 @@ const installSharedGameEngine = () => {
         logMain("warn", "engine.gone", String(details?.reason || "unknown"));
         closeEngineWindow();
       });
+      const opened = engineWindow;
       engineWindow.on("closed", () => {
+        // (A window closed late, while its farewell went out, is not the one open now.)
+        if (engineWindow !== opened) return;
         engineWindow = null;
+        engineCredential = "";
       });
-      await engineWindow.loadURL(`${origin}/engine.html`);
+      await engineWindow.loadURL(`${origin}/engine.html#credential=${engineCredential}`);
       return { open: true };
     },
     close: () => {
@@ -782,7 +836,7 @@ const attachEditingContextMenu = (win) => {
 
     if (misspelledWord) {
       if (dictionarySuggestions.length === 0) {
-        menu.append(new MenuItem({ label: "No spelling suggestions", enabled: false }));
+        menu.append(new MenuItem({ label: uiWord("No spelling suggestions"), enabled: false }));
       } else {
         for (const suggestion of dictionarySuggestions) {
           menu.append(new MenuItem({
@@ -792,20 +846,20 @@ const attachEditingContextMenu = (win) => {
         }
       }
       menu.append(new MenuItem({
-        label: "Add to dictionary",
+        label: uiWord("Add to dictionary"),
         click: () => win.webContents.session.addWordToSpellCheckerDictionary(misspelledWord),
       }));
       menu.append(new MenuItem({ type: "separator" }));
     }
 
-    if (editFlags.canUndo) menu.append(new MenuItem({ label: "Undo", role: "undo" }));
-    if (editFlags.canRedo) menu.append(new MenuItem({ label: "Redo", role: "redo" }));
+    if (editFlags.canUndo) menu.append(new MenuItem({ label: uiWord("Undo"), role: "undo" }));
+    if (editFlags.canRedo) menu.append(new MenuItem({ label: uiWord("Redo"), role: "redo" }));
     if (editFlags.canUndo || editFlags.canRedo) menu.append(new MenuItem({ type: "separator" }));
 
-    if (editFlags.canCut) menu.append(new MenuItem({ label: "Cut", role: "cut" }));
-    if (editFlags.canCopy) menu.append(new MenuItem({ label: "Copy", role: "copy" }));
-    if (editFlags.canPaste) menu.append(new MenuItem({ label: "Paste", role: "paste" }));
-    if (editFlags.canSelectAll) menu.append(new MenuItem({ label: "Select All", role: "selectAll" }));
+    if (editFlags.canCut) menu.append(new MenuItem({ label: uiWord("Cut"), role: "cut" }));
+    if (editFlags.canCopy) menu.append(new MenuItem({ label: uiWord("Copy"), role: "copy" }));
+    if (editFlags.canPaste) menu.append(new MenuItem({ label: uiWord("Paste"), role: "paste" }));
+    if (editFlags.canSelectAll) menu.append(new MenuItem({ label: uiWord("Select All"), role: "selectAll" }));
 
     // Right-clicking blank space with nothing selected/editable earns none of
     // the above — popping up an empty menu would just be a dead flash. Pinned
@@ -826,8 +880,8 @@ const attachEditingContextMenu = (win) => {
 let quitting = false;
 
 const pageGoneWording = (reason, name) => ({
-  message: reason === "oom" ? `${name} ran out of memory.` : `${name}'s page stopped unexpectedly.`,
-  detail: `The game's page closed (${reason}). Reload to go back to the game; everything saved before this is kept.`,
+  message: reason === "oom" ? uiWord("{{name}} ran out of memory.", { name }) : uiWord("{{name}}'s page stopped unexpectedly.", { name }),
+  detail: uiWord("The game's page closed ({{reason}}). Reload to go back to the game; everything saved before this is kept.", { reason }),
 });
 
 const handlePageGone = (win, details, { quitting: isQuitting = false } = {}) => {
@@ -837,7 +891,7 @@ const handlePageGone = (win, details, { quitting: isQuitting = false } = {}) => 
   const name = APP_NAME;
   const { message, detail } = pageGoneWording(reason, name);
   dialog
-    .showMessageBox(win, { type: "error", title: name, message, detail, buttons: ["Reload", "Quit"], defaultId: 0, cancelId: 1, noLink: true })
+    .showMessageBox(win, { type: "error", title: name, message, detail, buttons: [uiWord("Reload"), uiWord("Quit")], defaultId: 0, cancelId: 1, noLink: true })
     .then(({ response }) => {
       if (win.isDestroyed()) return;
       if (response === 0) win.webContents.reload();
@@ -1085,7 +1139,8 @@ const boot = async () => {
   // (electron/launchUpdate.cjs); the banner is for one found while it is open.
   // Nothing here may stop the game opening: any failure opens it as before.
   const launchUpdate = await runLaunchUpdate({
-    updater,
+    // Without update checks (the installer's privacy page) there is nothing to ask.
+    updater: INSTALL_OPTIONS.checkUpdates ? updater : null,
     fs,
     recordFile: path.join(USER_ROOT, "launch-update.json"),
     showWindow: openSetupWindow,
@@ -1105,7 +1160,8 @@ const boot = async () => {
   // This app's own file, downloaded once per install or update and never
   // again (electron/appFile.cjs): how installs are counted. In the background;
   // the game opens whether it goes through or not.
-  void fetchAppFileOnce({
+  // Not when the player said no on the installer's privacy page.
+  if (INSTALL_OPTIONS.countInstall) void fetchAppFileOnce({
     channel: CHANNEL,
     packaged: app.isPackaged,
     markFile: path.join(USER_ROOT, "app-file.json"),
@@ -1185,14 +1241,11 @@ const reportFatalBootError = (error) => {
   const name = APP_NAME;
   const portClash = (error && error.code === "EADDRINUSE") || message.includes("EADDRINUSE") || message.startsWith("No free port");
   dialog.showErrorBox(
-    `${name} could not start`,
+    uiWord("{{name}} could not start", { name }),
     portClash
-      ? `${name} runs its own local server, and every port it tried is already taken `
-        + `by another program.\n\n`
-        + `Docker Desktop is the usual culprit — it holds 3000 and 3001 on many `
-        + `machines. Close it, or set PORT to a free port before launching, then `
-        + `start ${name} again.\n\n${message}`
-      : `${message}\n\nThe full error is in the diagnostics log under Settings.`,
+      ? `${uiWord("{{name}} runs its own local server, and every port it tried is already taken by another program.", { name })}\n\n`
+        + `${uiWord("Docker Desktop is the usual culprit — it holds 3000 and 3001 on many machines. Close it, or set PORT to a free port before launching, then start {{name}} again.", { name })}\n\n${message}`
+      : `${message}\n\n${uiWord("The full error is in the diagnostics log under Settings.")}`,
   );
   app.quit();
 };
@@ -1207,6 +1260,12 @@ const reportFatalBootError = (error) => {
 const DISCORD_APPLICATION_ID = "1529270119916896326";
 const registerDiscordLaunch = () => {
   if (!app.isPackaged || String(process.env.OH_DISCORD_PRESENCE ?? "1") === "0") return;
+  // Said no on the installer's privacy page: no link handler, and one an
+  // earlier version of the app left behind comes off.
+  if (!INSTALL_OPTIONS.discordLaunch) {
+    try { app.removeAsDefaultProtocolClient(`discord-${DISCORD_APPLICATION_ID}`); } catch { /* nothing registered */ }
+    return;
+  }
   try {
     app.setAsDefaultProtocolClient(`discord-${DISCORD_APPLICATION_ID}`);
   } catch {
@@ -1240,9 +1299,16 @@ if (!app.requestSingleInstanceLock()) {
     quitting = true;
     globalThis.__ohSystemSpeech?.stopAll();
   });
+  app.on("before-quit", (event) => {
+    if (engineWindow && !engineWindow.isDestroyed()) {
+      event.preventDefault();
+      void closeEngineWindow().finally(() => app.quit());
+    }
+  });
   ipcMain.handle("setup:cancel", () => app.quit());
   // "Download the beta" on the update screen: in the player's own browser, so
   // the download is where they can see it. Nothing about this launch changes:
   // the update goes on installing.
   ipcMain.handle("setup:open-beta", () => shell.openExternal(BETA_DOWNLOAD_URL));
+  ipcMain.handle("setup:open-native", () => shell.openExternal(NATIVE_DOWNLOAD_URL));
 }

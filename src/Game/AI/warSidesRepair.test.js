@@ -61,11 +61,11 @@ test("it runs once per save", () => {
   assert.deepEqual(moved, []);
 });
 
-test("a time skip repairs the sides as it reads the save, after the ledgers are seeded", async () => {
+test("a time skip repairs the sides as it reads the save", async () => {
   const { readFileSync } = await import("node:fs");
   const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
-  assert.match(gameplay, /const bundle = withWarSidesRepair\(withDiplomaticLedgerMigration\(await readGameStateBundle\(\{ force: true \}\)\)\);\n  const baseColors/);
-  assert.match(gameplay, /withWarSidesRepair\(withDiplomaticLedgerMigration\(await readGameStateBundle\(\{ force: true \}\)\), \{ log: false \}\);/, "the forecast repairs without logging");
+  assert.match(gameplay, /const bundle = withBoardsLent\(await readGameStateBundle\(\{ force: true \}\)\);\n[^\n]*\n  bundle\.world = withWarSidesRepair\(bundle\)\.world;/);
+  assert.match(gameplay, /withWarSidesRepair\(await readGameStateBundle\(\{ force: true \}\), \{ log: false \}\);/, "the forecast repairs without logging");
   const { normalizeWorldState } = await import("../../runtime/gameState.js");
   assert.equal(normalizeWorldState({ warSidesRepairVersion: 1 }).warSidesRepairVersion, 1, "the stamp survives a save");
 });

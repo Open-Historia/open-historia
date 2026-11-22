@@ -83,6 +83,19 @@ export const keepDetectedEvents = (before, after) => {
   };
 };
 
+// ---- Whether it runs at all ------------------------------------------------
+// The chance a minute the pulse rolls against: zero, so nothing is built or
+// sent, when the player turned "Countries write to me between time skips" off
+// (runtime/mapSettings.js MAP_SETTING_KEYS.idleDiplomacy) or the game's
+// idleDiplomacy feature is off; otherwise the feature's own chance
+// (averageMinutes). The background daily cap is not part of it: "no more
+// limiting it tho, it should be unlimited if its enabled" (the owner,
+// 2026-11-09; requestBudget.js UNCAPPED_BACKGROUND_TASKS).
+export const idlePulseChance = ({ playerSwitch = true, featureChance = 0 } = {}) => {
+  const chance = Number(featureChance);
+  return playerSwitch === true && chance > 0 ? Math.min(1, chance) : 0;
+};
+
 // ---- A quiet world ---------------------------------------------------------
 // Most pulses answer with nothing, and on a world nothing has touched since
 // they are likely to again: each is still a request. So a pulse that came back

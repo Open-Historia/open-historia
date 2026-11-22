@@ -46,9 +46,12 @@ const makeLargeWorld = () => {
 test("world exploration audit builds the polity alias catalogue once per audit", () => {
   const { world, polityEnumerationCount } = makeLargeWorld();
 
+  // Who each event concerns is read from its fields (actors here), by the
+  // polities' exact names or aliases: never from its title or description.
   const events = Array.from({ length: 10 }, (_, index) => ({
     title: `Polity ${index} signs pact with Polity ${index + 1}`,
     description: `P${index} and P${index + 1} hold cross-border talks.`,
+    actors: [`Polity ${index}`, `P${index + 1}`],
     impacts: { createdChats: [] },
   }));
 
@@ -60,7 +63,7 @@ test("world exploration audit builds the polity alias catalogue once per audit",
         actor: `Polity ${index}`,
         domain: "economy",
       })),
-      { id: 9, type: "global", domain: "cross-border system" },
+      { id: 9, type: "global", domain: "cross-border system", crossBorder: true },
       { id: 10, type: "global", domain: "wider world" },
     ],
   };

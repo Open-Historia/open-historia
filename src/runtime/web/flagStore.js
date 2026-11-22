@@ -18,9 +18,12 @@ import { STORES, idbGetAll, idbPut, idbDelete } from "./idb.js";
 import { sha256Hex } from "../sha256.js";
 // The same rule as the desktop library, so a flag one build keeps the other does too.
 import { validateFlagDataUrl } from "../../../server/flagValidation.js";
+import { nameId } from "../../../server/nameId.js";
 
+// Same rule as server/flagStore.js: the game's one rule for an id made from a
+// name (server/nameId.js).
 const slug = (raw, fallback = "flag") =>
-  String(raw ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || fallback;
+  nameId(raw, (name) => String(name ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48)) || fallback;
 
 // Same rule as server/flagStore.js: a polity name is kept exactly, or dropped.
 const exactPolity = (value) => (typeof value === "string" && value.length <= 200 ? value : "");

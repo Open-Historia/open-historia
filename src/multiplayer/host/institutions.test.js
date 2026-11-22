@@ -10,7 +10,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createInstitutionDesk, governanceCommandFor, lifecycleCommandFor } from "./institutions.js";
+import { createInstitutionDesk, governanceCommandFor, institutionThreadRefusal, lifecycleCommandFor } from "./institutions.js";
 
 const HOST = "Abkhazia";
 const GUEST = "Russia";
@@ -131,4 +131,97 @@ test("a hearing is answered only for someone at it", async () => {
   await assert.rejects(desk({ seat: GUEST, call: "hearing", args: { thread: "host-private" } }), /not in that conversation/);
   await assert.rejects(desk({ seat: GUEST, call: "hearing", args: { thread: "nowhere" } }), /not there/);
   await assert.rejects(desk({ seat: GUEST, call: "summon-army", args: {} }), /not something a player can do/);
+});
+
+// A Council's or a hearing's turn ran outside the table's one turn at a time
+// (host/gameHost.js onTable), beside an answer in the same thread: both read
+// the thread as it was, minted the same line ids, and the second's lines were
+// dropped as known (the gap audit of 2026-11-18, D2).
+test("a Council's and a hearing's turn wait for the table's turn, and read the thread as the turn before left it", async () => {
+  const state = fakeGame({
+    chats: [{ id: "council-baltic", institutionId: "baltic-pact", countries: ["Latvia"], messages: [] }, { id: "hearing-1", player: GUEST, countries: ["Latvia"] }],
+    made: { channel: { channel: { id: "council-baltic", messages: [] } } },
+  });
+  const desk = createInstitutionDesk({ host: HOST, game: state.game });
+  const turns = [];
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const onTable = async (chatId, job) => {
+    turns.push(chatId);
+    await held;
+    // What the answer before it wrote.
+    state.chats = state.chats.map((chat) => (chat.id === chatId ? { ...chat, messages: [...(chat.messages ?? []), { id: "m-before", text: "Said before." }] } : chat));
+    return job();
+  };
+  const council = desk({ seat: GUEST, call: "council", args: { institutionId: "baltic-pact", proposalId: "p1", kind: "debate" }, onTable });
+  const hearing = desk({ seat: GUEST, call: "hearing", args: { thread: "hearing-1" }, onTable });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(turns, ["council-baltic", "hearing-1"], "each turn is its table's");
+  assert.equal(state.calls.filter((entry) => entry.name === "chatTurn").length, 0, "nothing is asked before the table's turn");
+  release();
+  await Promise.all([council, hearing]);
+  const asked = state.calls.filter((entry) => entry.name === "chatTurn").map((entry) => entry.args);
+  assert.equal(asked.length, 2);
+  for (const turn of asked) {
+    assert.equal(turn.seat, GUEST);
+    assert.deepEqual(turn.chat.messages.map((message) => message.id), ["m-before"], "the thread as it stands when the turn comes");
+  }
+});
+
+// FOLLOWUPS A1: the business was written under the name the seat had when the request arrived; a round in between
+// had renamed it. Each write is an entry of the host's order, and takes the seat as it is when it runs.
+test("each write is an entry of the host's order, for the seat as it is when that entry runs; an ended seat writes nothing", async () => {
+  const state = fakeGame({ chats: [], made: { message: { channel: { id: "council-baltic" } } } });
+  let country = GUEST;
+  const entries = [];
+  const write = async (label, fn) => {
+    entries.push(label);
+    // What ran before this entry (a round) renamed the country.
+    country = "Russian Empire";
+    return fn();
+  };
+  const seat = () => {
+    if (!country) throw new Error("You no longer play Russia.");
+    return country;
+  };
+  const desk = createInstitutionDesk({ host: HOST, game: state.game, write });
+  await desk({ seat, call: "council", args: { institutionId: "baltic-pact", proposalId: "p1", kind: "debate", comment: "We object." } });
+  // The comment, and the Council it opened made the guest's: each an entry. The turn asks the AI outside one.
+  assert.deepEqual(entries, ["institution-business", "institution-business"]);
+  assert.deepEqual(state.calls.map((entry) => [entry.name, entry.args.playerCountry ?? entry.args.seat]), [["message", "Russian Empire"], ["chatTurn", "Russian Empire"]]);
+  // The seat ended before its entry ran: nothing is written.
+  const ended = async (label, fn) => {
+    country = "";
+    return fn();
+  };
+  const gone = createInstitutionDesk({ host: HOST, game: state.game, write: ended });
+  const calls = state.calls.length;
+  await assert.rejects(gone({ seat, call: "lifecycle", args: { command: { type: "found", name: "Baltic Pact" } } }), /no longer play/);
+  assert.equal(state.calls.length, calls);
+});
+
+// Any member closed or renamed an institution's Council or a hearing for every
+// member (the gap audit of 2026-11-18, N6).
+test("an institution's table keeps its name, its Council stays open, and a hearing closes once it is settled", () => {
+  const world = (status) => ({ institutions: { byId: { "baltic-pact": {
+    id: "baltic-pact", name: "Baltic Pact", status: "active", members: [{ polity: "Latvia", status: "member" }],
+    lifecycleCases: { c1: { id: "c1", kind: "invitation", polity: GUEST, initiatedBy: "Latvia", status } },
+  } } } });
+  const council = { id: "council-baltic", institutionId: "baltic-pact" };
+  const hearing = { id: "invite-1", lifecycleInstitutionId: "baltic-pact", lifecycleCaseIds: ["c1"] };
+  const accession = { ...hearing, institutionId: "baltic-pact" };
+  assert.match(institutionThreadRefusal(council, "rename", world("pending")), /keeps the institution's name/);
+  assert.match(institutionThreadRefusal(council, "close", world("pending")), /stays open/);
+  const dissolved = world("pending");
+  dissolved.institutions.byId["baltic-pact"].status = "dissolved";
+  assert.equal(institutionThreadRefusal(council, "close", dissolved), "", "a dissolved institution's Council is anyone's in it to put away");
+  assert.match(institutionThreadRefusal(hearing, "rename", world("pending")), /keeps the institution's name/);
+  assert.match(institutionThreadRefusal(hearing, "close", world("pending")), /closes once its business is settled/);
+  assert.match(institutionThreadRefusal(accession, "close", world("pending-approval")), /closes once its business is settled/);
+  assert.equal(institutionThreadRefusal(hearing, "close", world("rejected")), "", "settled: leaving it closes it, for everyone");
+  assert.equal(institutionThreadRefusal(accession, "close", world("accepted")), "");
+  // Adding is refused where it always was (host/gameHost.js); any other thread is anyone's in it to change.
+  assert.equal(institutionThreadRefusal(council, "add", world("pending")), "");
+  assert.equal(institutionThreadRefusal({ id: "talks" }, "rename", world("pending")), "");
+  assert.equal(institutionThreadRefusal({ id: "talks" }, "close", world("pending")), "");
 });

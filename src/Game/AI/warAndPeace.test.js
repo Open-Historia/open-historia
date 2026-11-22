@@ -13,11 +13,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { TREATY_BROKEN_REPUTATION } from "../../runtime/alliances.js";
 import { normalizeWorldState } from "../../runtime/gameState.js";
-import { TERRITORY_AS_HELD, TERRITORY_RESTORED, readTermsLine } from "../../runtime/peaceTerms.js";
+import { TERRITORY_AS_HELD, TERRITORY_RESTORED, readTermsLine, readTreatyLines } from "../../runtime/peaceTerms.js";
 import { WEARINESS_A_YEAR, wearinessOf } from "../../runtime/warWeariness.js";
-import { PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
+import { FILTERED_WORLD_KEY_NAMES, PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
+import { buildPeaceBlock } from "./peacePrompt.js";
+import { turnAgreements } from "./agreementEngine.js";
 import { playerFronts } from "../GameUI/warRoomData.js";
 import {
   acceptPeaceOffer,
@@ -120,6 +121,50 @@ test("an offer of peace is taken or turned down by the country it was made to", 
   assert.equal(act("accept", "Cisland").world, state);
 });
 
+// "each country making its own peace while the war goes on for the rest" (the owner, 2026-11-15, on peace in
+// shared games). Germany and Italy, both played, fought France; France offered Germany peace and Germany took it:
+// Italy's war was over too, and the French land Italy had taken went back. Italy was never asked.
+test("a person's peace is their own: beside another person, they leave the war, which goes on for the rest", () => {
+  const offers = [
+    { id: "peace:war-1:borduria:8", warId: "war-1", from: "Borduria", to: "Aland", terms: { territory: TERRITORY_RESTORED }, date: "1915-01-01", round: 8, status: "open" },
+    { id: "peace:war-1:borduria:8b", warId: "war-1", from: "Borduria", to: "Cisland", terms: { territory: TERRITORY_AS_HELD }, date: "1915-01-01", round: 8, status: "open" },
+  ];
+  const state = world({
+    wars: [{ ...WAR, sideA: ["Aland", "Cisland"] }],
+    // Aland holds b8 and b9 of Borduria's, Cisland b10, and Borduria a10 of Aland's.
+    regionOwnershipOverrides: { ...regions("a", "Aland", 9), a10: "Borduria", ...regions("b", "Borduria", 7), b8: "Aland", b9: "Aland", b10: "Cisland", ...regions("c", "Cisland", 4) },
+    regionSovereigntyOverrides: { a10: "Aland", b8: "Borduria", b9: "Borduria", b10: "Borduria" },
+    peaceOffers: offers,
+  });
+  const players = ["Aland", "Cisland"];
+  const taken = acceptPeaceOffer(state, offers[0].id, { date: "1915-01-10", round: 8, players });
+  // Aland is out; the war goes on between Cisland and Borduria.
+  assert.deepEqual([war(taken).status, war(taken).sideA, war(taken).sideB], ["active", ["Cisland"], ["Borduria"]]);
+  // The ground between Aland and Borduria is settled by the terms, and none of Cisland's.
+  assert.deepEqual(["b8", "b9", "a10", "b10"].map((id) => holder(taken, id)), ["Borduria", "Borduria", "Aland", "Cisland"]);
+  assert.equal(sovereign(taken, "b10"), "Borduria", "what Cisland holds of Borduria's is still theirs to fight over");
+  // It is kept as a separate peace; Cisland's own offer still waits for Cisland.
+  assert.deepEqual(taken.peaceTreaties.map((treaty) => [treaty.from, treaty.to, treaty.left]), [["Borduria", "Aland", ["Aland"]]]);
+  assert.deepEqual(taken.peaceOffers.map((offer) => offer.status), ["accepted", "open"]);
+  // The same answer through the one door, whoever's screen it came from.
+  const door = playerDiplomacy(state, { op: "accept", ref: offers[0].id, country: "Aland", players, date: "1915-01-10", round: 8 });
+  assert.deepEqual([door.error, war(door.world).sideA], ["", ["Cisland"]]);
+  // Then Cisland takes its own: nobody else plays in it now, and the war is over.
+  const both = acceptPeaceOffer(taken, offers[1].id, { date: "1915-01-20", round: 8, players });
+  assert.deepEqual([war(both).status, holder(both, "b10"), sovereign(both, "b10")], ["ended", "Cisland", "Cisland"]);
+  // With one person in the war, as in a game played alone, a peace ends the war for the AI's countries beside them.
+  const alone = acceptPeaceOffer(state, offers[0].id, { date: "1915-01-10", round: 8, players: ["Aland"] });
+  assert.deepEqual([war(alone).status, holder(alone, "b10"), alone.peaceTreaties[0].left], ["ended", "Borduria", undefined]);
+  // No peace takes a country out of a war a person who did not make it still fights it in.
+  const crossed = world({ wars: [{ ...WAR, sideA: ["Aland", "Cisland"], sideB: ["Borduria", "Dorland"] }] });
+  assert.equal(makePeace(crossed, { warId: "war-1", from: "Borduria", to: "Aland", terms: { territory: TERRITORY_RESTORED }, date: "1915-01-10", round: 8, players: ["Aland", "Cisland", "Dorland"] }), crossed);
+  // The next period's story is told it as what it is: the war goes on.
+  const told = buildPeaceBlock({ world: taken, game: { round: 8 }, players });
+  assert.match(told, /Separate peace made since the last period \(whoever left the war is already out of it in the ledger, and the war goes on for the rest/);
+  assert.match(told, /The Border War: Borduria and Aland made peace on 1915-01-10, and Aland left the war; /);
+  assert.doesNotMatch(told, /Peace made by the game or a player since the last period/);
+});
+
 test("a person puts terms of their own, and they wait, open, for the enemy's leader to answer in the chat", () => {
   const put = (terms, players = ["Aland"]) => proposePeace(world(), { warId: "war-1", from: "Aland", terms, players, date: "1915-01-10", round: 8, chatId: "chat-b", messageId: "msg-terms" });
   const cede = { territory: TERRITORY_AS_HELD };
@@ -151,6 +196,41 @@ test("a person puts terms of their own, and they wait, open, for the enemy's lea
   // Unasked, a leader may offer peace itself in its reply.
   const offered = answer({ verdict: "offer", terms: { territory: TERRITORY_AS_HELD } }, world());
   assert.deepEqual(offered.world.peaceOffers.map((offer) => [offer.from, offer.to, offer.source]), [["Borduria", "Aland", "chat"]]);
+});
+
+// "Peace between people: offers between players, each country making its own peace" (the owner, 2026-11-15). Every
+// door was shut for a side with a person on it: "That side is led by another player", and a war between two people
+// ended only by conquest.
+test("terms of peace are put to another player by name, who takes or declines them, and each country makes its own peace", () => {
+  const cede = { territory: TERRITORY_RESTORED };
+  const people = ["Aland", "Borduria"];
+  const put = (state, players, extra = {}) => proposePeace(state, { warId: "war-1", from: "Aland", to: "Borduria", terms: cede, players, date: "1915-01-10", round: 8, ...extra });
+  const offered = put(world(), people);
+  assert.deepEqual([offered.reason, offered.to, offered.offer.from, offered.offer.status], ["", "Borduria", "Aland", "open"]);
+  // Theirs to answer, through the same door as any offer; nobody else's.
+  const act = (state, op, country, players = people) => playerDiplomacy(state, { op, ref: offered.offer.id, country, players, date: "1915-01-12", round: 8 });
+  assert.equal(act(offered.world, "accept", "Aland").error, "not-yours");
+  const taken = act(offered.world, "accept", "Borduria");
+  assert.deepEqual([taken.error, war(taken.world).status, holder(taken.world, "b9")], ["", "ended", "Borduria"], "the two of them, and nobody else, in it: the war is over");
+  assert.deepEqual([war(act(offered.world, "decline", "Borduria").world).status], ["active"]);
+  // The story tells it as theirs: the AI answers none of it.
+  const told = buildPeaceBlock({ world: offered.world, game: { round: 8 }, players: people });
+  assert.match(told, /Offers of peace that wait for an answer \(the answer is theirs: write none, and the war goes on meanwhile\):\n- Aland has offered Borduria peace/);
+  assert.doesNotMatch(told, /Offers of peace a player has made/);
+  // With another player beside Aland, Aland's peace takes only Aland out.
+  const beside = world({ wars: [{ ...WAR, sideA: ["Aland", "Cisland"] }] });
+  const three = ["Aland", "Borduria", "Cisland"];
+  const separate = act(put(beside, three).world, "accept", "Borduria", three);
+  assert.deepEqual([war(separate.world).status, war(separate.world).sideA, war(separate.world).sideB], ["active", ["Cisland"], ["Borduria"]]);
+  // Another player fighting on against each of the two: no peace can take either out yet.
+  const crossed = world({ wars: [{ ...WAR, sideA: ["Aland", "Cisland"], sideB: ["Borduria", "Dorland"] }] });
+  assert.equal(put(crossed, ["Aland", "Borduria", "Cisland", "Dorland"]).reason, "crossed");
+  // A side the AI plays answers through its first country, as before, whichever of it is named; one a person leads
+  // is that person's to answer, and the AI beside them answers nothing.
+  const coalition = world({ wars: [{ ...WAR, sideB: ["Borduria", "Dorland"] }] });
+  assert.deepEqual([put(coalition, ["Aland"], { to: "Dorland" }).to, put(coalition, ["Aland"], { to: "Dorland" }).reason], ["Borduria", ""]);
+  assert.equal(put(coalition, ["Aland", "Borduria"], { to: "Dorland" }).reason, "played");
+  assert.equal(put(world(), ["Aland"], { to: "Cisland" }).to, "Borduria", "a country not in the war is put nothing");
 });
 
 const turn = (state, extra = {}) => turnWarAndPeace({ world: state, baseWorld: state, days: 30, date: "1915-02-01", round: 9, players: ["Aland"], fronts: null, ...extra });
@@ -226,7 +306,9 @@ test("reparations are paid every turn: the payer owes more and the receiver less
   assert.equal(state.countryStats.Borduria.economy.publicDebt, 40);
 });
 
-const ALLIANCE = { id: "pact-1", title: "The Northern Pact", type: "mutual_defense", status: "active", parties: ["Borduria", "Cisland"], startedDate: "1910-01-01", lastUpdatedDate: "1910-01-01", terms: "Each defends the other." };
+// What breaking it costs is what the request that made it wrote (AI/agreementEngine.js): here a standing lost.
+const BREACH = 9;
+const ALLIANCE = { id: "pact-1", title: "The Northern Pact", type: "mutual_defense", status: "active", parties: ["Borduria", "Cisland"], startedDate: "1910-01-01", lastUpdatedDate: "1910-01-01", terms: "Each defends the other.", effects: { onBreak: [{ type: "reputation", party: "breaker", change: -BREACH }] } };
 // A war that begins this turn: it is in the world as the turn ends, and was not as it began.
 const attacked = (extra = {}, base = {}) => {
   const before = world({ wars: [], agreements: [ALLIANCE], regionSovereigntyOverrides: {}, regionOwnershipOverrides: { ...regions("a", "Aland", 10), ...regions("b", "Borduria", 10), ...regions("c", "Cisland", 4) }, ...base });
@@ -244,8 +326,12 @@ test("a war begun against a country brings in those bound to defend it, and one 
   const broke = turnWarAndPeace({ world: sour.after, baseWorld: sour.before, days: 30, date: "1914-04-01", round: 3, players: ["Aland"] });
   assert.deepEqual(war(broke).sideB, ["Borduria"]);
   assert.deepEqual(broke.callsToArms.map((call) => call.status), ["refused"]);
-  assert.equal(broke.internationalReputation.Cisland, 50 - TREATY_BROKEN_REPUTATION);
+  assert.equal(broke.internationalReputation.Cisland, 50 - BREACH);
   assert.deepEqual(broke.agreements.map((entry) => [entry.id, entry.status, entry.endedDate]), [["pact-1", "ended", "1914-04-01"]]);
+  // An alliance with no breach written (an old save's) costs its breaker nothing but the bond.
+  const unwritten = attacked({ agreements: [{ ...ALLIANCE, effects: undefined }], relations: sour.after.relations });
+  const free = turnWarAndPeace({ world: unwritten.after, baseWorld: unwritten.before, days: 30, date: "1914-04-01", round: 3, players: ["Aland"] });
+  assert.equal(free.internationalReputation?.Cisland ?? 50, 50);
   // A war that was already being fought calls on nobody new, and one applied twice calls once.
   const old = attacked({}, { wars: [WAR] });
   assert.deepEqual(turnWarAndPeace({ world: old.after, baseWorld: old.before, days: 30, date: "1914-04-01", round: 3, players: [] }).callsToArms, []);
@@ -253,7 +339,7 @@ test("a war begun against a country brings in those bound to defend it, and one 
   // The story ended the pact in the same turn the war began: that is a treaty broken, and the breaker pays.
   const ended = attacked({ agreements: [{ ...ALLIANCE, status: "ended", endedDate: "1914-03-20" }] });
   const dropped = turnWarAndPeace({ world: ended.after, baseWorld: ended.before, days: 30, date: "1914-04-01", round: 3, players: ["Aland"] });
-  assert.deepEqual([war(dropped).sideB, dropped.internationalReputation.Cisland], [["Borduria"], 50 - TREATY_BROKEN_REPUTATION]);
+  assert.deepEqual([war(dropped).sideB, dropped.internationalReputation.Cisland], [["Borduria"], 50 - BREACH]);
 });
 
 test("a person bound to defend a country is asked, and nobody joins a war for them", () => {
@@ -269,19 +355,20 @@ test("a person bound to defend a country is asked, and nobody joins a war for th
   const sheet = { ...asked, countryStats: { ...asked.countryStats, Cisland: { population: { total: 5e6 }, indices: { internationalReputation: 70 } } } };
   const refused = answerCallToArms(sheet, call.id, false, { date: "1914-04-05", round: 3 });
   assert.deepEqual([war(refused).sideB, refused.callsToArms[0].status], [["Borduria"], "refused"]);
-  assert.equal(refused.internationalReputation.Cisland, 70 - TREATY_BROKEN_REPUTATION);
-  assert.equal(refused.countryStats.Cisland.indices.internationalReputation, 70 - TREATY_BROKEN_REPUTATION);
+  assert.equal(refused.internationalReputation.Cisland, 70 - BREACH);
+  assert.equal(refused.countryStats.Cisland.indices.internationalReputation, 70 - BREACH);
   assert.equal(refused.agreements[0].status, "ended");
   // Through the one door: only the country called may answer, and once.
   const act = (op, country) => playerDiplomacy(asked, { op, ref: call.id, country, players: ["Cisland"], date: "1914-04-05", round: 3 });
   assert.deepEqual([act("honour", "Cisland").error, act("honour", "Cisland").accepted, act("honour", "Cisland").to], ["", true, "Borduria"]);
   assert.equal(act("refuse", "Aland").error, "not-yours");
   assert.equal(answerCallToArms(honoured, call.id, false, { round: 4 }), honoured);
-  // Left unanswered, it is a treaty broken two turns on.
-  const later = turnWarAndPeace({ world: asked, baseWorld: asked, days: 30, date: "1914-05-01", round: 4, players: ["Cisland"] });
+  // Left unanswered once its message has asked it (the turn sends it: gameplay.js), it is a treaty broken two turns on.
+  const sent = { ...asked, callsToArms: asked.callsToArms.map((entry) => ({ ...entry, messageId: `msg-${entry.id}` })) };
+  const later = turnWarAndPeace({ world: sent, baseWorld: sent, days: 30, date: "1914-05-01", round: 4, players: ["Cisland"] });
   assert.equal(later.callsToArms[0].status, "open");
   const lapsed = turnWarAndPeace({ world: later, baseWorld: later, days: 30, date: "1914-06-01", round: 5, players: ["Cisland"] });
-  assert.deepEqual([lapsed.callsToArms[0].status, lapsed.internationalReputation.Cisland], ["refused", 50 - TREATY_BROKEN_REPUTATION]);
+  assert.deepEqual([lapsed.callsToArms[0].status, lapsed.internationalReputation.Cisland], ["refused", 50 - BREACH]);
 });
 
 test("a standing is set on the world and on a sheet that carries the figure", () => {
@@ -297,7 +384,10 @@ test("a standing is set on the world and on a sheet that carries the figure", ()
 test("the world keeps all of it, every player is shown it, and the turn and a person's answer reach it", () => {
   const kept = normalizeWorldState({});
   assert.deepEqual([kept.warWeariness, kept.peaceOffers, kept.reparations, kept.peaceTreaties, kept.callsToArms], [[], [], [], [], []]);
-  for (const key of ["warWeariness", "peaceOffers", "reparations", "peaceTreaties", "callsToArms"]) assert.ok(PUBLIC_WORLD_KEYS.includes(key), key);
+  for (const key of ["warWeariness", "reparations", "peaceTreaties"]) assert.ok(PUBLIC_WORLD_KEYS.includes(key), key);
+  // An offer of peace and a call to arms are their parties' own until answered, as a treaty's offer is: each player
+  // is shown its own (multiplayer/host/projection.js; the gap audit of 2026-11-18).
+  for (const key of ["peaceOffers", "callsToArms"]) assert.ok(FILTERED_WORLD_KEY_NAMES.includes(key) && !PUBLIC_WORLD_KEYS.includes(key), key);
   const gameplay = read("gameplay.js");
   assert.ok(gameplay.includes("worldWithImpacts = turnWarAndPeace({\n    world: worldWithImpacts,\n    baseWorld,\n    days: turnDays(baseGame, nextGame),"));
   assert.ok(gameplay.indexOf("worldWithImpacts = turnWarAndPeace({") < gameplay.indexOf("const pruned = pruneWarUnits({"), "before the units of a war that has ended leave the map");
@@ -378,6 +468,42 @@ test("a player's order to end their war is put to the enemy as their offer, whic
   assert.equal(refused.length, 1);
 });
 
+// "After i managed to still win the war a peace treaty was signed with the netherlands and i thought that should end
+// the war so i simmed 6 months but they still fought" (a player's report, 2026-11-09).
+test("the enemy may take a player's order of peace in the same skip, and a peace ends every twin of its war", () => {
+  const base = world();
+  const refused = [];
+  const proposed = [];
+  // The skip carries out the player's order and tells Borduria accepting: its line is taken, on the offer's terms.
+  const same = turnWarAndPeace({
+    world: base,
+    baseWorld: base,
+    days: 180,
+    date: "1915-03-01",
+    round: 4,
+    players: ["Aland"],
+    proposals: [{ warId: "war-1", from: "Aland" }],
+    onProposed: (entry) => proposed.push(entry),
+    treaties: [{ from: "Borduria", to: "Aland", terms: { territory: TERRITORY_RESTORED } }],
+    onRefused: (entry) => refused.push(entry),
+  });
+  assert.deepEqual(refused, []);
+  assert.equal(proposed[0]?.to, "Borduria");
+  assert.equal(war(same).status, "ended");
+  assert.equal(same.peaceOffers.find((entry) => entry.from === "Aland")?.status, "accepted");
+  assert.equal(holder(same, "b8"), "Aland", "as held, the terms the order offered");
+  assert.equal(same.peaceTreaties.at(-1)?.warId, "war-1");
+
+  // A ledger that started the war twice: the peace made in one ends the other, and nothing else.
+  const twice = world({ wars: [WAR, { ...WAR, id: "war-2", sideA: ["Borduria"], sideB: ["Aland"] }, { ...WAR, id: "war-3", sideA: ["Aland"], sideB: ["Cisland"] }] });
+  const peace = makePeace(twice, { warId: "war-1", from: "Borduria", to: "Aland", date: "1915-03-01", round: 4 });
+  assert.deepEqual(peace.wars.map((entry) => [entry.id, entry.status]).sort(), [["war-1", "ended"], ["war-2", "ended"], ["war-3", "active"]]);
+  // Its battlefields are the engine's to close as its war is over (runtime/fronts/engine.js syncWithWar), the twin's with it.
+  const fields = [{ name: "The Border", warId: "war-1", status: "active", sides: [["Aland"], ["Borduria"]] }, { name: "The North", warId: "war-2", status: "active", sides: [["Borduria"], ["Aland"]] }];
+  assert.equal(playerFronts(fields, "Aland", twice.wars).length, 2);
+  assert.equal(playerFronts(fields, "Aland", peace.wars).length, 0);
+});
+
 // "fully conquouring an enemy should end the war" (the owner, 2026-11-03).
 test("a war in which one side's countries hold no land at all ends at the end of the turn, the conqueror keeping it", () => {
   const conquered = world({ regionOwnershipOverrides: { ...regions("a", "Aland", 10), ...regions("b", "Aland", 10), ...regions("c", "Cisland", 4) } });
@@ -419,15 +545,15 @@ test("a peace can annex a country whole, cede regions by name, make a puppet, an
   const make = (line, extra = {}) => makePeace(state, { warId: "war-1", from: "Aland", to: "Borduria", terms: readTermsLine(line, { from: "Aland", to: "Borduria" }), date: "1915-01-10", round: 9, regions: catalog, ...extra });
 
   // All of Borduria passes to Aland: every region it held, and those Aland had taken, in law as in fact.
-  const annexed = make("Borduria is annexed");
+  const annexed = make("annex~Borduria");
   for (let at = 1; at <= 10; at += 1) assert.deepEqual([holder(annexed, `b${at}`), sovereign(annexed, `b${at}`)], ["Aland", "Aland"], `b${at}`);
   assert.equal(holder(annexed, "c1"), "Cisland");
   assert.equal(war(annexed).status, "ended");
   assert.ok(war(annexed).note.includes("Borduria is annexed: all its land passes to Aland"));
 
-  // Regions ceded by name ("Dospad and Wesk" are two), the rest of the ground as held; a name nowhere on Borduria's
-  // land is told to the story as a condition; and Borduria becomes Aland's protectorate.
-  const ceded = make("as held; Borduria cedes Klow, Dospad and Wesk, Atlantis to Aland; Borduria becomes Aland's protectorate; the border forts are razed");
+  // Regions ceded by name, a part a region, the rest of the ground as held; a name nowhere on Borduria's land is
+  // told to the story as a condition; and Borduria becomes Aland's protectorate.
+  const ceded = make("as held; cede~Klow~Aland; cede~Dospad~Aland; cede~Wesk~Aland; cede~Atlantis~Aland; puppet~Borduria~protectorate; condition~the border forts are razed");
   for (const id of ["b1", "b3", "b4", "b8"]) assert.equal(holder(ceded, id), "Aland", id);
   for (const id of ["b2", "b5"]) assert.equal(holder(ceded, id), "Borduria", id);
   const terms = ceded.peaceTreaties[0].terms;
@@ -436,9 +562,153 @@ test("a peace can annex a country whole, cede regions by name, make a puppet, an
   const row = ceded.puppets.find((entry) => entry.status === "active");
   assert.deepEqual([row.overlord, row.puppet, row.kind], ["Aland", "Borduria", "protectorate"]);
 
+  // A cession is one region, by its name: "Dospad and Wesk" names no region of the map, and is not cut at its "and".
+  const joined = make("as held; cede~Dospad and Wesk~Aland");
+  for (const id of ["b3", "b4"]) assert.equal(holder(joined, id), "Borduria", id);
+  assert.deepEqual(joined.peaceTreaties[0].terms.conditions, ["Dospad and Wesk passes to Aland"]);
+
   // A third country is no part of it: Cisland can be neither annexed nor made a puppet by Aland and Borduria's peace.
-  const third = make("Cisland is annexed; Cisland becomes Aland's puppet");
+  const third = make("annex~Cisland; puppet~Cisland~satellite");
   assert.equal(holder(third, "c1"), "Cisland");
   assert.deepEqual(third.puppets.filter((entry) => entry.status === "active"), []);
-  assert.deepEqual(third.peaceTreaties[0].terms.conditions, ["Cisland is annexed", "Cisland becomes Aland's puppet"]);
+  assert.deepEqual(third.peaceTreaties[0].terms.annexed, undefined);
+});
+
+// The same peace told by a model playing in French: "Borduria cède Klow à Aland" was read as a mere condition
+// and the ground went back to the old borders. The terms are the game's own records now, in every language.
+test("a French cession moves the ground exactly as its English twin does", () => {
+  const state = world();
+  const catalog = [
+    { id: "b1", name: "Klow", country: "Borduria" },
+    { id: "b2", name: "Szohod", country: "Borduria" },
+    ...Array.from({ length: 8 }, (_, at) => ({ id: `b${at + 3}`, name: `Borduria ${at + 3}`, country: "Borduria" })),
+  ];
+  const settle = (line) => {
+    const [told] = readTreatyLines(line);
+    return turnWarAndPeace({ world: state, baseWorld: state, days: 30, date: "1915-01-10", round: 9, players: [], treaties: [told], regions: catalog });
+  };
+  const english = settle("Borduria | Aland | as held; cede~Klow~Aland; pay~Borduria~2~5; condition~the border forts are razed");
+  const french = settle("Borduria | Aland | as held; cede~Klow~Aland; pay~Borduria~2~5; condition~les forts frontaliers sont rasés");
+  for (const made of [english, french]) {
+    assert.equal(war(made).status, "ended");
+    for (const id of ["b1", "b8", "b9", "b10"]) assert.deepEqual([holder(made, id), sovereign(made, id)], ["Aland", "Aland"], id);
+    assert.equal(holder(made, "b2"), "Borduria");
+    assert.deepEqual(made.reparations.map((entry) => [entry.payer, entry.receiver, entry.share]), [["Borduria", "Aland", 0.02]]);
+  }
+  assert.deepEqual(french.regionOwnershipOverrides, english.regionOwnershipOverrides);
+  assert.deepEqual(french.regionSovereigntyOverrides, english.regionSovereigntyOverrides);
+  assert.deepEqual(french.peaceTreaties[0].terms.conditions, ["les forts frontaliers sont rasés"]);
+  // Words alone, in French or in English, are a condition: the war ends and nothing is ceded by them.
+  for (const words of ["Borduria cède Klow à Aland", "Borduria cedes Klow to Aland"]) {
+    const told = settle(`Borduria | Aland | restored; ${words}`);
+    assert.equal(holder(told, "b1"), "Borduria", words);
+    assert.deepEqual(told.peaceTreaties[0].terms.conditions, [words]);
+  }
+});
+
+// Two wars between the same pair, the player's offer waiting in the second: the skip's line accepting it was
+// refused ("a person is in that war") because warBetween found the first, and the peace ff199dc1 meant to end both
+// was never made.
+test("a skip's line accepting a player's offer is taken in whichever twin war the offer waits in", () => {
+  const twins = world({
+    wars: [WAR, { ...WAR, id: "war-2", sideA: ["Borduria"], sideB: ["Aland"] }],
+    peaceOffers: [{ id: "peace:war-2:aland:3", warId: "war-2", from: "Aland", to: "Borduria", terms: { territory: TERRITORY_RESTORED, reparations: null }, status: "open", round: 3 }],
+  });
+  const refused = [];
+  const made = turnWarAndPeace({
+    world: twins,
+    baseWorld: twins,
+    days: 180,
+    date: "1915-03-01",
+    round: 4,
+    players: ["Aland"],
+    treaties: [{ from: "Borduria", to: "Aland", terms: null }],
+    onRefused: (entry) => refused.push(entry),
+  });
+  assert.deepEqual(refused, []);
+  assert.deepEqual(made.wars.map((entry) => [entry.id, entry.status]).sort(), [["war-1", "ended"], ["war-2", "ended"]]);
+  assert.equal(made.peaceOffers.find((entry) => entry.id === "peace:war-2:aland:3")?.status, "accepted");
+});
+
+test("a treaty cession uses the map's baked donor when the old World override is sparse", () => {
+  const state = world();
+  delete state.regionOwnershipOverrides.b1;
+  const catalog = [
+    { id: "b1", name: "Klow", country: "Borduria", bakedOwner: "Borduria" },
+  ];
+  const terms = readTermsLine("as held; cede~Klow~Aland", { from: "Aland", to: "Borduria" });
+  const next = makePeace(state, {
+    warId: "war-1", from: "Aland", to: "Borduria",
+    terms, regions: catalog, date: "1915-01-10", round: 9,
+  });
+  assert.equal(next.regionOwnershipOverrides.b1, "Aland");
+  assert.equal(next.countryStats.Borduria.continuity.progressionBlocked, true,
+    "the map's seed legal donor must not retain a pre-cession statistics baseline");
+  assert.equal(next.countryStats.Aland.continuity.progressionBlocked, true);
+});
+
+// One maker's terms to two people in one war and round had one id, and the second took the first's place without a
+// word: Latvia's offer was gone from its view, and its answer was "not yours" (the review of 2026-11-18, wars 7).
+test("terms one country puts to two players in the same war and round are two offers, each its own to answer", () => {
+  const players = ["Russia", "Latvia", "Estonia"];
+  let world = { wars: [{ id: "war-1", title: "The Baltic War", status: "active", sideA: ["Russia"], sideB: ["Latvia", "Estonia"], startDate: "2014-01-01" }], peaceOffers: [] };
+  const terms = { territory: TERRITORY_AS_HELD };
+  const first = playerDiplomacy(world, { op: "propose", ref: "war-1", to: "Latvia", terms, country: "Russia", players, date: "2014-04-01", round: 3 });
+  world = first.world;
+  const second = playerDiplomacy(world, { op: "propose", ref: "war-1", to: "Estonia", terms, country: "Russia", players, date: "2014-04-01", round: 3 });
+  assert.equal(first.offerId, "peace:war-1:russia:3", "the first keeps the id it always had");
+  assert.notEqual(second.offerId, first.offerId);
+  assert.deepEqual(second.world.peaceOffers.map((offer) => [offer.to, offer.status]), [["Latvia", "open"], ["Estonia", "open"]]);
+  const answer = playerDiplomacy(second.world, { op: "accept", ref: first.offerId, country: "Latvia", players, date: "2014-04-01", round: 3 });
+  assert.equal(answer.error, "", "Latvia answers its own");
+  // An AI's offers to two players in one round, the same.
+  const ai = { wars: [{ id: "war-2", status: "active", sideA: ["Borduria"], sideB: ["Aland", "Cisland"] }], peaceOffers: [] };
+  const toAland = offerPeace(ai, { from: "Borduria", to: "Aland", terms, players: ["Aland", "Cisland"], round: 8 });
+  const toCisland = offerPeace(toAland.world, { from: "Borduria", to: "Cisland", terms, players: ["Aland", "Cisland"], round: 8 });
+  assert.deepEqual(toCisland.world.peaceOffers.map((offer) => [offer.id, offer.to, offer.status]), [["peace:war-2:borduria:8", "Aland", "open"], ["peace:war-2:borduria:8:2", "Cisland", "open"]]);
+});
+
+test("refusing a call to arms marks the broken alliance endApplied so onEnd does not fire again, and applies onBreak area clauses", () => {
+  const regions = [{ id: "r1", name: "Border Valley", country: "Aland" }];
+  const state = world({
+    groups: { "Border Guard": { description: "A local force.", color: "#22c55e" } },
+    groupAreas: { r1: "Border Guard" },
+    relations: [{ a: "Aland", b: "Border Guard", score: 50 }],
+    agreements: [{
+      id: "all-1",
+      title: "Mutual Defense Pact",
+      type: "alliance",
+      parties: ["Aland", "Border Guard"],
+      status: "active",
+      effectsApplied: true,
+      effects: {
+        onBreak: [
+          { type: "relation", party: "Aland", with: "Border Guard", change: -20 },
+          { type: "area", group: "Border Guard", op: "release", region: "Border Valley" },
+        ],
+        onEnd: [{ type: "relation", party: "Aland", with: "Border Guard", change: -15 }],
+      },
+    }],
+    callsToArms: [{
+      id: "call-1",
+      warId: "war-1",
+      defender: "Aland",
+      ally: "Border Guard",
+      aggressor: "Borduria",
+      via: { kind: "agreement", id: "all-1", title: "Mutual Defense Pact" },
+      status: "open",
+      round: 2,
+    }],
+  });
+  const refused = answerCallToArms(state, "call-1", false, { date: "1914-04-05", round: 3, regions });
+  const ended = refused.agreements.find((a) => a.id === "all-1");
+  assert.equal(ended.status, "ended");
+  assert.equal(ended.brokenBy, "Border Guard");
+  assert.equal(ended.endApplied, true, "broken agreement must not also fire onEnd on the next turn");
+  assert.equal(refused.groupAreas.r1, undefined, "onBreak area effect ran with the passed region catalog");
+  const scoreAfterBreak = refused.relations.find((r) => [r.a, r.b].sort().join("|") === "Aland|Border Guard")?.score;
+  assert.equal(scoreAfterBreak, 30);
+  const afterTurn = turnAgreements({ world: refused, days: 30, date: "1914-05-05", round: 4, regions }).world;
+  const scoreAfterTurn = afterTurn.relations.find((r) => [r.a, r.b].sort().join("|") === "Aland|Border Guard")?.score;
+  assert.equal(scoreAfterTurn, 30, "onEnd did not double-fire after onBreak");
 });

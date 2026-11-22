@@ -38,7 +38,8 @@ const zone = (extra = {}) => ({
   rings: [[[10, 40], [30, 40], [30, 50], [10, 50]]],
   blendKm: 400,
   transitionDays: 14,
-  seasons: [{ name: "Summer", start: "01-01", end: "12-31", weather: {}, effects: {} }],
+  // Said to be the world's summer (its kind): its name is never read.
+  seasons: [{ name: "Summer", kind: "summer", start: "01-01", end: "12-31", weather: {}, effects: {} }],
   events: [],
   ...extra,
 });
@@ -84,10 +85,16 @@ test("the world's seasons turn over four weeks round the first of the month, the
   }
 });
 
-test("a season of a designer's tints in its own colour, else its name's, else its weather's", () => {
+test("a season of a designer's tints in its own colour, else as the world season it is said to be, else its weather's", () => {
   assert.deepEqual(seasonTintOf({ name: "Anything", color: "#112233" }), [17, 34, 51]);
-  assert.deepEqual(seasonTintOf({ name: "Deep Winter" }), [...SEASON_TINTS.winter]);
-  assert.deepEqual(seasonTintOf({ name: "The Fall" }), [...SEASON_TINTS.autumn]);
+  assert.deepEqual(seasonTintOf({ name: "Deep Winter", kind: "winter" }), [...SEASON_TINTS.winter]);
+  // The same season named in French tints alike: by what it is said to be, never by its name.
+  assert.deepEqual(seasonTintOf({ name: "Hiver profond", kind: "winter" }), seasonTintOf({ name: "Deep Winter", kind: "winter" }));
+  assert.deepEqual(seasonTintOf({ name: "The Fall", kind: "autumn" }), [...SEASON_TINTS.autumn]);
+  // A name alone says nothing, in any language: an old season with no kind tints by its weather.
+  assert.equal(seasonTintOf({ name: "Deep Winter" }), null);
+  assert.deepEqual(seasonTintOf({ name: "Deep Winter", weather: { snow: 1 } }), seasonTintOf({ name: "Hiver profond", weather: { snow: 1 } }));
+  assert.equal(seasonTintOf({ name: "x", kind: "monsoon" }), null, "a kind the world does not have is none");
   const night = seasonTintOf({ name: "The Long Night", weather: { snow: 1, blizzard: 1 } });
   assert.ok(night.every((part) => part > 220), "snow and blizzards are white");
   const monsoon = seasonTintOf({ name: "Monsoon", weather: { rain: 3, storm: 1 } });
@@ -99,8 +106,8 @@ test("a season of a designer's tints in its own colour, else its name's, else it
 
 test("a zone's seasons fade into each other over its transition days, and where none is in it shows the world's own", () => {
   const seasons = [
-    { name: "Winter", start: "12-01", end: "02-28", weather: {}, effects: {} },
-    { name: "Spring", start: "03-01", end: "05-31", weather: {}, effects: {} },
+    { name: "Winter", kind: "winter", start: "12-01", end: "02-28", weather: {}, effects: {} },
+    { name: "Spring", kind: "spring", start: "03-01", end: "05-31", weather: {}, effects: {} },
   ];
   const turning = zoneTintOn(zone({ seasons }), "1941-03-01", 45);
   assert.equal(turning.strength, 1);

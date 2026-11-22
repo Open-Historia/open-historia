@@ -26,22 +26,20 @@
 // every label; the troops above the cities and structures and just below the
 // unit counters.
 
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { getNationColors } from "../../runtime/assets.js";
-import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
-import { buildDiplomaticStanceMap, getDiplomaticOwnerColor } from "../../runtime/diplomaticStance.js";
-import { useActiveGameCountry } from "../../runtime/library.js";
+import { useDiplomaticView } from "./useDiplomaticView.js";
 import { isTouchPrimary } from "../../runtime/mobileUi.js";
 import { TROOP_STATES } from "../../runtime/fronts/constants.js";
 import { latToY, projectorOf, yToLat } from "../../runtime/fronts/frame.js";
 import { useWorldState } from "./useWorldState.js";
 import { createOwnerRgbResolver, ownerDisplayCss, parseColorToRgb } from "./ownerColors.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
-import { POLITICAL_FILL_OPACITY_STOPS, politicalFillOpacityAtZoom } from "./vnext/presentationPolicy.js";
+import { POLITICAL_FILL_OPACITY_STOPS, diplomaticFillOpacityAtZoom, politicalFillOpacityAtZoom } from "./vnext/presentationPolicy.js";
 import { getFrontTargets, settleFront, startFrontsSync, subscribeFronts } from "./frontsController.js";
 import { arrowDetailAt, frontArrowFeatures, frontArrowRgb, frontAt, frontShownOn, frontTroopFeatures, stageOf } from "./frontGeometry.js";
-import { createFrontField, createPaintPlayer, landMask, paintPixels, paintScaleFor, pictureCorners, pictureFits, touchedCells, writeFrontField } from "./frontPaint.js";
+import { createFrontField, createPaintPlayer, landMask, paintPixels, paintScaleFor, pictureCorners, pictureFits, touchedCells, viewWithin, writeFrontField } from "./frontPaint.js";
 import { FRONT_BASEMAP_PUT_LAYER_ID, FRONT_BASEMAP_TAKE_LAYER_ID, createFrontBasemapLayers, markPicturePainted, picturePaintedTimes } from "./frontBasemapLayer.js";
 import { FRONT_GROUND_LAYER_ID, createFrontGroundLayer } from "./frontGroundLayer.js";
 import { getGroundHeldIds, getGroundMeshes, setGroundAreas, setGroundWantedIds, subscribeGroundHeldIds, subscribeGroundMeshes } from "./frontGround.js";
@@ -71,6 +69,7 @@ const PLAY_FRAMES_PER_SECOND = 24;
 const PLAY_FRAMES_PER_SECOND_TOUCH = 12;
 // The sources of the map whose regions give the land its shape.
 const MASK_SOURCES = ["custom-regions-source", "custom-regions-repair-source"];
+const REMASK_STILL_MS = 300;
 
 const UNOWNED_COLOR = "rgb(120, 120, 120)";
 const UNOWNED_RGB = [120, 120, 120];
@@ -280,16 +279,16 @@ const FrontLayers = () => {
   const handOverAllRef = useRef(() => {});
   const picturesRef = useRef(pictures);
   picturesRef.current = pictures;
-  const { polityOverrides, groups, regionOwnershipOverrides, wars, relations, agreements, puppets } = useWorldState();
-  // On the diplomatic map the ground a side has taken is painted as the regions are (Nations.jsx): in the colour of
-  // where that side stands with the player, not in its own. "the drawn territory remains the same color on the
-  // diplomatic map making it not be the same color as your country" (the owner, 2026-10-15).
-  const playerCountry = useActiveGameCountry();
-  const mapMode = useMapSettingValue(MAP_SETTING_KEYS.mapMode, "political");
-  const stances = useMemo(
-    () => (mapMode === "diplomatic" ? buildDiplomaticStanceMap({ playerCountry, wars, agreements, relations, puppets }) : null),
-    [mapMode, playerCountry, wars, agreements, relations, puppets],
-  );
+  const { polityOverrides, groups, regionOwnershipOverrides } = useWorldState();
+  // On the diplomatic map the ground a side has taken is painted as the regions are (Nations.jsx): in the colour the
+  // view gives that side's country, not in its own. "the drawn territory remains the same color on the diplomatic map
+  // making it not be the same color as your country" (the owner, 2026-10-15). One view for the whole map
+  // (useDiplomaticView.js): the fills' and this are the same computation.
+  const diplomaticView = useDiplomaticView();
+  // ...and as strongly as the regions round it: the diplomatic map lays its colours stronger (presentationPolicy.js).
+  const groundStrengthRef = useRef(politicalFillOpacityAtZoom);
+  groundStrengthRef.current = diplomaticView ? diplomaticFillOpacityAtZoom : politicalFillOpacityAtZoom;
+  const groundStrength = useCallback((zoom) => groundStrengthRef.current(zoom), []);
   // The war room's marks on the troops: the general whose troops are lit, and
   // the troops picked out (warRoomStore.js).
   const warRoomOpen = useWarRoom((state) => state.open);
@@ -304,8 +303,8 @@ const FrontLayers = () => {
     // A side is a country or a group; a group has a colour of its own.
     const colorOf = (name) => groups?.[name]?.color || ownerDisplayCss(resolveOwnerRgb, name, UNOWNED_COLOR);
     const rgbOf = (name) => parseColorToRgb(colorOf(name)) ?? UNOWNED_RGB;
-    // The colour its ground is painted in: its own, or on the diplomatic map its stance's.
-    const groundRgbOf = (name) => (stances ? parseColorToRgb(getDiplomaticOwnerColor(name, stances)) ?? UNOWNED_RGB : rgbOf(name));
+    // The colour its ground is painted in: its own, or on the diplomatic map the view's.
+    const groundRgbOf = (name) => (diplomaticView ? parseColorToRgb(diplomaticView.colorOf(name)) ?? UNOWNED_RGB : rgbOf(name));
     const arrows = new Map();
     const arrowColorsOf = (name) => {
       let made = arrows.get(name);
@@ -320,7 +319,7 @@ const FrontLayers = () => {
       return made;
     };
     return { colorOf, rgbOf, groundRgbOf, arrowColorsOf };
-  }, [colorMap, polityOverrides, groups, stances]);
+  }, [colorMap, polityOverrides, groups, diplomaticView]);
 
   // Everything the playing needs, kept out of React state so a frame costs
   // pixels and two setData calls and nothing else.
@@ -367,7 +366,7 @@ const FrontLayers = () => {
           return { ...area, version: picturePaintedTimes(area.canvas), ready: whole };
         });
       },
-      strength: politicalFillOpacityAtZoom,
+      strength: groundStrength,
       onState: (working) => setGround((now) => (now === "failed" ? now : working ? "working" : "failed")),
       onError: (error) => console.warn("[fronts] a battlefield's ground could not be drawn by its own layer; the bare map is put back under it instead.", error),
     });
@@ -392,7 +391,7 @@ const FrontLayers = () => {
       } catch { /* the map is gone */ }
       if (groundLayerRef.current === layer) groundLayerRef.current = null;
     };
-  }, [map, anyPainted, groundFailed]);
+  }, [map, anyPainted, groundFailed, groundStrength]);
 
   // The battlefields the ground layer is to draw, told to the political map,
   // which asks the regions worker for their regions and hides their fills
@@ -452,7 +451,7 @@ const FrontLayers = () => {
       // (The layer draws the painted ground whole, the bare map and the colour over it, from the
       // picture itself: it does not wait on the map's own copy of the picture, nor need it.)
       pictures: () => picturesRef.current,
-      strength: politicalFillOpacityAtZoom,
+      strength: groundStrength,
       onState: (working) => setSeenThrough(working === true),
       onError: (error) => console.warn("[fronts] the bare map could not be put back under the painted ground; it is cleared to grey instead.", error),
     });
@@ -486,7 +485,7 @@ const FrontLayers = () => {
       } catch { /* the map is gone */ }
       setSeenThrough(false);
     };
-  }, [map, painted]);
+  }, [map, painted, groundStrength]);
 
   useEffect(() => {
     let cancelled = false;
@@ -697,6 +696,7 @@ const FrontLayers = () => {
     // for the part of the map on the screen, which is all the map has loaded:
     // the rest goes by the cells until it is looked at.
     let maskedFor = "";
+    let maskedView = null;
     const fold = (name) => String(name ?? "").trim().toLowerCase();
     const maskOf = (entry, bounds, featuresOf) => {
       const { picture } = entry;
@@ -765,12 +765,14 @@ const FrontLayers = () => {
       const bounds = mapInstance?.getBounds?.();
       if (!bounds) return;
       const key = [
-        (mapInstance.getZoom?.() ?? 0).toFixed(1), bounds.getWest().toFixed(2), bounds.getSouth().toFixed(2),
-        bounds.getEast().toFixed(2), bounds.getNorth().toFixed(2),
+        (mapInstance.getZoom?.() ?? 0).toFixed(1),
         ...[...playRef.current.values()].map((entry) => `${entry.target.name}:${entry.picture.canvas.width}`),
       ].join("|");
-      if (key === maskedFor && ownersRef.current === maskedOwners) return;
+      const view = { west: bounds.getWest(), south: bounds.getSouth(), east: bounds.getEast(), north: bounds.getNorth() };
+      // Ground already cut to the land at this zoom has nothing new to give.
+      if (key === maskedFor && ownersRef.current === maskedOwners && viewWithin(view, maskedView)) return;
       maskedFor = key;
+      maskedView = view;
       maskedOwners = ownersRef.current;
       // Read once for every battlefield: the map's regions are the same for each.
       const queried = new Map();
@@ -796,7 +798,15 @@ const FrontLayers = () => {
       if (any) paint(true);
     };
     let maskedOwners = null;
-    mapInstance?.on?.("idle", remask);
+    // It reads the drawing back and paints every picture again: a stall, so it waits until the map has stayed put.
+    let remaskTimer = null;
+    const holdRemask = () => clearTimeout(remaskTimer);
+    const remaskWhenStill = () => {
+      clearTimeout(remaskTimer);
+      remaskTimer = setTimeout(remask, REMASK_STILL_MS);
+    };
+    mapInstance?.on?.("idle", remaskWhenStill);
+    mapInstance?.on?.("movestart", holdRemask);
 
     let declared = "";
     const sync = () => {
@@ -933,7 +943,9 @@ const FrontLayers = () => {
     return () => {
       mapInstance?.off?.("styledata", onStyleData);
       mapInstance?.off?.("moveend", onMoveEnd);
-      mapInstance?.off?.("idle", remask);
+      mapInstance?.off?.("idle", remaskWhenStill);
+      mapInstance?.off?.("movestart", holdRemask);
+      clearTimeout(remaskTimer);
       repaintRef.current = () => {};
       handOverAllRef.current = () => {};
       stop();

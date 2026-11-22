@@ -36,6 +36,7 @@ export const POLITICAL_WORLD_GENERATION_MODES = Object.freeze({
   BASIC: "basic",
   BALANCED: "balanced",
   SIMULATION_READY: "simulation-ready",
+  UNIFORM: "uniform",
 });
 
 export const POLITICAL_WORLD_GENERATION_TEST_TARGETS = Object.freeze([
@@ -88,7 +89,15 @@ export const buildScenarioPoliticalRelevance = ({
   world = {},
   playerPolity = "",
   mode = POLITICAL_WORLD_GENERATION_MODES.BALANCED,
+  uniformDepth = null,
 } = {}) => {
+  // Advanced explicit scope, not an automatic relevance heuristic. Every
+  // active polity gets exactly the selected completeness contract, including
+  // the player's country and non-sovereign/landless political entities.
+  if (mode === POLITICAL_WORLD_GENERATION_MODES.UNIFORM
+      && ![POLITICAL_GENERATION_DEPTHS.STANDARD, POLITICAL_GENERATION_DEPTHS.RICH, POLITICAL_GENERATION_DEPTHS.FULL].includes(uniformDepth)) {
+    throw new Error("Uniform generation depth must be standard, rich or full.");
+  }
   const resolve = polityAliasResolver(world);
   const player = resolve(playerPolity);
   const belligerents = activeBelligerents(world, resolve);
@@ -98,6 +107,10 @@ export const buildScenarioPoliticalRelevance = ({
 
   for (const polity of collectScenarioPoliticalPolities(world)) {
     const key = polity.polityKey;
+    if (mode === POLITICAL_WORLD_GENERATION_MODES.UNIFORM) {
+      if (polity.active !== false) relevanceByPolity[key] = { depth: uniformDepth };
+      continue;
+    }
     if (key === player || belligerents.has(key)) {
       relevanceByPolity[key] = { depth: POLITICAL_GENERATION_DEPTHS.FULL };
       continue;
@@ -193,6 +206,7 @@ export const selectPoliticalGenerationTestPolities = (polities = [], count = 15)
 // the author's starting tags reach Round Zero as they reach the game.
 export const buildScenarioPoliticalGenerationInputs = (details, {
   mode = POLITICAL_WORLD_GENERATION_MODES.BALANCED,
+  uniformDepth = null,
   maxBatchSize = 8,
   countryTags = null,
 } = {}) => {
@@ -205,12 +219,15 @@ export const buildScenarioPoliticalGenerationInputs = (details, {
     polities,
     politicalActors: normalizePoliticalActors(world.politicalActors),
     world,
+    generationMode: mode,
+    uniformDepth: mode === POLITICAL_WORLD_GENERATION_MODES.UNIFORM ? uniformDepth : null,
     historyAuthority: roundZeroContext.historyAuthority,
     roundZeroContext,
     relevanceByPolity: buildScenarioPoliticalRelevance({
       world,
       playerPolity: game.country,
       mode,
+      uniformDepth,
     }),
     scenarioContext: scenarioContextFromDetails(details),
     contextByPolity: polityContextByKey(world, polities),

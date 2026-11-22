@@ -93,12 +93,17 @@ test("event field synonyms and impact aliases map to the canonical names", () =>
   assert.equal(Object.hasOwn(first.impacts, "transfers"), false);
 });
 
-test("normalizes marker build aliases and removes unsupported location hints", () => {
+// The structure's field names a model reaches for are its fields; the op is one of the schema's five, and another verb
+// ("create", in English or any language) is left as written for the task runner to leave out (runtime/markerOps.js).
+test("normalizes a marker build's field names and removes unsupported location hints; the op is the schema's own", () => {
+  const unread = normalizeGameplayPayload("jumpForward", jump({ events: [event({ impacts: { markerOps: [{ op: "create", marker: { name: "Forward headquarters" } }] } })] }));
+  assert.equal(unread.events[0].impacts.markerOps[0].op, "create", "another verb is not read as build");
+
   const normalized = normalizeGameplayPayload("jumpForward", jump({
     events: [event({
       impacts: {
         markerOps: [{
-          op: "create",
+          op: "Build",
           marker: {
             latitude: "48.8566",
             longitude: "2.3522",

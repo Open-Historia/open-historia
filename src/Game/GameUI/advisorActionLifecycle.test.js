@@ -116,7 +116,8 @@ test("Cancel cannot remove an already resolved, edited, missing, unit-backed or 
 test("Cancelled creates are not a loophole for forged proposals, shared-game writes or privileged contacts", async () => {
   const ctx = setup();
   await approveAdvisorAction(ctx.api);
-  await assert.rejects(cancelApprovedAdvisorAction({ ...ctx.api, sharedGame: true }), /shared games/i);
+  // In a shared game the queue is the host's alone: with no way to ask it, nothing is written here.
+  await assert.rejects(cancelApprovedAdvisorAction({ ...ctx.api, sharedGame: true }), /shared game's queue could not be reached/i);
   await assert.rejects(cancelApprovedAdvisorAction({ ...ctx.api, proposalId: "proposal-3" }), /missing/i);
   const wrongThread = { ...ctx.api, threadId: "advisor-unavailable" };
   await assert.rejects(cancelApprovedAdvisorAction(wrongThread), /active domestic/i);
@@ -171,6 +172,14 @@ test("Edit/Remove cards are actionable only while their exact canonical target r
   assert.equal(advisorActionCardState(edit, { status: "updated" }, undefined, undefined), "updated");
   assert.equal(advisorActionCardState(remove, { status: "removed" }, undefined, undefined), "removed");
   assert.throws(() => planApprovedAdvisorAction([{ ...plannedTarget, status: "resolved" }], edit, normalize), /no longer awaiting/);
+});
+
+test("edit confirmation identifies the existing queued Action and cannot masquerade as a new queue", () => {
+  const jsx = readFileSync(new URL("./advisor.jsx", import.meta.url), "utf8");
+  assert.match(jsx, /proposal\.operation === "edit" \? "Proceed \/ Update"/);
+  assert.match(jsx, /This updates the existing queued Action/);
+  assert.match(jsx, /targetAction\.title/);
+  assert.match(jsx, /It will not create a separate Action/);
 });
 
 test("the UI observes Edit/Remove target IDs and never exposes Proceed on unavailable targets", () => {

@@ -141,11 +141,19 @@ test("an old save's world.politics is folded into its Political World once, and 
 });
 
 test("a compiled reading of one polity fills in its Political World record, or makes one", () => {
-  const made = foldLandscapeIntoActor(null, { government: "Kingdom", headOfState: "King Tomislav III", parties: [party()] }, { polityKey: "Illyria" });
+  const made = foldLandscapeIntoActor(null, { government: "Kingdom", headOfState: { name: "Tomislav III", title: "King" }, systemType: "constitutional_monarchy", parties: [party()] }, { polityKey: "Illyria" });
   assert.equal(made.polityKey, "Illyria");
   assert.deepEqual(made.government.headOfState, { name: "Tomislav III", title: "King" });
   assert.deepEqual(made.government.rulingParties, ["Croatian Democratic Union"]);
+  assert.equal(made.politicalSystem.type, "constitutional_monarchy", "the reading's system type, an enum");
   assert.equal(foldLandscapeIntoActor(null, null), null, "nothing read, nothing made");
+  // A head an older reading wrote as one text is kept whole: no title is cut
+  // out of it by its words, which may be any language's.
+  for (const head of ["King Tomislav III", "Roi Tomislav III"]) {
+    assert.equal(foldLandscapeIntoActor(null, { government: "Kingdom", headOfState: head, parties: [party()] }, { polityKey: "Illyria" }).government.headOfState, head);
+  }
+  // A system type outside the list is none the record takes.
+  assert.equal(foldLandscapeIntoActor(null, { government: "Kingdom", headOfState: { name: "Tomislav III", title: "King" }, systemType: "Royaume", parties: [party()] }, { polityKey: "Illyria" }).politicalSystem, undefined);
 });
 
 test("the task has a default prompt and a tool, and its schema takes a full answer", () => {
@@ -154,12 +162,18 @@ test("the task has a default prompt and a tool, and its schema takes a full answ
   assert.equal(getGameplayTool("politicalLandscape")?.name, "submit_political_landscape");
   const answer = {
     government: "Constitutional monarchy",
-    headOfState: "King Tomislav III",
+    headOfState: { name: "Tomislav III", title: "King" },
+    headOfGovernment: { name: "Ivan Horvat", title: "Prime Minister" },
     kind: "parties",
     parties: [{ ...party(), colour: "", founded: "1989", description: "" }],
+    systemType: "constitutional_monarchy",
   };
   assert.equal(validateGameplayPayload("politicalLandscape", answer).valid, true);
-  assert.equal(validateGameplayPayload("politicalLandscape", { ...answer, parties: [{ ...party(), ideology: "Monarchism" }] }).valid, false);
+  const { systemType, ...withoutSystemType } = answer;
+  assert.equal(systemType, "constitutional_monarchy");
+  assert.equal(validateGameplayPayload("politicalLandscape", withoutSystemType).valid, true, "the system type is optional");
+  assert.equal(validateGameplayPayload("politicalLandscape", { ...answer, parties: [{ ...party(), ideology: "Monarchism", politicalPosition: "Conservative monarchist" }] }).valid, true);
+  assert.equal(validateGameplayPayload("politicalLandscape", { ...answer, parties: [{ ...party(), ideology: "" }] }).valid, false);
 });
 
 test("a turn moves the parties with the Political World's own ops: seats, roles, native names, a party dissolved", () => {
@@ -210,4 +224,20 @@ test("a compiled landscape whose shares total 100 before rounding is not refused
   });
   assert.equal(entry.parties.reduce((sum, p) => sum + p.support, 0), 102);
   assert.doesNotThrow(() => assertPoliticalLandscapeConsistency(entry));
+});
+
+test("freeform compiled party ideology and position become canonical without losing legacy taxonomy", () => {
+  const compiled = normalizePoliticalLandscape({
+    government: "Parliamentary republic", headOfState: "President Example", kind: "parties",
+    parties: [{ nameEn: "Ecological League", nameNative: "Ecological League", ideology: "Community environmentalism",
+      politicalPosition: "Green left", leader: "Mira Example", role: "opposition", support: 6 }],
+  });
+  assert.equal(compiled.parties[0].ideologyText, "Community environmentalism");
+  assert.equal(compiled.parties[0].politicalPosition, "Green left");
+  const folded = foldLandscapeIntoActor(null, compiled, { polityKey: "Exampleland" });
+  assert.equal(folded.parties[0].ideology, "Community environmentalism");
+  assert.equal(folded.parties[0].politicalPosition, "Green left");
+  const old = normalizePoliticalLandscape({ government: "Parliamentary republic", parties: [party()] });
+  assert.equal(old.parties[0].ideology, "socialConservatism");
+  assert.equal(old.parties[0].ideologyText, undefined);
 });

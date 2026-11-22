@@ -68,6 +68,9 @@ const worldKind = (resolved) => {
   return "custom";
 };
 
+// What the records and the map say outranks what real history had, and in a war above all.
+export const WARS_FOLLOW_THE_RECORD = "Where this game's records or its map differ from real history, they are what is true, and its wars most of all: a war is fought where the map and the battlefields' accounts put it, real history's campaigns of these dates happen only where they put the fighting, and a side whose capital or heartland its enemy holds is losing, whatever real history says.";
+
 export const buildRealHistoryDirective = ({
   world = {},
   game = {},
@@ -100,5 +103,8 @@ export const buildRealHistoryDirective = ({
     default:
       lines.push(`${began} Real history up to that date is this world's past, and from then on it stays the default for everything the game has not changed: the real events of this period happen, with their real people, places, dates and numbers, unless something in this game has changed their causes. What the game has changed so far is in the event history, the records and the map.`.trim());
   }
+  // Wars most of all: a player crushing Germany from Berlin was told of Operation Typhoon and the Siege of Leningrad
+  // (2026-11-10). Where the records and the map have parted from real history, they are what happened.
+  if (worldKind(resolved) !== "fictional") lines.push(WARS_FOLLOW_THE_RECORD);
   return lines.join("\n");
 };

@@ -404,7 +404,7 @@ test("the scenario editor has a Music tab, saved by the editor's own Save", () =
   const library = read("src/Game/GameUI/libraryBar.jsx");
   assert.ok(library.includes("  music: \"Music\","), "the tab's name");
   // (The War tab is under Wars in the Features tab since 2026-11-01.)
-  assert.match(library, /\? \["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "music", "bundles"\]/);
+  assert.match(library, /\? \["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "music", "languages", "bundles"\]/);
   assert.match(library, /: \["overview", "world", "features", "prompts", "assets"\];/, "a game's editor has none: the music is its scenario's");
   assert.ok(library.includes("{editorSection === \"music\" && kind === \"scenario\" && ("));
   assert.ok(library.includes("music: normalizeScenarioMusic(scenario.music),"), "part of the form, so closing with unsaved lists asks first");

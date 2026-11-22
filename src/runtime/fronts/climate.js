@@ -79,23 +79,48 @@ const oddsOf = (mix) => {
 };
 
 // Which of a zone's seasons covers a day of the year: its place in the list, or -1 for none (the world's own).
-const seasonAt = (zone, day) => {
-  const seasons = zone.seasons ?? [];
-  for (let at = 0; at < seasons.length; at += 1) {
-    const start = dayOfMonthDay(seasons[at].start);
-    const end = dayOfMonthDay(seasons[at].end);
+// Read off the zone's year (yearOf), worked out once a zone: every day of every battlefield, and of every copy of
+// one a staff rehearses, asks it for every zone, and reading the seasons' dates afresh each time was a sixth of a
+// skip's land war (2026-11-10, a world war's 180 days in 60 seconds).
+const seasonAt = (zone, day) => yearOf(zone).here[day];
+// The first day of the stretch of the year a day lies in (the same season, or the same gap between seasons), and its last.
+const stretchOf = (zone, day) => {
+  const year = yearOf(zone);
+  return { here: year.here[day], first: year.first[day], last: year.last[day] };
+};
+// A zone's year, a day of it at a time (1 to 365): the season covering it (-1 for none), and the first and last day
+// of the stretch it lies in. Worked out as each day was before, from the seasons' own dates.
+const years = new WeakMap();
+const seasonOn = (bounds, day) => {
+  for (let at = 0; at < bounds.length; at += 1) {
+    const [start, end] = bounds[at];
     if (start <= end ? day >= start && day <= end : day >= start || day <= end) return at;
   }
   return -1;
 };
-// The first day of the stretch of the year a day lies in (the same season, or the same gap between seasons), and its last.
-const stretchOf = (zone, day) => {
-  const here = seasonAt(zone, day);
-  let first = day;
-  let last = day;
-  for (let step = 1; step < YEAR && seasonAt(zone, ((day - step - 1 + YEAR) % YEAR) + 1) === here; step += 1) first = ((day - step - 1 + YEAR) % YEAR) + 1;
-  for (let step = 1; step < YEAR && seasonAt(zone, ((day + step - 1) % YEAR) + 1) === here; step += 1) last = ((day + step - 1) % YEAR) + 1;
-  return { here, first, last };
+const yearOf = (zone) => {
+  // (Kept by the zone and the dates of its seasons: a zone whose seasons are changed in place is worked out again.)
+  const seasons = zone.seasons ?? [];
+  let mark = "";
+  for (const season of seasons) mark += `${season?.start}/${season?.end};`;
+  const known = years.get(zone);
+  if (known && known.mark === mark) return known;
+  const bounds = seasons.map((season) => [dayOfMonthDay(season.start), dayOfMonthDay(season.end)]);
+  const here = new Int16Array(YEAR + 1);
+  for (let day = 1; day <= YEAR; day += 1) here[day] = seasonOn(bounds, day);
+  const first = new Int16Array(YEAR + 1);
+  const last = new Int16Array(YEAR + 1);
+  for (let day = 1; day <= YEAR; day += 1) {
+    let from = day;
+    let to = day;
+    for (let step = 1; step < YEAR && here[((day - step - 1 + YEAR) % YEAR) + 1] === here[day]; step += 1) from = ((day - step - 1 + YEAR) % YEAR) + 1;
+    for (let step = 1; step < YEAR && here[((day + step - 1) % YEAR) + 1] === here[day]; step += 1) to = ((day + step - 1) % YEAR) + 1;
+    first[day] = from;
+    last[day] = to;
+  }
+  const year = { here, first, last, mark };
+  if (zone && typeof zone === "object") years.set(zone, year);
+  return year;
 };
 
 // A zone's mix on a date: what share each of its seasons (or the world's own, -1) has of it today.

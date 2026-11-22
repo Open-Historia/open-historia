@@ -163,3 +163,37 @@ test("both response-body notes are told apart from rejected model text", () => {
   assert.equal(isResponseBodyNote(undefined), false);
 });
 
+
+// Two writers waiting for the world to be free used to wake on the same idle
+// moment and both begin: "wait until idle" and "begin" were two steps.
+test("the lock is taken in turn: two who wait are let in one at a time, in the order they asked", async () => {
+  const { beginSimulation, endSimulation, enterSimulation, isSimulationBusy } = await import("./simulationStatus.js");
+  beginSimulation();
+  const order = [];
+  const first = enterSimulation().then(() => order.push("first"));
+  const second = enterSimulation().then(() => order.push("second"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(order, [], "nobody gets in while it is held");
+  endSimulation();
+  await first;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(order, ["first"], "the second waits for the first to finish");
+  assert.equal(isSimulationBusy(), true);
+  endSimulation();
+  await second;
+  assert.deepEqual(order, ["first", "second"]);
+  endSimulation();
+  assert.equal(isSimulationBusy(), false);
+  // Free: taken at once.
+  await enterSimulation();
+  assert.equal(isSimulationBusy(), true);
+  endSimulation();
+  // A wait that is called off takes nothing.
+  beginSimulation();
+  const controller = new AbortController();
+  const given = enterSimulation({ signal: controller.signal });
+  controller.abort(new Error("stopped"));
+  await assert.rejects(given, /stopped/);
+  endSimulation();
+  assert.equal(isSimulationBusy(), false);
+});

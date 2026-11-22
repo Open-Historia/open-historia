@@ -12,7 +12,7 @@ This page is the map of the codebase. Each subsystem has its own page; follow th
 |---|---|---|
 | UI framework | React 19 (+ `babel-plugin-react-compiler`) | `package.json`, `vite.config.ts` |
 | Bundler / dev server | Vite 7 | `vite.config.ts`, `package.json` scripts |
-| Map renderer | MapLibre GL 5 via `react-map-gl/maplibre` | `src/Game/Map/World.jsx` |
+| Map renderer | MapLibre GL 6, the game's own build of it ([Open-Historia/maplibre-gl-js](https://github.com/Open-Historia/maplibre-gl-js), installed from its release), via `react-map-gl/maplibre` | `src/Game/Map/World.jsx` |
 | Vector tiles | PMTiles 4 (`pmtiles`, `ol-pmtiles`) — regions / countries / cities archives | `src/runtime/assets.js`, `src/runtime/preload.js` |
 | Map editor renderer | OpenLayers 10 (`ol`) — lazy-loaded, editor route only | `src/App.jsx`, `src/Editor/OlMap.jsx` |
 | Geometry / GIS | `@turf/*`, `d3-geo`, `polygon-clipping`, `shpjs`, `geotiff` | `package.json` deps |
@@ -119,7 +119,7 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `site/` | Marketing homepage shell wrapped around `/play/` by `build:site` |
 | `mobile/` | Android app: Capacitor (`android/`, `www/`, `capacitor.config.json`) around the web build, plus the map-staging scripts (`scripts/`, which use the website's stager and list, `scripts/stage-map-assets.mjs` and `scripts/map-assets.web.json`); no server of its own — see [mobile.md](mobile.md) |
 | `fmg/` | The game's prepared copy of Azgaar's Fantasy Map Generator (gitignored; fetched by `scripts/fetch-fmg.mjs`, packed by the desktop installers, served at `/fmg` for the editor's Generate drawer) |
-| `tools/import-counter/` | Cloudflare Worker: the retired import counter. It keeps answering older game builds from the hub's index and stores nothing; this build does not call it ([delivery-and-deploy.md §7.1](delivery-and-deploy.md)) |
+| `tools/import-counter/` | Cloudflare Worker: the import counter. The game reports a post's first import on an install to it and reads the counts from it (`src/runtime/hubImportCount.js`); counts in D1, once per install, post and address a day ([delivery-and-deploy.md §7.1](delivery-and-deploy.md)) |
 | `hub-templates/` | GitHub issue templates for the community scenario/basemap hub |
 | `dist/`, `dist-web/`, `dist-site/` | Build outputs (desktop, web, assembled site) |
 | `map-cache/` | The six map files a web build carries, downloaded and verified by `scripts/stage-map-assets.mjs` (gitignored) |
@@ -205,7 +205,7 @@ The client **never** talks to storage directly. Every state read/write is a same
 | `/api/basemaps…`, `/api/flags…` | GET/POST/PUT/DELETE | `basemapStore.js`, `tiledBasemaps.js` (Tiled Basemap install jobs and archives, [ADR 0005](adr/0005-tiled-basemaps-stream-to-disk.md)), `officialBasemaps.js` (the official list of detailed maps, [ADR 0006](adr/0006-official-basemap-list.md)), `flagStore.js` |
 | `/api/ui-settings`, `/api/lang/:code` | GET/PUT | shared UI language + accumulated translation packs |
 | `/api/ai/relay` | POST | Server-to-server relay to the player's OpenAI-compatible AI endpoint (defeats CORS) |
-| `/api/hub/file` | GET | Community hub GitHub proxy (SSRF-guarded to GitHub hosts). Import counts are read by the page from the hub's own index, not through the server |
+| `/api/hub/file` | GET | Community hub GitHub proxy (SSRF-guarded to GitHub hosts). Downloads count no imports; the page reports and reads import counts from the import counter itself, not through the server |
 | `/api/server/shutdown` | POST | Exits the process (no button in the UI any more; for scripts) |
 | `/fmg/*`, `*splat` | GET | Vendored FMG static + SPA fallback (`index.html`) |
 

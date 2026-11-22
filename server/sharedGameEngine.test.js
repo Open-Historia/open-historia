@@ -113,3 +113,20 @@ test("while the engine window is open, no page can open, make-and-open or delete
   assert.equal((await json("/api/games/active", { method: "PUT", body: { gameId: idOf(standIn) } })).status, 200);
   assert.equal(await openGame(), idOf(standIn));
 });
+
+// --- A stand-in another page shows -------------------------------------------------
+
+// The page showing a guest's stand-in renews a lease here, and a page of this server that starts in any browser or
+// device reads it before it closes a stand-in it takes for left behind (server/standInLeases.js; the review of
+// 2026-11-18, door 9). Another website can neither renew one nor read them.
+test("a stand-in's lease is renewed and let go by its page, and read by any page of this server", async () => {
+  const held = async () => (await (await fetch(`${base}/api/stand-ins/leases`)).json()).held;
+  assert.deepEqual(await held(), []);
+  assert.equal((await fetch(`${base}/api/stand-ins/shared-game-0123456789ab/lease`, { method: "PUT" })).status, 204);
+  assert.deepEqual(await held(), ["shared-game-0123456789ab"]);
+  const foreign = await fetch(`${base}/api/stand-ins/shared-game-ffffffffffff/lease`, { method: "PUT", headers: { Origin: "https://evil.example" } });
+  assert.notEqual(foreign.status, 204);
+  assert.deepEqual(await held(), ["shared-game-0123456789ab"]);
+  assert.equal((await fetch(`${base}/api/stand-ins/shared-game-0123456789ab/lease`, { method: "DELETE" })).status, 204);
+  assert.deepEqual(await held(), []);
+});

@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { getWorldStateSnapshot, useWorldState } from "../Map/useWorldState.js";
 import { getPlayerCode, setInteractionMode } from "../Map/unitsController.js";
-import { approximateMark, canSettleStructure, saveSettledStructure } from "../../runtime/structurePlacement.js";
+import { SETTLE_NOT_SAVED, approximateMark, canSettleStructure, saveSettledStructure } from "../../runtime/structurePlacement.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -15,6 +15,7 @@ import { dismissUnitPopup } from "./Units.jsx";
 import { isSameFeatureSelection, useCardScreenPos } from "./mapCards.js";
 import { useEventsById } from "./eventLookup.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
+import { markerFamilyOf } from "../../runtime/markerFamily.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -48,28 +49,20 @@ export const dismissFeaturePopup = () => {
   if (_currentSelection) _dismiss?.();
 };
 
-// DOM-side emoji per kind (the on-map glyphs are font-limited; the popup isn't).
-const KIND_EMOJI = [
-  [/city|town|settlement|metropolis|capital/, "🏙"],
-  [/military base|army base|fort|fortress|barracks|garrison|outpost|citadel|castle/, "🏰"],
-  [/bunker|shelter/, "🛡"],
-  [/missile|silo|launch/, "🚀"],
-  [/embassy|consulate/, "🏛"],
-  [/port|harbor|harbour|naval/, "⚓"],
-  [/airbase|airfield|airport|air base/, "✈"],
-  [/nuclear|reactor|plant|power/, "⚡"],
-  [/factory|industrial|refinery|mine/, "🏭"],
-  [/radar|listening|intelligence|spy/, "📡"],
-  [/monument|memorial|shrine|temple|cathedral|mosque/, "🗿"],
-];
+// DOM-side emoji per family (the on-map glyphs are font-limited; the popup
+// isn't): the structure's own family (runtime/markerFamily.js), never English
+// words in its kind.
+const FAMILY_EMOJI = Object.freeze({
+  settlement: "🏙",
+  military: "🏰",
+  resource: "⛏",
+  infrastructure: "🏗",
+  "industry-science": "🏭",
+  diplomatic: "🏛",
+  landmark: "📍",
+});
 
-const emojiForKind = (kind) => {
-  const normalized = String(kind || "").toLowerCase();
-  for (const [pattern, emoji] of KIND_EMOJI) {
-    if (pattern.test(normalized)) return emoji;
-  }
-  return "📍";
-};
+const emojiForStructure = (structure) => FAMILY_EMOJI[markerFamilyOf(structure)] || FAMILY_EMOJI.landmark;
 
 const titleCase = (value) =>
   String(value || "")
@@ -165,12 +158,16 @@ const FeaturePopup = () => {
   const [selection, setSelection] = useState(null);
   const [animKey, setAnimKey] = useState(0);
   const [dismissing, setDismissing] = useState(false);
+  // Why the host did not settle the structure (a shared game), said in the card
+  // where the player pressed Accept.
+  const [settleError, setSettleError] = useState("");
   const { current: map } = useMap();
   const { markers } = useWorldState();
 
   _setSelection = (value) => {
     _currentSelection = value;
     setDismissing(false);
+    setSettleError("");
     setSelection(value);
     if (value !== null) setAnimKey((key) => key + 1);
   };
@@ -305,7 +302,7 @@ const FeaturePopup = () => {
       >
         <div style={{ display: "flex", alignItems: "center", gap: "9px", padding: "10px 12px 8px" }}>
           <span style={{ fontSize: "1.5rem", lineHeight: 1 }}>
-            {isCity ? (feature.capital === "primary" ? "⭐" : "🏙") : emojiForKind(feature.kind)}
+            {isCity ? (feature.capital === "primary" ? "⭐" : "🏙") : emojiForStructure(feature)}
           </span>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontWeight: 700, fontSize: "13px", wordBreak: "break-word" }}>{feature.name}</div>
@@ -415,9 +412,13 @@ const FeaturePopup = () => {
               <button
                 className="oh-tap"
                 onClick={() => {
-                  // In a shared game the host may refuse (the round is being resolved).
+                  // In a shared game the host may refuse, and the card says why.
+                  setSettleError("");
                   void saveSettledStructure(feature.id)
-                    .catch((error) => logDebugEvent("warn", "[map] Accepting the structure's place failed.", error));
+                    .catch((error) => {
+                      logDebugEvent("warn", "[map] Accepting the structure's place failed.", error);
+                      setSettleError(String(error?.message || "") || SETTLE_NOT_SAVED);
+                    });
                 }}
                 style={settleButton}
               >
@@ -433,6 +434,11 @@ const FeaturePopup = () => {
               >
                 Move
               </button>
+            </div>
+          ) : null}
+          {!isCity && settleable && settleError ? (
+            <div role="alert" style={{ marginTop: "6px", fontSize: "11px", lineHeight: 1.45, color: "#fca5a5" }}>
+              {settleError}
             </div>
           ) : null}
         </div>

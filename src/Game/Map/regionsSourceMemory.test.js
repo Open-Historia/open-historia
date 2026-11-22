@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { WORKER_COPY_SWEEP, forgetParsedSourceCopy, holdUntilSourceLoaded, workerCopySweepScript } from "./regionsSourceMemory.js";
+import { holdUntilSourceLoaded } from "./regionsSourceMemory.js";
 
 const fakeMap = (source = null) => {
   const listeners = new Map();
@@ -33,23 +33,6 @@ const fakeTimers = () => {
     pending,
   };
 };
-
-test("the page's copy of a URL source's parsed file is dropped, and the URL kept", () => {
-  const geojson = { type: "FeatureCollection", features: [{ id: 1 }] };
-  const map = fakeMap({ _data: { geojson } });
-  assert.equal(forgetParsedSourceCopy(map, "custom-regions-source", "/api/regions"), true);
-  assert.deepEqual(map.source._data, { url: "/api/regions" });
-  // Already a URL, an in-memory source, another source, or no URL: untouched.
-  assert.equal(forgetParsedSourceCopy(map, "custom-regions-source", "/api/regions"), false);
-  assert.equal(forgetParsedSourceCopy(fakeMap({ _data: { updateable: new Map() } }), "custom-regions-source", "/x"), false);
-  assert.equal(forgetParsedSourceCopy(map, "other-source", "/x"), false);
-  const inMemory = fakeMap({ _data: { geojson } });
-  assert.equal(forgetParsedSourceCopy(inMemory, "custom-regions-source", ""), false);
-  assert.equal(inMemory.source._data.geojson, geojson);
-  // A MapLibre without the field: nothing to do, nothing thrown.
-  assert.equal(forgetParsedSourceCopy(fakeMap({}), "custom-regions-source", "/x"), false);
-  assert.equal(forgetParsedSourceCopy(null, "custom-regions-source", "/x"), false);
-});
 
 test("the worker's parse waits for MapLibre's to finish", () => {
   let loaded = false;
@@ -99,30 +82,4 @@ test("a source already loaded (a worker restart) releases at once; cancel releas
   timers.fire();
   assert.deepEqual(releases, ["source-loaded"]);
   assert.equal(waiting.listenerCount("sourcedata"), 0);
-});
-
-test("a worker drops its spare copies of a loaded URL source's file and keeps the index", () => {
-  const sweep = new Function("self", "sourceId", WORKER_COPY_SWEEP);
-  const index = { tiles: {} };
-  const settled = () => ({ _pendingData: Promise.resolve({}), _dataUpdateable: new Map([[1, {}]]), _geoJSONIndex: index });
-  const regions = settled();
-  const loading = { ...settled(), _pendingRequest: new AbortController() };
-  const other = settled();
-  const scope = { worker: { workerSources: { 1: { geojson: { "custom-regions-source": regions, "cities-source": other } }, 2: { geojson: { "custom-regions-source": loading } }, 3: {} } } };
-  assert.equal(sweep(scope, "custom-regions-source"), 1);
-  assert.equal(regions._pendingData, undefined);
-  assert.equal(regions._dataUpdateable, undefined);
-  assert.equal(regions._geoJSONIndex, index);
-  assert.ok(loading._pendingData && loading._dataUpdateable, "a source still loading is left alone");
-  assert.ok(other._pendingData && other._dataUpdateable, "other sources are left alone");
-  assert.equal(sweep(scope, "custom-regions-source"), 0, "a second sweep finds nothing");
-  assert.equal(sweep({}, "custom-regions-source"), 0, "not a MapLibre worker: nothing");
-  assert.equal(sweep({ worker: {} }, "custom-regions-source"), 0);
-});
-
-test("the sweep script runs as a classic script with its source id bound", () => {
-  const regions = { _pendingData: {}, _dataUpdateable: new Map(), _geoJSONIndex: {} };
-  const self = { worker: { workerSources: { a: { geojson: { 'odd"id': regions } } } } };
-  new Function("self", workerCopySweepScript('odd"id'))(self);
-  assert.equal(regions._pendingData, undefined);
 });

@@ -1,7 +1,7 @@
 /*! Open Historia — native unit director tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MAX_RAISED_COMBATANTS, buildUnitDirectorInput, eventNeedsNativeUnitDirector, landHolders, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, orderRaisesForces, pickCombatantPlace, pruneWarUnits, sanitizeDirectorOrders } from "./nativeUnitDirector.js";
+import { MAX_RAISED_COMBATANTS, buildUnitDirectorInput, eventNeedsNativeUnitDirector, landHolders, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, pickCombatantPlace, pruneWarUnits, sanitizeDirectorOrders } from "./nativeUnitDirector.js";
 import { normalizeUnitEntry } from "../../runtime/gameState.js";
 
 // Seen in a live game (2026-09-21): the jump moved the Falklands garrison to
@@ -41,87 +41,103 @@ test("a move for a unit the event does not move yet is kept", () => {
   assert.equal(acceptedByEvent.get(0)?.length, 1);
 });
 
+// Which events the director reads, and which of its operations it keeps, is
+// decided by what an event CARRIES: unit operations, the Military tag or the
+// engine's kind "military", a warId, combatants, or a player's order it carries
+// out. Never by its words: the English word lists that stood here passed
+// English events and no others (the owner, 2026-11-13: no keywording anywhere).
 // Seen in a harness run (2026-09-27) on a player's Burkina Faso Game: the unit
-// director asked to raise "1st Dori VDP Rapid-Reaction Battalion" and the rule
-// threw it away, because the new-formation cue only knew armies down to
-// regiments and only with nothing between "new" and the noun.
+// director asked to raise "1st Dori VDP Rapid-Reaction Battalion" and a word
+// rule threw it away. The director's spawn is now taken as the new formation it
+// says it is, on any event it was asked about.
 const burkinaUnit = {
   id: "unit-bf", name: "Burkinabe Army Northern Group", type: "infantry",
   ownerCode: "Burkina Faso", strength: 100, lng: -1.5, lat: 12.4,
 };
-const raising = (title, description = "") => sanitizeDirectorOrders({
-  events: [{ title, description, kind: "military", impacts: {} }],
-  orders: [{ eventIndex: 0, unitOps: [{ op: "spawn", unit: { name: "New formation", type: "infantry", ownerCode: "Burkina Faso", strength: 100, lng: -0.05, lat: 14.03 } }] }],
+const raising = (event) => sanitizeDirectorOrders({
+  events: [{ impacts: {}, ...event }],
+  orders: [{ eventIndex: 0, unitOps: [{ op: "spawn", unit: { name: "1st Dori VDP Rapid-Reaction Battalion", type: "infantry", ownerCode: "Burkina Faso", strength: 100, lng: -0.05, lat: 14.03 } }] }],
   units: [burkinaUnit],
   game: {},
 });
 
-test("a new formation is raised whatever its size, with words between 'new' and the noun", () => {
-  for (const title of [
-    "Burkina Faso Activates New VDP Rapid-Reaction Battalion at Dori",
-    "Burkinabe Forces Raise a New Rapid-Reaction Battalion and Deploy It to Dori",
-    "Army Forms a Mechanized Company to Guard the Northern Road",
-    "Government Raises a Volunteer Militia in Soum Province",
-    "Ouagadougou Stands Up a New Joint Border Force",
+test("a spawn on an event the director reads is kept, whatever the event's words, in any language", () => {
+  for (const event of [
+    { title: "Burkina Faso Activates New VDP Rapid-Reaction Battalion at Dori", tags: ["Military"] },
+    { title: "Le Burkina Faso active un nouveau bataillon d'intervention rapide à Dori", tags: ["Military"] },
+    { title: "Burkinabe Battalion Holds Its Positions Near Dori", kind: "military" },
+    { title: "Буркина-Фасо формирует новый батальон в Дори", warId: "war-sahel" },
+    { title: "Ouagadougou bouge", combatants: ["Burkina Faso", "JNIM"] },
+    { title: "The order is carried out", impacts: { actionIds: ["order-7"] } },
   ]) {
-    const { acceptedByEvent, diagnostics } = raising(title);
-    assert.equal(acceptedByEvent.get(0)?.length, 1, `${title}: ${JSON.stringify(diagnostics)}`);
+    const { acceptedByEvent, diagnostics } = raising(event);
+    assert.equal(acceptedByEvent.get(0)?.length, 1, `${event.title}: ${JSON.stringify(diagnostics)}`);
   }
 });
 
-test("a formation that already exists fighting again is still not a new one", () => {
-  const { acceptedByEvent, diagnostics } = raising(
-    "Burkinabe Battalion Holds Its Positions Near Dori",
-    "The battalion repelled an attack on the northern road.",
-  );
-  assert.equal(acceptedByEvent.get(0), undefined);
-  assert.match(diagnostics[0]?.reason ?? "", /no explicit new-formation cue/);
+test("an event that carries nothing military takes no operation, in English as in French", () => {
+  for (const title of ["Burkina Faso Activates New VDP Rapid-Reaction Battalion at Dori", "Le Burkina Faso active un nouveau bataillon à Dori"]) {
+    const { acceptedByEvent, diagnostics } = raising({ title, kind: "world", tags: ["Politics"] });
+    assert.equal(acceptedByEvent.get(0), undefined, title);
+    assert.match(diagnostics[0]?.reason ?? "", /carries no unit operations, Military tag, war, combatants or player's order/, title);
+  }
 });
 
-test("an event that raises a new formation is one the director is asked about", () => {
-  assert.equal(eventNeedsNativeUnitDirector({ title: "Burkina Faso Activates New VDP Rapid-Reaction Battalion at Dori" }), true);
-  assert.equal(eventNeedsNativeUnitDirector({ title: "Government Raises a Volunteer Militia in Soum Province" }), true);
+test("a strength change and a removal are taken as the director wrote them, with no casualty words asked of the event", () => {
+  const unit = { id: "unit-1", name: "1st Army", type: "infantry", ownerCode: "Aland", strength: 90, lng: 10, lat: 50 };
+  for (const description of ["The army held the line.", "L'armée a tenu la ligne.", ""]) {
+    const { acceptedByEvent, diagnostics } = sanitizeDirectorOrders({
+      events: [{ title: "Front", description, tags: ["Military"], impacts: {} }],
+      orders: [{ eventIndex: 0, unitOps: [{ op: "strength", unitId: "unit-1", strength: 60 }, { op: "remove", unitId: "unit-1" }] }],
+      units: [unit],
+      game: {},
+    });
+    assert.deepEqual(acceptedByEvent.get(0)?.map((op) => op.op), ["strength", "remove"], `${description}: ${JSON.stringify(diagnostics)}`);
+  }
+  // What the op itself does not support is still refused: a unit that does not exist, an attack.
+  const { diagnostics } = sanitizeDirectorOrders({
+    events: [{ title: "Front", tags: ["Military"], impacts: {} }],
+    orders: [{ eventIndex: 0, unitOps: [{ op: "strength", unitId: "nobody", strength: 10 }, { op: "attack", unitId: "unit-1", targetUnitId: "x" }] }],
+    units: [unit],
+    game: {},
+  });
+  assert.deepEqual(diagnostics.map((entry) => entry.action), ["DROP", "DROP"]);
+});
+
+test("the events the director is asked about are those carrying unit ops, the Military tag, a war, combatants or a player's order", () => {
+  assert.equal(eventNeedsNativeUnitDirector({ title: "x", tags: ["Military"] }), true);
+  assert.equal(eventNeedsNativeUnitDirector({ title: "x", tags: ["military", "Politics"] }), true, "the tag's case aside");
+  assert.equal(eventNeedsNativeUnitDirector({ title: "x", kind: "Military" }), true);
+  assert.equal(eventNeedsNativeUnitDirector({ title: "x", warId: "war-1" }), true);
+  assert.equal(eventNeedsNativeUnitDirector({ title: "x", combatants: ["Aland"] }), true);
+  assert.equal(eventNeedsNativeUnitDirector({ title: "x", impacts: { actionIds: ["a-1"] } }), true);
+  assert.equal(eventNeedsNativeUnitDirector({ title: "x", impacts: { unitOps: [{ op: "move", unitId: "u" }] } }), true);
+  assert.equal(eventNeedsNativeUnitDirector({ title: "x", kind: "world", tags: ["Economy"], warId: " ", combatants: [""], impacts: { actionIds: [] } }), false);
+  assert.equal(eventNeedsNativeUnitDirector(null), false);
 });
 
 // Seen in a player's Game (2026-09-29): an order to place a garrison became
-// "British Army Deploys New Strategic Garrison to <town>", and the director
-// marched the one armoured division there instead. A garrison placed at a named
-// spot is a new fixed formation, not a move of one that exists.
-const britishDivision = {
-  id: "unit-uk", name: "1st British Assault Division", type: "armor",
-  ownerCode: "British Empire", strength: 80, lng: -4.25, lat: 55.86,
-};
-const garrisoning = (title, description = "") => sanitizeDirectorOrders({
-  events: [{ title, description, kind: "player", impacts: {} }],
-  orders: [{ eventIndex: 0, unitOps: [{ op: "spawn", unit: { name: "Stranraer Garrison", type: "garrison", ownerCode: "British Empire", strength: 100, lng: -5.03, lat: 54.9 } }] }],
-  units: [britishDivision],
-  game: {},
-});
-
-test("a garrison placed, stationed or established at a named place is a new formation", () => {
-  assert.equal(orderRaisesForces("Place a garrison in Stranraer"), true);
-  assert.equal(orderRaisesForces("Station a garrison at Ayr"), true);
-  for (const [title, description] of [
-    ["British Army Deploys New Strategic Garrison to Stranraer", ""],
-    ["British Army Establishes a Garrison at Stranraer", "The British Army executes an operational deployment to establish a permanent military garrison in Stranraer."],
-    ["Britain Places a Garrison in Stranraer", ""],
-  ]) {
-    assert.equal(eventNeedsNativeUnitDirector({ title, description }), true, title);
-    const { acceptedByEvent, diagnostics } = garrisoning(title, description);
-    assert.equal(acceptedByEvent.get(0)?.length, 1, `${title}: ${JSON.stringify(diagnostics)}`);
+// "British Army Deploys New Strategic Garrison to <town>". The event that
+// carries out a player's order is the director's to read whatever the order or
+// the event says: by the order it cites, and never by the order's words.
+test("an event carrying out a player's order reaches the director by its citation, never by the order's words", () => {
+  for (const title of ["British Army Deploys New Strategic Garrison to Stranraer", "L'armée britannique installe une garnison à Stranraer"]) {
+    assert.equal(eventNeedsNativeUnitDirector({ title, kind: "player", impacts: { actionIds: ["order-1"] } }), true, title);
+    assert.equal(eventNeedsNativeUnitDirector({ title, kind: "player", impacts: {} }), false, title);
   }
 });
 
-test("an existing garrison holding or reinforced is not a new one", () => {
-  const { acceptedByEvent } = garrisoning("Stranraer Garrison Holds Firm", "The garrison repelled a probe at dawn.");
-  assert.equal(acceptedByEvent.get(0), undefined);
-  assert.equal(orderRaisesForces("Place sanctions on Russia"), false);
-});
-
-test("money or votes raised for an army are not a new formation", () => {
-  assert.equal(eventNeedsNativeUnitDirector({ title: "Parliament Raises Funds for the Army" }), false);
-  const { acceptedByEvent } = raising("Parliament Raises Funds for the Army", "The defence budget grows for the troops.");
-  assert.equal(acceptedByEvent.get(0), undefined);
+test("words alone, in any language, never wake the director", () => {
+  for (const title of [
+    "Parliament Raises Funds for the Army",
+    "Government Raises a Volunteer Militia in Soum Province",
+    "Le gouvernement lève une milice de volontaires",
+    "Khal Drogo's Khalasar Rides On West Along the Velvet Road",
+    "Brazil hosts a trade summit and reaches a deal on tariffs",
+  ]) {
+    assert.equal(eventNeedsNativeUnitDirector({ title, kind: "world" }), false, title);
+    assert.equal(buildUnitDirectorInput({ events: [{ title, kind: "world", impacts: {} }], world: {} }), null, title);
+  }
 });
 
 test("a combatant with no unit at all is named to the director, so the war gets a counter", () => {
@@ -219,20 +235,39 @@ test("the engine raises at most a couple of formations a skip, the wars' leading
 });
 
 // Seen in a live check (2026-10-02): a month of fighting in Ukraine written as
-// "world" events bound to no war and naming no combatants, so no counter came.
-test("an unbound military event is read as the active war whose powers it names", () => {
+// "world" events bound to no war. The war an event is about is the one it is
+// bound to, and who fought is its combatants: a war is never guessed from the
+// powers its words mention (an English stem, "Russian" for Russia, did that).
+test("an unbound event is about no war, whatever powers its words mention; its combatants still count", () => {
   const unbound = {
     title: "Ukrainian Forces Advance Along Frontlines Following Allied Strike Operations",
     description: "Ukrainian mechanized brigades advance against Russian positions near Kherson after heavy fighting.",
     kind: "world",
+    tags: ["Military"],
+  };
+  const twin = {
+    title: "Українські сили просуваються вздовж лінії фронту",
+    description: "Українські механізовані бригади наступають на російські позиції біля Херсона.",
+    kind: "world",
+    tags: ["Military"],
   };
   const world = { units: [], wars: [{ id: "war-ru-ua", status: "active", sideA: ["Russia"], sideB: ["Ukraine"] }, { id: "war-uk-sy", status: "active", sideA: ["United Kingdom"], sideB: ["Syria"] }] };
-  assert.deepEqual(buildUnitDirectorInput({ events: [unbound], world }).candidates[0].combatantsWithoutUnits, ["Russia", "Ukraine"]);
-  // Bound to a war, it is that war, whatever it names.
-  assert.deepEqual(buildUnitDirectorInput({ events: [{ ...unbound, warId: "war-uk-sy" }], world }).candidates[0].combatantsWithoutUnits, ["United Kingdom", "Syria"]);
-  // Naming no warring power, it is no war.
-  const elsewhere = { ...unbound, title: "Mechanized Brigades Advance in a Border Clash", description: "Brigades advance after heavy fighting." };
-  assert.equal(buildUnitDirectorInput({ events: [elsewhere], world }).candidates[0].combatantsWithoutUnits, undefined);
+  for (const event of [unbound, twin]) {
+    assert.equal(buildUnitDirectorInput({ events: [event], world }).candidates[0].combatantsWithoutUnits, undefined, event.title);
+    assert.deepEqual(buildUnitDirectorInput({ events: [{ ...event, combatants: ["Ukraine", "Russia"] }], world }).candidates[0].combatantsWithoutUnits, ["Ukraine", "Russia"], event.title);
+    // Bound to a war, it is that war, whatever it names.
+    assert.deepEqual(buildUnitDirectorInput({ events: [{ ...event, warId: "war-uk-sy" }], world }).candidates[0].combatantsWithoutUnits, ["United Kingdom", "Syria"], event.title);
+  }
+});
+
+test("the units shown first are those of the powers the events say are fighting, never those their words mention", () => {
+  const units = [
+    { id: "u-sy", name: "Syrian 4th Division", type: "infantry", ownerCode: "Syria", strength: 90, lng: 36.3, lat: 33.5 },
+    { id: "u-ru", name: "1st Guards Tank Army", type: "armor", ownerCode: "Russia", strength: 90, lng: 37.6, lat: 55.7 },
+  ];
+  const event = { title: "The 1st Guards Tank Army and the Syrian 4th Division are named here", tags: ["Military"], combatants: ["Russia"], impacts: {} };
+  const input = buildUnitDirectorInput({ events: [event], world: { units } });
+  assert.deepEqual(input.units.map((unit) => unit.id), ["u-ru", "u-sy"]);
 });
 
 // Mark asked (2026-10-02): if you win the war, do the units disappear? They did
@@ -296,31 +331,20 @@ test("every turn clears the map after its wars and borders are applied, before a
 
 // A Game of Thrones campaign (298 AC): 98 events moved a host, a khalasar or a
 // ship, and only 25 moved a counter. The director only looked at events in a
-// modern army's words, so "the khalasar rides west" never reached it.
-const gotEvent = (title, description = "") => ({ title, description, kind: "world", impacts: {} });
+// modern army's words, so "the khalasar rides west" never reached it. It now
+// reads the event's Military tag, in whatever words the event is told.
+const gotEvent = (title, description = "", extra = {}) => ({ title, description, kind: "world", impacts: {}, ...extra });
 
-test("fantasy and historical movement reaches the unit director", () => {
+test("fantasy and historical movement reaches the unit director by its tag, in any language", () => {
   const moving = [
     "Khal Drogo's Khalasar Rides On West Along the Velvet Road With Daenerys at His Side",
-    "Khal Drogo's Khalasar Moves On to the Next Grazing With Daenerys at His Side",
     "Mance Rayder's Host Breaks Camp at the Fist of the First Men and Turns West Along the Milkwater",
-    "The Lysene Galley Swift Hesper Clears White Harbor to Search the Stepstones Line",
-    "Balon Greyjoy Launches the Iron Fleet From Pyke to Patrol the Iron Islands' Waters",
-    "Lord Cerwyn's northern levy marches on along the Kingsroad past Last Hearth",
+    "Le khalasar de Khal Drogo chevauche vers l'ouest sur la route de Velours",
+    "Ост Манса Налетчика снимается с лагеря у Кулака Первых Людей",
   ];
   for (const title of moving) {
-    assert.ok(buildUnitDirectorInput({ events: [gotEvent(title)], world: {} }), title);
-  }
-});
-
-test("everyday words that look like movement do not wake the director", () => {
-  const still = [
-    "Brazil hosts a trade summit and reaches a deal on tariffs",
-    "Winterfell's maester rides out the winter fever in his tower",
-    "Iron Bank factors send the Crown's default account to Braavos by the next ship",
-  ];
-  for (const title of still) {
-    assert.equal(buildUnitDirectorInput({ events: [gotEvent(title)], world: {} }), null, title);
+    assert.ok(buildUnitDirectorInput({ events: [gotEvent(title, "", { tags: ["Military"] })], world: {} }), title);
+    assert.equal(buildUnitDirectorInput({ events: [gotEvent(title)], world: {} }), null, `${title}: untagged, it is no military event`);
   }
 });
 
@@ -334,27 +358,92 @@ test("a story ship leaves the map once its ten rounds are up", () => {
   assert.equal(gone.removed[0].reason, "voyage-ended");
 });
 
-test("a player's story ship setting sail reaches the unit director; someone else's merchant does not", () => {
+// The player's story ship (the Lantern Grace, a cog with a stolen dragon egg) is
+// the director's to judge, from an event of the player's own it reads: the
+// candidate says it is the player's (playerRelated), and the director decides
+// whether a ship of the player's sets sail in it. No list of words for ships
+// and sailing is read, in English or any other language.
+test("a player's own event is shown to the director as the player's, where a story ship may sail", () => {
   const sailing = {
     title: "Lantern Grace Sails From Pentos With the Stolen Dragon Egg Before Noon",
     description: "The cog Lantern Grace cleared the outer quay at Pentos with the sealed chest aboard and set her course for White Harbor.",
     kind: "player",
     playerRelated: true,
+    tags: ["Military"],
     impacts: {},
   };
-  assert.ok(buildUnitDirectorInput({ events: [sailing], world: {} }));
-  assert.equal(buildUnitDirectorInput({ events: [{ ...sailing, playerRelated: false }], world: {} }), null);
+  const twin = { ...sailing, title: "Le Lantern Grace quitte Pentos avec l'œuf de dragon volé", description: "La cogue a quitté le quai extérieur de Pentos." };
+  for (const event of [sailing, twin]) {
+    const input = buildUnitDirectorInput({ events: [event], world: {} });
+    assert.equal(input.candidates[0].playerRelated, true, event.title);
+    assert.equal(buildUnitDirectorInput({ events: [{ ...event, playerRelated: false }], world: {} }).candidates[0].playerRelated, undefined);
+    assert.equal(buildUnitDirectorInput({ events: [{ ...event, tags: ["Culture"] }], world: {} }), null, "untagged and carrying nothing military, it is not read");
+  }
 });
 
 // The army of the dead grows with every kill (the scenario's rule), but the
 // wight counters stayed at 40 and 96 while events said the host passed two
-// hundred: a host growing was not something the director was shown.
-test("a host that grows, or the slain rising to join it, reaches the unit director", () => {
+// hundred: a host growing was not something the director was shown. An event
+// of fighting carries the Military tag and its combatants, and is shown.
+test("a host that grows in a fight reaches the unit director by what the event carries", () => {
   for (const title of [
     "The Dead Overrun Frozen Shore Riders on the Hardhome Headland and the Fallen Rise to Join Them",
-    "Wights at the Haunted Forest's Edge Climb the Hardhome Headland as the Host Grows to Near Two Hundred and Forty",
-    "Mance Rayder's Host Swells at the Fist of the First Men as Its Scouts Test the Passes",
+    "Les morts submergent les cavaliers de la Côte gelée et les tombés se relèvent pour les rejoindre",
   ]) {
-    assert.ok(buildUnitDirectorInput({ events: [gotEvent(title)], world: {} }), title);
+    assert.ok(buildUnitDirectorInput({ events: [gotEvent(title, "", { combatants: ["The Dead", "Free Folk"] })], world: {} }), title);
+    assert.ok(buildUnitDirectorInput({ events: [gotEvent(title, "", { tags: ["Military"] })], world: {} }), title);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Wiring: gameplay.js does not load under bare node, so its part is checked in
+// its source.
+// ---------------------------------------------------------------------------
+
+test("a Scene's record carries its tags, which its map check reads; the skip's function does not grow", async () => {
+  const { readFileSync } = await import("node:fs");
+  const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const record = gameplay.slice(gameplay.indexOf("const sceneRecordFrom = (payload) =>"), gameplay.indexOf("const resolveInteractiveScene = async"));
+  assert.match(record, /tags: normalizeArray\(payload\?\.recordTags\)/);
+  const scene = gameplay.slice(gameplay.indexOf("const resolveInteractiveScene = async"), gameplay.indexOf("const sceneMapConsequences = async"));
+  assert.match(scene, /tags: normalizeArray\(summaryPayload\?\.tags\),/);
+  const { INTERACTIVE_EXECUTOR_SCHEMA, INTERACTIVE_SUMMARY_SCHEMA } = await import("./gameplaySchemas.js");
+  // Optional, and after every field the record already had (only the Scene's
+  // map flag, recordMapChanged, comes after it).
+  const executorKeys = Object.keys(INTERACTIVE_EXECUTOR_SCHEMA.properties);
+  assert.ok(executorKeys.indexOf("recordTags") > executorKeys.indexOf("recordImportance"));
+  assert.equal(INTERACTIVE_EXECUTOR_SCHEMA.required.includes("recordTags"), false);
+  assert.deepEqual(INTERACTIVE_EXECUTOR_SCHEMA.properties.recordTags.items.enum, ["Military", "Diplomacy", "Economy", "Politics", "Culture", "Disaster"]);
+  const summaryKeys = Object.keys(INTERACTIVE_SUMMARY_SCHEMA.properties);
+  assert.ok(summaryKeys.indexOf("tags") > summaryKeys.indexOf("regionTransfers"));
+  assert.equal(INTERACTIVE_SUMMARY_SCHEMA.required.includes("tags"), false);
+});
+
+test("a missing combatant is raised at a place the event's places field names, never one its words mention", async () => {
+  const { readFileSync } = await import("node:fs");
+  const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const raise = gameplay.slice(gameplay.indexOf("const combatantPlacesOf = "), gameplay.indexOf("// The director's orders may say where in words too."));
+  assert.match(raise, /eventPlacesOnMap\(event, gazetteer/);
+  assert.match(raise, /pickCombatantPlace\(power, combatantPlacesOf\(normalizeArray\(events\)\[eventIndex\], gazetteer, bundle\?\.world\)\)/);
+  assert.equal(/placesNamedIn|description|title/.test(raise.replace(/\/\/[^\n]*/g, "")), false, "no text is read");
+  assert.match(gameplay, /await raiseMissingCombatants\(answer, input, bundle, events\);/);
+  // The director is told which candidates are the player's own, where a story ship may sail.
+  assert.match(gameplay, /A candidate marked playerRelated is the player's own story/);
+});
+
+// What an air unit flies decides its share of fighters in an air battle (runtime/fronts/airStrike.js), and is
+// its airRole, never words of its name or make-up. The director and the Game Master may give it; a time skip's
+// function has no room for it (foldedSkip.js FOLDED_SKIP_SCHEMA_BUDGET), so a skip's wings fly the mixed share.
+test("an air unit's role is kept as the model gives it, offered to the director and not sent in a skip", async () => {
+  const wing = (airRole) => normalizeUnitEntry({ name: "1st Wing", type: "air", ownerCode: "Aland", lng: 1, lat: 1, airRole });
+  assert.equal(wing("Fighter").airRole, "fighter");
+  assert.equal(wing("bomber").airRole, "bomber");
+  assert.equal(wing("chasseur").airRole, undefined, "only the game's own roles");
+  assert.equal(wing(undefined).airRole, undefined);
+  const { UNIT_DIRECTOR_SCHEMA, GAMEPLAY_TOOLS } = await import("./gameplaySchemas.js");
+  const spawnOf = (anyOf) => anyOf.find((branch) => branch.properties?.op?.enum?.[0] === "spawn").properties.unit.properties;
+  assert.deepEqual(spawnOf(UNIT_DIRECTOR_SCHEMA.properties.eventOrders.items.properties.unitOps.items.anyOf).airRole.enum, ["fighter", "bomber", "mixed"]);
+  const jumpUnit = spawnOf(GAMEPLAY_TOOLS.jumpForward.schema.properties.events.items.properties.impacts.properties.unitOps.items.anyOf);
+  assert.equal("airRole" in jumpUnit, false, "the skip's function has no room for it");
+  assert.equal(Object.keys(jumpUnit).at(-1), "note", "and is sent the unit it always was");
 });

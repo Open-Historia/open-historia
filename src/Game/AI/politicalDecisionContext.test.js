@@ -165,7 +165,7 @@ const makeWorld = () => ({
         traits: { caution: 80 },
         goals: ["Preserve dynastic rule"],
         powerBlocs: [
-          { id: "royal-court", name: "Royal Court", kind: "ruling court", influence: { label: "dominant" } },
+          { id: "royal-court", name: "Royal Court", kind: "ruling court", leader: { name: "King Delta" }, influence: { label: "dominant" } },
           { id: "merchant-elite", name: "Merchant Elite", kind: "elite faction", influence: { label: "significant" } },
         ],
         parties: [],
@@ -324,6 +324,25 @@ test("regime-agnostic political systems expose power blocs without inventing ele
   assert.doesNotMatch(context.text, /No governing party\/power-bloc row resolved/);
 });
 
+// A bloc governed when its name, kind or status held an English word ("Royal",
+// "Court", "Military", "Ruling"): a court named in Russian never did, and a
+// "Royal Navy Lobby" always did. It governs when the head of state or of
+// government leads it, an exact name in both records.
+test("a power bloc governs by who leads it, never by the words of its name", () => {
+  const world = makeWorld();
+  const court = world.politicalActors.byPolity["Court Kingdom"];
+  court.powerBlocs[0] = { id: "tsar-court", name: "Царский двор", kind: "двор", leader: { name: "King Delta" }, influence: { label: "господствующий" } };
+  const russian = buildPoliticalDecisionContext(world, "Court Kingdom");
+  assert.equal(russian.political.entities.governing[0].name, "Царский двор");
+  assert.equal(russian.political.entities.opposition[0].name, "Merchant Elite");
+
+  // Named like a governing bloc, led by someone else: one of the competing actors.
+  court.powerBlocs[0] = { id: "royal-navy-lobby", name: "Royal Military Court Lobby", kind: "ruling clique", leader: { name: "Admiral Echo" } };
+  const lobby = buildPoliticalDecisionContext(world, "Court Kingdom");
+  assert.deepEqual(lobby.political.entities.governing, []);
+  assert.deepEqual(lobby.political.entities.opposition.map((entry) => entry.name).sort(), ["Merchant Elite", "Royal Military Court Lobby"]);
+});
+
 test("formal officeholders remain separate from a distinct supreme political leader", () => {
   const context = buildPoliticalDecisionContext(makeWorld(), "Supreme State");
   assert.equal(context.political.decisionAuthority.primary, "Supreme Leader");
@@ -409,23 +428,32 @@ test("tight World Director-sized capsules prioritize C4, governing-party motives
 
 
 
-test("compact decision capsules use the caller's task focus to surface later canonical strategy rows without reordering canonical state", () => {
+// The rows a tight capsule keeps were re-ranked by the words they shared with
+// the decision at hand (English stopwords and suffixes stripped). They are the
+// actor's own first rows now, whatever the caller is deciding and in whatever
+// language it is written.
+test("compact decision capsules keep the actor's own order, whatever the decision at hand", () => {
   const world = makeWorld();
   const actor = world.politicalActors.byPolity["Actor Republic"];
   actor.fears.push("Fuel-price shock could fracture the governing coalition");
   actor.domesticPressures.push("Port exporters demand immediate relief from maritime restrictions");
 
   const before = structuredClone(actor);
-  const context = buildPoliticalDecisionContext(world, "Actor Republic", {
-    counterpartPolity: "Counterpart State",
-    decisionFocusText: "We propose restoring maritime export access and emergency fuel-price relief for port trade.",
-    maxChars: 1700,
-  });
-
-  assert.match(context.text, /Goals: Protect export access/);
-  assert.match(context.text, /Fears: Fuel-price shock could fracture the governing coalition/);
-  assert.match(context.text, /Domestic pressure: Port exporters demand immediate relief from maritime restrictions/);
-  assert.deepEqual(world.politicalActors.byPolity["Actor Republic"], before, "focus selection must stay projection-only");
+  const plain = buildPoliticalDecisionContext(world, "Actor Republic", { counterpartPolity: "Counterpart State", maxChars: 1700 });
+  for (const decisionFocusText of [
+    "We propose restoring maritime export access and emergency fuel-price relief for port trade.",
+    "Предлагаем восстановить морской экспорт и срочно снизить цены на топливо для портовой торговли.",
+  ]) {
+    const context = buildPoliticalDecisionContext(world, "Actor Republic", {
+      counterpartPolity: "Counterpart State",
+      decisionFocusText,
+      maxChars: 1700,
+    });
+    assert.equal(context.text, plain.text, decisionFocusText);
+  }
+  assert.match(plain.text, /Goals: Preserve the frontier buffer; Keep alliance guarantees credible/);
+  assert.doesNotMatch(plain.text, /Fuel-price shock/);
+  assert.deepEqual(world.politicalActors.byPolity["Actor Republic"], before, "the capsule is projection-only");
 });
 
 test("compact decision capsules preserve authored order when the caller supplies no usable task focus", () => {

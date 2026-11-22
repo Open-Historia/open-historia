@@ -57,18 +57,20 @@ export const RECEIPT_PLAYER_TEXTS = Object.freeze({
   agreementUntitled: "A new agreement was not recorded: it had no title.",
   staleOrderLinksOne: "1 link from an event to an order that is not in your queue was removed.",
   staleOrderLinksMany: "{{count}} links from events to orders that are not in your queue were removed.",
-  cityControlUnchanged: "The event says control of {{city}} changed, but nothing changed it, so the map still shows its previous controller.",
   transferWholeCountryUnknown: "The transfer of all of {{name}}'s land was not applied: no regions are held under that exact name.",
   controlWholeCountryUnknown: "The change of control over all of {{name}}'s land was not applied: no regions are held under that exact name.",
   transferUnknownOwner: "The transfer of {{region}} was not applied: {{owner}} is not a country on this map.",
   controlUnknownOwner: "The change of control over {{region}} was not applied: {{owner}} is not a country on this map.",
   transferNoRegion: "The transfer of {{region}} was not applied: no region on the map matches that name.",
   controlNoRegion: "The change of control over {{region}} was not applied: no region on the map matches that name.",
+  dissolutionRefusedOne: "{{country}} was not dissolved: 1 of its regions was given to no one.",
+  dissolutionRefusedMany: "{{country}} was not dissolved: {{count}} of its regions were given to no one.",
   politicalRefused: "A change to a government, party or leader was not applied: the engine's political records refused it.",
   institutionRefused: "A change to an institution or its membership was not applied: the institution's rules refused it.",
   chatNotOpened: "The conversation \"{{title}}\" was not opened: none of its participants is a country on this map.",
   untitledChatNotOpened: "A conversation was not opened: none of its participants is a country on this map.",
   unitNotRaised: "A new unit was not raised: it had no name or no owner.",
+  unitTypeNotFielded: "{{name}} was not raised: {{owner}} cannot field the unit type {{type}}.",
   unitOrderNoUnit: "An order to a unit was not carried out: it did not say which unit.",
   unitOrderUnknownUnit: "An order to the unit \"{{unit}}\" was not carried out: no unit has that id, and it may have been destroyed.",
   structureUnnamed: "A structure was not built: it had no name.",
@@ -77,6 +79,9 @@ export const RECEIPT_PLAYER_TEXTS = Object.freeze({
   reportEmpty: "A report was not written: it carried no document.",
   reportNoHolders: "The report \"{{title}}\" was not written: none of the governments meant to hold it is a country on this map.",
   projectUnnamed: "A project was not opened: it had no name.",
+  // Said without its reason, which is a secret of a service's (gameplay.js:
+  // a programme planted on a service whose agent was never turned).
+  projectNotOpened: "A project was not opened: nothing in the world bears it out.",
   projectChangeNoProject: "A change to a project was not applied: it did not say which project.",
   projectChangeUnknown: "A change to the project \"{{name}}\" was not applied: nothing on the board has that name.",
   schemaTruncatedOne: "1 item beyond the allowed length was left out of the answer.",
@@ -185,9 +190,6 @@ export const interventionNote = ({ kept = [], dropped = [], closingDate = "" } =
 export const unresolvedTerritoryNote = (entry, family, eventTitle = "") => {
   const control = family === "regionControlOps";
   const region = clean(entry?.label);
-  if (entry?.kind === "narrated-city-coverage") {
-    return receiptPlayerNote("cityControlUnchanged", { city: clean(entry.cityName) || region || clean(entry.regionName) }, eventTitle);
-  }
   if (entry?.wholeCountry) {
     return receiptPlayerNote(control ? "controlWholeCountryUnknown" : "transferWholeCountryUnknown", { name: region }, eventTitle);
   }
@@ -239,6 +241,11 @@ export const schemaRemovalNote = (removal) => {
   if (removal?.kind === "truncate") return one(removal.removedCount, "schemaTruncatedOne", "schemaTruncatedMany", {}, event);
   return receiptPlayerNote("schemaMalformed", {}, event);
 };
+
+// A dissolution the engine refuses (gameState.js dissolvedPolityLand): the
+// polity, by name, still holds `count` regions its event gives to no one.
+export const dissolutionRefusedNote = ({ polity = "", count = 0 } = {}, event = "") =>
+  one(count, "dissolutionRefusedOne", "dissolutionRefusedMany", { country: clean(polity) }, event);
 
 export const eventCountNote = ({ count, min, max }) =>
   one(count, "eventCountOne", "eventCountMany", { min: whole(min), max: whole(max) });

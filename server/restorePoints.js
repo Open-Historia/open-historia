@@ -16,6 +16,8 @@ export const restorePointIndexEntry = (snap) => ({
   fromDate: snap?.fromDate ?? "",
   toDate: snap?.toDate ?? "",
   capturedAt: snap?.capturedAt ?? "",
+  // The start of a shared game's round (src/runtime/turnCommit.js restorePointProblem).
+  ...(snap?.shared === true ? { shared: true } : {}),
 });
 
 // A restore point never changes once captured: every writer passes the older

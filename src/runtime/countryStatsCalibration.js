@@ -4,11 +4,43 @@
 // outside the nominal-scale guard is nudged to its boundary, and the economic
 // calibration is audited. Pure and import-light, so node --test can load it
 // (gameplay.js cannot be).
-import { normalizeCountryStatsMacroEstimate } from "./countryStats.js";
+import { normalizeCountryStatsMacroEstimate, normalizeStatsTransportRows } from "./countryStats.js";
 import { parseGameDate } from "./gameDates.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
+
+// If a mapped sheet fails to decode its required macro rows, the empty component
+// array is only a consequence. Tell the model exactly which rows failed rather
+// than requesting fictional nonterritorial status or loosening coverage.
+const EMPTY_MAPPED_STATS_ERROR = "$.territorialComponents may be empty only when $.territorialScope is nonterritorial.";
+export const countryStatsValidationFailure = ({
+  schemaError = "", coverageError = "", calibrationError = "",
+  economicCalibrationError = "", splitError = "",
+} = {}) => {
+  const details = [coverageError, calibrationError, economicCalibrationError, splitError].filter(Boolean).join(" ");
+  if (!schemaError || (coverageError && schemaError === EMPTY_MAPPED_STATS_ERROR)) {
+    return details || schemaError;
+  }
+  return schemaError;
+};
+
+// A complete authored Day-One component ledger is canonical data. The absence
+// of a newer Stats calibration stamp is not proof the country requires a new
+// numeric baseline. Reuse the original canonical sheet without an AI call or
+// persistence mutation when the native geography matches and no events are pending.
+export const shouldPreserveLegacyStartStatsBaseline = ({
+  previousComplete = false, atScenarioStartState = false,
+  hasAuthoritativeTerritorialFingerprint = false, territorialCoverageMatches = false,
+  previousStateFingerprint = "", unaccountedEconomicEvents = null,
+  forceReassess = false,
+} = {}) => Boolean(
+  previousComplete && atScenarioStartState &&
+  hasAuthoritativeTerritorialFingerprint && territorialCoverageMatches &&
+  !normalizeString(previousStateFingerprint) && !forceReassess &&
+  Number(unaccountedEconomicEvents) === 0 && unaccountedEconomicEvents !== null &&
+  unaccountedEconomicEvents !== undefined
+);
 
 export const decodeCountryStatMacroEstimates = (value, macroPlan = []) => {
   const nativePlan = normalizeArray(macroPlan)
@@ -18,7 +50,7 @@ export const decodeCountryStatMacroEstimates = (value, macroPlan = []) => {
     }))
     .filter((entry) => entry.memberCount > 0);
 
-  const text = normalizeString(value);
+  const text = normalizeStatsTransportRows(value);
   if (nativePlan.length > 0) {
     if (!text) {
       return { estimates: [], error: `territorialMacroComponentsText is empty; return exactly ${nativePlan.length} macro estimate row(s).` };
@@ -94,7 +126,7 @@ export const normalizeNearBoundaryHistoricalNominalScale = ({ calibration, compo
     .map(normalizeString)
     .filter(Boolean);
   const anchorYear = Math.trunc(Number(calibration?.anchorYear));
-  const rebasedGdpPerCapita = Number(calibration?.rebasedGdpPerCapita2026Eur);
+  const rebasedGdpPerCapita = Number(calibration?.rebasedGdpPerCapita2026Usd);
   if (mode !== "historical_start" || divergenceEventIds.length || !Number.isInteger(anchorYear) || !(rebasedGdpPerCapita > 0)) {
     return { components: rows, adjusted: false };
   }
@@ -163,7 +195,7 @@ export const validateNativeEconomicCalibration = ({
   const anchorCurrency = normalizeString(calibration?.anchorCurrency).toUpperCase();
   const nominalGdpBillions = Number(calibration?.nominalGdpBillions);
   const nominalGdpPerCapita = Number(calibration?.nominalGdpPerCapita);
-  const rebasedGdpPerCapita = Number(calibration?.rebasedGdpPerCapita2026Eur);
+  const rebasedGdpPerCapita = Number(calibration?.rebasedGdpPerCapita2026Usd);
   const divergenceEventIds = normalizeArray(calibration?.divergenceEventIds)
     .map(normalizeString)
     .filter(Boolean);
@@ -180,7 +212,7 @@ export const validateNativeEconomicCalibration = ({
     return "economicCalibration.anchorCurrency must be USD or EUR so native code can audit the rebasing scale.";
   }
   if (!(nominalGdpBillions > 0) || !(nominalGdpPerCapita > 0) || !(rebasedGdpPerCapita > 0)) {
-    return "economicCalibration nominal GDP, nominal GDP/capita, and rebased 2026-EUR GDP/capita anchors must all be positive.";
+    return "economicCalibration nominal GDP, nominal GDP/capita, and rebased 2026-USD GDP/capita anchors must all be positive.";
   }
 
   const populationMode = normalizeString(populationCalibration?.mode);
@@ -195,7 +227,7 @@ export const validateNativeEconomicCalibration = ({
   }
 
   // The rebasing factor is an ACCOUNTING conversion only: contemporaneous nominal
-  // USD/EUR -> constant 2026 EUR. It must never smuggle PPP/international-dollar
+  // USD/EUR -> constant 2026 USD. It must never smuggle PPP/international-dollar
   // purchasing power into the canonical nominal GDP ledger. The modern-era ceiling
   // is intentionally generous enough for CPI + FX movement while still rejecting
   // the classic 2x-3x PPP substitution seen in Belarus-style failures.
@@ -257,8 +289,8 @@ export const validateNativeEconomicCalibration = ({
 
     if (scaleOutsideUnexplainedRange && divergenceEventIds.length === 0) {
       return (
-        `Generated nominal GDP/capita (${Math.round(generatedGdpPerCapita).toLocaleString()} 2026-EUR) is ${scaleRatio.toFixed(2)}x the audited ` +
-        `historical nominal anchor (${Math.round(rebasedGdpPerCapita).toLocaleString()} 2026-EUR) without any cited canonical economic divergence event. ` +
+        `Generated nominal GDP/capita (${Math.round(generatedGdpPerCapita).toLocaleString()} 2026-USD) is ${scaleRatio.toFixed(2)}x the audited ` +
+        `historical nominal anchor (${Math.round(rebasedGdpPerCapita).toLocaleString()} 2026-USD) without any cited canonical economic divergence event. ` +
         "Preserve the nominal historical scale or cite supplied divergenceEventIds that causally justify the departure."
       );
     }

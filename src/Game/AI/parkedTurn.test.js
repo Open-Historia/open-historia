@@ -79,8 +79,8 @@ test("a kept skip comes back from its campaign's store ready to be written, aski
   assert.equal(requests.budget.cap, 3);
   assert.equal(requests.budget.spent, 1);
   assert.equal(requests.budget.reserved, 1);
-  assert.equal(requests.budget.take("stats"), true);
-  assert.equal(requests.budget.take("history"), false, "the last slot is the ballots'");
+  assert.equal(requests.budget.take("jumpRetry"), true);
+  assert.equal(requests.budget.take("jumpLookup"), false, "the last slot is the ballots'");
   assert.equal(requests.budget.take("institutionBallots"), true);
 });
 
@@ -93,9 +93,10 @@ test("a skip kept by an older build is written under the skip's own list and cap
   const { requests } = restoreParkedTurn(record, { campaignId: "game-a" }).applyArgs.projects;
   assert.equal(requests.budget.allows("unitDirector"), false, "a check is no longer a request of its own");
   assert.equal(requests.budget.take("unitDirector"), false);
-  assert.equal(requests.budget.take("history"), true);
-  assert.equal(requests.budget.take("stats"), true);
-  assert.equal(requests.budget.take("history"), false, "three is the most a skip spends");
+  assert.equal(requests.budget.allows("history"), false, "nor is anything asked after a skip");
+  assert.equal(requests.budget.take("jumpRetry"), true);
+  assert.equal(requests.budget.take("jumpLookup"), true);
+  assert.equal(requests.budget.take("jumpLookup"), false, "three is the most a skip spends");
   assert.equal(requests.budget.spent, 3);
 });
 

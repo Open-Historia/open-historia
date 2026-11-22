@@ -9,6 +9,7 @@
 // The IndexedDB copy answers the part of the Web Cache API that Transformers.js
 // (env.customCache) and the workers use: match, put, keys and delete, by URL.
 
+// i18n-ignore: a storage key.
 const DB_PREFIX = "oh-model-store:";
 const STORE = "files";
 

@@ -32,14 +32,16 @@ permissions:
   deployments: write
 
 concurrency:
-  # A push while a deploy is running should supersede it, not race it onto the
-  # live domain in whatever order the two happen to finish.
+  # A push while a deploy is running must not race it onto the live domain in
+  # whatever order the two happen to finish. It waits for it instead (a deploy
+  # is never cut off halfway), and of several waiting only the newest runs.
   group: deploy-site
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
 

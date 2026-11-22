@@ -1,5 +1,5 @@
 // What the advisor reads of the world's ledgers (main.jsx buildAdvisorSystemPrompt).
-import { buildCompactEconomicContext, normalizeCountryStatsTracking } from "../../runtime/countryStats.js";
+import { buildCompactEconomicContext } from "../../runtime/countryStats.js";
 import { buildCanonicalWarContext } from "./nativeWarLedger.js";
 import { buildBoundedDiplomaticContext } from "./nativeDiplomaticDirector.js";
 
@@ -57,10 +57,11 @@ export function describeWorldLedgersForAdvisor(worldData, chatData, country) {
   });
   const wars = buildCanonicalWarContext(worldData);
 
-  const tracked = normalizeCountryStatsTracking(worldData.countryStatsTracking, { playerCountry: player }).trackedPolities || [];
+  // (The countries the player tracked in Stats came after these, until that
+  // list went with the automatic Stats refresh, 2026-11-07.)
   const seen = new Set([player.toLowerCase()]);
   const figures = [];
-  for (const name of [...diplomacy.actors, ...tracked]) {
+  for (const name of diplomacy.actors) {
     const key = String(name || "").trim().toLowerCase();
     if (!key || seen.has(key) || figures.length >= MAX_ADVISOR_FOREIGN_SHEETS) continue;
     seen.add(key);

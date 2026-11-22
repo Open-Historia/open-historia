@@ -25,3 +25,12 @@ Before you finish any task, check:
 The complete guide is **[docs/update-notices.md](docs/update-notices.md)**: when to write one, the entry format with examples, how to build a theme, the kit, the house rules and how devices are shown updates. Follow it exactly.
 
 When a feature is promoted to another branch (alpha, then beta, then main), its notice entry goes with it. Promote only the lines for what was promoted.
+
+## Standing order: a pull request that changes how anything looks shows it
+
+If a change makes anything look different, its pull request must include images of it: a screen, panel, popup, map style, theme, icon, layout, animation or text on screen. Without them the pull request is unfinished.
+
+- **Show what changed** with screenshots of the new look. Include a before and after when the difference is subtle, and a short recording or GIF for motion or interaction.
+- **Cover every place it shows.** If the change looks different on the desktop, the website, Android or the native app, or in another theme or language, show each one that changed.
+- **Put the images in the pull request description** (drag them into GitHub's editor), not only as files in the repo.
+- A pull request with no visual change says so in one line: "No visual change."

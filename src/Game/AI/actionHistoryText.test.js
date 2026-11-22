@@ -46,3 +46,13 @@ test("the 'not previous' helper renders the resolved history, and 'this round' t
   const line = renderTemplate("Orders from earlier rounds, already carried out: ${PLAYER_EVERY_ACTION_NOT_PREVIOUS}", helpers);
   assert.doesNotMatch(line, /Raise the reserves/);
 });
+
+test("a skip's orders this round carry their ids, which the focus names them by; other tasks' do not", async () => {
+  assert.match(buildActionHistoryText(actions, { ids: true }), /^- \[a3\] \(action\) Raise the reserves: Raise the reserves$/m);
+  assert.doesNotMatch(buildActionHistoryText(actions, { includeResolved: true, ids: true }), /\[a1\]/, "only a live order is cited by id");
+  const bundle = { actions, game: { gameDate: "2016-01-01" }, world: {}, events: [], chats: [], advisor: [] };
+  const skip = await buildPromptContext(bundle, { requiredKeys: ["plannedActions"], taskKey: "jumpForward" });
+  assert.match(skip.plannedActions, /\[a3\] \(action\) Raise the reserves/);
+  const advice = await buildPromptContext(bundle, { requiredKeys: ["plannedActions"], taskKey: "actions" });
+  assert.doesNotMatch(advice.plannedActions, /\[a3\]/);
+});

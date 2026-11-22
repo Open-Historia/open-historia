@@ -10,7 +10,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { applyMarkerOps } from "./gameState.js";
-import { acceptStructure, approximateMark, canSettleStructure, moveStructure } from "./structurePlacement.js";
+import { SETTLE_NOT_SAVED, STRUCTURE_SEA_KM, acceptStructure, approximateMark, canSettleStructure, moveStructure, saveSettledStructure, structureMoveRefusal } from "./structurePlacement.js";
+import { syntheticMap } from "./fronts/syntheticMap.js";
+import { buildWorldGrid } from "./fronts/worldGrid.js";
+import { chartOf } from "./warRoomChart.js";
 
 const MARK = { asked: "Djibo, Burkina Faso", country: "Burkina Faso", near: "Ouagadougou" };
 const base = {
@@ -78,4 +81,82 @@ test("the player settles their own approximate structures and their puppets', no
     assert.equal(canSettleStructure({ ...base, ownerCode: "Mali" }, { playerCountry: "Burkina Faso", world }), true);
     assert.equal(canSettleStructure({ ...base, ownerCode: "Russia" }, { playerCountry: "Burkina Faso", world }), false);
     assert.equal(canSettleStructure({ ...base, approximate: undefined }, { playerCountry: "Burkina Faso", world }), false);
+});
+
+// In a shared game a Move is held to the host's own map: any point on Earth was taken, another player's capital
+// included (the gap audit of 2026-11-18). Aland in the west, the sea between, Borduria in the east, and more
+// open sea round them both.
+test("in a shared game a structure moves onto its own country's land or the sea off it, and nowhere else", () => {
+    const world = syntheticMap({
+        layout: [
+            "AAAA~~~BBBBB",
+            "AAAA~~~BBBBB",
+            "AAAABBBBBBBB",
+        ],
+        legend: { A: "Aland", B: "Borduria", "~": null },
+        west: 0,
+        north: 54,
+        step: 1,
+        key: "the settled sea",
+    });
+    const chart = chartOf({ grid: buildWorldGrid(world.regions, { step: 0.5 }), controllerOf: world.controllerOf });
+    const fort = { ...base, ownerCode: "Aland" };
+    assert.equal(structureMoveRefusal(fort, { lng: 1.5, lat: 52.5 }, { chart }), "", "its own land");
+    assert.equal(structureMoveRefusal(fort, { lng: 5.5, lat: 53.5 }, { chart }), "", "the sea off its coast");
+    assert.match(structureMoveRefusal(fort, { lng: 9.5, lat: 52.5 }, { chart }), /its own country's land/, "another's land");
+    assert.match(structureMoveRefusal(fort, { lng: -40, lat: 0 }, { chart }), /its own country's land/, "far out at sea, off the map");
+    assert.match(structureMoveRefusal(fort, { lng: 1.5, lat: 52.5 }, { chart: null }), /could not be read/);
+    assert.ok(STRUCTURE_SEA_KM >= 100);
+});
+
+// A refused settle was written to the diagnostics log alone, and the card and the map said nothing (the gap audit of
+// 2026-11-18): the host's reason is what the save throws, for the card or the map's banner to show.
+test("in a shared game a settle is asked of the host, and a refusal comes back with the host's reason", async () => {
+    const { setSharedRequester } = await import("../multiplayer/client/sharedGameBridge.js");
+    const { startRemoteRuntime, stopRemoteRuntime } = await import("../multiplayer/client/remoteRuntime.js");
+    const asked = [];
+    setSharedRequester(async (t, fields) => {
+        asked.push({ t, ...fields });
+        return fields.move ? { ok: false, error: "A structure is moved onto its own country's land, or to the sea off it." } : { ok: true, error: "" };
+    });
+    startRemoteRuntime({ publish: () => {}, urlFor: () => "" });
+    try {
+        await saveSettledStructure("structure-1");
+        await assert.rejects(saveSettledStructure("structure-1", { lng: 9.5, lat: 52.5 }), /its own country's land/);
+        assert.deepEqual(asked, [
+            { t: "settle", marker: "structure-1", move: false, lng: 0, lat: 0 },
+            { t: "settle", marker: "structure-1", move: true, lng: 9.5, lat: 52.5 },
+        ]);
+        setSharedRequester(async () => ({ ok: false, error: "" }));
+        await assert.rejects(saveSettledStructure("structure-1"), (error) => error.message === SETTLE_NOT_SAVED);
+    } finally {
+        stopRemoteRuntime();
+        setSharedRequester(null);
+    }
+});
+
+// A click on the world copy east of the date line reports a longitude past 180: the shared game's request refused it
+// in its schema's words ("$.lng: outside -180..180") and single player moved nothing (the review of 2026-11-18, door 5).
+test("a structure moved on a world copy across the date line goes where the click is on Earth, in a shared game and alone", async () => {
+    const { setSharedRequester } = await import("../multiplayer/client/sharedGameBridge.js");
+    const { startRemoteRuntime, stopRemoteRuntime } = await import("../multiplayer/client/remoteRuntime.js");
+    const { PLAYER_REQUESTS } = await import("../multiplayer/game/messages.js");
+    const { validate } = await import("../multiplayer/protocol/validate.js");
+    const asked = [];
+    setSharedRequester(async (t, fields) => {
+        asked.push(validate(PLAYER_REQUESTS[t], { t, id: "0123456789abcdef", ...fields }));
+        return { ok: true, error: "" };
+    });
+    startRemoteRuntime({ publish: () => {}, urlFor: () => "" });
+    try {
+        await saveSettledStructure("structure-1", { lng: 190.25, lat: -17.5 });
+        assert.equal(asked[0].ok, true, "a request the host takes");
+        assert.equal(asked[0].value.lng, -169.75);
+    } finally {
+        stopRemoteRuntime();
+        setSharedRequester(null);
+    }
+    // Alone, the same point is moved to, as moveStructure takes it.
+    const moved = moveStructure([{ id: "structure-1", lng: 1, lat: 1, approximate: { asked: "x", country: "Fiji" } }], "structure-1", { lng: -169.75, lat: -17.5 });
+    assert.deepEqual([moved[0].lng, moved[0].lat], [-169.75, -17.5]);
 });

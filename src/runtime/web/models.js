@@ -19,6 +19,8 @@ import {
   pickHubProvenance,
 } from "../../../server/hubProvenance.js";
 import { scenarioMusicField } from "../../../server/scenarioMusic.js";
+import { nameId } from "../../../server/nameId.js";
+import { scenarioLanguagesField } from "../../../server/scenarioLanguages.js";
 import {
   BUILT_IN_SCENARIO_DEFAULT_DATE,
   DEFAULT_GAME_META,
@@ -252,6 +254,9 @@ export const readScenarioMeta = (scenarioId, raw = {}) => {
     // Server twin: the hub tracks the scenario plays, by situation
     // (server/scenarioMusic.js). Only there while it names one.
     ...scenarioMusicField(raw?.music),
+    // Server twin: its own text in other languages (server/scenarioLanguages.js),
+    // never in a listing.
+    ...scenarioLanguagesField(raw?.languages),
     name,
     playCount: normalizePlayCount(raw?.playCount),
     subtitle,
@@ -269,6 +274,8 @@ export const missingBasemapField = (raw) => {
 // A scenario's music as its details and its bundle carry it, shared with the
 // desktop store so the two never differ.
 export { scenarioMusicField };
+// And its language packs.
+export { scenarioLanguagesField };
 
 export const readGameMeta = (gameId, raw = {}) => {
   const name = String(raw?.name ?? "").trim() || DEFAULT_GAME_META.name;
@@ -358,9 +365,10 @@ export const normalizeRuntimeWorld = (assetKey, data, scenarioCustomGeometry) =>
     : normalized;
 };
 
-// server normalizeId (:316) — no length cap for scenario/game ids.
+// server normalizeId (:316) — no length cap for scenario/game ids, and the game's
+// one rule for an id made from a name (server/nameId.js).
 export const normalizeId = (rawValue, prefix) => {
-  const value = String(rawValue ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const value = nameId(rawValue, (name) => String(name ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""));
   return value || `${prefix}-${Date.now().toString(36)}`;
 };
 

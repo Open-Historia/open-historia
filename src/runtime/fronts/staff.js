@@ -19,6 +19,12 @@
 //                       against what faces it, some periods and not others
 //   about even          it holds
 //   much the weaker     it digs in
+//   its capital lost    it goes for it, on the line nearest it, at odds it
+//                       would otherwise hold at (STAFF_RETAKE_ODDS)
+//
+// And it CALLS UP fresh troops from its country's men when the side needs them
+// (callUpNeed; engine.js staffCallUp): a thin or outmatched line, ground lost,
+// and most of all a capital or a heartland at stake.
 //
 // THE STORY STILL COMMANDS. An order the story gave a side stands, and its
 // staff leaves the side alone, for STAFF_STORY_ORDER_DAYS; only an order that
@@ -46,7 +52,14 @@ import {
   STAFF_CHANCE_DEFENDER,
   STAFF_DEFENDER_ADVANCES,
   STAFF_DEFENDER_PROBES,
+  STAFF_CALL_UP_LOSING,
+  STAFF_CALL_UP_MOBILISE,
+  STAFF_CALL_UP_THIN,
+  STAFF_CAPITAL_THREAT_KM,
   STAFF_DIGS_IN_UNDER,
+  STAFF_HOMELAND_SHARE,
+  STAFF_RETAKE_ODDS,
+  STAFF_THIN_SHARE,
   SCENARIO_MARK,
   STAFF_MARK,
   STAFF_SECTOR_TROOPS_LEAST,
@@ -106,6 +119,10 @@ export const staffDecision = (battle, side, { began = false, today = null, key =
   const advances = began ? STAFF_ATTACKER_ADVANCES : STAFF_DEFENDER_ADVANCES;
   const probes = began ? STAFF_ATTACKER_PROBES : STAFF_DEFENDER_PROBES;
   if (ratio >= advances) return { order: "advance", sector: "all", ratio };
+  // A side whose capital the other holds does not sit and hold: at the odds of a fight it goes for it, on the
+  // stretch of line nearest it. A Germany that had lost Berlin dug in everywhere for months (2026-11-10).
+  const capital = capitalOf(battle, side);
+  if (capital?.held && ratio >= STAFF_RETAKE_ODDS) return { order: "advance", sector: `city: ${capital.name}`, ratio };
   if (ratio < STAFF_DIGS_IN_UNDER) return { order: "dig in", sector: "all", ratio };
   if (ratio < probes) return { order: "hold", sector: "all", ratio };
   // Strong enough to try something, not to try everything: some periods it does.
@@ -127,6 +144,59 @@ export const staffDecision = (battle, side, { began = false, today = null, key =
   if (!best) return ratio >= 1 ? { order: "advance", sector: "all", ratio } : { order: "hold", sector: "all", ratio };
   if (best.there < 1) return { order: "hold", sector: "all", ratio };
   return { order: "advance", sector: best.name, ratio };
+};
+
+// ---- what a side calls up (constants.js STAFF_CALL_UP_*) ------------------------
+
+// A side's capital on the battlefield's ground: the largest town marked a capital on its own lawful land
+// (battle.homeSide), with whether the other side holds it and whether the other side's troops are within
+// STAFF_CAPITAL_THREAT_KM of it. null where none of its land in the frame has one.
+export const capitalOf = (battle, side) => {
+  const { arena, field, place } = battle;
+  const lawful = battle.homeSide;
+  if (!arena?.cities || !lawful) return null;
+  let best = null;
+  for (const city of arena.cities) {
+    if (!city.capital || !(city.cell >= 0 && city.cell < field.size) || lawful[arena.region[city.cell]] !== side) continue;
+    if (!best || city.population > best.population) best = city;
+  }
+  if (!best) return null;
+  const held = field.holders[best.cell] === 1 - side;
+  const near = held || battle.troops[1 - side].some((troop) => {
+    if (!isLive(troop)) return false;
+    const km = place.kmAt((troop.y + best.y) / 2);
+    const dx = (troop.x - best.x) * km;
+    const dy = (troop.y - best.y) * km;
+    return dx * dx + dy * dy <= STAFF_CAPITAL_THREAT_KM * STAFF_CAPITAL_THREAT_KM;
+  });
+  return { name: best.name, x: best.x, y: best.y, held, near };
+};
+
+// Whether a side nobody plays needs fresh troops, and how many of what its strength raises there (`usual`):
+// { share, why } with why "mobilise" (its capital or its heartland at stake), "losing" (the other side has taken
+// more of its land since the run began), "thin" (a thin or outmatched line) or "" (none needed, share 0).
+export const callUpNeed = (battle, side, usual) => {
+  const { field, arena } = battle;
+  const lawful = battle.homeSide;
+  const live = battle.troops[side].reduce((count, troop) => count + (isLive(troop) ? 1 : 0), 0);
+  let home = 0;
+  let lost = 0;
+  let lostBefore = 0;
+  if (lawful && arena?.region) {
+    for (let cell = 0; cell < field.size; cell += 1) {
+      if (!field.play[cell] || lawful[arena.region[cell]] !== side) continue;
+      home += 1;
+      if (field.holders[cell] === 1 - side) lost += 1;
+      if (battle.startHolders?.[cell] === 1 - side) lostBefore += 1;
+    }
+  }
+  const capital = capitalOf(battle, side);
+  if (capital?.held || capital?.near || (home > 0 && lost >= home * STAFF_HOMELAND_SHARE)) return { share: STAFF_CALL_UP_MOBILISE, why: "mobilise" };
+  if (lost > lostBefore) return { share: STAFF_CALL_UP_LOSING, why: "losing" };
+  const own = worthOf(battle, side);
+  const theirs = worthOf(battle, 1 - side);
+  if (live < usual * STAFF_THIN_SHARE || own.worth < theirs.worth) return { share: STAFF_CALL_UP_THIN, why: "thin" };
+  return { share: 0, why: "" };
 };
 
 // ---- a breakthrough (Wars and Fronts Pt.2) -------------------------------------

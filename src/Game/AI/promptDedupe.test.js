@@ -62,9 +62,11 @@ test("an empty marker or prompt never claims the rule is present", () => {
 // ride in the live records rendered into it (gameplay.js buildJumpLiveState), so
 // there is nothing left to de-duplicate — only this to hold.
 test("the jump's levers ride in its live records, not after its template", () => {
-  const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
-  // Pushed as they are, or without the groups lever while groups are off.
-  assert.match(gameplay, /blocks\.push\([^;]*JUMP_LEVERS/);
+  // Source-inspection assertions use LF patterns; Windows checkouts may store CRLF.
+  const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  // Pushed as the game's features have them (jumpLevers: without the groups lever while groups are off).
+  assert.match(gameplay, /blocks\.push\(jumpLevers\(\)\)/);
+  assert.match(gameplay, /const jumpLevers = \(\) => \{\n\s*const grouped = [^\n]*JUMP_LEVERS/);
   assert.doesNotMatch(gameplay, /ACTIONS_REFERENCE/);
   assert.doesNotMatch(gameplay, /\[Units on the Map\]/);
 });

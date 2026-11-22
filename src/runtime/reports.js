@@ -26,8 +26,11 @@
 // the world is observable and belongs in the event's public text. A report
 // costs no request of its own — it rides in the answer that wrote the event.
 //
-// DELIBERATELY IMPORT-FREE, like projects.js: the rules on plain data, tested
-// on their own. The caller hands in how a polity name is canonicalised.
+// DELIBERATELY IMPORT-FREE, like projects.js, but for the import-free id maker
+// (runtime/blindIds.js): the rules on plain data, tested on their own. The
+// caller hands in how a polity name is canonicalised.
+
+import { blindId } from "./blindIds.js";
 
 export const REPORTS_LIMIT = 240;
 export const REPORT_BODY_MAX_CHARS = 6000;
@@ -51,11 +54,10 @@ const nameList = (value) => {
     return names;
 };
 
-let sequence = 0;
-const mintId = (prefix) => {
-    sequence += 1;
-    return `${prefix}-${Date.now().toString(36)}-${sequence.toString(36)}`;
-};
+// A document's id is read by each government that holds it: random, so that
+// two of one player's documents never tell how many others were written
+// between them, or when (runtime/blindIds.js).
+const mintId = (prefix) => blindId(prefix);
 
 // One stored document. `visibleTo` empty in storage is read as public (null):
 // a document that no government holds is one the world never wrote.
@@ -100,7 +102,10 @@ export const normalizeReports = (reports) => {
 };
 
 // One operation as the model writes it. A create with nothing to say is not a
-// report; a share of nothing widens nothing.
+// report; a share of nothing widens nothing. The op is the schema's create or
+// share (an op left unwritten beside a title or a body is a create by its
+// shape); "update" was once read as a share, in English only (the owner,
+// 2026-11-13: no keywording anywhere).
 export const normalizeReportOp = (entry) => {
     if (!entry || typeof entry !== "object") return null;
     const op = fold(entry.op || entry.operation || (entry.title || entry.body ? "create" : ""));
@@ -119,7 +124,7 @@ export const normalizeReportOp = (entry) => {
             dateline: asText(entry.dateline || entry.date),
         };
     }
-    if (op === "share" || op === "update") {
+    if (op === "share") {
         const reportId = asText(entry.reportId || entry.id);
         const visibleTo = nameList(entry.visibleTo ?? entry.addVisibleTo ?? entry.recipients ?? entry.holders);
         if (!reportId || !visibleTo.length) return null;

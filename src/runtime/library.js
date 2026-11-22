@@ -1,7 +1,7 @@
 /*! Open Historia — portions (scenario-map editor seeding) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { useSyncExternalStore } from "react";
 import { announceGameOpening, setReadinessGame } from "./mapReadiness.js";
-import { enterGame } from "./gameEntry.js";
+import { enterGame, hasEnteredGame } from "./gameEntry.js";
 import {
   JSON_URLS,
   readJson,
@@ -185,11 +185,17 @@ const withSharedGameEntry = (game) => (sharedGameEntry && game?.id === sharedGam
 
 const applyLibraryCatalog = (catalog) => {
   lastCatalog = catalog;
-  const games = Array.isArray(catalog?.games) ? catalog.games.map((game) => withSharedGameEntry(withOpenGameCountry(game))) : [];
+  const every = Array.isArray(catalog?.games) ? catalog.games.map((game) => withSharedGameEntry(withOpenGameCountry(game))) : [];
+  // A shared game's stand-in (server/sharedGameStandIn.js) is never one of the
+  // player's games: the list leaves it out. While its shared game is open it is
+  // still the game the page runs on, so the active game is found among all,
+  // and it is listed too: its card's Current is the guest's way back into the
+  // shared game from the menu, as the host's own game's card is the host's.
+  const games = every.filter((game) => !game.standIn || game.id === sharedGameEntry?.gameId);
   const scenarios = Array.isArray(catalog?.scenarios) ? catalog.scenarios : [];
   const activeGameId = catalog?.activeGameId ?? games[0]?.id ?? null;
   const selectedScenarioId = catalog?.selectedScenarioId ?? scenarios[0]?.id ?? null;
-  const activeGame = games.find((entry) => entry.id === activeGameId) ?? null;
+  const activeGame = every.find((entry) => entry.id === activeGameId) ?? null;
   const selectedScenario = scenarios.find((entry) => entry.id === selectedScenarioId) ?? null;
   const runtimeScenario =
     scenarios.find((entry) => entry.id === catalog?.runtimeScenario?.id) ??
@@ -280,6 +286,26 @@ export const setOpenGameCountry = (gameId, country) => {
 
 export const getLibraryState = () => libraryState;
 
+// Whether the page has no game to run: the library is read, lists none of the
+// player's games, and has no active game either. A shared game's stand-in is
+// never listed (applyLibraryCatalog), but while its shared game is open it is
+// the game the page runs, for every purpose but the list: the War Room, the
+// music and Discord read this. They read the list's length, so a guest with no
+// games of their own (every first-time player who installs to join a friend)
+// could not open the War Room, heard the menu's music all game and showed "in
+// the menu" (the review of 2026-11-18, door 2). In single player the active
+// game is always one of the listed, so nothing there changes.
+export const hasNoGameToRun = ({ loaded = false, games = [], activeGame = null } = {}) => Boolean(loaded)
+  && (Array.isArray(games) ? games.length : 0) === 0
+  && !activeGame?.id;
+
+// Every shared game's stand-in in this library, as the library last read it:
+// [{ id, standIn: { returnTo } }]. The list of games never shows them
+// (applyLibraryCatalog); runtime/standInGames.js closes them.
+export const libraryStandIns = () => (Array.isArray(lastCatalog?.games) ? lastCatalog.games : [])
+  .filter((game) => game?.standIn && game.id)
+  .map((game) => ({ id: String(game.id), standIn: { returnTo: String(game.standIn.returnTo ?? "") } }));
+
 export const subscribeToLibraryState = (listener) => {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -360,6 +386,7 @@ export const createScenario = async (payload) => {
 };
 
 export const saveScenario = async (scenarioId, payload, { refresh = true } = {}) => {
+  assertSharedMapKept(scenarioId);
   const details = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}`, {
     body: payload,
     method: "PUT",
@@ -378,6 +405,7 @@ export const selectScenario = async (scenarioId) => {
 };
 
 export const removeScenario = async (scenarioId) => {
+  assertSharedMapKept(scenarioId);
   const catalog = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}`, {
     method: "DELETE",
   });
@@ -418,6 +446,7 @@ export const downloadScenarioJsonAsset = async (scenarioId, assetKey, { coarse =
 };
 
 export const uploadScenarioAsset = async (scenarioId, assetKey, file, { refresh = true } = {}) => {
+  assertSharedMapKept(scenarioId);
   const response = await fetch(
     `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}`,
     {
@@ -435,6 +464,7 @@ export const uploadScenarioAsset = async (scenarioId, assetKey, file, { refresh 
 };
 
 export const clearScenarioAsset = async (scenarioId, assetKey, { refresh = true } = {}) => {
+  assertSharedMapKept(scenarioId);
   const details = await requestJson(
     `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}`,
     {
@@ -446,6 +476,7 @@ export const clearScenarioAsset = async (scenarioId, assetKey, { refresh = true 
 };
 
 export const uploadGameAsset = async (gameId, assetKey, file, { refresh = true } = {}) => {
+  assertNoSharedGame();
   const response = await fetch(
     `${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/assets/${encodeURIComponent(assetKey)}`,
     {
@@ -463,6 +494,7 @@ export const uploadGameAsset = async (gameId, assetKey, file, { refresh = true }
 };
 
 export const clearGameAsset = async (gameId, assetKey, { refresh = true } = {}) => {
+  assertNoSharedGame();
   const details = await requestJson(
     `${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/assets/${encodeURIComponent(assetKey)}`,
     {
@@ -493,6 +525,7 @@ export const importScenarioBundle = async (bundle) => {
 // "Update" button. Keeps the local scenario id, so games that reference it
 // keep working.
 export const updateScenarioFromBundle = async (scenarioId, bundle) => {
+  assertSharedMapKept(scenarioId);
   const details = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/import`, {
     body: bundle,
     method: "PUT",
@@ -556,7 +589,44 @@ export const removeGameParkedTurn = async (gameId) =>
 export const loadGameDetails = async (gameId) =>
   requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`);
 
-export const createGame = async (payload) => {
+// While a shared game is open its game is the host's (setSharedGameEntry):
+// nothing here switches the page to another game, makes one, changes one or
+// deletes one under it. A guest's page had no such hold, and could switch away
+// or delete the stand-in the shared game is drawn on mid-game (the gap audit of
+// 2026-11-18); the host's server already refused it on the host's computer.
+// The shared game's own stand-in (client/sharedGame.js) says `forSharedGame`.
+export const SHARED_GAME_OPEN = "Leave the shared game first: while it is open, its game is the host's.";
+const assertNoSharedGame = ({ forSharedGame = false } = {}) => {
+  if (sharedGameEntry && !forSharedGame) throw new Error(SHARED_GAME_OPEN);
+};
+
+// Nor is the map the shared game is drawn on changed under it: a guest's own
+// copy of the host's scenario is checked against the host's map once, when it
+// joins (client/standIn.js), and a Workshop save or a hub update of that copy
+// mid-game drew another world on that screen alone, unseen (the gap audit of
+// 2026-11-18). Every other scenario is the player's to change as ever; the
+// host's own computer refuses the hosted one in its server too.
+export const SHARED_MAP_HELD = "Leave the shared game first: its map is this scenario's, and stays as the host's while the game is open.";
+const sharedScenarioId = () => {
+  if (!sharedGameEntry) return "";
+  const game = (Array.isArray(lastCatalog?.games) ? lastCatalog.games : []).find((entry) => entry?.id === sharedGameEntry.gameId);
+  return String(game?.scenarioId ?? "");
+};
+const assertSharedMapKept = (scenarioId) => {
+  const held = sharedScenarioId();
+  if (held && held === String(scenarioId ?? "")) throw new Error(SHARED_MAP_HELD);
+};
+
+// A shared game's stand-in (server/sharedGameStandIn.js) is opened by its
+// shared game alone: never as a game of the player's, before or after.
+export const STAND_IN_CLOSED = "That game only showed a shared game, and is gone with it.";
+// And what hosting one is told (multiplayer/host/engineMain.js, ui/LobbiesTab.jsx).
+export const STAND_IN_NOT_SHARED = "This game only showed a shared game you joined, so it cannot be shared. Open one of your own games to host.";
+const isStandInGame = (gameId) => (Array.isArray(lastCatalog?.games) ? lastCatalog.games : [])
+  .some((game) => game?.id === gameId && game.standIn);
+
+export const createGame = async (payload, { forSharedGame = false } = {}) => {
+  assertNoSharedGame({ forSharedGame });
   announceGameOpening(payload?.scenarioId ?? payload?.id ?? "");
   const details = await requestJson(GAMES_API_ROOT, {
     body: payload,
@@ -579,7 +649,8 @@ export const createGame = async (payload) => {
   return details;
 };
 
-export const saveGame = async (gameId, payload, { refresh = true } = {}) => {
+export const saveGame = async (gameId, payload, { refresh = true, forSharedGame = false } = {}) => {
+  assertNoSharedGame({ forSharedGame });
   const details = await requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`, {
     body: payload,
     method: "PUT",
@@ -589,10 +660,24 @@ export const saveGame = async (gameId, payload, { refresh = true } = {}) => {
   return details;
 };
 
-export const activateGame = async (gameId) => {
+// `enter: false`: the game is made the active one and not opened (the page is
+// about to load again, as when a shared game closes, runtime/standInGames.js).
+// The open shared game's own game (the host's campaign, a guest's stand-in) is
+// the one Current on its card goes back into from the menu: nothing is
+// switched, the page enters the game it already runs. It was refused as any
+// other game was ("Leave the shared game first"), and Current did nothing.
+export const activateGame = async (gameId, { forSharedGame = false, enter = true } = {}) => {
+  if (!forSharedGame && sharedGameEntry && String(gameId ?? "") === sharedGameEntry.gameId) {
+    // (Its map is up already when the menu was only opened over it.)
+    if (enter && !hasEnteredGame()) announceGameOpening(gameId);
+    if (enter) enterGame();
+    return libraryState;
+  }
+  assertNoSharedGame({ forSharedGame });
+  if (!forSharedGame && isStandInGame(gameId)) throw new Error(STAND_IN_CLOSED);
   // The loading screen comes up now, not when the new UI mounts a round trip
   // later (GameUI/gameLoadingScreen.jsx).
-  announceGameOpening(gameId);
+  if (enter) announceGameOpening(gameId);
   const catalog = await requestJson(`${GAMES_API_ROOT}/active`, {
     body: { gameId },
     method: "PUT",
@@ -603,11 +688,12 @@ export const activateGame = async (gameId) => {
   // applied, so the map mounts for the game that was asked for; and whether or
   // not the active id changed, since Play on the game that was already the
   // active one changes nothing else.
-  enterGame();
+  if (enter) enterGame();
   return state;
 };
 
 export const removeGame = async (gameId) => {
+  assertNoSharedGame();
   // Logged before the request, not after: "they deleted a save and then it
   // broke" is the report this line exists for, and a delete that throws
   // half-way is exactly the case where the after-the-fact line never runs.
@@ -615,6 +701,9 @@ export const removeGame = async (gameId) => {
   const catalog = await requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`, {
     method: "DELETE",
   });
+  // Its related-events vectors (eventVectorStore.js), derived and rebuilt
+  // should the game come back out of the trash.
+  void import("./eventVectorStore.js").then(({ forgetGameVectors }) => forgetGameVectors(gameId)).catch(() => {});
   return applyLibraryCatalog(catalog);
 };
 
@@ -638,6 +727,7 @@ export const emptyTrash = async (kind) =>
 // imported or updated, downloaded since (src/runtime/missingBasemap.js):
 // payload is { dataUrl } or { geojson }.
 export const restoreScenarioBasemap = async (scenarioId, payload) => {
+  assertSharedMapKept(scenarioId);
   const details = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/basemap`, {
     body: { payload },
     method: "PUT",

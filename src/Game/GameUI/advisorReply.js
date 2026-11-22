@@ -12,10 +12,17 @@
 import { extractFencedJson, filterAdvisorDeployments, validateChartConfig } from "./advisorBlocks.js";
 import { buildMessageDrafts } from "./advisorDrafts.js";
 import { buildInstitutionDrafts } from "./advisorInstitutionDrafts.js";
+import { stripAdvisorActionHistoryAnnotations } from "../AI/advisorActionHistory.js";
 
 // A ```chart fence that never closed (the reply ran out) is not matched by
 // extractFencedJson and would print its JSON into the bubble.
 const UNCLOSED_CHART = /```chart[\s\S]*$/;
+
+// (A plan written in prose under English "Action:" and "Lead:" headings used
+// to be taken for an Action the advisor forgot to submit, with a button to ask
+// for it. The same plan in any other language was not, and a plan written
+// that way in English was not always one. What the advisor submits is its
+// ```actions block, and nothing else is read as one.)
 
 // Why a whole block drew nothing, before any entry was looked at.
 const blockProblems = (json, reason) => {
@@ -81,7 +88,7 @@ export const parseAdvisorReply = (rawText, { allowedUnitTypes = null, streaming 
   const deployments = filterAdvisorDeployments(deployRaw, allowedUnitTypes, deployProblems);
 
   return {
-    text: rest.trim(),
+    text: stripAdvisorActionHistoryAnnotations(rest.trim()),
     chartConfig: chart.config,
     chartProblem: chart.problem,
     actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null,

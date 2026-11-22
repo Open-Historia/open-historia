@@ -1,6 +1,9 @@
 /*! Open Historia — portions (regions.geojson scenario asset + custom-map seeding) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import fs from "fs";
+import { scenarioFilesFingerprint } from "./scenarioFingerprint.js";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "./gameFeatures.js";
+import { assertEconomicDisplayCurrencyChoice } from "./economicDisplayCurrency.js";
+import { standInOf } from "./sharedGameStandIn.js";
 import { layOutScenarioBundle } from "./mapProjection.js";
 import path from "path";
 import url from "url";
@@ -10,6 +13,7 @@ import {
   migrateOwnerRecord,
   needsMigration as needsOwnerMigration,
 } from "./ownerMigration.js";
+import { commonNameRenames, migrateToCommonNames, needsCommonNames, scenarioPredatesCommonNames } from "./commonNames.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.join(__dirname, "..");
@@ -17,6 +21,7 @@ const DIST_DIR = path.join(PROJECT_ROOT, "dist");
 const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
 import { DATA_DIR as SERVER_DATA_DIR } from "./dataDir.js";
 import { coarsenFeatureCollection } from "./coarseGeometry.js";
+import { nameId } from "./nameId.js";
 import {
   createTiledBasemap,
   findBasemapMetaByHash,
@@ -39,6 +44,7 @@ import {
 } from "./hubProvenance.js";
 import { planRestorePointSlots, publicRestorePointIndex } from "./restorePoints.js";
 import { scenarioMusicField } from "./scenarioMusic.js";
+import { scenarioLanguagePack, scenarioLanguagesField, withoutScenarioLanguages } from "./scenarioLanguages.js";
 import { musicTracksDropped, usedMusicTrackIds } from "./keptMusic.js";
 import { musicLibraryUsage, sweepMusicLibrary } from "./musicLibrary.js";
 const SCENARIOS_DIR = path.join(SERVER_DATA_DIR, "scenarios");
@@ -53,6 +59,9 @@ const GAME_MANIFEST_PATH = path.join(SERVER_DATA_DIR, "game-manifest.json");
 const PMTILES_ASSETS_DIR = process.env.OH_ASSETS_DIR
   ? path.resolve(process.env.OH_ASSETS_DIR)
   : path.join(PUBLIC_DIR, "assets");
+// The same folder, for server.js to serve at /assets: the world's cities and the
+// editor's seed world are in it, and on a packaged build nowhere else.
+export const MAP_ASSETS_DIR = PMTILES_ASSETS_DIR;
 
 const DEFAULT_SCENARIO_ID = "default";
 const DEFAULT_GAME_ID = "default";
@@ -445,6 +454,11 @@ const RUNTIME_ONLY_JSON_ASSET_FILES = {
   // file on purpose: it is refreshed AFTER a jump's world write lands, and a
   // second writer on world.json would race it.
   intercepts: "storage/intercepts.json",
+  // A shared game's session (src/multiplayer/host/sessionRecord.js): who plays
+  // which country, on which device, and the round, so the game can be shared
+  // again another day. Written by the host's engine window only; never part of
+  // an export, and a copy of the game is a new campaign it does not apply to.
+  shared: "storage/shared.json",
 };
 const RESTORE_POINT_DIR = "storage/snapshots";
 
@@ -521,6 +535,7 @@ const JSON_ASSET_DEFAULTS = {
   snapshots: [],
   snapshotsIndex: { entries: [] },
   intercepts: {},
+  shared: {},
 };
 
 // The world keys a fresh game inherits from its scenario. MIRRORED in
@@ -538,6 +553,9 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "ownBasemaps",
   "canonModelVersion",
   "canonContext",
+  // Explicit scenario Projects funding basis. Non-monetary scenarios need no
+  // modern GDP metric and do not invent a cash ledger.
+  "projectFundingMode",
   "customCities",
   "customGeometry",
   "customRegions",
@@ -574,6 +592,8 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "scenarioFronts",
   // How the scenario's wars are fought (src/runtime/warSettings.js).
   "warSettings",
+  // Its own unit types (src/runtime/unitTypes.js).
+  "unitTypes",
   // What the scenario draws on its map for war (src/runtime/warGeography.js).
   "terrainAreas",
   "fortifications",
@@ -723,12 +743,15 @@ const invalidateCatalogs = (writtenPath = null) => {
   }
 };
 
+// A scenario's or a game's id, from what it was asked to be called, by the
+// game's one rule for an id made from a name (nameId.js): a Latin name keeps its
+// slug, a name in another script is its own hash instead of the hour it was made.
 const normalizeId = (rawValue, prefix) => {
-  const value = String(rawValue ?? "")
+  const value = nameId(rawValue, (name) => String(name ?? "")
   .trim()
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, "-")
-  .replace(/^-+|-+$/g, "");
+  .replace(/^-+|-+$/g, ""));
 
   return value || `${prefix}-${Date.now().toString(36)}`;
 };
@@ -904,6 +927,9 @@ const readScenarioMeta = (scenarioId) => {
     // The hub tracks the scenario plays, by situation (scenarioMusic.js). Only
     // there while it names one.
     ...scenarioMusicField(raw?.music),
+    // Its own text in other languages (scenarioLanguages.js). Only there while
+    // it has a pack; never in a listing (buildScenarioCatalogEntry).
+    ...scenarioLanguagesField(raw?.languages),
     name,
     playCount: normalizePlayCount(raw?.playCount),
     subtitle,
@@ -977,6 +1003,11 @@ const writeScenarioMeta = (scenarioId, updates, { touch = true } = {}) => {
   // (null, or four empty lists, takes it away); any other write keeps it.
   delete next.music;
   Object.assign(next, scenarioMusicField(updates?.music !== undefined ? updates.music : current.music));
+  // The language packs the same way: a write that carries them replaces them
+  // (null takes them away), any other write keeps them.
+  delete next.languages;
+  delete next.languageCodes;
+  Object.assign(next, scenarioLanguagesField(updates?.languages !== undefined ? updates.languages : current.languages));
 
   writeJsonFile(getScenarioMetaPath(scenarioId), next);
   // A track this scenario named and no longer does may be nobody's now.
@@ -1897,6 +1928,9 @@ const readGameFigures = (gameId) => {
       Number.isFinite(Number(gameData?.round)) && Number(gameData.round) > 0
         ? Math.trunc(Number(gameData.round))
         : 1,
+    // A shared game's frame on this device, which the library never lists
+    // (server/sharedGameStandIn.js).
+    standIn: standInOf(gameData),
   };
   gameFiguresCache.set(gameId, { stamp, figures });
   return figures;
@@ -1954,6 +1988,7 @@ const buildGameCatalog = () => {
        ownCoverImageUrl,
        pendingActions: figures.pendingActions,
        round: figures.round,
+       ...(figures.standIn ? { standIn: figures.standIn } : {}),
        scenarioAccentColor: scenario?.accentColor ?? meta.accentColor,
        // The first client reader of `missing`: pressing Play on a game whose map
        // is not here has to offer to go and get it rather than open a blank world.
@@ -2043,7 +2078,10 @@ const getScenarioSummary = (scenarioId) => {
 // (buildScenarioCatalog) or only named by a game (getGameScenarioSummary,
 // buildGameCatalog): one shape, built here and nowhere else.
 const buildScenarioCatalogEntry = (scenarioId, { gameCount = 0, canDelete = true, missing = false } = {}) => {
-  const meta = readScenarioMeta(scenarioId);
+  // Without its language packs, which can be large: a listing says only which
+  // languages it has (`languageCodes`), and the packs are read where they are
+  // used (getScenarioDetails, readScenarioLanguagePack).
+  const meta = withoutScenarioLanguages(readScenarioMeta(scenarioId));
   const assetStatus = getScenarioAssetStatus(scenarioId);
   // A scenario that is not there has no updatedAt of its own — readScenarioMeta
   // mints one per read — so its token is fixed, or it would differ on every call.
@@ -2125,8 +2163,21 @@ const getScenarioDetails = (scenarioId) => {
       prompts: readJsonFile(getScenarioJsonPath(scenarioId, "prompts"), {}),
       world: readJsonFile(getScenarioJsonPath(scenarioId, "world"), {}),
     },
-    scenario: summary,
+    // With its language packs, which the listing leaves out: the editor's
+    // Languages tab edits them.
+    scenario: { ...summary, ...scenarioLanguagesField(readScenarioMeta(scenarioId).languages) },
   };
+};
+
+// One language's pack of a scenario (source -> translation), for a game in
+// that language (GET /api/scenarios/:id/languages/:code). Empty when it has
+// none.
+const readScenarioLanguagePack = (scenarioId, code) => {
+  ensureScenarioStore();
+  if (!fs.existsSync(getScenarioDirectory(scenarioId))) {
+    throw new Error(`Scenario not found: ${scenarioId}`);
+  }
+  return scenarioLanguagePack(readScenarioMeta(scenarioId).languages, code);
 };
 
 const getGameDetails = (gameId) => {
@@ -2258,6 +2309,7 @@ const createScenario = ({
   heroSubtitle,
   heroTitle,
   id,
+  languages,
   music,
   name,
   seedScenarioId,
@@ -2333,6 +2385,10 @@ const createScenario = ({
                 DEFAULT_SCENARIO_META.heroTitle,
                 // A bundle's music, or the music of the scenario this one is a copy of.
                 ...scenarioMusicField(music !== undefined ? music : sourceScenario?.music),
+                // A bundle's language packs, or those of the scenario this one
+                // is a copy of (which its listing leaves out).
+                ...scenarioLanguagesField(languages !== undefined ? languages
+                  : sourceScenario ? readScenarioMeta(seedScenarioId).languages : null),
                 name: String(name ?? "").trim() || "Custom Scenario",
                 subtitle:
                 String(subtitle ?? "").trim() ||
@@ -2372,6 +2428,7 @@ const createGame = ({
 } = {}) => {
   ensureGameStore();
 
+  assertEconomicDisplayCurrencyChoice(gamePatch);
   const resolvedGameId = ensureUniqueId(id || name || "game", "game");
   const gameDir = getGameDirectory(resolvedGameId);
   // Refused before anything is on disk: a game made to be opened at once.
@@ -2502,6 +2559,7 @@ const updateScenario = (scenarioId, body = {}) => {
     gamePatch,
     heroSubtitle,
     heroTitle,
+    languages,
     music,
     name,
     prompts,
@@ -2512,6 +2570,8 @@ const updateScenario = (scenarioId, body = {}) => {
     world,
     worldPatch,
   } = body ?? {};
+  assertEconomicDisplayCurrencyChoice(game);
+  assertEconomicDisplayCurrencyChoice(gamePatch);
   ensureScenarioStore();
 
   if (!fs.existsSync(getScenarioDirectory(scenarioId))) {
@@ -2522,7 +2582,7 @@ const updateScenario = (scenarioId, body = {}) => {
   // updatedAt, and must not mark a downloaded copy as changed.
   const provenance = pickHubProvenance(body);
   const edits = [accentColor, countryNameOverrides, description, eyebrow, features, game, gamePatch, heroSubtitle,
-    heroTitle, music, name, prompts, promptsPatch, storage, subtitle, world, worldPatch].some((value) => value !== undefined);
+    heroTitle, languages, music, name, prompts, promptsPatch, storage, subtitle, world, worldPatch].some((value) => value !== undefined);
   if (Object.keys(provenance).length && !edits) {
     writeScenarioMeta(scenarioId, provenance, { touch: false });
     if (setActive) setSelectedScenario(scenarioId);
@@ -2544,6 +2604,8 @@ const updateScenario = (scenarioId, body = {}) => {
                     heroTitle: String(heroTitle ?? currentMeta.heroTitle).trim() || currentMeta.heroTitle,
                     // null takes the music away; a save that does not mention it keeps it.
                     ...(music !== undefined ? { music } : {}),
+                    // The same for its language packs.
+                    ...(languages !== undefined ? { languages } : {}),
                     name: String(name ?? currentMeta.name).trim() || currentMeta.name,
                     subtitle: String(subtitle ?? currentMeta.subtitle).trim() || currentMeta.subtitle,
   });
@@ -2629,6 +2691,8 @@ const updateGame = (
     worldPatch,
   } = {},
 ) => {
+  assertEconomicDisplayCurrencyChoice(game);
+  assertEconomicDisplayCurrencyChoice(gamePatch);
   ensureGameStore();
 
   if (!fs.existsSync(getGameDirectory(gameId))) {
@@ -3014,7 +3078,12 @@ const deleteGame = (gameId) => {
   // Deleting the open game opens the next one: not under a game being hosted.
   if (getGameManifest().activeGameId === gameId) assertActiveGameMayChange("");
 
-  moveDirectoryToTrash(resolved, "game", gameId);
+  // A shared game's stand-in held nothing of the player's (its documents were
+  // the host's view): gone for good, and never a "Recently deleted" entry
+  // among the player's own (server/sharedGameStandIn.js). Tried again a few
+  // times, as the trash's own move is, while a handle on Windows lets go.
+  if (standInOf(readJsonFile(getGameJsonPath(gameId, "game"), {}))) fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 4, retryDelay: 150 });
+  else moveDirectoryToTrash(resolved, "game", gameId);
   invalidateOwnerSchemaCache("game", gameId);
   gameFiguresCache.delete(gameId);
 
@@ -3344,6 +3413,41 @@ const migrateOwnerRecordAtPaths = (label, paths) => {
   return true;
 };
 
+// ---------------------------------------------------------------------------
+// Common country names (server/commonNames.js): a world that took the built-in's
+// old formal names ("Kingdom of Spain") is re-keyed to the common ones ("Spain")
+// once, on disk, in the same once-per-record pass as the owner migration, after
+// it. The table is the packaged seed's formerNames, read once.
+// ---------------------------------------------------------------------------
+let commonNameRenameTable = null;
+const readCommonNameRenames = () => {
+  if (!commonNameRenameTable) commonNameRenameTable = commonNameRenames(readJsonFile(path.join(BUILT_IN_SEED_DIR, "world.json"), null));
+  return commonNameRenameTable;
+};
+
+const migrateCommonNamesAtPaths = (label, paths, { scenarioId = "", parentPredates = false } = {}) => {
+  const world = readJsonFile(paths.world, null);
+  if (!needsCommonNames(world, { scenarioId, parentPredates })) return false;
+  const own = (file) => (file && fs.existsSync(file) ? readJsonFile(file, null) : undefined);
+  const migrated = migrateToCommonNames({
+    world,
+    game: own(paths.game),
+    colors: own(paths.colors),
+    flags: own(paths.flags),
+    tags: own(paths.tags),
+    chat: own(paths.chat),
+    actions: own(paths.actions),
+  }, readCommonNameRenames());
+  if (!migrated) return false;
+  for (const part of ["game", "colors", "flags", "tags", "chat", "actions"]) {
+    if (migrated[part] !== undefined) writeJsonFile(paths[part], migrated[part]);
+  }
+  // World last: it carries the marker, so a failure part-way is redone next time.
+  writeJsonFile(paths.world, migrated.world);
+  console.log(`[common-names] ${label}: ${migrated.renamed.length} countr${migrated.renamed.length === 1 ? "y" : "ies"} renamed to their common names`);
+  return true;
+};
+
 const ensureScenarioOwnerSchema = (scenarioId) => {
   const key = `scenario:${scenarioId}`;
   if (ownerSchemaChecked.has(key)) return;
@@ -3375,6 +3479,20 @@ const ensureScenarioOwnerSchema = (scenarioId) => {
   } catch (error) {
     ownerSchemaChecked.delete(key); // let the next read retry rather than pin a half state
     console.warn(`[owner-migration] ${key} failed: ${error.message}`);
+    return;
+  }
+  try {
+    migrateCommonNamesAtPaths(key, {
+      world: getScenarioJsonPath(scenarioId, "world"),
+      game: getScenarioJsonPath(scenarioId, "game"),
+      colors: getScenarioJsonPath(scenarioId, "colors"),
+      flags: getScenarioJsonPath(scenarioId, "flags"),
+      tags: getScenarioJsonPath(scenarioId, "tags"),
+      chat: getScenarioJsonPath(scenarioId, "chat"),
+      actions: getScenarioJsonPath(scenarioId, "actions"),
+    }, { scenarioId });
+  } catch (error) {
+    console.warn(`[common-names] ${key} failed: ${error.message}`);
   }
 };
 
@@ -3431,6 +3549,26 @@ const ensureGameOwnerSchema = (gameId) => {
   } catch (error) {
     ownerSchemaChecked.delete(key);
     console.warn(`[owner-migration] ${key} failed: ${error.message}`);
+    return;
+  }
+  try {
+    // The game's own world, chats, actions, colours, flags and tags; the
+    // scenario's colours it reads when it has none are the scenario's to move
+    // (ensureScenarioOwnerSchema above already did).
+    const parentId = getGameSummary(gameId)?.scenarioId || DEFAULT_SCENARIO_ID;
+    migrateCommonNamesAtPaths(key, {
+      world: getGameJsonPath(gameId, "world"),
+      game: getGameJsonPath(gameId, "game"),
+      colors: getGameJsonPath(gameId, "colors"),
+      flags: getGameJsonPath(gameId, "flags"),
+      tags: getGameJsonPath(gameId, "tags"),
+      chat: getGameJsonPath(gameId, "chat"),
+      actions: getGameJsonPath(gameId, "actions"),
+    }, {
+      parentPredates: scenarioPredatesCommonNames(parentId, readJsonFile(getScenarioJsonPath(parentId, "world"), null)),
+    });
+  } catch (error) {
+    console.warn(`[common-names] ${key} failed: ${error.message}`);
   }
 };
 
@@ -3472,6 +3610,43 @@ const resolveRuntimeGeojsonAsset = (assetKey) => {
     }
   }
   return { contentType: "application/json; charset=utf-8", sourcePath };
+};
+
+// A scenario's map as one checksum (scenarioFingerprint.js), which a shared
+// game's host states in its lobby and each guest checks its own copy against:
+// the files the runtime draws the map from (resolveRuntimeGeojsonAsset: the
+// scenario's own, or the stock world's regions where it has none), each first
+// brought to the owners' schema the runtime serves it in, so two copies of one
+// map agree wherever they were first opened; and the scenario's own tiles, by
+// size.
+const scenarioMapFingerprint = (scenarioId) => {
+  ensureScenarioStore();
+  const id = String(scenarioId ?? "").trim();
+  if (!id || !fs.existsSync(getScenarioMetaPath(id))) throw new Error(`The scenario "${id}" is not in this library.`);
+  ensureScenarioOwnerSchema(id);
+  const servedPath = (assetKey) => {
+    const own = getScenarioUploadPath(id, assetKey);
+    if (fs.existsSync(own)) return own;
+    // The stock world's regions, for a scenario with none of its own, exactly as
+    // resolveRuntimeGeojsonAsset serves it: never for the built-in scenario.
+    if (assetKey !== "regionsGeojson" || id === DEFAULT_SCENARIO_ID) return null;
+    const stockPath = resolveStockRegionsPath();
+    if (stockPath && stockPath !== STOCK_REGIONS_PATH) ensureScenarioOwnerSchema(DEFAULT_SCENARIO_ID);
+    return stockPath || null;
+  };
+  const tilePath = (assetKey) => {
+    const own = getScenarioUploadPath(id, assetKey);
+    return fs.existsSync(own) ? own : null;
+  };
+  return scenarioFilesFingerprint({
+    files: {
+      regions: servedPath("regionsGeojson"),
+      cities: servedPath("citiesGeojson"),
+      background: servedPath("backgroundData"),
+      ownBasemaps: servedPath("ownBasemapsData"),
+    },
+    tiles: { cities: tilePath("cities"), countries: tilePath("countries"), regions: tilePath("regions") },
+  });
 };
 
 // Restore points, one file each (server/restorePoints.js): storage/snapshots/
@@ -4293,6 +4468,8 @@ const exportScenarioBundle = (scenarioId) => {
       // Which hub tracks it plays (ids and versions only): left out of the
       // file altogether when it names none.
       ...scenarioMusicField(summary.music),
+      // Its own text in other languages: left out of the file when it has none.
+      ...scenarioLanguagesField(readScenarioMeta(scenarioId).languages),
       name: summary.name,
       subtitle: summary.subtitle,
     },
@@ -4363,6 +4540,7 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
     // null rather than nothing for a bundle without any: an import is a copy
     // of the bundle, never of another scenario.
     music: scenario.music ?? null,
+    languages: scenario.languages ?? null,
     name: scenario.name,
     setActive: false,
     subtitle: scenario.subtitle,
@@ -4487,6 +4665,8 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
   // The new version's music, or none: a version that dropped its music must
   // not go on playing the old version's.
   metaPatch.music = scenario.music ?? null;
+  // Its language packs the same way: the new version's, or none.
+  metaPatch.languages = scenario.languages ?? null;
   writeScenarioMeta(scenarioId, metaPatch);
 
   // A community basemap the game could not download arrives as its reference
@@ -4865,6 +5045,7 @@ const removeGameParkedTurn = (gameId) => {
 };
 
 export {
+  scenarioMapFingerprint,
   createGame,
   createScenario,
   deleteGame,
@@ -4879,6 +5060,7 @@ export {
   getLibraryCatalog,
   getScenarioCatalog,
   getScenarioDetails,
+  readScenarioLanguagePack,
   importGameBundle,
   importScenarioBundle,
   listTrash,

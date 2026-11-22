@@ -60,6 +60,7 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | PUT | `/api/scenarios/active` | Set the selected scenario (alias of `selected`) | `setSelectedScenario` |
 | PUT | `/api/scenarios/selected` | Set the selected scenario | `setSelectedScenario` |
 | PUT | `/api/scenarios/:scenarioId` | Update meta / `world` / `game` / `prompts` / `storage.*` (full-replace or `*Patch` merge), and the hub bookkeeping: `hubPublished`, `hubReviews`, and `hubOrigin` only as `null` (Unlink; any other value → 400) | `updateScenario` |
+| GET | `/api/scenarios/:scenarioId/languages/:code` | One language's pack of the scenario's own text, `{ code, strings }` (empty when it has none), for a game in that language ([i18n.md](i18n.md#a-scenarios-own-language-packs)) | `readScenarioLanguagePack` |
 | GET | `/api/scenarios/:scenarioId/export` | Export a shareable bundle; always full, custom PMTiles included. `?mode=` is accepted and ignored, and older light bundles still import | `exportScenarioBundle` |
 | POST | `/api/scenarios/import` | Import a bundle as a **new** scenario (auto-selects it) → 201 | `importScenarioBundle` |
 | PUT | `/api/scenarios/:scenarioId/import` | Replace an existing scenario's content from a fresh bundle (hub "Update" button); 400 when the bundle names a post the scenario is not a copy of | `updateScenarioFromBundle` |
@@ -211,7 +212,8 @@ server/data/
     <scenarioId>/
       scenario.json              # meta (name, hero*, accentColor, coverImageContentType,
                                  #        countryNameOverrides, hubOrigin, hubPublished, hubUnlinked,
-                                 #        hubReviews, playCount, timestamps)
+                                 #        hubReviews, playCount, timestamps, music?, languages?;
+                                 #        listings carry languageCodes instead of languages)
       world.json  game.json  prompts.json   # CORE_JSON_ASSET_FILES
       colors.json flags.json tags.json       # OPTIONAL_JSON_ASSET_FILES
       cover-image.bin            # uploaded cover (content type in scenario.json)

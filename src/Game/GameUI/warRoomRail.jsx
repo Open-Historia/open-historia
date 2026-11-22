@@ -121,8 +121,11 @@ const Rule = () => <div aria-hidden="true" style={{ background: STEEL.seam, boxS
 //   locked       nothing can be ordered now (a turn is running, or a write is on its way)
 //   turnRunning  it is a turn that is running
 //   notice       what the last order was refused for
-//   carriers     what carries troops this year: [{ medium, kind, speed, capacity }]
+//   carriers     what carries troops this year, of what the game has on (the Wars feature): [{ medium, kind, speed,
+//                capacity, most, bar }]: `most`, the formations one dispatch carries (an airlift few); `bar`, why the
+//                player's country cannot send any by it ("no-navy", "no-air-force"), or ""
 //   onCarrier    (medium) => the troops picked out are to go by it: the map then asks where
+//   carrying     the medium chosen, while the transport tool is in hand
 //   own          how many troops the player has on this battlefield
 //   away         the player's troops have all withdrawn from it
 //   onWithdraw   the troops picked out leave the battlefield (all of the player's, with none picked)
@@ -144,7 +147,7 @@ const Rule = () => <div aria-hidden="true" style={{ background: STEEL.seam, boxS
 //                is Stand down
 //   home         it is a country's forces at home: there is no front to go forward or back from, nor an enemy to
 //                deceive, and the troops go where a route is drawn (into another country's land, the war beginning)
-const WarRoomRail = ({ shown, top, isMobile, tool, selected, locked, turnRunning, notice, carriers = [], own = 0, away = false, onTool, onOrder, onRelease, onClear, onCarrier, onWithdraw, onReturn, canFortify = false, drafted = false, navies = true, fleets = 0, fleetsOut = false, onFleets = () => {}, station = "", deployForm = "front", onDeployForm = () => {}, aircraft = true, wings = 0, aircraftOut = false, onAircraft = () => {}, peace = false, home = false, supply = false, onSupply = () => {}, supplyAreas = null, foot = 0 }) => {
+const WarRoomRail = ({ shown, top, isMobile, tool, selected, locked, turnRunning, notice, carriers = [], carrying = "", own = 0, away = false, onTool, onOrder, onRelease, onClear, onCarrier, onWithdraw, onReturn, canFortify = false, drafted = false, navies = true, fleets = 0, fleetsOut = false, onFleets = () => {}, station = "", deployForm = "front", onDeployForm = () => {}, aircraft = true, wings = 0, aircraftOut = false, onAircraft = () => {}, peace = false, home = false, supply = false, onSupply = () => {}, supplyAreas = null, foot = 0 }) => {
   const none = selected.length === 0;
   const drawing = tool !== "pan";
   // The choice of carrier, open beside the rail.
@@ -247,8 +250,9 @@ const WarRoomRail = ({ shown, top, isMobile, tool, selected, locked, turnRunning
             ? <RailKey label="Stand down" title="Stand down: these troops go home. With none picked out, all of yours do" disabled={locked || (none && own === 0)} onClick={onWithdraw}><WithdrawIcon /></RailKey>
             : <RailKey label="Withdraw" title="Withdraw: these troops leave the battlefield and go home. With none picked out, all of yours do" disabled={locked || (none && own === 0)} onClick={onWithdraw}><WithdrawIcon /></RailKey>}
         <Rule />
-        {/* Carried to where their side holds no land: by ship, rail or air, then a click on the map for where. */}
-        <RailKey label="Transport" title="Transport: carry these troops by ship, rail or air to a place your side has no border with" on={tool === "transport" || choice} disabled={locked || none} onClick={() => (tool === "transport" ? onTool("pan") : setChoosing((value) => !value))}><ShipIcon /></RailKey>
+        {/* Carried to where their side holds no land: by ship, rail or air, then a click on the map for where. (None
+            when the game has every transport switched off.) */}
+        {carriers.length > 0 && <RailKey label="Transport" title="Transport: carry these troops by ship, rail or air to a place your side has no border with" on={tool === "transport" || choice} disabled={locked || none} onClick={() => (tool === "transport" ? onTool("pan") : setChoosing((value) => !value))}><ShipIcon /></RailKey>}
         {!home && <RailKey label="Diversion" title="Draw a diversion: a movement you want the other side to believe" on={tool === "diversion"} disabled={locked} onClick={() => onTool("diversion")}><DiversionIcon /></RailKey>}
         <RailKey label="Deploy" title="Deploy: choose where your new troops on this battlefield come in, along a front or as a swarm" on={tool === "deploy"} disabled={locked} onClick={() => onTool("deploy")}><DeployIcon /></RailKey>
         {/* Deploy Aircraft: an air unit sent to strike troops, a structure or a city when time next passes. */}
@@ -328,6 +332,9 @@ const WarRoomRail = ({ shown, top, isMobile, tool, selected, locked, turnRunning
           {selected.length > LOAD_MOST && <div style={{ color: BONE_SOFT, fontSize: "0.7rem", lineHeight: 1.35 }}>One dispatch carries {LOAD_MOST} formations at most: the rest stay where they are.</div>}
           {carriers.map((carrier) => {
             const Picture = CARRIER_ICONS[carrier.medium] ?? ShipIcon;
+            // (A country with no navy, or no air force, has that carrier shown and cannot choose it: runtime/fronts/transports.js transportBar.)
+            const barred = Boolean(carrier.bar);
+            const fewer = carrier.medium === "air" && carrier.most > 0 && selected.length > carrier.most;
             return (
               <button
                 key={carrier.medium}
@@ -335,18 +342,27 @@ const WarRoomRail = ({ shown, top, isMobile, tool, selected, locked, turnRunning
                 role="menuitem"
                 className="oh-tap"
                 data-oh-war-room-carrier={carrier.medium}
+                disabled={barred}
+                aria-disabled={barred}
                 onClick={() => {
+                  if (barred) return;
                   setChoosing(false);
                   onCarrier(carrier.medium);
                 }}
-                style={{ ...keyLook(false, false), alignItems: "center", flexDirection: "row", fontSize: "0.76rem", gap: "0.55rem", height: "auto", justifyContent: "flex-start", padding: "0.4rem 0.55rem", textAlign: "left", width: "100%" }}
+                style={{ ...keyLook(false, barred), alignItems: "center", flexDirection: "row", fontSize: "0.76rem", gap: "0.55rem", height: "auto", justifyContent: "flex-start", padding: "0.4rem 0.55rem", textAlign: "left", width: "100%" }}
               >
                 <Picture />
                 <span style={{ display: "flex", flexDirection: "column", gap: "0.14rem", minWidth: 0 }}>
                   <span><CarrierWord medium={carrier.medium} /></span>
                   <span style={{ color: BONE_SOFT, fontFamily: "sans-serif", fontSize: "0.68rem", fontWeight: 400, letterSpacing: 0, textTransform: "none" }}>
-                    <span data-no-translate>{carrier.kind}</span> · {carrier.capacity} formations each · {carrier.speed} km a day
+                    {carrier.bar === "no-navy" && <>You have no navy.</>}
+                    {carrier.bar === "no-air-force" && <>You have no air force.</>}
+                    {!barred && carrier.medium === "air" && <><span data-no-translate>{carrier.kind}</span> · {carrier.most} formations at most · {carrier.speed} km a day</>}
+                    {!barred && carrier.medium !== "air" && <><span data-no-translate>{carrier.kind}</span> · {carrier.capacity} formations each · {carrier.speed} km a day</>}
                   </span>
+                  {!barred && fewer && (
+                    <span style={{ color: BONE_SOFT, fontFamily: "sans-serif", fontSize: "0.68rem", fontWeight: 400, letterSpacing: 0, textTransform: "none" }}>{carrier.most} of the {selected.length} go: the rest stay where they are.</span>
+                  )}
                 </span>
               </button>
             );
@@ -409,7 +425,8 @@ const WarRoomRail = ({ shown, top, isMobile, tool, selected, locked, turnRunning
             </>
           )}
           {!turnRunning && tool === "replan" && <>Draw the operation’s way anew.</>}
-          {!turnRunning && tool === "transport" && <>Click the place the {selected.length} picked out are to be carried to. Drag to move the map. They board when time next passes.</>}
+          {!turnRunning && tool === "transport" && carrying !== "air" && <>Click the place the {selected.length} picked out are to be carried to. Drag to move the map. They board when time next passes.</>}
+          {!turnRunning && tool === "transport" && carrying === "air" && <>Click the place the {selected.length} picked out are to be flown to: anywhere, enemy land too. Over enemy ground they can be intercepted. Drag to move the map. They board when time next passes.</>}
           {!turnRunning && tool === "fortify" && <>Draw the fortified line on the map. You choose how strong it is to be once it is drawn.</>}
           {!turnRunning && tool === "aircraft" && <>Click what the air unit is to strike. Its bombs fall inside the ring, on your own troops there too. Drag to move the map.</>}
           {!turnRunning && tool === "fleet" && station === "patrol" && <>Click the place at sea the fleet is to patrol. Drag to move the map.</>}

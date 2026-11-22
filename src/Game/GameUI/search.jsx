@@ -389,7 +389,8 @@ const Search = memo(({ mapRef, besideWarRoom = false }) => {
         alignItems: "center",
         zIndex: 9999,
         borderRadius: hasSuggestions ? "0 0 12px 12px" : "12px",
-        backgroundColor: "var(--oh-hud-bg)",
+        // The theme's glass, as the dock beside it (chat.jsx Toolbar).
+        backgroundColor: "var(--oh-ui-glass-pill, var(--oh-hud-bg))",
         backdropFilter: "var(--oh-hud-blur)",
         border: "1px solid var(--oh-hud-border)",
         boxShadow: "var(--oh-hud-shadow-soft)",
@@ -519,7 +520,7 @@ const Search = memo(({ mapRef, besideWarRoom = false }) => {
             bottom: `calc(${size} - 1px)`,
             left: "-1px",
             right: "-1px",
-            backgroundColor: "var(--oh-hud-bg-strong)",
+            backgroundColor: "var(--oh-ui-overlay-header, var(--oh-hud-bg-strong))",
             backdropFilter: "var(--oh-hud-blur)",
             borderRadius: "10px 10px 0 0",
             border: "1px solid var(--oh-hud-border)",
@@ -550,7 +551,7 @@ const Search = memo(({ mapRef, besideWarRoom = false }) => {
                 alignItems: "center",
                 gap: "0.55rem",
                 backgroundColor:
-                  index === selectedIndex ? "rgba(255,255,255,0.08)" : "transparent",
+                  index === selectedIndex ? "var(--oh-ui-glass-hover, rgba(255,255,255,0.08))" : "transparent",
                 opacity: suggestion.stale ? 0.5 : 1,
                 borderBottom:
                   index < suggestions.length - 1

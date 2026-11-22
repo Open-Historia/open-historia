@@ -89,7 +89,7 @@ test("GM exact approved events bypass ordinary prose-only write de-dup", async (
   // One journaled generation, all of it or none: there is no restore write
   // left that could itself half-fail.
   assert.match(apply, /mutateCanonicalTurnState\(/);
-  assert.match(apply, /\}, \{ preserveApprovedEvents: true \}\)/);
+  assert.match(apply, /\}, \{ preserveApprovedEvents: true, fence \}\)/);
   assert.doesNotMatch(apply, /writeEventsState\(/);
   const state = await sourceText(gameStatePath);
   const mutate = state.slice(state.indexOf("export const mutateCanonicalTurnState"), state.indexOf("const RUNTIME_DOCUMENTS"));
@@ -131,21 +131,21 @@ test("GM state-mutation comparisons reject mapRefs as political identity evidenc
   assert.match(source.slice(start, end), /allowMapRefs:\s*false/);
 });
 
-test("GM exhaustive geographic wording completes a rendered base-country footprint natively", async () => {
+// A whole base-country footprint is the GM answer's territorialScopes, expanded
+// natively (gmTerritoryScope.js). The administrator's words were read for it
+// too ("all North Korean states"), in English only; they are not read now, and
+// the request is no longer threaded through the region resolver.
+test("GM exhaustive geography is the territorialScopes field alone, never the request's wording", async () => {
   const source = await sourceText(gameplayPath);
-  assert.match(source, /detectExplicitBaseTerritoryScope/);
-  assert.match(source, /explicitScopeText:\s*resolvedRegionIdsOnly\s*\?\s*""\s*:\s*request/);
-  assert.match(source, /country:\s*toCountryName\(region\?\.countryCode\)\s*\|\|\s*region\?\.country/);
-  assert.match(source, /scopeContainsRegion\(explicitBaseScope, regionId\)/);
-  assert.match(source, /ownerNameOf\(scopedRegionId\)/);
+  assert.doesNotMatch(source, /detectExplicitBaseTerritoryScope|explicitScopeText|explicitBaseScope|scopeContainsRegion/);
+  assert.match(source, /resolveGameMasterBaseGeographyScope\(scope\.baseCountries, catalog\)/);
 });
 
-test("GM control operations share the same explicit geographic scope completion", async () => {
+test("GM control operations go through the same region resolver as transfers", async () => {
   const source = await sourceText(gameplayPath);
   const start = source.indexOf("const resolveRegionControlOps");
   const end = source.indexOf("const buildTransferFeedback", start);
   assert.ok(start >= 0 && end > start);
   const branch = source.slice(start, end);
-  assert.match(branch, /explicitScopeText/);
   assert.match(branch, /resolveRegionTransfers\(proxyContainers, world/);
 });

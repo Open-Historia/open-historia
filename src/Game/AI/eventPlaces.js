@@ -23,16 +23,17 @@ import { kindOfName, stripKindTags } from "./nameRefs.js";
 const asText = (value) => String(value ?? "").trim();
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const fold = (value) => asText(value).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ");
-const withoutArticle = (value) => asText(value).replace(/^(?:the|a|an)\s+/i, "");
 
 const PLACE_KINDS = new Set(["country", "region", "city", "structure", "unit", "sea"]);
 
 // One written entry: { kind, name, country }, or null for one with no kind (or
 // a kind that is no place). `country` is what a city or a region was said to
-// be in: the part tagged as a country, else the last part after a comma.
+// be in: the part tagged as a country, else the last part after a comma. Each
+// name is kept as it was written, an article and all: "the" is no more taken
+// off an English name than "la" off a French one (nameRefs.js).
 export const readEventPlace = (written) => {
     const { text, kinds } = stripKindTags(written);
-    const parts = text.split(",").map((part) => withoutArticle(part)).filter(Boolean);
+    const parts = text.split(",").map((part) => asText(part)).filter(Boolean);
     if (!parts.length) return null;
     const name = parts[0];
     const kind = kindOfName(kinds, name);
@@ -170,4 +171,4 @@ export const findEventPlaces = (places, gazetteer, options = {}) => asArray(plac
     .filter(Boolean);
 
 // What the model is told, in the rules of a skip that finishes its own events.
-export const EVENT_PLACES_RULE = "• Places. `places` lists the places the event happens at, up to four, each with its kind and, for a city or a region, its country: \"city: Kharkiv, country: Ukraine\", \"region: Crimea, country: Ukraine\", \"country: Poland\", \"building: Camp Humphreys\", \"sea: Black Sea\", \"unit: 3rd Infantry Division\". The player's map goes to them and the event's card links to them, so list only places on the map, by the names the map uses; a thing that is not a place on the map (a person, a ministry, a treaty, a commodity) is never listed, and an event that happens nowhere in particular lists none.";
+export const EVENT_PLACES_RULE = "• Places. `places` lists the places the event happens at, up to four, each with its kind and, for a city or a region, its country: \"city: Kharkiv, country: Ukraine\", \"region: Crimea, country: Ukraine\", \"country: Poland\", \"building: Camp Humphreys\", \"sea: Black Sea\", \"unit: 3rd Infantry Division\". The player's map goes to them and the event's card links to them, so list only places on the map, by the names the map uses; a thing that is not a place on the map (a person, a ministry, a treaty, a commodity) is never listed, and an event that happens nowhere in particular lists none. A region is one [Game Map Description] lists by name, copied exactly; in a power listed without its regions, name one of its cities from [City Coordinates], or the country. The country after a city or a region is the power that holds it now, as the map says.";

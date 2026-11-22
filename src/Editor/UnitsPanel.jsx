@@ -14,15 +14,18 @@ import { inputStyle, pillButton } from "./editorStyles.js";
 
 const TYPE_LABELS = { infantry: "Infantry", armor: "Armour", air: "Air", naval: "Naval", artillery: "Artillery", garrison: "Garrison" };
 
-const UnitsPanel = ({ units = [], polityName = (key) => key, activeTool, setActiveTool, onLocate, onEdit, onRemove, onRemoveAll, onClose }) => {
+const UnitsPanel = ({ units = [], unitTypes = [], polityName = (key) => key, activeTool, setActiveTool, onLocate, onEdit, onRemove, onRemoveAll, onClose }) => {
   const [query, setQuery] = useState("");
+  // The scenario's own unit type a unit is of (runtime/unitTypes.js), or null.
+  const ownTypeOf = (unit) => (unit?.unitType ? unitTypes.find((type) => type.id === unit.unitType) ?? null : null);
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const named = (u) => unitTypes.find((type) => type.id === u.unitType)?.name || "";
     const list = q
-      ? units.filter((u) => `${u.name} ${u.type} ${u.ownerCode} ${polityName(u.ownerCode)} ${u.composition || ""}`.toLowerCase().includes(q))
+      ? units.filter((u) => `${u.name} ${u.type} ${named(u)} ${u.ownerCode} ${polityName(u.ownerCode)} ${u.composition || ""}`.toLowerCase().includes(q))
       : units;
     return [...list].sort((a, b) => polityName(a.ownerCode).localeCompare(polityName(b.ownerCode)) || String(a.name).localeCompare(String(b.name)));
-  }, [units, query, polityName]);
+  }, [units, unitTypes, query, polityName]);
   const placing = activeTool === "unit";
 
   return (
@@ -58,22 +61,25 @@ const UnitsPanel = ({ units = [], polityName = (key) => key, activeTool, setActi
             {units.length ? "No unit matches that search." : "No units yet."}
           </div>
         )}
-        {filtered.map((u) => (
-          <div key={u.id} style={{ border: "1px solid rgba(255,255,255,0.09)", borderRadius: 8, display: "flex", alignItems: "center", gap: 6, padding: "6px 8px" }}>
-            <button onClick={() => onEdit?.(u.id)} title="Edit" style={{ background: "transparent", border: "none", color: "white", cursor: "pointer", flex: 1, textAlign: "left", padding: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>{u.name || "Unit"}</div>
-              <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.5)" }}>
-                {TYPE_LABELS[u.type] || u.type} · {polityName(u.ownerCode) || "no owner"} · {u.strength ?? 100}%{u.composition ? ` · ${u.composition}` : ""}
-              </div>
-            </button>
-            <button onClick={() => onLocate?.(u)} title="Locate" style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.7)", cursor: "pointer" }}>
-              <Icon name="fit" size={14} />
-            </button>
-            <button onClick={() => onRemove?.(u.id)} title="Delete" style={{ background: "transparent", border: "none", color: "#f87171", cursor: "pointer" }}>
-              <Icon name="trash" size={14} />
-            </button>
-          </div>
-        ))}
+        {filtered.map((u) => {
+          const own = ownTypeOf(u);
+          return (
+            <div key={u.id} style={{ border: "1px solid rgba(255,255,255,0.09)", borderRadius: 8, display: "flex", alignItems: "center", gap: 6, padding: "6px 8px" }}>
+              <button onClick={() => onEdit?.(u.id)} title="Edit" style={{ background: "transparent", border: "none", color: "white", cursor: "pointer", flex: 1, textAlign: "left", padding: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{u.name || "Unit"}</div>
+                <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.5)" }}>
+                  {own ? (own.icon ? `${own.icon} ${own.name}` : own.name) : TYPE_LABELS[u.type] || u.type} · {polityName(u.ownerCode) || "no owner"} · {u.strength ?? 100}%{u.composition ? ` · ${u.composition}` : ""}
+                </div>
+              </button>
+              <button onClick={() => onLocate?.(u)} title="Locate" style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.7)", cursor: "pointer" }}>
+                <Icon name="fit" size={14} />
+              </button>
+              <button onClick={() => onRemove?.(u.id)} title="Delete" style={{ background: "transparent", border: "none", color: "#f87171", cursor: "pointer" }}>
+                <Icon name="trash" size={14} />
+              </button>
+            </div>
+          );
+        })}
       </div>
     </Panel>
   );

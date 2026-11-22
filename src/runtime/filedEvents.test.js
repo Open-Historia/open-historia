@@ -44,18 +44,26 @@ test("a curator row with its event becomes a card; a row with only a title takes
   assert.equal(toFiledEvent({ route: "EXACT_DUPLICATE" }), null);
 });
 
-test("stored cards are bounded, deduplicated by title and repaired", () => {
+test("stored cards are bounded, one per event by its id, and repaired", () => {
   const many = Array.from({ length: FILED_EVENTS_MAX + 5 }, (_, index) => ({ title: `Event ${index}`, route: "NATIVE_PROCESS_FILLER" }));
   assert.equal(normalizeFiledEvents(many).length, FILED_EVENTS_MAX);
+  // The same event noted by two passes is one card; two events that share a
+  // headline are two, in any language.
   const cards = normalizeFiledEvents([
-    { title: "Same", route: "EXACT_DUPLICATE", fate: "made-up" },
-    { title: "same", route: "EXACT_DUPLICATE" },
+    { title: "Same", route: "EXACT_DUPLICATE", fate: "made-up", eventId: "segment-1-event-3" },
+    { title: "Same", route: "EXACT_DUPLICATE", eventId: "segment-1-event-3" },
+    { title: "same", route: "EXACT_DUPLICATE", eventId: "segment-1-event-4" },
+    { title: "Même", route: "EXACT_DUPLICATE", eventId: "segment-1-event-5" },
+    { title: "Même", route: "EXACT_DUPLICATE", eventId: "segment-1-event-6" },
     { route: "EXACT_DUPLICATE" },
     null,
   ]);
-  assert.equal(cards.length, 1);
+  assert.deepEqual(cards.map((card) => card.title), ["Same", "same", "Même", "Même"]);
   assert.equal(cards[0].fate, FILED_FATES.notRecorded);
   assert.ok(cards[0].note);
+  assert.equal("eventId" in cards[0], false, "the id is never saved");
+  // Cards read back from a save carry no id, and stay as they were saved.
+  assert.equal(normalizeFiledEvents(cards).length, 4);
   assert.deepEqual(normalizeFiledEvents(undefined), []);
 });
 

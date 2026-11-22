@@ -197,7 +197,7 @@ test("its layers are in the map's order: the weather over the walls and under th
   assert.match(component, /const shown = switchedOn && effectsOn && /);
   // Seen at every zoom, the whole world at once too.
   assert.doesNotMatch(component, /minzoom|maxzoom/);
-  assert.match(component, /map\.on\("styleimagemissing", asked\);/);
+  assert.match(component, /resolveMissingImages\(map, \(id\) => provide\(map, id\)\)/);
   for (const name of ["frontWeatherFeatures.js", "weatherPatches.js", "mapPatterns.js", "FrontWeatherLayers.jsx", "IceLayers.jsx"]) assert.doesNotMatch(read(name), /createLinearGradient|createRadialGradient|createConicGradient|gradient\(/i);
   // The patches are the zones' weather as the last turn wrote it, else worked out as the turn would.
   assert.match(component, /zoneWeatherById\(recorded, date, zoneWeatherFor\(\{ climateZones: zones \}, \{ seed: gameId, date \}\)\)/);

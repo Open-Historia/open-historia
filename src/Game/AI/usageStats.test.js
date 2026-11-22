@@ -162,3 +162,23 @@ test("every streamed chat answer hands its usage to the call's record, as a buff
   assert.equal(calls, 4, "Gemini, OpenAI-compatible, Anthropic and Anthropic-compatible");
   assert.equal(main.split("if (streamResult.usage) onUsage?.(streamResult.usage);").length - 1, calls);
 });
+
+test("what a request wrote to Anthropic's cache is recorded apart from what it read", () => {
+  // A prefix written on every call and never read costs more than no cache at
+  // all; the record has to be able to show that.
+  assert.deepEqual(
+    normalizeUsage({ usage: { input_tokens: 2000, output_tokens: 900, cache_read_input_tokens: 0, cache_creation_input_tokens: 30000 } }),
+    { promptTokens: 32000, outputTokens: 900, totalTokens: 32900, cacheWriteTokens: 30000 },
+  );
+  assert.deepEqual(
+    normalizeUsage({ usage: { input_tokens: 2000, output_tokens: 900, cache_read_input_tokens: 30000, cache_creation_input_tokens: 500 } }),
+    { promptTokens: 32500, outputTokens: 900, totalTokens: 33400, cachedTokens: 30000, cacheWriteTokens: 500 },
+  );
+});
+
+test("DeepSeek's cache hits are read as cached tokens", () => {
+  assert.deepEqual(
+    normalizeUsage({ usage: { prompt_tokens: 40000, completion_tokens: 3000, total_tokens: 43000, prompt_cache_hit_tokens: 36000, prompt_cache_miss_tokens: 4000 } }),
+    { promptTokens: 40000, outputTokens: 3000, totalTokens: 43000, cachedTokens: 36000 },
+  );
+});

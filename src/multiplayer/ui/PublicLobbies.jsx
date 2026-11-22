@@ -17,7 +17,7 @@ const card = {
   padding: "1.2rem 1.3rem",
   position: "relative",
 };
-const input = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "9px", color: "#f8fafc", fontSize: "0.84rem", outline: "none", padding: "0.5rem 0.7rem", boxSizing: "border-box" };
+const input = { background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.04))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))", borderRadius: "9px", color: "#f8fafc", fontSize: "0.84rem", outline: "none", padding: "0.5rem 0.7rem", boxSizing: "border-box" };
 const cell = { borderTop: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.82)", fontSize: "0.82rem", padding: "0.55rem 0.5rem", textAlign: "left" };
 // Anyone's text, kept from reordering the text around it.
 const isolate = { unicodeBidi: "isolate" };

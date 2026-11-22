@@ -12,7 +12,8 @@
 //     t      a pair: each side's troops' paths (codec.js encodeTracks), in
 //            the order of the record's troops
 //     names  whose colour taken ground is painted in: the members of side 0,
-//            then those of side 1
+//            then those of side 1 (past PAINT_NAMES_MAX in all, each side's
+//            leading members, the room shared between the sides: paintNamesOf)
 //     m      the painted ground as the replay begins, a state a cell (codec.js
 //            encodeStates): PAINT_OWN_A or PAINT_OWN_B for ground a side
 //            holds at home, 1 + an index into `names` for ground painted in
@@ -174,9 +175,24 @@ const memberList = (value) => (Array.isArray(value) ? value : []).map((name) => 
 // One for each battlefield, each run. `sides` are the battlefield's two lists
 // of members; `cols` and `rows` its frame's. (`from` is what another
 // recorder had recorded, carried onto this one's grid: carryOnto below.)
+// How many of each side's members ground is painted in the name of: every one
+// while both sides fit in PAINT_NAMES_MAX; past that, the room shared between
+// the two sides (what one does not need, the other may), each side's leading
+// members first. Both sides' names were cut together where they ran out, so a
+// side past the cap left the other none and its captures were drawn as its
+// own ground. A member past its side's share paints in its side's first name.
+export const paintNamesOf = (sides) => {
+  const counts = [0, 1].map((side) => (Array.isArray(sides?.[side]) ? sides[side].length : 0));
+  if (counts[0] + counts[1] <= PAINT_NAMES_MAX) return counts;
+  const half = Math.floor(PAINT_NAMES_MAX / 2);
+  const first = Math.min(counts[0], Math.max(half, PAINT_NAMES_MAX - counts[1]));
+  return [first, Math.min(counts[1], PAINT_NAMES_MAX - first)];
+};
+
 export const createReplayRecorder = ({ sides = [[], []], cols = 0, rows = 0, from = null } = {}) => {
   const members = [memberList(sides[0]), memberList(sides[1])];
-  const names = [...members[0], ...members[1]].slice(0, PAINT_NAMES_MAX);
+  const shares = paintNamesOf(members);
+  const names = [...members[0].slice(0, shares[0]), ...members[1].slice(0, shares[1])];
   const cells = Math.max(0, Math.floor(cols) * Math.floor(rows));
   // What each cell is painted as now, the same as it began (and as a list of states), and the changes.
   const painted = from ? from.painted : new Uint8Array(cells);
@@ -198,8 +214,8 @@ export const createReplayRecorder = ({ sides = [[], []], cols = 0, rows = 0, fro
     const own = side === 0 ? PAINT_OWN_A : PAINT_OWN_B;
     if ((ground.homes && ground.homes[cell] === holder) || members[side].length === 0) return own;
     const painter = Math.min(ground.painters ? ground.painters[cell] : 0, members[side].length - 1);
-    const state = 1 + (side === 0 ? painter : members[0].length + painter);
-    return state <= names.length ? state : own;
+    if (shares[side] === 0) return own;
+    return 1 + (side === 0 ? 0 : shares[0]) + (painter < shares[side] ? painter : 0);
   };
 
   return {

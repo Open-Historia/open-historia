@@ -20,7 +20,7 @@ export const MAP_IDLE_EVENT = "oh:map-idle";
 
 // An idle this soon after the mark can still be the one from before the layers
 // were added; the next one is the drawn map.
-const SETTLE_MARGIN_MS = 150;
+export const SETTLE_MARGIN_MS = 150;
 
 const now = () => (typeof performance !== "undefined" && performance.now ? performance.now() : Date.now());
 
@@ -39,6 +39,10 @@ export const announceGameOpening = (gameId) => {
   store().opening = { gameId: String(gameId ?? ""), at: now() };
   window.dispatchEvent(new CustomEvent(GAME_OPENING_EVENT, { detail: store().opening }));
 };
+
+// The game the library last began to open ("" before any): the music asks
+// whether it is the one already drawn (runtime/ambientMusic.js reopensDrawnGame).
+export const openingGameId = () => String(store().opening?.gameId ?? "");
 
 // The same game drawn again from scratch — the 3D globe switched on or off,
 // which replaces the MapLibre instance. The opening screen covers it until the
@@ -95,6 +99,9 @@ export const politiesSettled = () => {
   const idleAt = store().idleAt ?? 0;
   return Boolean(record && idleAt > record.at + SETTLE_MARGIN_MS);
 };
+
+// The polities are in but the last idle came too soon to count, and a finished map does not go idle again by itself.
+export const awaitingSettledIdle = () => politiesReady() && !politiesSettled();
 
 export const markMapIdle = () => {
   if (typeof window === "undefined") return;

@@ -1,6 +1,6 @@
 # AI Return Schemas & Validation
 
-Every AI gameplay task in Open Historia hands the model a JSON Schema (as a provider "tool") and gets back a JSON object it must trust before mutating the world. This page documents the schemas the model must return (`src/Game/AI/gameplaySchemas.js`), the hand-rolled two-layer validator that gates every response, and the strict-vs-salvage retry discipline in `runJsonTask` (`src/Game/AI/gameplay.js`) that decides whether a bad answer earns a corrective retry or gets repaired in place. If you are adding a field the model should emit, read the [`additionalProperties: false` trap](#the-additionalpropertiesfalse-trap) first — it is the single most common way a new feature silently does nothing.
+Every AI gameplay task in Open Historia hands the model a JSON Schema (as a provider "tool") and gets back a JSON object it must trust before mutating the world. This page documents the schemas the model must return (`src/Game/AI/gameplaySchemas.js`), the hand-rolled two-layer validator that gates every response, and the strict-vs-salvage retry discipline in `runJsonTask` (`src/Game/AI/gameplay.js`) that decides whether a bad answer earns a corrective retry or gets repaired in place. If you are adding a field the model should emit, read the [`additionalProperties: false` trap](#7-the-additionalproperties-false-trap) first — it is the single most common way a new feature silently does nothing.
 
 Related pages: [World state](world-state.md) (what these payloads mutate), [AI providers](ai-overview.md) (how the schema becomes a tool call in `main.jsx`), [Gameplay orchestration](ai-overview.md) (the task callers), [Gameplay prompts](ai-prompts.md) (the templates rendered alongside each schema).
 
@@ -35,7 +35,7 @@ Diplomatic speaker routing is deliberately absent from this table: one-on-one th
 | `jumpForward` | `JUMP_FORWARD_SCHEMA` | `submit_jump_result` | `simulateTimelineJump` |
 | `autoJumpForward` | `AUTO_JUMP_FORWARD_SCHEMA` (**= `JUMP_FORWARD_SCHEMA`**) | `submit_jump_result` | `simulateAutoJump` |
 | `descriptionToAction` | `DESCRIPTION_TO_ACTION_SCHEMA` | `submit_description_to_action` | freeform-intent → command |
-| `eventConsolidator` | `EVENT_CONSOLIDATOR_SCHEMA` | `submit_event_consolidation` | `consolidateHistoryBatch` |
+| `eventConsolidator` | `EVENT_CONSOLIDATOR_SCHEMA` | `submit_event_consolidation` | none of its own: a time skip carries the fold in its `history` field (`foldJumpTool`, without the field notes); a batch sent before 2026-11-07 still lands through `deferredConsolidationApplier` |
 | `interactiveCreation` | `INTERACTIVE_CREATION_SCHEMA` (**= `interactiveSchema`**) | `submit_interactive_creation` | opening an interactive event's scene |
 | `interactiveExecutor` | `INTERACTIVE_EXECUTOR_SCHEMA` | `submit_interactive_execution` | advance an interactive event |
 | `interactiveSummary` | `INTERACTIVE_SUMMARY_SCHEMA` | `submit_interactive_summary` | finished interactive event → event |
@@ -72,7 +72,7 @@ Small factory helpers keep the schemas DRY (`gameplaySchemas.js`):
 | `stringArraySchema(desc)` | `{ type: "array", items: { type: "string" } }` | e.g. `aliases`, `tags`, `invitees` |
 | `percentageSchema(desc)` | `{ type: "integer", minimum: 0, maximum: 100 }` | all stat-sheet indices |
 
-Every object schema sets `additionalProperties: false`. Understand what that means before adding fields — see [§7](#7-the-additionalpropertiesfalse-trap).
+Every object schema sets `additionalProperties: false`. Understand what that means before adding fields — see [§7](#7-the-additionalproperties-false-trap).
 
 ---
 
@@ -127,7 +127,7 @@ A creation/rename/recolor/metadata change. Only `code` is required; send other f
 | `tags` | `string[]` | Complete new trait list (ideology/alignment/posture) — send the whole list, not a delta | no |
 | `note` | string | Brief reason | no |
 
-> `reputation` is the canonical example of the [`additionalProperties: false` trap](#7-the-additionalpropertiesfalse-trap): the prompt asked for it and `gameState` clamped/wrote it, but it was **absent from `properties`** — so a strict `json_schema` provider could never emit it and reputation silently never moved. Declaring it is what connected the feature.
+> `reputation` is the canonical example of the [`additionalProperties: false` trap](#7-the-additionalproperties-false-trap): the prompt asked for it and `gameState` clamped/wrote it, but it was **absent from `properties`** — so a strict `json_schema` provider could never emit it and reputation silently never moved. Declaring it is what connected the feature.
 
 ### 4.4 `unitOpSchema` — `anyOf` on `op`
 
@@ -159,41 +159,39 @@ Not a single object: an `anyOf` of four shapes discriminated by `op`. Each branc
 
 ### 4.5-bis `projectOpSchema` — ONE object, discriminated by `op`
 
-Unlike `unitOpSchema` and `markerOpSchema`, this is a single object with an `op` enum and all-optional fields, not an `anyOf`.
+Unlike `unitOpSchema` and `markerOpSchema`, this is a single object with an `op` enum and all-optional fields, not an `anyOf`. Since 2026-11-15 the projects engine runs every project (`runtime/projectEngine.js`), so an op says only what an event did to one, by its name (no ids: `normalizeProjectsShape` and the jump's shape normalizer leave out an `id` or `projectId` written from habit):
 
 | `op` | Meaning |
 |---|---|
-| `create` | open a new effort (give it a `summary` too) |
-| `update` | progress moved, or the status changed; `newName` renames |
-| `milestone` | a checkpoint reached or missed (`projectMilestoneSchema`) |
-| `complete` / `cancel` / `fail` | it ended; all three keep it on the board under Closed |
-| `remove` | erase an entry that should never have been opened — NOT how a project ends |
+| `create` | open a project, with its `plan` (below); `ownerCode` for another country's |
+| `update` | what it IS (`summary`, `kind`, `secrecy`, `tags`, `newName`), a line on what an event did (`lastUpdate`), a verdict on doubted intelligence (`verification`: `confirmed` / `refuted`) |
+| `setback` | an event set it back: `days` of work lost (1-180), `overrun` (1-50 % dearer a month); takes hold from the next period |
+| `boost` | an event brought it on: `days` gained (1-90); next period |
+| `cancel` / `fail` | it ended; both keep it on the board under Closed (`note`) |
 
-Required: `op` and `name`. `eventIndex` says which of the events this op follows from.
+Required: `op` and `name`. `eventIndex` says which of the events this op follows from. No progress, status, dates or checkpoints: those are the engine's. Numbers carry their ranges in words, not as schema bounds: the engine holds each (a bound in the schema would cut a whole op out of an answer over one number).
 
-> **Why it is not an `anyOf`.** It used to be, with six branches — and three of them (nested `create`, flat `create`, `update`) each restated `projectSchema`'s twenty properties in full. Serialized, that was **41,538 characters of a 63,161-character jump schema**: two thirds of the entire output contract for one impact branch, more than three times every other branch combined, sent on every jump and once per segment.
->
-> It was also duplication rather than information. `normalizeProjectOp` (`runtime/gameState.js`) already accepts a create written flat *or* nested (`operation.project ?? operation`), already resolves every op alias, and already merges a create naming an existing project into an update of only the fields it carried. The schema was spending 13 KB describing tolerance the reducer had all along.
->
-> Collapsing it was also a **reliability** win, not only a size one: a six-branch `anyOf` is one of the worst constructs for Gemini's OpenAPI subset (see `geminiSchema.js`) and for small local models, which routinely pick the wrong branch or blend two. `onComplete` was thinned the same way — it re-embedded `polityChangeSchema`, `regionTransferSchema` and `regionClaimSchema` in full, all three of which appear elsewhere in the very same payload.
->
-> The nested `create` spelling survives as a permissive `project: { type: "object" }` key. The model is no longer told to nest, but `additionalProperties: false` means one that does anyway would fail validation and cost the whole turn — the exact failure the flat variant was added to prevent. ~150 characters instead of 13,000.
->
-> `src/Game/AI/projectOpSchema.test.js` is the safety net: every op shape the six-variant schema accepted must still validate.
+**`plan`** (`projectPlanSchema`): `{ durationDays* (days of work at normal funding, 14-3650), monthlyCost* (at normal funding, in the owner's GDP currency), ongoing?, milestones?: [{ title*, atProgress* (1-99) }], effects?: [effect], yields?: [effect] (ongoing only, monthly) }`.
 
-### 4.5-ter `PROJECTS_SCHEMA` — the board's own task
+**`effect`** (`projectEffectSchema`): `{ type* (stat | relation | structure | unitType | territory), stat?, change?, country?, name?, kind?, base?, attack?, toughness?, speed?, region?, claim?, lng?, lat? }`, normalized and bounded by `projectEngine.js normalizeProjectEffect` ([world-state.md §2e-bis](world-state.md)).
 
-A skip keeps the board itself, in every mode: `foldJumpTool` adds `impacts.projectOps` to the contract it is sent (`foldedProjectOpsSchema`: this op without `priority`, `startedAt`, the links, `focus`, the nested `project` and `onComplete`), `agentReports` at the top level when an agent's report is due, and `history` (`{ summary*, document* }`, the consolidator's two fields) last of all when a fold of the history document is due. `JUMP_FORWARD_SCHEMA`, which every answer is validated against, accepts both contracts, and takes `agentReports` and `history` loosely: each is judged where it is read, so a poor one costs that report or that fold and never the turn. See [the folded time skip](ai-overview.md#the-folded-time-skip-one-request-its-own-consequences).
+> **Why it is not an `anyOf`.** It used to be, with six branches, three of which restated `projectSchema` in full: 41,538 characters of a 63,161-character jump schema. A six-branch `anyOf` is also one of the worst constructs for Gemini's OpenAPI subset (`geminiSchema.js`) and for small local models. `src/Game/AI/projectOpSchema.test.js` holds the contract.
 
-For a skip a provider refused in its folded form, `projectOps` does not appear on the jump the model is sent: `jumpImpactsSchema` is `impactsSchema` minus that branch, and the board is moved by the `board` job of the one turn review that skip gets, after the segments merge and before anything is written.
+### 4.5-ter `PROJECTS_SCHEMA`, the skip's board rider, and `PROJECT_PLAN_SCHEMA`
+
+A skip keeps the board itself, in every mode: `foldJumpTool` adds `impacts.projectOps` to the contract it is sent (`foldedProjectOpsSchema`: this op without `newName`, `tags`, `note`, `focus` and `approach`, its plan without `ongoing` and `yields`, its effects `stat | relation | structure | territory` without a unit type's figures or coordinates — a structure stands where the event that opened the project happened, `boardPassApply.js withEventFocus` — and its numbers without bounds; some 1,340 characters, `foldedSkipSent.test.js`), `agentReports` at the top level when an agent's report is due, and `history` (`{ summary*, document* }`) last of all when a fold is due. `JUMP_FORWARD_SCHEMA`, which every answer is validated against, accepts the full op.
+
+`PROJECTS_SCHEMA` (`submit_project_ops`) is the same ops with `eventIndex`, for a Scene's map check (`runSceneReview`):
 
 ```
-{ "projectOps": [ { "op": "update", "id": "...", "name": "...", "eventIndex": 0, "progress": 58, ... } ] }
+{ "projectOps": [ { "op": "setback", "name": "...", "eventIndex": 0, "days": 30, "lastUpdate": "..." } ] }
 ```
 
-`{"projectOps": []}` is a valid and expected answer — the prompt says so explicitly, because a schema that rejected it would push the model into inventing progress, which is the one thing the board must never contain.
+`{"projectOps": []}` is the usual answer: the engine moves every project by itself.
 
-The **game master keeps the full `impactsSchema`**, board included: it is a single call with no second pass to hand the work to.
+`PROJECT_PLAN_SCHEMA` (`submit_project_plan`, the `projectPlan` task, [ai-prompts.md §7.17](ai-prompts.md)): `{ name*, summary*, kind?, secrecy?, tags?, durationDays*, monthlyCost*, ongoing?, milestones*, effects*, yields?, focus? }`, under 7,000 characters.
+
+The **game master keeps the full `impactsSchema`**, board included.
 
 Jump schema size across the two changes, measured when they landed: **63,161 → 31,678 → 21,609 characters.** It grew again with what beta added to the jump (31,720 once `at` joined), and the **description audit** brought it to **24,915**: every field description says what the field *is* in a line, because the levers are explained at length in the actions reference and the call-time directives the jump is always given — a paragraph in a field description was the same paragraph a third time. The guard in `projectOpSchema.test.js` is now **28,000**, raised on purpose when `impacts.reports` landed (26,363 chars; ~1,450 for the family). It is a prompt-size guard, not a provider limit: an impact family that saves a *request* may raise it — reports inside the jump cost ~1,450 characters instead of a whole request a turn, which is the trade the budget asks for.
 
@@ -229,14 +227,20 @@ Also used for `autoJumpForward`. This is the largest task.
 | `stopDate` | string | Date the simulation stops | **yes** |
 | `summary` | string | Concise period summary | **yes** |
 | `clearActions` | boolean | Were queued player actions resolved | **yes** |
-| `diplomaticOutreach` | `createdChatSchema[]` + `peaceOffer` | Polities reaching out on their own initiative, not tied to any event. A letter offering the player peace carries `peaceOffer` (`territory`, `reparationsPayer`, `reparationsPercent`, `reparationsYears`), kept by `warAndPeace.js offerPeace` and shown on the letter's message | no |
-| `peaceTreaties` | string | The peaces two countries nobody plays made, a line each: `offering | accepting | terms` (`peaceTerms.js readTreatyLines`) | no |
-| `socialPosts` | `{ author*, role, country, date, text*, quote, offTopic }[]` | Rostra's posts of the period (`SOCIAL_POSTS_FIELD`): field notes in the prompt (`[Social Media]`), no bounds on the list (Gemini refuses them on a list of objects). Sent last before the riders (`withSocialPosts`), and not at all while the Social media feature is off; read against a loose `{ type: "object" }[]`, each post on its own by `readSkipPosts` (`runtime/socialFeed.js`), so a malformed post costs that post, never the turn, and a broken or cut-off list is cut away with the riders (`parseWithoutTrailingFields`). It cost the schema about 400 characters: the guard is 29,650 (`projectOpSchema.test.js`) | no |
+| `diplomaticOutreach` | `createdChatSchema[]` + `peaceOffer` | Polities reaching out on their own initiative, not tied to any event. A letter offering the player peace carries `peaceOffer` (`territory`, `reparationsPayer`, `reparationsPercent`, `reparationsYears`, and `moreTerms` in the record form of a `peaceTreaties` line), kept by `warAndPeace.js offerPeace` and shown on the letter's message | no |
+| `peaceTreaties` | string | The peaces two countries nobody plays made, a line each: `offering | accepting | terms`, the terms in the game's record form (`as held; cede~region~country; pay~country~percent~years; condition~words`, `peaceTerms.js readTreatyLines`) | no |
+| `socialPosts` | `{ author*, role, country, date, text*, quote, offTopic, reach, mentions }[]` | Rostra's posts of the period (`SOCIAL_POSTS_FIELD`): field notes in the prompt (`[Social Media]`); `reach` (`leader`, `official`, `famous`, `ordinary`) sets the counts under a post and `mentions` (exact map names) the Mentions tab, no bounds on the list (Gemini refuses them on a list of objects). Sent last before the riders (`withSocialPosts`), and not at all while the Social media feature is off; read against a loose `{ type: "object" }[]`, each post on its own by `readSkipPosts` (`runtime/socialFeed.js`), so a malformed post costs that post, never the turn, and a broken or cut-off list is cut away with the riders (`parseWithoutTrailingFields`). It cost the schema about 400 characters: the guard is 29,650 (`projectOpSchema.test.js`) | no |
 | `pollResults` | `{ poll*, shares*: number[], votes, consensus }[]` | The public's votes on the player's open Rostra polls (`POLL_RESULTS_FIELD`), field notes under `[Social Media]`. Sent only while a poll is open, just before `socialPosts` (`withSocialPosts(tool, on, { polls })`), so the guard above is unchanged; read against nothing at all (any value is accepted) and each entry on its own by `readSkipPollResults`, so an odd one costs that poll its answer this time, never the turn | no |
 
-`eventSchema`: `id`, `date`* , `title`* , `description`* , `importance`, `kind`, `places` (below), `notable` (bool), `playerRelated` (bool), `impacts` (`impactsSchema`).
+`eventSchema`: `id`, `date`* , `title`* , `description`* , `importance`, `kind`, `places` (below), `notable` (bool), `playerRelated` (bool), `impacts` (`impactsSchema`), `digest`, and last `concerns` (`string[]`): the polities the event is about, by their exact map names. The country panel lists an event under a polity by `concerns`, `combatants`, its country `places` and its impacts, and a shared game's host marks an event as each player's own by the same fields (`src/runtime/eventConcerns.js`); an event's words are never read for a name.
 
-`places`: optional, `string[]`, at most 4. Where the event happens, each entry one place with its kind and, for a city or a region, its country: `"city: Kharkiv, country: Ukraine"`, `"region: Crimea"`, `"country: Poland"`, `"building: Camp Humphreys"` (or `structure:`), `"sea: Black Sea"`, `"unit: 3rd Infantry Division"`. It is what the event's card links to and where the camera goes; nothing else reads it. The engine finds each on the map as that kind and no other and keeps what it found on the event as `{ kind, name, regionId? , lng?, lat? }` (`src/runtime/eventPlaces.js`); an entry with no kind, or that the map does not have, is dropped silently. In the jump's schema the field costs 223 characters, taken back from the descriptions of `id`, `date`, `importance`, `notable`, `playerRelated` and the region field, so the schema stays under its 28,000-character guard (27,985); the rule in the skip's own text (`EVENT_PLACES_RULE`) is 584 characters.
+`digest`: optional in the event's schema and in a save, asked of every event a skip sends (as `impacts` is; `gameplaySchemas.js` adds it to the asked fields when the event has it). One line of at most 140 characters: what happened and what it changed. The normaliser keeps it tidied to one line (`normalizeEventDigest`, `EVENT_DIGEST_MAX_CHARS`), and a later skip's history tells the event by it once the event is not among the newest skip's ([world state §2f](world-state.md#2f-turn-machinery--narrative-history)).
+
+**The sizes.** Since 2026-11-07 every field of the skip's function says what it is in fewer words, the rules several of them repeated being in the prompt already (`[The Map]`, `[Polities]`, `[Levers]`, `[Every Event Carries Its Consequences]`): the descriptions went from 13.7k to 12.0k characters, the digest included, and the lean contract from 29,982 to 28,273, under the guard of 28,400 (`projectOpSchema.test.js`). What the guards pin stays in the words (player sovereignty and PWv2 for institutions, "region: Hamhung"). A folded skip's function is the same from turn to turn for the board, the history fold and the poll answers, so a provider caches it with the prompt; the agents' reports are offered only on a skip with agents due, since on every skip they took it to 33.8k characters, past the 32,672 Gemini refused. The turn-to-turn function is about 29.8k as Gemini gets it, under the 30,435 that went through (`foldedSkipSent.test.js`). The fold's `history` field takes `{ summary, years, canon, eras, document }` loose, with `years`, `canon` and `eras` as arrays of objects with no properties, which Gemini fills with empty objects ([ai-prompts.md §7.6](ai-prompts.md#the-history-in-tiers-and-the-canon)).
+
+`places`: optional, `string[]`, at most 4. Where the event happens, each entry one place with its kind and, for a city or a region, its country: `"city: Kharkiv, country: Ukraine"`, `"region: Crimea"`, `"country: Poland"`, `"building: Camp Humphreys"` (or `structure:`), `"sea: Black Sea"`, `"unit: 3rd Infantry Division"`. It is what the event's card links to and where the camera goes; nothing else reads it. The engine finds each on the map as that kind and no other and keeps what it found on the event as `{ kind, name, regionId? , lng?, lat? }` (`src/runtime/eventPlaces.js`); an entry with no kind, or that the map does not have, is dropped silently. In the jump's schema the field costs 223 characters, taken back from the descriptions of `id`, `date`, `importance`, `notable`, `playerRelated` and the region field, so the schema stayed under what was then its 28,000-character guard (27,985; the guard is 28,400 since the descriptions were cut, above); the rule in the skip's own text (`EVENT_PLACES_RULE`) is 584 characters.
+
+`scriptedBeat`: optional string, after `warId`, `combatants` and `impacts` (`SCRIPTED_BEAT_FIELD`). The id of the scenario author's scripted event the event tells, as `[Scripted events this period]` lists it in square brackets; a beat is matched to the event that tells it by this id alone (`worldDirection.js beatIsWritten`), and one no event names is written by the engine. Every skip's answer may carry it; it is sent (`withScriptedBeat`, 113 characters) only to a game whose scenario has scripted events, never to the Game Master, and not kept in the save.
 
 There is **no scene** in the answer: a scene begins only when the player takes up an interactive event, an event of the skip that the engine offers for it now and then at no cost (`runtime/interactiveOffer.js`; `interactiveCreation`). The schema used to carry a `catalyst` on every skip, into a save no panel showed it from; an answer that still carries one has it dropped by `normalizeGameplayPayload` before validation, never refused.
 
@@ -251,7 +255,7 @@ Four optional strings, one record per line, fields separated by `~`. They delibe
 | `agreementUpdates` | `agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms` | start, update, suspend, resume, end, expire |
 | `puppetUpdates` | `op~overlord~puppet~kind~loyalty~secrecy~eventNumbersCSV~note` | install, reclassify, loyalty, reveal, release, annex, revolt, suppress |
 
-`eventNumbersCSV` (1-based) is a hint first: the engine rebinds war records from `event.warId` and the transition's wording (`normalizeWorldWarEventLinks`, in `nativeWarLedger.js`) whenever an event carries the record's warId, and the diplomatic director binds relation and agreement records to the one event that matches. When no event carries the warId the model's own numbers are kept rather than blanked, so the validator reports the real defect (the event is missing its `warId`) instead of asking for a number the model already gave. Validation runs per segment against the world as the earlier segments left it (`validateSegmentLedgers`): strict while a retry remains, repaired on the final attempt (`repairWarLedgerPayload`): a record's own event numbers are stamped onto their events as the warId they declare, a record that still cannot bind is dropped with the war bindings of its events (events of wars that already exist keep theirs), and the segment is kept — the events stand as narrative, and only the canonical war change is lost, logged to the diagnostics log. Accepted records are bound to the segment's event ids, concatenated by `mergeSegmentPayloads` (which carries all four families — every skip is built from the merge, so a family it left out would never be applied), remapped to the canonical round-scoped ids minted in `applySimulationResult` (`src/runtime/eventIdentity.js`), and applied by `applyWarUpdates` / `applyDiplomaticUpdates`. Each decoder caps ONE answer's records (16 wars, 20 relations, 16 agreements, 24 puppets, 16 storylines); the merged turn's applies (and its storyline motion check) pass `limit: Infinity`, because every segment's answer was held to the caps already and cutting a four-segment year to one answer's worth dropped every later segment's records. `eventSchema` carries `warId` and `combatants[]` for the combat rule (docs/world-state.md §2b-bis).
+`eventNumbersCSV` (1-based) is a hint first: the engine rebinds war records from `event.warId` and the transition's wording (`normalizeWorldWarEventLinks`, in `nativeWarLedger.js`) whenever an event carries the record's warId. Relation, agreement and puppet records keep the events their numbers named (`ledgerPins.js`, before the answer is sorted); one that named none is applied all the same, dated by the skip, and nothing ties a record to an event by its words. When no event carries the warId the model's own numbers are kept rather than blanked, so the validator reports the real defect (the event is missing its `warId`) instead of asking for a number the model already gave. Validation runs per segment against the world as the earlier segments left it (`validateSegmentLedgers`): strict while a retry remains, repaired on the final attempt (`repairWarLedgerPayload`): a record's own event numbers are stamped onto their events as the warId they declare, a record that still cannot bind is dropped with the war bindings of its events (events of wars that already exist keep theirs), and the segment is kept — the events stand as narrative, and only the canonical war change is lost, logged to the diagnostics log. Accepted records are bound to the segment's event ids, concatenated by `mergeSegmentPayloads` (which carries all four families — every skip is built from the merge, so a family it left out would never be applied), remapped to the canonical round-scoped ids minted in `applySimulationResult` (`src/runtime/eventIdentity.js`), and applied by `applyWarUpdates` / `applyDiplomaticUpdates`. Each decoder caps ONE answer's records (16 wars, 20 relations, 16 agreements, 24 puppets, 16 storylines); the merged turn's applies (and its storyline motion check) pass `limit: Infinity`, because every segment's answer was held to the caps already and cutting a four-segment year to one answer's worth dropped every later segment's records. `eventSchema` carries `warId` and `combatants[]` for the combat rule (docs/world-state.md §2b-bis).
 
 `puppetUpdates` records a **subordination** — one polity directing another's will while it stays a separate country holding its own territory and its own sovereignty (docs/world-state.md §2b-bis and the Glossary). `kind` ∈ protectorate | satellite | client and says WHICH POWERS the Overlord holds rather than how tightly, so a change of arrangement is `reclassify` and never a step along a scale; only `install` needs kind/loyalty/secrecy. `loyalty` is 0-100 and `secrecy` is open | covert. `reveal` is one-way. The director refuses what the world cannot support: a second Overlord for a Puppet that has one, a cycle, and any chain — an `install` naming an Overlord that is itself held attaches to whoever holds it, and one naming a Puppet that holds others reparents those one hop up, permanently, in the same event.
 
@@ -361,16 +365,9 @@ if (breakdown.agriculture + breakdown.industry + breakdown.services !== 100)
 
 Each part is already a `percentageSchema` (int 0–100) by Layer 1, but three in-range integers can still sum to 97 or 110. This exact-equality check (`!== 100`, not a tolerance band) guarantees the three-slice pie the stat sheet renders is coherent. A model that emits `40/40/30` fails and, on attempt 1, is told to fix it.
 
-### 5.4 The capture-reluctance guards (Layer 2, `validateGeneratedWorldChanges` in `gameplay.js`)
+### 5.4 No capture-reluctance guards
 
-Not in `validateGameplayPayload` — they live in `validateGeneratedWorldChanges`, which jump/GM tasks pass as their `validatePayload` callback. The recurring field report they fix: "two turns of invasions and not a single province transferred."
-
-They run on the strict attempt only, only for event-shaped payloads, and only while the `captureGuard` option is on (the default). The Game Master preview passes `captureGuard: false`: an administrative correction may mention an annexation without moving a border. Two checks, over every event's `title`+`description`:
-
-1. **Control changes.** If the whole payload has **zero** `regionControlOps` and an event matches `CONTROL_CHANGE_LANGUAGE` — a word-boundary-anchored regex of *capture verbs* (`captur*`, `seiz*`, `conquer*`, `occupy/ies/ied/ation`, `overran/overrun`, `liberat*`, `retak*`, `recaptur*`, `fell to`, `falls to`, `takes control`, `assumes control`) — without also matching the legal wording below, the error asks for control operations (`op=control` for a capture/occupation/liberation, `op=contest` while a region is disputed) or for the capture language to go.
-2. **Legal transfers.** If the whole payload has **zero** `regionTransfers` and an event matches `LEGAL_TRANSFER_LANGUAGE` (`annex*`, `cede/ceded/ceding`, `cession`, `sovereignty passes/transfers`, `treaty transfer`, `formal(ly) transfer(red)`, `incorporat*`, `unification`, `territorial award`, `sold`, `sale of territory`), the error asks for legal transfers (one per region, or `wholeCountry: true` for a total annexation or unification) or for the settlement wording to go.
-
-So wartime captures belong in `regionControlOps`, not `regionTransfers`; `annex*` and `cede*` moved from the capture list to the legal one. Both regexes are narrow by design: "preoccupied"/"occupational" never match, and defensive battles that move no borders (war verbs, not capture verbs) never trip them. English-only heuristic; non-English games just skip the nudge. Because the guards are **strict-only**, they can never cost a finished turn on the final attempt.
+There were two, in `validateGeneratedWorldChanges`: when an event's words matched `CONTROL_CHANGE_LANGUAGE` (capture verbs) or `LEGAL_TRANSFER_LANGUAGE` (annex*, cede*, cession…) and the payload carried no `regionControlOps` or no `regionTransfers`, the strict attempt was sent back. They were removed on 2026-11-13: an English word list cannot read a game written in the player's language, and it misreads plain prose. The map moves only by the operations an event carries, and the skip is told so (`FOLDED_SKIP_CONSEQUENCES` in `gameplay.js`).
 
 ---
 
@@ -381,7 +378,6 @@ Passed as `validatePayload` by `jumpForward`/`autoJumpForward` (`gameplay.js`) a
 | Check | Strict behavior (attempt 1) | Salvage behavior (final attempt) |
 |---|---|---|
 | Region transfers unresolvable against the map | Return `buildTransferFeedback` — the losing owner's real region list so the model can resend with exact ids/names | Leave unresolved transfers for normalization to drop |
-| Capture narration + zero transfers | Corrective error (see §5.4) | Skipped entirely |
 | `createdChats` with no known participants | Reject | Drop the chat, keep the turn |
 | `createdChats` opener/title missing | Reject (`validateChatOpener`) | Skipped |
 | `unitOps.spawn` missing name/ownerCode | Reject | Drop the op |
@@ -507,7 +503,7 @@ This ladder is what lets local/self-hosted models without tool support still pla
 
 | You want to… | Go to |
 |---|---|
-| Add/change a field the model returns | `gameplaySchemas.js` `properties` + [§7 trap](#7-the-additionalpropertiesfalse-trap) |
+| Add/change a field the model returns | `gameplaySchemas.js` `properties` + [§7 trap](#7-the-additionalproperties-false-trap) |
 | Add a whole new task | Add schema → `GAMEPLAY_SCHEMAS` + tool → `GAMEPLAY_TOOLS`, then a caller using `runJsonTask` |
 | Change what makes a payload invalid (generic) | `validateGameplayPayload` (`gameplaySchemas.js`) |
 | Change map/world-aware validation | `validateGeneratedWorldChanges` (`gameplay.js`) |

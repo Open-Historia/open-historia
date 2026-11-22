@@ -8,6 +8,12 @@ import { normalizeRegionTypes } from "../../runtime/regionTypes.js";
 import { battlefieldHeldClaimants } from "../../runtime/fronts/heldRegions.js";
 import { mapViewOf, projectionIsDefault, sheetBounds } from "../../../server/mapProjection.js";
 import { noteMapMeasure } from "../../runtime/mapMeasure.js";
+import {
+  institutionsForMap,
+  politicalActorsForMap,
+  powerTiersForMap,
+  sovereigntyOverridesForMap,
+} from "../../runtime/diplomaticWorldSlices.js";
 
 // Map-facing world store — R5.0 event-driven edition.
 //
@@ -215,6 +221,12 @@ const deriveMapState = (state) => ({
   wars: Array.isArray(state?.wars) ? state.wars : EMPTY_ARRAY,
   relations: Array.isArray(state?.relations) ? state.relations : EMPTY_ARRAY,
   agreements: Array.isArray(state?.agreements) ? state.agreements : EMPTY_ARRAY,
+  // The political world the diplomatic map draws (runtime/diplomaticViews.js),
+  // cut to its public enums and members (runtime/diplomaticWorldSlices.js).
+  institutions: institutionsForMap(state?.institutions),
+  politicalActors: politicalActorsForMap(state?.politicalActors),
+  powerStatus: powerTiersForMap(state?.powerStatus),
+  regionSovereigntyOverrides: sovereigntyOverridesForMap(state?.regionSovereigntyOverrides),
   // The scenario's region types (runtime/regionTypes.js), whose look the map
   // draws; a scenario saved before they were exported has none.
   regionTypes: Array.isArray(state?.regionTypes) && state.regionTypes.length
@@ -255,6 +267,10 @@ const sameMapState = (prev, next) =>
   prev.wars === next.wars &&
   prev.relations === next.relations &&
   prev.agreements === next.agreements &&
+  prev.institutions === next.institutions &&
+  prev.politicalActors === next.politicalActors &&
+  prev.powerStatus === next.powerStatus &&
+  prev.regionSovereigntyOverrides === next.regionSovereigntyOverrides &&
   prev.regionTypes === next.regionTypes &&
   prev.cityRenames === next.cityRenames &&
   prev.cityPopulations === next.cityPopulations &&
@@ -297,6 +313,18 @@ const stabilizeMapStateReferences = (prev, next) => {
     agreements: areEqualStructured(prev.agreements, next.agreements)
       ? prev.agreements
       : next.agreements,
+    institutions: areEqualStructured(prev.institutions, next.institutions)
+      ? prev.institutions
+      : next.institutions,
+    politicalActors: areEqualStructured(prev.politicalActors, next.politicalActors)
+      ? prev.politicalActors
+      : next.politicalActors,
+    powerStatus: areEqualShallow(prev.powerStatus, next.powerStatus)
+      ? prev.powerStatus
+      : next.powerStatus,
+    regionSovereigntyOverrides: areEqualShallow(prev.regionSovereigntyOverrides, next.regionSovereigntyOverrides)
+      ? prev.regionSovereigntyOverrides
+      : next.regionSovereigntyOverrides,
     regionTypes: areEqualStructured(prev.regionTypes, next.regionTypes)
       ? prev.regionTypes
       : next.regionTypes,

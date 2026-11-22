@@ -56,6 +56,19 @@ test("the countries an untraced operation took place in", () => {
   ]), ["Germany", "Italy", "Spain"]);
 });
 
+// The review of 2026-11-18, simulation 2: a guest's untraced operation hid the
+// host's roster line in that country, and left the guest's own in.
+test("each service's own untraced operations, for its own brief", () => {
+  const operations = [
+    op({ owner: "Spain", target: "Morocco" }),
+    op({ owner: "France", target: "Morocco", caught: true, identified: true }),
+    op({ owner: "France", target: "Italy" }),
+  ];
+  assert.deepEqual(untracedTargets(operations, { owner: "spain" }), ["Morocco"]);
+  assert.deepEqual(untracedTargets(operations, { owner: "France" }), ["Italy"]);
+  assert.deepEqual(untracedTargets(operations, { owner: "Portugal" }), []);
+});
+
 test("a report follows the agent's collection orders and its sources", () => {
   assert.equal(collectionOrders({ target: "Germany" }), "");
   assert.equal(collectionOrders({ target: "Germany", focus: "diplomacy" }), "");
@@ -63,4 +76,22 @@ test("a report follows the agent's collection orders and its sources", () => {
   assert.match(military, /COLLECTION PRIORITY — the service has tasked this agent to collect on Germany's armed forces/);
   assert.match(military, /RECRUITED SOURCES — the agent runs "a staff officer"/);
   for (const focus of ["research", "economy", "politics"]) assert.match(collectionOrders({ target: "Japan", focus }), /COLLECTION PRIORITY/);
+});
+
+// "I ordered my spy to assassinate head of state it succeed but nothing happened he still alive" (a player, 2026-11-06).
+test("a killing that came off is a death, and the office it empties is filled in the same event", () => {
+  const base = { id: "op1", spyId: "s1", owner: "Aland", target: "Brod", kind: "assassinate", instructions: "President Kovac" };
+  for (const operation of [
+    { ...base, outcome: "success", caught: false, identified: false },
+    { ...base, outcome: "success", caught: true, identified: false },
+    { ...base, outcome: "success", caught: true, identified: true },
+  ]) {
+    const block = covertOperationsBlock([operation]);
+    assert.match(block, /The person targeted is dead from this event on./);
+    assert.match(block, /politicalActorOps replace-leader for their country \(office headOfState or headOfGovernment\)/);
+    assert.match(block, /Never write them alive or acting again./);
+  }
+  // A failed attempt kills nobody, and other operations are as they were.
+  assert.doesNotMatch(covertOperationsBlock([{ ...base, outcome: "failure", caught: true, identified: true }]), /is dead/);
+  assert.doesNotMatch(covertOperationsBlock([{ ...base, kind: "sabotage", outcome: "success", caught: false, identified: false }]), /is dead/);
 });

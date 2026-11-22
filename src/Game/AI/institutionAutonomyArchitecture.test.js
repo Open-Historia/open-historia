@@ -22,7 +22,10 @@ test("autonomous formal pass targets only unresolved voters and keeps player sov
   const autonomy = read("./institutionAutonomy.js");
   assert.match(gameplay, /autonomousBallotActors/);
   assert.match(gameplay, /!formalBusinessRequested \|\| autonomousBallotActors\.has/);
-  assert.match(autonomy, /filter\(\(polity\) => lower\(polity\) !== lower\(playerCountry\)\)/);
+  // No person is an AI voter: the people, never the one name of the seat acting.
+  assert.match(autonomy, /filter\(\(polity\) => !humans\.has\(lower\(polity\)\)\)/);
+  assert.match(gameplay, /collectAutonomousInstitutionBallotWork\(bundle\.world, people, \{ maxInstitutions: 4/);
+  assert.match(gameplay, /const people = humanCountriesWith\(bundle\.game, player\)/);
   assert.match(autonomy, /recorded\.has/);
   assert.match(autonomy, /Native governance independently validates every ballot and prevents duplicates/);
 });

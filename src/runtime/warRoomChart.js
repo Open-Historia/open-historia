@@ -23,6 +23,9 @@
 //   coastOff(country, from)    [lng, lat] in open water off the country's coast, the
 //                              stretch nearest `from` in the water `from` is in; null when
 //                              it has no such coast
+//   landNear(country, lng, lat, km)   whether land the country holds lies within `km` of
+//                              the place, on the sheet: a structure moved out to sea stands
+//                              off its own country's shore (multiplayer/host settle)
 //
 // A cell of the sheet that is partly land and partly sea is both: a ship may
 // pass it, and a line may be built on the land of it.
@@ -138,5 +141,18 @@ export const chartOf = ({ grid = null, controllerOf = null, groupOf = null, loca
     return best >= 0 ? rounded(grid.centreOf(best)) : null;
   };
 
-  return { sea, joins, holds, coastOff };
+  const landNear = (country, lng, lat, km) => {
+    const wanted = fold(country);
+    if (!wanted || !(Number(km) >= 0)) return false;
+    const start = grid.cellOf(Number(lng), Number(lat));
+    const own = (cell) => {
+      const mark = grid.region[cell];
+      if (!grid.land[cell] || !mark) return false;
+      const holder = holderOf(mark);
+      return holder.control === wanted || holder.group === wanted;
+    };
+    return nearestCell(grid, start, cellsFor(Number(km)), own) >= 0;
+  };
+
+  return { sea, joins, holds, coastOff, landNear };
 };

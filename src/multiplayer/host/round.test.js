@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createRoundMachine, readyNeeded } from "./round.js";
+import { ROUND_FAILURE_KINDS, cancelledRound, createRoundMachine, readyNeeded } from "./round.js";
 
 // A clock whose timers fire in order as it is advanced, each at its own time.
 const createClock = (start = 1_000_000) => {
@@ -276,4 +276,221 @@ test("settings are clamped to sane bounds", () => {
   assert.equal(settings.roundMinutes, 1);
   assert.equal(settings.readyThreshold, 0.5);
   assert.equal(settings.countdownSeconds, 3600);
+});
+
+test("a round ended while paused lands in a reveal that ends: Pause, then End round now, no longer sticks", async () => {
+  const { clock, round } = machine();
+  round.setPlayers(["a", "b"]);
+  round.start();
+  round.pause();
+  assert.equal(round.status().paused, true);
+  round.resolveNow();
+  await clock.flush();
+  assert.equal(round.status().phase, "revealing");
+  assert.equal(round.status().paused, false, "ending the round ends the pause");
+  await clock.advance(60_000);
+  assert.equal(round.status().phase, "planning");
+  assert.equal(round.status().round, 2);
+});
+
+test("reading a round through counts for the round it names, never for the next one being resolved", async () => {
+  let release;
+  const world = machine({}, { during: () => new Promise((resolve) => { release = resolve; }) });
+  world.round.setPlayers(["a", "b"]);
+  world.round.start();
+  world.round.setReady("a", true);
+  world.round.setReady("b", true);
+  await world.clock.flush();
+  release();
+  await world.clock.flush();
+  assert.equal(world.round.status().phase, "revealing");
+  world.round.revealedBy("a", 1);
+  world.round.revealedBy("b", 1);
+  assert.equal(world.round.status().round, 2);
+  // Round 2 is resolved; both have finished reading round 1 late.
+  world.round.setReady("a", true);
+  world.round.setReady("b", true);
+  await world.clock.flush();
+  assert.equal(world.round.status().phase, "resolving");
+  world.round.revealedBy("a", 1);
+  world.round.revealedBy("b", 1);
+  release();
+  await world.clock.flush();
+  assert.equal(world.round.status().phase, "revealing", "round 2's reveal is not ended by round 1's reading");
+  world.round.revealedBy("a", 2);
+  world.round.revealedBy("b", 2);
+  assert.equal(world.round.status().phase, "planning");
+});
+
+test("with nobody here, no round is resolved: the clock waits for someone", async () => {
+  const { clock, round, resolved } = machine();
+  round.setPlayers(["a"]);
+  round.start();
+  round.setPlayers([]);
+  await clock.advance(11 * 60_000);
+  assert.deepEqual(resolved, []);
+  assert.equal(round.status().phase, "planning");
+  round.setPlayers(["a"]);
+  await clock.flush();
+  assert.deepEqual(resolved, [1], "resolved once someone is here and the round's time is up");
+});
+
+test("a round that fails says why until one lands", async () => {
+  let fail = true;
+  const clock = createClock();
+  const round = createRoundMachine({
+    settings: { roundMinutes: 10, countdownSeconds: 30, revealSeconds: 60 },
+    now: clock.now,
+    timers: clock.timers,
+    onResolve: async () => { if (fail) throw new Error("The model's quota is used up."); },
+  });
+  round.setPlayers(["a"]);
+  round.start();
+  round.setReady("a", true);
+  await clock.flush();
+  assert.deepEqual(round.status().failure, { round: 1, reason: "The model's quota is used up.", kind: "failed" });
+  fail = false;
+  round.resolveNow();
+  await clock.flush();
+  assert.equal(round.status().phase, "revealing");
+  assert.equal(round.status().failure, null);
+});
+
+// A cancel read "Round 4 could not be resolved: The host cancelled the round." (the review of 2026-11-18, ui 6):
+// what became of the round is kept with it, and how long one has been resolving is there for the round bar's clock.
+test("a round the host called off is kept as cancelled, not failed, and a round being resolved says for how long", async () => {
+  const clock = createClock();
+  let release = () => {};
+  const round = createRoundMachine({
+    settings: { roundMinutes: 10 },
+    now: clock.now,
+    timers: clock.timers,
+    onResolve: () => new Promise((_resolve, reject) => { release = () => reject(cancelledRound("The host cancelled the round.")); }),
+  });
+  round.setPlayers(["a"]);
+  round.start();
+  assert.equal(round.status().resolvingMs, 0, "nothing is resolving");
+  round.resolveNow();
+  await clock.advance(42_000);
+  assert.equal(round.status().phase, "resolving");
+  assert.equal(round.status().resolvingMs, 42_000);
+  release();
+  await clock.flush();
+  assert.deepEqual(round.status().failure, { round: 1, reason: "The host cancelled the round.", kind: "cancelled" });
+  assert.equal(round.status().phase, "planning");
+  assert.equal(round.status().resolvingMs, 0);
+  assert.deepEqual(ROUND_FAILURE_KINDS, ["failed", "cancelled"]);
+});
+
+// One round number, the campaign's (the gap audit of 2026-11-18). The machine counted from 1 in each sitting while
+// every turn record and the Events panel count the campaign's rounds: the round bar and the panel named two numbers,
+// and a player's "I have read the round", sent with the turn record's number, never matched, so every reveal ran its
+// full time.
+test("a game started at the campaign's round names that round, and a player's reading of the round the skip wrote counts", async () => {
+  const clock = createClock();
+  let campaign = 7;
+  const round = createRoundMachine({
+    settings: { roundMinutes: 10, countdownSeconds: 0, revealSeconds: 60 },
+    now: clock.now,
+    timers: clock.timers,
+    // The skip writes the campaign's next round, and says which.
+    onResolve: async () => {
+      campaign += 1;
+      return { round: campaign };
+    },
+  });
+  round.setPlayers(["a", "b"]);
+  round.start(7);
+  assert.equal(round.status().round, 7, "the campaign's round, not 1");
+  round.setReady("a", true);
+  round.setReady("b", true);
+  await clock.flush();
+  assert.equal(round.status().phase, "revealing");
+  assert.equal(round.status().round, 8, "the round the skip wrote, as its turn record names it");
+  round.revealedBy("a", 8);
+  round.revealedBy("b", 8);
+  assert.equal(round.status().phase, "planning", "every player read it: planning begins without waiting out the reveal");
+  assert.equal(round.status().round, 8, "and no second count is added");
+  // A reading of another round still counts for nothing.
+  round.setReady("a", true);
+  round.setReady("b", true);
+  await clock.flush();
+  round.revealedBy("a", 3);
+  assert.equal(round.status().phase, "revealing");
+});
+
+// A page holds the landed turn before the round's entry ends (a view pushed after the skip's commit), and says it has
+// read it, naming the round the skip wrote: that read came while the machine still named the round being resolved,
+// and was dropped, so the reveal ran its full time (the review of 2026-11-18, core 8).
+test("a reading said while the round is still being resolved counts once it lands, for the round it names", async () => {
+  const clock = createClock();
+  let campaign = 7;
+  let release;
+  const round = createRoundMachine({
+    settings: { roundMinutes: 10, countdownSeconds: 0, revealSeconds: 60 },
+    now: clock.now,
+    timers: clock.timers,
+    onResolve: async () => {
+      await new Promise((resolve) => { release = resolve; });
+      campaign += 1;
+      return { round: campaign };
+    },
+  });
+  round.setPlayers(["a", "b"]);
+  round.start(7);
+  round.setReady("a", true);
+  round.setReady("b", true);
+  await clock.flush();
+  assert.equal(round.status().phase, "resolving");
+  round.revealedBy("a", 8);
+  round.revealedBy("b", 7);
+  release();
+  await clock.flush();
+  assert.equal(round.status().phase, "revealing", "b named another round: the reveal waits for b");
+  round.revealedBy("b", 8);
+  assert.equal(round.status().phase, "planning", "a's early reading counted");
+  // Both early, and the reveal is over as soon as the round lands.
+  round.setReady("a", true);
+  round.setReady("b", true);
+  await clock.flush();
+  round.revealedBy("a", 9);
+  round.revealedBy("b", 9);
+  release();
+  await clock.flush();
+  assert.equal(round.status().phase, "planning");
+  assert.equal(round.status().round, 9);
+});
+
+test("what the round holds for a player follows their seat to a new name: a reading said early counts under it", async () => {
+  const clock = createClock();
+  let release;
+  const round = createRoundMachine({
+    settings: { roundMinutes: 10, countdownSeconds: 0, revealSeconds: 60 },
+    now: clock.now,
+    timers: clock.timers,
+    onResolve: async () => {
+      await new Promise((resolve) => { release = resolve; });
+      // The round renamed b's country; the host moves the seat before the round lands (host/gameHost.js followSeats).
+      round.rename("b", "b2");
+      round.setPlayers(["a", "b2"]);
+      return { round: 8 };
+    },
+  });
+  round.setPlayers(["a", "b"]);
+  round.start(7);
+  round.setReady("a", true);
+  round.setReady("b", true);
+  await clock.flush();
+  round.revealedBy("a", 8);
+  round.revealedBy("b", 8);
+  release();
+  await clock.flush();
+  assert.equal(round.status().phase, "planning", "both had read it, b under its old name");
+});
+
+test("a game taken up again goes on at the campaign's round", () => {
+  const clock = createClock();
+  const round = createRoundMachine({ now: clock.now, timers: clock.timers });
+  round.resumeAt(12, { campaign: true });
+  assert.equal(round.status().round, 12);
 });

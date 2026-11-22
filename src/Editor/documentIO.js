@@ -7,6 +7,7 @@
 // (/api/mapeditor/documents) plus a local JSON export/download.
 
 import { saveBlobToDisk } from "../runtime/saveFile.js";
+import { fileSafeName } from "../../server/nameKey.js";
 
 const BASE = "/api/mapeditor/documents";
 
@@ -58,7 +59,7 @@ export const deleteDocument = async (id) => {
 };
 
 export const downloadJson = (doc) => {
-  const name = (doc.name || doc.metadata?.name || "map").replace(/[^a-z0-9]+/gi, "-");
+  const name = fileSafeName(doc.name || doc.metadata?.name, { fallback: "map" });
   const blob = new Blob([JSON.stringify(doc)], { type: "application/json" });
   // runtime/saveFile.js: a download in a browser, Downloads/Open Historia in the app.
   return saveBlobToDisk(blob, `${name}.json`);

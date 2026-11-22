@@ -27,8 +27,10 @@ import {
 } from "../../runtime/gameState.js";
 import { activeWars } from "../../runtime/gameFeatures.js";
 import { wrapLng } from "../../runtime/unitMotion.js";
+import { normalizeUnitTypes, unitTypeOf } from "../../runtime/unitTypes.js";
 import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { ORDER_MAX_CHARS } from "../../multiplayer/game/messages.js";
 
 // A turn reads world.json when it starts and writes it back whole when it
 // lands, so a unit placed, disbanded or moved in between would be undone
@@ -49,6 +51,9 @@ let playerCode = "";
 let round = 1;
 let gameDate = "";
 let allowedUnitTypes = null; // null = all types allowed; else the scenario's whitelist
+// The scenario's own unit types (world.unitTypes, runtime/unitTypes.js): what the Forces panel and the unit card call a
+// unit of one, and the mark they show it with.
+let unitTypes = [];
 let interactionMode = { kind: "idle" }; // idle | deploy | admin-place
 let syncRefCount = 0;
 let syncInstalled = false;
@@ -106,6 +111,9 @@ const effectiveAllowedUnitTypes = () => {
   return (allowedUnitTypes ?? UNIT_TYPES).filter((type) => (wars.air || type !== "air") && (wars.navies || type !== "naval"));
 };
 export const getAllowedUnitTypes = () => effectiveAllowedUnitTypes();
+// The scenario's own unit types, and the one a unit is of (null for an ordinary unit).
+export const getUnitTypes = () => unitTypes;
+export const getUnitTypeOf = (unit) => unitTypeOf(unitTypes, unit);
 // Whether `type` may be deployed under `allowed` (null or empty: any type).
 export const isDeployableType = (type, allowed) =>
   !Array.isArray(allowed) || allowed.length === 0 || allowed.includes(String(type ?? "").trim().toLowerCase());
@@ -135,6 +143,7 @@ const sameUnits = (a, b) => {
     if (
       left.id !== right.id ||
       left.type !== right.type ||
+      left.unitType !== right.unitType ||
       left.ownerCode !== right.ownerCode ||
       left.name !== right.name ||
       left.strength !== right.strength ||
@@ -191,16 +200,19 @@ const adoptWorld = (world, { notify = true } = {}) => {
       : null;
 
   const nextOrders = Array.isArray(world.pendingUnitOrders) ? world.pendingUnitOrders : [];
+  const nextUnitTypes = normalizeUnitTypes(world.unitTypes);
 
   const unitsChanged = !sameUnits(units, nextUnits);
   const typesChanged = !sameAllowedUnitTypes(allowedUnitTypes, nextAllowed);
   const ordersChanged = !sameOrders(pendingOrders, nextOrders);
+  const ownTypesChanged = JSON.stringify(unitTypes) !== JSON.stringify(nextUnitTypes);
 
   if (unitsChanged) units = nextUnits;
   if (typesChanged) allowedUnitTypes = nextAllowed;
   if (ordersChanged) pendingOrders = nextOrders;
+  if (ownTypesChanged) unitTypes = nextUnitTypes;
 
-  const changed = unitsChanged || typesChanged || ordersChanged;
+  const changed = unitsChanged || typesChanged || ordersChanged || ownTypesChanged;
   if (notify && changed) emit();
   return changed;
 };
@@ -229,9 +241,15 @@ const adoptGame = (game, { notify = true } = {}) => {
 // saves carry on units nothing is actually moving. See clearStaleUnitMotion for
 // what produced them and why a unit under a queued order is left alone. Written
 // back rather than merely displayed, so the save stops lying about it too.
+//
+// Not on a page playing a shared game: the world is the host's, and it is
+// repaired when its host plays it alone (a guest's view holds only its own
+// queue, so every other player's unit under orders would read as stale). The
+// write went nowhere and was answered "saved" (the review of 2026-11-18, door
+// 3). Not marked done, so the page's own game is repaired once it is back.
 let motionRepaired = false;
 const repairStaleUnitMotion = async () => {
-  if (motionRepaired) return;
+  if (motionRepaired || inSharedGame()) return;
   motionRepaired = true;
   busy = true;
   try {
@@ -394,6 +412,8 @@ export const updateUnitAdmin = async (unitId, patch = {}) => {
         ...unit,
         ...(Object.prototype.hasOwnProperty.call(patch, "name") ? { name: patch.name } : {}),
         ...(Object.prototype.hasOwnProperty.call(patch, "type") ? { type: patch.type } : {}),
+        // (One of the scenario's own unit types by its id, or "" for none: runtime/unitTypes.js.)
+        ...(Object.prototype.hasOwnProperty.call(patch, "unitType") ? { unitType: patch.unitType } : {}),
         ...(Object.prototype.hasOwnProperty.call(patch, "strength") ? { strength: patch.strength } : {}),
         ...(Object.prototype.hasOwnProperty.call(patch, "status") ? { status: patch.status } : {}),
         ...(Object.prototype.hasOwnProperty.call(patch, "lng") ? { lng: patch.lng } : {}),
@@ -573,6 +593,7 @@ export const deployUnit = async ({ type, strength, name, composition, lng, lat }
   // Forces panel offers only those, but the advisor names its own.
   const allowedNow = effectiveAllowedUnitTypes();
   if (allowedNow && !allowedNow.includes(unit.type)) return { ok: false, error: UNIT_TYPE_NOT_ALLOWED };
+  // i18n-ignore: the order as the model reads it.
   const text =
     `Deploy request: ${name || type} (${type}, strength ${strength}% of establishment` +
     `${composition ? `, ${composition}` : ""}, owner ${playerCode || "PLAYER"}) at ` +
@@ -591,26 +612,39 @@ export const deployUnit = async ({ type, strength, name, composition, lng, lat }
 // This is intent, not control: it queues an ordinary action for the AI to weigh
 // against the front, the era and everyone else's plans on the next jump — the
 // same treatment every other action they plan gets. Nothing on the map moves now.
-// Resolves to whether the order was written.
+// Resolves to { ok: true } once the order is written, else { ok: false, error }:
+// in a shared game the host's own reason ("At most 12 orders a round."), which
+// the card shows where the player asked. It kept only whether, and the card
+// said the order could not be saved whatever the host had answered (the gap
+// audit of 2026-11-18), as deployUnit and disbandUnit already said why.
+// i18n-ignore: the order as the model reads it.
+const unitOrderWording = (unit, request) => `Orders requested for ${unit.name} (${unit.type}, owner ${unit.ownerCode}), ` +
+  `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
+  `carry this out over the coming period as far as the era, terrain, logistics and the wider ` +
+  `situation allow, or explain in an event why it could not be done.`;
+// How many characters of their own a player may ask of a formation in a shared
+// game: what the host's order request takes (game/messages.js), less the words
+// the order is wrapped in. The card's box holds it; null in single player,
+// whose orders are free text.
+export const unitOrderRoom = (unitId) => {
+  const unit = getUnitById(unitId);
+  return unit && inSharedGame() ? Math.max(0, ORDER_MAX_CHARS - unitOrderWording(unit, "").length) : null;
+};
 export const requestUnitOrders = async (unitId, text) => {
   const request = String(text ?? "").trim();
   const unit = getUnitById(unitId);
-  if (!unit || !request) return false;
+  if (!unit || !request) return { ok: false, error: ORDER_NOT_SAVED };
+  const wording = unitOrderWording(unit, request);
   // In a shared game an order is asked of the host, like any other
-  // (multiplayer/): the same words, under this player's country.
+  // (multiplayer/): the same words, under this player's country. Whole: it was
+  // cut to what the request takes without a word, and the card cleared its box
+  // once the host took the rest (the review of 2026-11-18, door 4). One too
+  // long is refused in words, and stays in the box.
   if (inSharedGame()) {
-    const wording = `Orders requested for ${unit.name} (${unit.type}, owner ${unit.ownerCode}), ` +
-      `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
-      `carry this out over the coming period as far as the era, terrain, logistics and the wider ` +
-      `situation allow, or explain in an event why it could not be done.`;
-    return (await requestFromHost("order", { text: wording.slice(0, 1500) })).ok;
+    const answer = await requestFromHost("order", { text: wording });
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error || ORDER_NOT_SAVED };
   }
-  return queueOrder(
-    `Orders requested for ${unit.name} (${unit.type}, owner ${unit.ownerCode}), ` +
-      `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
-      `carry this out over the coming period as far as the era, terrain, logistics and the wider ` +
-      `situation allow, or explain in an event why it could not be done.`,
-  );
+  return (await queueOrder(wording)) ? { ok: true } : { ok: false, error: ORDER_NOT_SAVED };
 };
 
 // The player stands one of their formations down. The unit leaves the map now
@@ -626,6 +660,7 @@ export const requestUnitOrders = async (unitId, text) => {
 // Resolves to { ok: true } once both halves are saved, else to
 // { ok: false, error } with the unit and the queue as they were (while a turn
 // runs, nothing is changed and the error says so).
+// i18n-ignore: the order as the model reads it.
 export const disbandUnit = async (unitId) => {
   const unit = getUnitById(unitId);
   if (!unit) return { ok: false, error: ORDER_NOT_SAVED };

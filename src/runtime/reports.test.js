@@ -41,7 +41,9 @@ test("a create op is read from what the model writes, a share from its id and ne
     assert.deepEqual(normalizeReportOp(pact), { op: "create", reportId: "pact-1", title: pact.title, body: pact.body, visibleTo: ["France", "Germany"], dateline: "1914-06-01" });
     assert.equal(normalizeReportOp({ title: "Letter", body: "Dear…" }).op, "create", "a title and a body are a create");
     assert.deepEqual(normalizeReportOp({ op: "share", reportId: "pact-1", visibleTo: ["Italy"] }), { op: "share", reportId: "pact-1", visibleTo: ["Italy"] });
-    assert.deepEqual(normalizeReportOp({ op: "update", id: "pact-1", addVisibleTo: ["Italy"] }), { op: "share", reportId: "pact-1", visibleTo: ["Italy"] });
+    assert.deepEqual(normalizeReportOp({ op: "share", id: "pact-1", addVisibleTo: ["Italy"] }), { op: "share", reportId: "pact-1", visibleTo: ["Italy"] });
+    // Another verb is no op, in English as in French: once "update" read as a share and "partager" as nothing.
+    for (const op of ["update", "partager", "mettre à jour"]) assert.equal(normalizeReportOp({ op, id: "pact-1", addVisibleTo: ["Italy"] }), null, op);
     assert.equal(normalizeReportOp({ op: "share", reportId: "pact-1" }), null, "a share of nothing widens nothing");
     assert.equal(normalizeReportOp({ op: "create", title: "x" }), null);
     assert.equal(normalizeReportOp("nonsense"), null);

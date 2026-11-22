@@ -17,6 +17,12 @@
 //
 // Only human players who are here count. A seat played by the AI, or whose
 // player is away, is left out of the share, so leavers never block a round.
+// With nobody here at all, no round is resolved: the clock waits for someone.
+//
+// A round that cannot be resolved stays visibly so (the owner, 2026-11-15:
+// "the round waits, visibly, with Retry"): the round is planned again with its
+// orders, every screen shows why it failed until a round lands, and the host
+// can end it again at once.
 //
 // Pure, with an injected clock and timers, so the tests step time exactly.
 
@@ -45,6 +51,12 @@ const clampSettings = (settings) => {
 // How many of `count` players make the share: 2/3 of 3 is 2, of 4 is 3.
 export const readyNeeded = (count, threshold) => (count <= 0 ? 0 : Math.max(1, Math.ceil(count * threshold - 1e-9)));
 
+// A round the host called off, rather than one that failed: what `onResolve`
+// rejects with then. Kept as the failure's `kind`, so every screen says
+// "cancelled" and not "could not be resolved: The host cancelled the round."
+export const ROUND_FAILURE_KINDS = Object.freeze(["failed", "cancelled"]);
+export const cancelledRound = (reason) => Object.assign(new Error(reason), { roundFailure: "cancelled" });
+
 export const createRoundMachine = ({
   settings: initialSettings = {},
   now = () => Date.now(),
@@ -55,16 +67,33 @@ export const createRoundMachine = ({
   let settings = clampSettings(initialSettings);
   let phase = "lobby";
   let round = 0;
+  // ONE ROUND NUMBER: the campaign's (game.round), when the host gives it. It
+  // used to count from 1 in each sitting, while the Events panel and every
+  // turn record count the campaign's rounds: the round bar and the panel named
+  // two numbers, and a player's "I have read the round" (sent with the turn
+  // record's number) never matched, so every reveal ran its full time (the gap
+  // audit of 2026-11-18). Following the campaign, the number is the campaign's
+  // round being planned, and the round a skip lands is the one it wrote.
+  let followsCampaign = false;
   let planningEnds = 0;
   let countdownEnds = 0;
   let planningStarted = 0;
   let revealEnds = 0;
   let paused = null; // { remaining: { planning, countdown, reveal } } while paused
+  // The last round that could not be resolved and why, until one is.
+  let failure = null; // { round, reason, kind }
+  // When the round being resolved began to be.
+  let resolvingSince = 0;
   let timer = null;
   const present = new Set();
   const ready = new Set();
   const lastActive = new Map();
   const revealed = new Set();
+  // Reads said while the round is still being resolved, each with the round
+  // it names: a page may hold the landed turn before the round's entry ends,
+  // and names the round the skip wrote, which the machine learns only when it
+  // lands (onResolve). Counted then, for the round that landed.
+  const early = new Map();
 
   const counted = () => [...present];
   const isReady = (seat) => {
@@ -91,7 +120,11 @@ export const createRoundMachine = ({
     ready: counted().filter(isReady),
     counted: counted(),
     needed: readyNeeded(counted().length, settings.readyThreshold),
+    failure: failure ? { ...failure } : null,
+    // How long the round has been resolving, for the round bar's clock.
+    resolvingMs: phase === "resolving" ? Math.max(0, now() - resolvingSince) : 0,
     settings: { ...settings },
+    followsCampaign,
   });
 
   const emit = () => onChange(snapshot());
@@ -100,6 +133,9 @@ export const createRoundMachine = ({
     timers.clearTimeout(timer);
     timer = null;
     if (paused || !["planning", "countdown", "revealing"].includes(phase)) return;
+    // A round that could not be resolved waits for the host (resolveNow): it
+    // ran again at every deadline, on the host's key, and failed again.
+    if (failure && phase !== "revealing") return;
     // Wake at the next deadline, and also when an idle player would turn
     // ready or the minimum planning time would run out, whichever is first.
     const moments = [deadline()];
@@ -115,31 +151,46 @@ export const createRoundMachine = ({
 
   const resolve = () => {
     phase = "resolving";
+    resolvingSince = now();
     timers.clearTimeout(timer);
     // Who has read the round through is counted from here: a player is sent
     // the round's events as the last step of resolving it, and one with little
     // to read may say so before the phase is announced.
     revealed.clear();
+    early.clear();
     emit();
     Promise.resolve()
       .then(() => onResolve({ round }))
       .then(
-        () => {
+        (landed) => {
+          // The campaign's round the skip wrote, which its turn record and its
+          // Events panel name, and every player's "read" names too.
+          if (followsCampaign && Number.isFinite(Number(landed?.round)) && Number(landed.round) > 0) round = Math.trunc(Number(landed.round));
+          for (const [seat, number] of early) if (number === round && present.has(seat)) revealed.add(seat);
+          early.clear();
+          failure = null;
           phase = "revealing";
           revealEnds = now() + settings.revealSeconds * 1000;
           emit();
           evaluate();
         },
-        () => {
+        (error) => {
           // A round that could not be resolved goes back to planning, with the
-          // orders still queued, rather than skipping ahead.
+          // orders still queued, rather than skipping ahead, and says why.
+          early.clear();
+          failure = {
+            round,
+            reason: String(error?.message || error || "").replace(/\s+/g, " ").trim().slice(0, 280),
+            kind: error?.roundFailure === "cancelled" ? "cancelled" : "failed",
+          };
           startPlanning({ sameRound: true });
         },
       );
   };
 
   const startPlanning = ({ sameRound = false } = {}) => {
-    if (!sameRound) round += 1;
+    // Following the campaign, the landed round is already the next to plan.
+    if (!sameRound && !followsCampaign) round += 1;
     phase = "planning";
     planningStarted = now();
     planningEnds = planningStarted + settings.roundMinutes * 60 * 1000;
@@ -158,7 +209,13 @@ export const createRoundMachine = ({
       return;
     }
     if (phase !== "planning" && phase !== "countdown") return;
+    // The round waits for the host's Retry after a failure (decision 9: it
+    // waits, visibly, and is never written for it): players may still give
+    // orders and say they are ready, and nothing runs it by itself.
+    if (failure) return undefined;
     const total = counted().length;
+    // Nobody here: nothing is resolved until someone is (setPlayers looks again).
+    if (total === 0) return undefined;
     const readyNow = readyCount();
     const needed = readyNeeded(total, settings.readyThreshold);
     const planningOver = t >= planningEnds;
@@ -190,6 +247,7 @@ export const createRoundMachine = ({
         present.delete(seat);
         ready.delete(seat);
         revealed.delete(seat);
+        early.delete(seat);
       }
       for (const seat of next) present.add(seat);
       emit();
@@ -208,19 +266,62 @@ export const createRoundMachine = ({
     touch(seat) {
       if (present.has(seat)) lastActive.set(seat, now());
     },
-    // A player's client finished showing the round's events.
-    revealedBy(seat) {
-      if (!["resolving", "revealing"].includes(phase) || !present.has(seat)) return;
-      revealed.add(seat);
-      if (phase === "revealing") evaluate();
+    // A seat's country renamed, or founded anew by its people (host/seats.js
+    // move): what the round holds for that player follows it, read or ready.
+    rename(from, to) {
+      if (!from || !to || from === to) return;
+      for (const set of [present, ready, revealed]) {
+        if (set.delete(from)) set.add(to);
+      }
+      for (const held of [lastActive, early]) {
+        if (held.has(from)) {
+          held.set(to, held.get(from));
+          held.delete(from);
+        }
+      }
     },
-    start() {
+    // A player's client finished showing a round's events: counted for the
+    // round it names only. Said while the round is resolved, it names the
+    // round as it will land, and is counted when it lands, for that round
+    // (early): before, a read that came in that window named the landed round,
+    // was dropped, and the reveal ran its full time.
+    revealedBy(seat, number = round) {
+      if (!present.has(seat)) return;
+      if (phase === "resolving") {
+        early.set(seat, Number(number));
+        return;
+      }
+      if (Number(number) !== round || phase !== "revealing") return;
+      revealed.add(seat);
+      evaluate();
+    },
+    // `campaignRound`: the campaign's round (game.round), the one to plan.
+    start(campaignRound) {
       if (phase !== "lobby") return;
+      if (Number.isFinite(Number(campaignRound)) && Number(campaignRound) > 0) {
+        followsCampaign = true;
+        round = Math.trunc(Number(campaignRound));
+        startPlanning({ sameRound: true });
+        return;
+      }
       startPlanning();
     },
-    // The host ends planning now (a host control, and the lone-player case).
+    // A shared game taken up again (host/sessionRecord.js): planning the round
+    // it was at. A round being resolved when the game was stopped had not
+    // landed, and is planned again with its orders.
+    resumeAt(number, { campaign = false } = {}) {
+      if (phase !== "lobby") return;
+      followsCampaign = campaign;
+      round = Math.max(1, Math.trunc(Number(number) || 1));
+      startPlanning({ sameRound: true });
+    },
+    // The host ends planning now (a host control, and the lone-player case),
+    // paused or not: ended while paused, the round used to land into a reveal
+    // that never ended, with no button left to end it.
     resolveNow() {
-      if (phase === "planning" || phase === "countdown") resolve();
+      if (phase !== "planning" && phase !== "countdown") return;
+      paused = null;
+      resolve();
     },
     // A new round length, for the rounds to come and for this one's deadline,
     // counted from when its planning began and never under a minute from now.

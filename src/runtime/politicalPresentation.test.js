@@ -76,7 +76,8 @@ test("a two-percent coalition partner keeps its own slice (PWV2-007)", () => {
   assert.deepEqual(other.members.map((member) => member.name), ["D"]);
   assert.equal(other.support, 8);
   assert.equal(other.unlistedSupport, 5);
-  assert.equal(landscape.entries, landscape.slices);
+  assert.notEqual(landscape.entries, landscape.slices);
+  assert.deepEqual(landscape.entries.map((entry) => entry.name), ["A", "B", "C", "D", "E", "Other political support"]);
   assert.equal(landscape.hasQuantitativeValues, true);
 });
 
@@ -97,15 +98,23 @@ test("the three largest parties always get a slice, however small", () => {
   assert.deepEqual(sliceNames(landscape), ["A", "B", "C", "Other"]);
 });
 
-test("an explicit Others party merges into the one Other slice", () => {
-  const landscape = buildPoliticalPartyLandscape({
-    parties: [party("A", 50), party("Others", 10), party("B", 30)],
-  });
-  assert.deepEqual(sliceNames(landscape), ["A", "B", "Other"]);
-  const other = landscape.slices.find((slice) => slice.isOther);
-  assert.equal(other.support, 20);
-  assert.equal(other.unlistedSupport, 10);
-  assert.deepEqual(other.members.map((member) => member.name), ["Others"]);
+// The roster's catch-all row was found by its English name ("Others",
+// "Independents"), so "Autres" or "Прочие" was charted as a party of its own.
+// It is the row marked residual, in every language alike.
+test("the roster's residual row merges into the one Other slice, whatever it is called", () => {
+  for (const name of ["Others", "Autres", "Прочие"]) {
+    const landscape = buildPoliticalPartyLandscape({
+      parties: [party("A", 50), party(name, 10, { residual: true }), party("B", 30)],
+    });
+    assert.deepEqual(sliceNames(landscape), ["A", "B", "Other"], name);
+    const other = landscape.slices.find((slice) => slice.isOther);
+    assert.equal(other.support, 20);
+    assert.equal(other.unlistedSupport, 10);
+    assert.deepEqual(other.members.map((member) => member.name), [name]);
+  }
+  // A party merely named "Others" is a party like any other.
+  const named = buildPoliticalPartyLandscape({ parties: [party("A", 50), party("Others", 10), party("B", 30)] });
+  assert.ok(sliceNames(named).includes("Others"));
 });
 
 test("support that adds up past 100 keeps its labels but draws as one whole pie", () => {
@@ -129,10 +138,23 @@ test("parties with no support figures are listed but not charted", () => {
 });
 
 test("an estimated figure marks the landscape approximate", () => {
-  const landscape = buildPoliticalPartyLandscape({
-    parties: [party("A", 60), { name: "B", support: { percent: 30, basis: "generated estimate" } }],
-  });
-  assert.equal(landscape.isApproximate, true);
+  for (const basis of ["generated-estimate", "native-fallback-estimate"]) {
+    const landscape = buildPoliticalPartyLandscape({
+      parties: [party("A", 60), { name: "B", support: { percent: 30, basis } }],
+    });
+    assert.equal(landscape.isApproximate, true, basis);
+  }
+});
+
+// The badge reads the game's own two estimate bases exactly. A basis written in words ("approximate", "estimation",
+// "geschätzt") is none of them, in English as in any language, and a figure the campaign derived is exact.
+test("only the game's own estimate bases mark a figure approximate, never words in a basis", () => {
+  for (const basis of ["campaign-derived", "authored", "approximate", "estimate", "generated estimate", "estimation", "geschätzt", ""]) {
+    const landscape = buildPoliticalPartyLandscape({
+      parties: [party("A", 60), { name: "B", support: { percent: 30, basis } }],
+    });
+    assert.equal(landscape.isApproximate, false, basis || "(none)");
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -159,7 +181,7 @@ test("a party state with no power blocs charts its parties' influence", () => {
   const landscape = buildPoliticalLandscape({
     politicalSystem: { representation: "party_state" },
     parties: [
-      { name: "The Party", influence: { percent: 80, basis: "approximate" } },
+      { name: "The Party", influence: { percent: 80, basis: "generated-estimate" } },
       { name: "Allied bloc", influence: { percent: 12.5 } },
     ],
   });
@@ -217,7 +239,7 @@ test("mixed electoral profile exposes separate party and bloc views without chan
   assert.equal(views.defaultView, "parties");
   assert.equal(views.canSwitch, true);
   assert.equal(views.parties.mode, "party");
-  assert.deepEqual(views.parties.entries.map((entry) => entry.name), ["Democratic Party", "Other"]);
+  assert.deepEqual(views.parties.entries.map((entry) => entry.name), ["Democratic Party", "Other political support"]);
   assert.equal(views.blocs.mode, "power");
   assert.equal(views.blocs.source, "blocs");
   assert.deepEqual(views.blocs.entries.map((entry) => entry.name), ["Silicon Valley Billionaires", "Military establishment"]);
@@ -277,4 +299,32 @@ test("no political rosters gives no fabricated view; qualitative-only blocs stil
   assert.equal(qualitative.blocs.entries[0].influence, null);
   assert.equal(qualitative.blocs.entries[0].displayValue, "very strong");
   assert.equal(qualitative.blocs.hasQuantitativeValues, false);
+});
+
+test("all named tiny opposition parties remain inspectable outside the compact chart", () => {
+  const profile = { politicalSystem: { representation: "electoral" }, parties: [
+    party("Major", 70, { id: "major" }),
+    party("Second", 15, { id: "second" }),
+    party("Third", 7, { id: "third" }),
+    party("Green Minority", 2, { id: "green", publicDescription: "Ecological reformers", politicalPosition: "Green left" }),
+    party("Local Reform", 1, { id: "local", publicDescription: "Regional activists" }),
+    party("Tiny", 0, { id: "tiny" }),
+  ] };
+  const view = buildPoliticalLandscapeViews(profile).parties;
+  assert.deepEqual(view.slices.map((p) => p.name), ["Major", "Second", "Third", "Other"]);
+  assert.deepEqual(view.entries.map((p) => p.name), ["Major", "Second", "Third", "Green Minority", "Local Reform", "Tiny", "Other political support"]);
+  assert.equal(view.entries.find((p) => p.id === "green").publicDescription, "Ecological reformers");
+  assert.equal(view.entries.find((p) => p.id === "green").politicalPosition, "Green left");
+  assert.equal(view.entries.find((p) => p.id === "tiny").support, 0);
+  assert.equal(view.entries.at(-1).support, 5);
+});
+test("authored residual party remains inspectable separately from genuinely unlisted support", () => {
+  const view = buildPoliticalLandscapeViews({ parties: [
+    party("Large", 75, { id: "large" }),
+    party("Others", 20, { id: "other-authored", publicDescription: "Recorded independents", residual: true }),
+  ] }).parties;
+  assert.deepEqual(view.entries.map((p) => p.name), ["Large", "Others", "Other political support"]);
+  assert.equal(view.entries[1].publicDescription, "Recorded independents");
+  assert.equal(view.entries[2].support, 5);
+  assert.deepEqual(view.slices.map((p) => p.name), ["Large", "Other"]);
 });

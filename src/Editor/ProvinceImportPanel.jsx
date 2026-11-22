@@ -723,7 +723,12 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState({ fraction: 0, message: "" });
   const [result, setResult] = useState(null);
-  const [status, setStatus] = useState("");
+  // What the last analysis or import said, and whether it failed: the kind is
+  // set with the words, never read back out of them (a status was shown as a
+  // success when its words included "imported").
+  const [statusLine, setStatusLine] = useState({ text: "", failed: false });
+  const setStatus = (text, kind = "ok") => setStatusLine({ text: String(text ?? ""), failed: kind === "error" });
+  const status = statusLine.text;
   const workerRef = useRef(null);
   const previewUrlRef = useRef(null);
 
@@ -998,7 +1003,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
       else await analyzeRaster();
     } catch (e) {
       setProgress({ fraction: 0, message: "" });
-      setStatus(e?.message || String(e));
+      setStatus(e?.message || String(e), "error");
     } finally {
       setBusy(false);
     }
@@ -1036,7 +1041,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
           const reason = e?.message || String(e);
           if (!window.confirm(`The backup of the current map could not be saved (${reason}). Replace the map anyway, with no backup and no undo?`)) {
             setProgress({ fraction: 0, message: "" });
-            setStatus("Nothing was replaced: the backup of the current map could not be saved.");
+            setStatus("Nothing was replaced: the backup of the current map could not be saved.", "error");
             return;
           }
         }
@@ -1068,7 +1073,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
       onApplied?.({ ...applied, polityImport, cityImport });
       api.fitToData?.();
     } catch (e) {
-      setStatus(e?.message || String(e));
+      setStatus(e?.message || String(e), "error");
     } finally {
       setBusy(false);
     }
@@ -1345,7 +1350,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
         ) : null}
 
         {status && (
-          <div style={{ padding: "8px 9px", borderRadius: 8, background: status.includes("imported") ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)", border: "1px solid rgba(255,255,255,0.12)", fontSize: 11.5, lineHeight: 1.45 }}>
+          <div style={{ padding: "8px 9px", borderRadius: 8, background: statusLine.failed ? "rgba(239,68,68,0.08)" : "rgba(34,197,94,0.08)", border: "1px solid rgba(255,255,255,0.12)", fontSize: 11.5, lineHeight: 1.45 }}>
             {status}
           </div>
         )}

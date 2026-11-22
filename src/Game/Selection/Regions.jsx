@@ -1,10 +1,13 @@
 /*! Open Historia — portions (era polity names/flags + intel briefing) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, getPrimedScenarioRegionCatalog, resolveCountryDisplayName } from "../../runtime/assets.js";
 import { withMapClaims } from "../../runtime/mapClaims.js";
 import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
+import { dealsBetween, relationBetween } from "../../runtime/groupParties.js";
+import { RELATION_CATEGORY_LABELS, AGREEMENT_TYPE_LABELS } from "../../runtime/diplomaticViews.js";
+import { relationBandForScore } from "../../runtime/diplomaticStance.js";
 import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { readGameData, readWorldState } from "../../runtime/gameState.js";
 import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
@@ -24,6 +27,8 @@ import { clampAnchoredCardTop, isSameRegionSelection, regionControlStatus, useCa
 import { regionInfoFor } from "./regionInfo.js";
 import { getWorldPlaceIndex } from "../../runtime/placeSearch.js";
 import { resolveRegionName } from "../../runtime/regionNameFixes.js";
+import { sharedGameSeats, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
+import { playerSeatFor } from "../../multiplayer/client/seatRoster.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -116,7 +121,6 @@ const resolveLiveSelectionProps = async (props) => {
         ? resolvePolityIdentity(rawController, world, {
             allowUnknown: true,
             requireActive: false,
-            allowCoreMatch: true,
             allowStockBase: true,
         }).resolved || rawController
         : "";
@@ -361,6 +365,9 @@ const RegionPopup = () => {
     // a card with no viewer is the player's own overlord described to them as a
     // stranger's business. The panel is suppressed until this is known.
     const [playerCountry, setPlayerCountry] = useState(_playerCountry);
+    // A shared game's seats, for "Played by" (client/seatRoster.js); empty in
+    // single player, so the card is unchanged there.
+    const sharedSeats = useSyncExternalStore(subscribeSharedGameRole, sharedGameSeats, sharedGameSeats);
     useEffect(() => {
         let cancelled = false;
         // The cached read, not a forced one: this is the same game.json every
@@ -487,7 +494,6 @@ const RegionPopup = () => {
         const identity = resolvePolityIdentity(controller || sel?.GID_0 || sel?.COUNTRY, worldState, {
             allowUnknown: false,
             requireActive: false,
-            allowCoreMatch: true,
             allowStockBase: true,
         });
         const polityKey = identity.resolved || controller || sel?.GID_0 || "";
@@ -650,12 +656,21 @@ const RegionPopup = () => {
     const controllingGroup = regionId && isActiveFeatureEnabled("groups")
         ? territoryState.groups?.[territoryState.groupAreas?.[regionId]] ?? null
         : null;
+    // The group's standing with the player (runtime/groupParties.js): the relation's band and the deals in
+    // force, and a way to talk to its leadership. Not for the player's own group.
+    const groupIsPlayers = Boolean(controllingGroup) && controllingGroup.name.toLowerCase() === String(playerCountry ?? "").trim().toLowerCase();
+    const groupRelation = controllingGroup && !groupIsPlayers ? relationBetween(worldState, controllingGroup.name, playerCountry) : null;
+    const groupDeals = controllingGroup && !groupIsPlayers ? dealsBetween(worldState, controllingGroup.name, playerCountry) : [];
+    const handleTalkToGroup = () => {
+        if (!controllingGroup) return;
+        requestDiplomaticChat({ targetType: "private", name: controllingGroup.name, code: "" });
+        _dismiss?.();
+    };
     const displayPolity = (code) => {
         if (!code) return "Unclaimed Territory";
         const identity = resolvePolityIdentity(code, worldState, {
             allowUnknown: true,
             requireActive: false,
-            allowCoreMatch: true,
             allowStockBase: true,
         });
         const key = identity.resolved || code;
@@ -677,7 +692,6 @@ const RegionPopup = () => {
     const controllerKey = isUnclaimed ? "" : (resolvePolityIdentity(controllerCode, worldState, {
         allowUnknown: true,
         requireActive: false,
-        allowCoreMatch: true,
         allowStockBase: true,
     }).resolved || controllerCode || "");
     const subordination = controllerKey && worldState ? puppetSummaryFor(worldState, playerCountry, controllerKey) : null;
@@ -685,6 +699,11 @@ const RegionPopup = () => {
         ? livePuppetsFor(worldState, playerCountry).filter((row) => row.overlord === controllerKey)
         : [];
     const puppetPreview = heldPuppets.slice(0, 2);
+    // The person who plays this country in a shared game, by any name the
+    // card knows it under (the host keys a seat by the canonical one).
+    const playerSeat = isUnclaimed || !sharedSeats.length
+        ? null
+        : playerSeatFor(sharedSeats, toCountryName(controllerCode), controllerKey, displayCountry);
     const remainingPuppets = heldPuppets.length - puppetPreview.length;
     // Wider on a touch screen that still anchors the card at the tap (a tablet,
     // a phone on its side): the finger-sized buttons took 140 of the header's
@@ -828,6 +847,17 @@ const RegionPopup = () => {
         </div>
         </div>
 
+        {playerSeat && (
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "5px", fontSize: "11px", lineHeight: 1.35, minWidth: 0 }}>
+            <span aria-hidden="true" style={{ color: "#2bc1f3", flexShrink: 0 }}>{"★"}</span>
+            <span style={{ color: "rgba(255,255,255,0.55)", flexShrink: 0 }}>Played by</span>
+            {playerSeat.name
+                ? <span data-no-translate style={{ color: "rgba(255,255,255,0.92)", fontWeight: 700, minWidth: 0, overflowWrap: "anywhere", unicodeBidi: "isolate" }}>{playerSeat.name}</span>
+                : <span style={{ color: "rgba(255,255,255,0.92)", fontWeight: 700 }}>a player</span>}
+            {playerSeat.you && <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0 }}>(you)</span>}
+            </div>
+        )}
+
         {subordination && (
             <div style={{ marginTop: "7px", padding: "7px 9px", borderRadius: "9px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.13)", borderLeft: "2px solid rgba(255,255,255,0.3)" }}>
             <span style={{ display: "block", fontSize: "12px", fontWeight: 800, color: "rgba(255,255,255,0.96)" }}>{subordination.headline}</span>
@@ -960,6 +990,33 @@ const RegionPopup = () => {
                 <div style={{ marginTop: "3px", fontSize: "11px", lineHeight: 1.4, color: "rgba(255,255,255,0.72)", maxHeight: "88px", overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                 {controllingGroup.description}
                 </div>
+            )}
+            {!groupIsPlayers && (
+                <div data-group-standing="true" style={{ display: "grid", gridTemplateColumns: "76px minmax(0, 1fr)", gap: "3px 7px", fontSize: "11px", lineHeight: 1.35, marginTop: "5px" }}>
+                <span style={{ color: "rgba(255,255,255,0.42)" }}>Relation</span>
+                <span style={{ color: "rgba(255,255,255,0.84)" }}>
+                {groupRelation
+                    ? <>{RELATION_CATEGORY_LABELS[relationBandForScore(groupRelation.score)]} <span data-no-translate style={{ color: "rgba(255,255,255,0.5)" }}>({Math.round(Number(groupRelation.score) || 0)})</span></>
+                    : RELATION_CATEGORY_LABELS.unknown}
+                </span>
+                {groupDeals.length > 0 && (
+                    <>
+                    <span style={{ color: "rgba(255,255,255,0.42)" }}>Deals</span>
+                    <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{groupDeals.map((deal) => AGREEMENT_TYPE_LABELS[deal.type] ?? AGREEMENT_TYPE_LABELS.other).join(", ")}</span>
+                    </>
+                )}
+                </div>
+            )}
+            {!groupIsPlayers && (
+                <button
+                type="button"
+                className="oh-tap-row"
+                data-group-talk="true"
+                onClick={(e) => { e.stopPropagation(); handleTalkToGroup(); }}
+                style={rostraButtonStyle}
+                >
+                Talk to their leadership
+                </button>
             )}
             </>
         )}

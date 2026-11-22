@@ -39,7 +39,7 @@
     },
     android: {
       stable: [["Download the APK", RELEASES + "android/open-historia.apk"]],
-      native: [],
+      native: [["Download the APK", NATIVE + "Open-Historia-Native-Android-arm64-v8a.apk"]],
       beta: [["Download the APK", RELEASES + "android-beta/open-historia-beta.apk"]]
     }
   };
@@ -65,7 +65,7 @@
       '<p class="eyebrow">Download the app</p><h2 id="dlpTitle">Pick your version</h2><p class="dlp-for">For ' + PLATFORM_NAME[mine] + (os === "ios" || os === "desktop" ? ' · <a href="#download" data-dlp-close>other platforms</a>' : "") + '</p><div class="dlp-grid">' +
       // Native and Beta are both recommended: one golden border holds the two.
       card(APPS[0], false) + '<div class="dlp-rec"><span class="tag">Recommended</span>' + card(APPS[1], true) + card(APPS[2], true) + "</div>" +
-      '</div><p class="dlp-foot">Each is its own app with its own saves, and updates itself. <a href="#download" data-dlp-close>All platforms and files</a></p></div>';
+      '</div><p class="dlp-foot">' + (mine === "android" ? "Each is its own app with its own saves. Stable and Beta update themselves; to update Native, install its newer APK over it." : "Each is its own app with its own saves, and updates itself.") + ' <a href="#download" data-dlp-close>All platforms and files</a></p></div>';
     document.body.appendChild(shell);
     shell.addEventListener("click", function (event) {
       if (event.target === shell || event.target.closest("[data-dlp-close]")) closePicker();

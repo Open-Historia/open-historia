@@ -27,10 +27,12 @@ test("a skip names who spies on the player, once each across its segments, and s
 
 test("the skip is asked who spies, and the game rolls only for those it named", () => {
   const gameplay = read("./gameplay.js");
-  assert.match(gameplay, /\[Who Spies on the Player\]\r?\nWrite spiesOnPlayer: the polities, by exact name and comma-separated, that would really try to place an agent in/);
+  // The block is spiesOnPlayers.js's (whoSpiesBlock), for each player when several play.
+  assert.match(read("./spiesOnPlayers.js"), /\[Who Spies on the Player\]\r?\nWrite spiesOnPlayer: the polities, by exact name and comma-separated, that would really try to place an agent in/);
   assert.match(gameplay, /spiesOnPlayer: merged\.spiesOnPlayer,/);
   assert.match(gameplay, /const spiesNamed = Array\.isArray\(result\.spiesOnPlayer\) \? result\.spiesOnPlayer : null;/);
-  assert.match(gameplay, /const espionageCandidates = espionageCandidatesAgainst\(canonicalEspionagePolity\(baseGame\.country\), spiesNamed\);/);
+  assert.match(gameplay, /const espionageCandidates = espionageCandidatesAgainst\(canonicalEspionagePolity\(baseGame\.country\), namedAgainst\(baseGame\.country\)\);/);
+  assert.match(gameplay, /const espionageCandidatesFor = \(person\) => espionageCandidatesAgainst\(canonicalEspionagePolity\(person\), namedAgainst\(person\)\);/);
   // Never every polity on the map again.
   assert.doesNotMatch(gameplay, /\.\.\.Object\.keys\(worldWithImpacts\.polityOverrides \?\? \{\}\),\r?\n\s+\.\.\.Object\.keys\(worldWithImpacts\.intelligence/);
   assert.match(gameplay, /\}\)\.filter\(\(candidate\) => named \|\| candidate\.hostility > 0\);/);

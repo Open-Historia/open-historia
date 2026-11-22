@@ -8,7 +8,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { NOTICE_UPDATES, UPDATES } from "./notes.js";
 import { PAST_UPDATES } from "./notesPast.js";
 import { RELEASES } from "./notesReleases.js";
-import { UPDATES_SHOWN_MOST, UPDATE_NOTE_KEY, canRememberUpdates, noticePages, pendingUpdates, previewedUpdates, releaseChapterEntries, rememberUpdate, seenUpdate } from "./updateNotices.js";
+import { CHANGELOG_BANNER, UPDATES_SHOWN_MOST, UPDATE_NOTE_KEY, buildShowsUpdateNotices, canRememberUpdates, noticePages, pendingUpdates, previewedUpdates, releaseChapterEntries, rememberUpdate, seenUpdate } from "./updateNotices.js";
 
 const memory = () => {
   const kept = new Map();
@@ -19,6 +19,71 @@ const list = [
   { id: "b", kind: "minor", date: "2026-08-01", banners: [{ title: "B", items: ["one"] }] },
   { id: "a", kind: "major", date: "2026-07-01", banners: [{ title: "A" }] },
 ];
+
+test("the diplomatic correspondence update has one Beta notice without replacing the Stats notice", () => {
+  const id = "2026-11-diplomatic-correspondence-refresh";
+  const matches = UPDATES.filter((entry) => entry.id === id);
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].date, "2026-11-16");
+  assert.equal(matches[0].channel, "beta");
+  assert.equal(matches[0].kind, "minor");
+  assert.equal(matches[0].banners[0].items.length, 4);
+  assert.match(matches[0].banners[0].items[0], /same game day/);
+  assert.match(matches[0].banners[0].items[1], /wide screen/);
+  assert.match(matches[0].banners[0].items[2], /older correspondence/);
+  assert.match(matches[0].banners[0].items[3], /interface theme/);
+  assert.equal(NOTICE_UPDATES.filter((entry) => entry.id === id).length, 1);
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+});
+
+test("the interim national Stats improvements have one readable Beta Update History notice", () => {
+  const id = "2026-11-national-stats-improvements";
+  const matches = UPDATES.filter((entry) => entry.id === id);
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].channel, "beta");
+  assert.equal(matches[0].date, "2026-11-16");
+  assert.equal(matches[0].kind, "minor");
+  assert.equal(matches[0].banners.length, 1);
+  assert.equal(matches[0].banners[0].items.length, 5);
+  assert.match(matches[0].banners[0].items[0], /whole-polity GDP divided by the full population/);
+  assert.match(matches[0].banners[0].items[1], /can no longer change GDP/);
+  assert.match(matches[0].banners[0].items[2], /time skips/);
+  assert.match(matches[0].banners[0].items[3], /demographic trend/);
+  assert.match(matches[0].banners[0].items[4], /Refresh no longer calls AI/);
+  assert.equal(NOTICE_UPDATES.filter((entry) => entry.id === id).length, 1);
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+});
+
+test("missing Advisor Action proposals have a minor Beta recovery notice", () => {
+  const id = "2026-11-advisor-action-completeness";
+  const updates = UPDATES.filter((entry) => entry.id === id);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].kind, "minor");
+  assert.equal(updates[0].channel, "beta");
+  assert.equal(updates[0].date, "2026-11-15");
+  assert.equal(updates[0].banners.length, 1);
+  assert.equal(updates[0].banners[0].items.length, 5);
+  assert.ok(updates[0].banners[0].items[2].includes("internal paths"));
+  assert.ok(updates[0].banners[0].items[3].includes("ideology labels"));
+  assert.ok(updates[0].banners[0].items[4].includes("every active polity"));
+  assert.ok(updates[0].banners[0].items[0].includes("missing from a reply"));
+  assert.equal(NOTICE_UPDATES.filter((entry) => entry.id === id).length, 1);
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+});
+
+test("Advisor silent-pass reliability has its own minor Beta notice", () => {
+  const id = "2026-11-advisor-group-silent-repair";
+  const updates = UPDATES.filter((entry) => entry.id === id);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].channel, "beta");
+  assert.equal(updates[0].date, "2026-11-14");
+  assert.equal(updates[0].kind, "minor");
+  assert.equal(updates[0].banners.length, 1);
+  assert.equal(updates[0].banners[0].items.length, 2);
+  assert.ok(updates[0].banners[0].items[0].includes("without asking the other advisors"));
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+  assert.equal(NOTICE_UPDATES.filter((entry) => entry.id === id).length, 1);
+});
 
 test("only an update with a notice is shown, once, and nothing where it could not be kept", () => {
   // A build with no new entry (a hotfix, a notice forgotten): the newest entry was seen, so nothing.
@@ -33,6 +98,65 @@ test("only an update with a notice is shown, once, and nothing where it could no
   const app = readFileSync(new URL("../../../App.jsx", import.meta.url), "utf8");
   assert.match(app, /if \(noticeShown && !notice\.preview\) rememberUpdate\(notice\.updates\[0\]\.id\);/);
   assert.doesNotMatch(app, /closeNotice = useCallback\([^\n]*rememberUpdate/);
+});
+
+test("one Beta release entry covers the combined Advisor, country tools and currency batch", () => {
+  const id = "2026-11-advisor-country-tools";
+  const updates = UPDATES.filter((update) => update.id === id);
+  assert.equal(updates.length, 1);
+  const update = updates[0];
+  assert.equal(update.kind, "minor");
+  assert.equal(update.channel, "beta");
+  assert.equal(update.date, "2026-11-12");
+  assert.equal(update.banners.length, 1);
+  assert.equal(update.banners[0].items.length, 6);
+  assert.equal(NOTICE_UPDATES.filter((item) => item.id === id).length, 1);
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+  assert.deepEqual(noticePages([update]).map((page) => page.key), [id + "#0"]);
+});
+
+test("country stats reliability has its own minor Beta notice", () => {
+  const id = "2026-11-country-stats-reliability";
+  const updates = UPDATES.filter((entry) => entry.id === id);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].kind, "minor");
+  assert.equal(updates[0].channel, "beta");
+  assert.equal(updates[0].date, "2026-11-14");
+  assert.equal(updates[0].banners.length, 1);
+  assert.equal(updates[0].banners[0].items.length, 4);
+  assert.ok(updates[0].banners[0].items.some((text) => text.includes("starting country figures")));
+  assert.ok(updates[0].banners[0].items.some((text) => text.includes("Game Master corrections")));
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+  assert.equal(NOTICE_UPDATES.filter((entry) => entry.id === id).length, 1);
+});
+
+test("Political World and pre-game history improvements have a Beta update notice", () => {
+  const id = "2026-11-political-world-prehistory";
+  const updates = UPDATES.filter((update) => update.id === id);
+  assert.equal(updates.length, 1, "the update is listed once in history");
+  const update = updates[0];
+  assert.equal(update.kind, "minor");
+  assert.equal(update.channel, "beta");
+  assert.equal(update.date, "2026-11-13");
+  assert.equal(update.banners.length, 1);
+  assert.equal(update.banners[0].items.length, 6);
+  assert.ok(update.banners[0].items.some((text) => /Existing treaties generated with Political World/.test(text)));
+  assert.equal(NOTICE_UPDATES.filter((entry) => entry.id === id).length, 1);
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+  assert.deepEqual(noticePages([update]).map((page) => page.key), [id + "#0"]);
+});
+
+test("the website's browser version shows no update notices; the apps do", () => {
+  // "make update announcements not appear on the website beta" (the owner, 2026-11-09).
+  assert.equal(buildShowsUpdateNotices({ VITE_OH_WEB: true, VITE_OH_NATIVE: false }), false, "the website");
+  assert.equal(buildShowsUpdateNotices({ VITE_OH_WEB: true, VITE_OH_NATIVE: true }), true, "the Android app, a web build too");
+  assert.equal(buildShowsUpdateNotices({ VITE_OH_WEB: false, VITE_OH_NATIVE: false }), true, "the desktop app");
+  assert.equal(buildShowsUpdateNotices({ DEV: true }), true, "a dev server");
+  assert.equal(buildShowsUpdateNotices(), true);
+  const app = readFileSync(new URL("../../../App.jsx", import.meta.url), "utf8");
+  assert.match(app, /updates: buildShowsUpdateNotices\(import\.meta\.env\) \? pendingUpdates\(\) : \[\]/);
+  // Nothing else asks for the pending notices.
+  assert.equal(app.match(/pendingUpdates\(/g)?.length, 1);
 });
 
 test("each update is shown once a device; one that missed several is shown all of them, newest first", () => {
@@ -88,6 +212,50 @@ test("every banner of the updates shown is a page, and a preview shows one updat
   assert.deepEqual(previewedUpdates("?updateNotice=latest", list).map((update) => update.id), ["c"]);
   assert.deepEqual(previewedUpdates("?updateNotice=b&x=1", list).map((update) => update.id), ["b"]);
   assert.equal(previewedUpdates("?updateNotice=nope", list), null);
+});
+
+test("several minor updates are one changelog page; one minor, the majors and a release are shown as before", () => {
+  // "make it so if there are multiple minor update annoucements, it merges them all into one changelog" (the owner, 2026-11-09).
+  const owed = [
+    { id: "m3", kind: "minor", date: "2026-11-05", banners: [{ title: "Three", items: ["c"] }, { title: "Three more", items: ["d"] }] },
+    { id: "big", kind: "major", date: "2026-11-04", banners: [{ title: "Big 1" }, { title: "Big 2" }] },
+    { id: "m2", kind: "minor", date: "2026-11-03", banners: [{ title: "Two", items: ["b"] }] },
+    { id: "m1", kind: "minor", date: "2026-11-02", banners: [{ title: "One", items: ["a"] }] },
+  ];
+  const pages = noticePages(owed);
+  // The major's own pages first (each in its theme), then ONE changelog of every minor update, newest first.
+  assert.deepEqual(pages.map((page) => page.key), ["big#0", "big#1", "changelog#m3"]);
+  const changelog = pages[2];
+  assert.equal(changelog.banner, CHANGELOG_BANNER);
+  assert.equal(changelog.banner.title, "What's new");
+  assert.deepEqual(changelog.changelog.map((update) => update.id), ["m3", "m2", "m1"]);
+  assert.equal(changelog.update.id, "m3", "dressed as the newest minor update");
+  assert.equal(changelog.update.kind, "minor");
+  assert.ok(changelog.changelog.every((update) => update.kind === "minor"), "no major inside it");
+  // Only minors: one page, the changelog.
+  assert.deepEqual(noticePages(owed.filter((update) => update.kind === "minor")).map((page) => page.key), ["changelog#m3"]);
+  // A single minor update looks as it did: its own banners, a page each.
+  assert.deepEqual(noticePages([owed[1], owed[0]]).map((page) => page.key), ["big#0", "big#1", "m3#0", "m3#1"]);
+  assert.deepEqual(noticePages([owed[2]]).map((page) => page.key), ["m2#0"]);
+  assert.equal(noticePages([owed[2]])[0].changelog, undefined);
+  // Majors only: untouched.
+  assert.deepEqual(noticePages([owed[1], list[2]]).map((page) => page.key), ["big#0", "big#1", "a#0"]);
+  // A release is still shown alone, minors under it and all.
+  const withRelease = [owed[0], { id: "r", kind: "release" }, owed[2], owed[3]];
+  assert.deepEqual(pendingUpdates({ updates: [owed[0], { id: "r", kind: "release" }, owed[2]], seen: "m1", keeps: true }).map((update) => update.id), ["r"]);
+  assert.deepEqual(pendingUpdates({ updates: withRelease, seen: "m1", keeps: true }).map((update) => update.id), ["r"]);
+  // Seen bookkeeping is the list's, not the pages': the newest update owed is what is remembered (App.jsx keeps
+  // notice.updates[0]), whichever page shows it.
+  const shown = pendingUpdates({ updates: owed, seen: "m1", keeps: true });
+  assert.deepEqual(shown.map((update) => update.id), ["m3", "big", "m2"]);
+  assert.deepEqual(noticePages(shown).map((page) => page.key), ["big#0", "big#1", "changelog#m3"]);
+  const storage = memory();
+  rememberUpdate(shown[0].id, storage);
+  assert.equal(seenUpdate(storage), "m3");
+  assert.deepEqual(pendingUpdates({ updates: owed, seen: seenUpdate(storage), keeps: true }), [], "nothing comes back");
+  // The notice draws the changelog page as one card.
+  const notice = readFileSync(new URL("./UpdateNotice.jsx", import.meta.url), "utf8");
+  assert.match(notice, /if \(page\.changelog\) return <ChangelogBanner banner=\{banner\} updates=\{page\.changelog\} \/>;/);
 });
 
 test("the notes are well made: new ids, dates, banners with what their kind needs, and themes that exist", () => {

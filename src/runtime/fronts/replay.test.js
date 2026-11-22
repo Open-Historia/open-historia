@@ -365,3 +365,21 @@ test("a replay says whose each region the fighting reached is drawn as, through 
   assert.deepEqual(mended.o, [["region-9", "Ukraine"]]);
   assert.deepEqual(mended.f, [[12, "region-9", "Russia"]], "a day past the end is the end");
 });
+
+// Ground is painted in at most PAINT_NAMES_MAX names. Both sides' names were
+// cut together where they ran out, so a side past the cap left the other side
+// none, and its captures were drawn as its own ground.
+test("the names taken ground is painted in are shared between the two sides once both cannot fit", async () => {
+  const { paintNamesOf } = await import("./replay.js");
+  const { PAINT_NAMES_MAX } = await import("./codec.js");
+  const sides = (a, b) => [Array.from({ length: a }, (_, index) => `A${index}`), Array.from({ length: b }, (_, index) => `B${index}`)];
+  assert.deepEqual(paintNamesOf(sides(3, 4)), [3, 4], "every member while both sides fit");
+  assert.deepEqual(paintNamesOf(sides(PAINT_NAMES_MAX - 4, 4)), [PAINT_NAMES_MAX - 4, 4]);
+  for (const [a, b] of [[40, 4], [4, 40], [40, 40], [64, 64]]) {
+    const [first, second] = paintNamesOf(sides(a, b));
+    assert.ok(first + second <= PAINT_NAMES_MAX, `${a} v ${b}`);
+    assert.ok(first > 0 && second > 0, `${a} v ${b}: neither side is left without names`);
+    assert.ok(first <= a && second <= b, `${a} v ${b}`);
+  }
+  assert.deepEqual(paintNamesOf(sides(40, 4)), [PAINT_NAMES_MAX - 4, 4], "what one side does not need, the other may");
+});

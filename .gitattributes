@@ -19,3 +19,13 @@ public/flags/** -text
 # ever added to. Merging alpha into beta or beta into main keeps both sides'
 # lines instead of conflicting, so no branch forgets the other's old defaults.
 src/Game/AI/shippedGuidance.js merge=union
+
+# The related-past-events model (public/models/all-MiniLM-L6-v2, src/runtime/embeddingModels.js):
+# stored exactly as the model host serves it at the pinned revision, so a checkout on
+# any platform ships the same bytes the sizes in the test are pinned to.
+public/models/** -text
+
+# How long the shipped translations of each default passage run (the same
+# script): one entry per line, the longest of a repeated key counts, so a merge
+# keeps both sides and the next run of the script tidies it.
+src/Game/AI/guidanceLengths.js merge=union

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  WARS_FOLLOW_THE_RECORD,
   buildRealHistoryDirective,
   resolveReferenceKnowledgeBoundary,
 } from "./futureHistoryBoundary.js";
@@ -111,4 +112,15 @@ test("reference authority dates use Beta's BC-capable game calendar", () => {
   });
   assert.equal(resolved.horizon, "-0218-03-01");
   assert.equal(resolved.referenceHorizonDate, "-0218-02-28");
+});
+
+// "now ive captured berlin and the game is still talking about things that happened historically" (a player, 2026-11-10).
+// Where the records and the map have parted from real history, they win, and a war is fought where they put it.
+test("a war that has gone otherwise is told as the game has it, in any world that has real history", () => {
+  const game = { startDate: "1939-09-01", gameDate: "1941-09-27" };
+  for (const world of [currentWorld(), {}, currentWorld({ divergence: { date: "1940-08-03", description: "An early war" } })]) {
+    assert.ok(buildRealHistoryDirective({ world, game }).includes(WARS_FOLLOW_THE_RECORD));
+  }
+  assert.match(WARS_FOLLOW_THE_RECORD, /a war is fought where the map and the battlefields' accounts put it, real history's campaigns of these dates happen only where they put the fighting, and a side whose capital or heartland its enemy holds is losing/);
+  assert.equal(buildRealHistoryDirective({ world: currentWorld({ authority: "none", type: "fictional" }), game }).includes(WARS_FOLLOW_THE_RECORD), false, "a world of its own has no real history to yield");
 });

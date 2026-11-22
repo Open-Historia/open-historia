@@ -36,8 +36,8 @@ stripes of a dispute; its card says who controls it and whose it lawfully is.</p
 
 <p class="beta-note"><b>On beta, more of the story reaches the map.</b> A country the story founds
 as another dissolves, such as a republic replacing an empire, takes the old country's land. An
-annexation you ordered reaches the map once a turn tells of it happening, when the place it names
-is unambiguous. And a war that ends <a href="/wiki/war/#ending-a-war-peace-on-terms">on terms</a>
+annexation you ordered reaches the map when the event that carries it out records the change: the
+map follows what an event records, never its wording. And a war that ends <a href="/wiki/war/#ending-a-war-peace-on-terms">on terms</a>
 settles the ground as the terms say, even from a ceasefire or an armistice: what each side holds
 becomes its own, or every region goes back to whose it lawfully was.</p>
 

@@ -1,113 +1,25 @@
 import { createWorldActorResolver } from "./nativeWorldIntegrity.js";
 
+// Which current polities a Round-Zero answer must show in a live war or an
+// unresolved storyline, and whether it does.
+//
+// The requirements used to be read out of the scenario briefing by English
+// word lists ("declares war", "wages war", "fights against", "armed
+// opposition"...), and an answer that left out an actor they picked was
+// refused, a second request, and asked again at every open of the game. A
+// briefing that said "In 1990 Iraq declared war on Kuwait. The war ended in
+// 1991" made both countries mandatory in a LIVE war; the same sentence in
+// French required nothing. The owner, 2026-11-06: "dont do keywording its super
+// unreliable"; 2026-11-13: "Historical wars aren't always initialized
+// properly". Nothing is read from the briefing's words now: the model is given
+// the briefing and writes the wars it holds, and only requirements a caller
+// states outright are checked.
+
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
 
-const escapeRegExp = (value) => normalizeString(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-const briefingSegments = (briefing) =>
-  normalizeString(briefing)
-    .split(/(?<=[.!?])\s+|\r?\n+/u)
-    .map((entry) => normalizeString(entry))
-    .filter(Boolean);
-
-const canonicalActorList = (world, canonicalPolities = []) => {
-  const resolver = createWorldActorResolver(world);
-  const seen = new Set();
-  const result = [];
-  const push = (value) => {
-    const canonical = resolver.knownCanonical(value);
-    const key = canonical.toLowerCase();
-    if (!canonical || seen.has(key)) return;
-    seen.add(key);
-    result.push(canonical);
-  };
-  for (const polity of normalizeArray(canonicalPolities)) push(polity);
-  if (!result.length) {
-    for (const record of resolver.records) push(record?.canonical);
-  }
-  return { resolver, actors: result };
-};
-
-const actorAliasPattern = (actor, resolver) => {
-  const aliases = [...new Set(
-    resolver.aliasesFor(actor)
-      .map(normalizeString)
-      .filter((entry) => entry.length >= 3),
-  )]
-    .sort((a, b) => b.length - a.length)
-    .map(escapeRegExp);
-  return aliases.length ? `(?<![a-z0-9])(?:${aliases.join("|")})(?![a-z0-9])` : "";
-};
-
-// Coverage extraction is actor-local, not sentence-global. A sentence like
-// "China observes Russia, which remains at war with Ukraine" must anchor Russia
-// and Ukraine only, not China. The patterns below therefore require the actor to
-// occupy the grammatical neighborhood of a strong armed-opposition cue.
-const actorHasArmedCoverageCue = (actor, segment, resolver) => {
-  const alias = actorAliasPattern(actor, resolver);
-  if (!alias) return false;
-
-  const forwardArmedDefiance = new RegExp(
-    `${alias}[^.!?]{0,110}\\b(?:declares?|declared|declar(?:e|es|ed|ing))\\s+armed\\s+(?:defiance|opposition|rebellion|uprising|revolt)\\b`,
-    "i",
-  );
-  const forwardDirect = new RegExp(
-    `${alias}[^.!?]{0,32}\\b(?:declares?|declared|declar(?:e|es|ed|ing))\\s+(?:a\\s+)?(?:state\\s+of\\s+)?war\\b|`
-      + `${alias}[^.!?]{0,32}\\b(?:wages?|waged|waging)\\s+war\\b|`
-      + `${alias}[^.!?]{0,32}\\b(?:rebels?|rebelled|rebelling|fights?|fought|fighting)\\s+against\\b`,
-    "i",
-  );
-  const directAtWar = new RegExp(
-    `${alias}[^.!?]{0,24}\\b(?:is|are|was|were|remains?|remain)\\s+at\\s+war\\b`,
-    "i",
-  );
-  const reverseTarget = new RegExp(
-    `\\b(?:at\\s+war\\s+(?:with|against)|declares?|declared|declar(?:e|es|ed|ing)\\s+(?:a\\s+)?(?:state\\s+of\\s+)?war\\s+on|(?:fights?|fought|fighting)\\s+against)\\b[^.!?]{0,60}${alias}`,
-    "i",
-  );
-  const roleCue = new RegExp(
-    `\\b(?:insurgent|insurgents|separatist|separatists|secessionist|secessionists|belligerent|belligerents|combatant|combatants|rebel|rebels)\\b[^.!?]{0,70}${alias}|`
-      + `${alias}[^.!?]{0,70}\\b(?:insurgent|insurgents|separatist|separatists|secessionist|secessionists|belligerent|belligerents|combatant|combatants)\\b`,
-    "i",
-  );
-  const hostilitiesCue = new RegExp(
-    `${alias}[^.!?]{0,40}\\b(?:opens?|opened|resumes?|resumed|renews?|renewed)\\s+hostilities\\b|`
-      + `\\b(?:hostilities\\s+(?:with|against))\\b[^.!?]{0,60}${alias}`,
-    "i",
-  );
-
-  return forwardArmedDefiance.test(segment)
-    || forwardDirect.test(segment)
-    || directAtWar.test(segment)
-    || reverseTarget.test(segment)
-    || roleCue.test(segment)
-    || hostilitiesCue.test(segment);
-};
-
-export const derivePregameBootstrapCoverageRequirements = ({
-  briefing = "",
-  world = {},
-  canonicalPolities = [],
-} = {}) => {
-  const { resolver, actors } = canonicalActorList(world, canonicalPolities);
-  if (!actors.length || !normalizeString(briefing)) return [];
-
-  const requirements = new Map();
-  for (const segment of briefingSegments(briefing)) {
-    for (const actor of actors) {
-      if (!actorHasArmedCoverageCue(actor, segment, resolver)) continue;
-      const key = actor.toLowerCase();
-      if (requirements.has(key)) continue;
-      requirements.set(key, {
-        polity: actor,
-        evidence: segment.slice(0, 240),
-        kind: "armed-actor",
-      });
-    }
-  }
-  return [...requirements.values()];
-};
+// No requirement is derived from the briefing's words (see above).
+export const derivePregameBootstrapCoverageRequirements = () => [];
 
 const addConflictActors = (target, values, resolver) => {
   for (const value of normalizeArray(values)) {
@@ -144,18 +56,16 @@ const conflictCoverageSet = (candidate, world) => {
   return covered;
 };
 
+// The requirements a caller states ({ polity, evidence? }), checked: "" when
+// each is in a live war or an unresolved storyline of the world or the answer.
 export const validatePregameBootstrapCoverage = (
   candidate,
   {
     world = {},
-    briefing = "",
-    canonicalPolities = [],
     requirements = null,
   } = {},
 ) => {
-  const required = Array.isArray(requirements)
-    ? requirements
-    : derivePregameBootstrapCoverageRequirements({ briefing, world, canonicalPolities });
+  const required = normalizeArray(requirements);
   if (!required.length) return "";
 
   const covered = conflictCoverageSet(candidate, world);

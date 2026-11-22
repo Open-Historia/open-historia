@@ -1,4 +1,6 @@
 /*! Open Historia — scenario-defined national Stats sheet definitions © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+import { isLatinName } from "../../server/nameId.js";
+
 export const STAT_SHEET_VERSION = 2;
 export const MAX_STAT_INDICES = 12;
 export const MAX_STAT_SECTIONS = 12;
@@ -46,8 +48,8 @@ export const DEFAULT_CUSTOM_STAT_SECTIONS = Object.freeze([
     label: "Economy",
     icon: "📈",
     stats: Object.freeze([
-      Object.freeze({ key: "gdp", label: "GDP", kind: "currency", icon: "💶", color: "#34d399", prefix: "€", compact: true, decimals: 1, minimum: 0, description: "Scenario-appropriate total economic output. Change the label/unit for eras where GDP is not meaningful." }),
-      Object.freeze({ key: "gdpPerCapita", label: "GDP/capita", kind: "currency", icon: "◫", color: "#e5e7eb", prefix: "€", compact: true, decimals: 0, minimum: 0, description: "Scenario-appropriate output or income per person. Delete or repurpose when not meaningful." }),
+      Object.freeze({ key: "gdp", label: "GDP", kind: "currency", icon: "💵", color: "#34d399", prefix: "$", compact: true, decimals: 1, minimum: 0, description: "Scenario-appropriate total economic output. Change the label/unit for eras where GDP is not meaningful." }),
+      Object.freeze({ key: "gdpPerCapita", label: "GDP/capita", kind: "currency", icon: "◫", color: "#e5e7eb", prefix: "$", compact: true, decimals: 0, minimum: 0, description: "Scenario-appropriate output or income per person. Delete or repurpose when not meaningful." }),
       Object.freeze({ key: "inflation", label: "Inflation", kind: "percentage", icon: "↗", color: "#34d399", suffix: "%", decimals: 1, minimum: 0, maximum: 1000, description: "Price inflation in percent." }),
       Object.freeze({ key: "unemployment", label: "Unemployment", kind: "percentage", icon: "♟", color: "#34d399", suffix: "%", decimals: 1, minimum: 0, maximum: 100, description: "Unemployment in percent." }),
       Object.freeze({ key: "publicDebt", label: "Public debt", kind: "percentage", icon: "▥", color: "#34d399", suffix: "%", decimals: 1, minimum: 0, maximum: 1000, description: "Public debt in the scenario's chosen percentage basis." }),
@@ -64,7 +66,36 @@ const DEFAULT_COLOR = "#a1a1aa";
 const validColor = (value) => /^#[0-9a-f]{6}$/i.test(clean(value));
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
+// A short, stable ASCII digest of a label (FNV-1a over its letters and digits in
+// any script, case and accents folded away), for a key the label's own words
+// cannot make.
+const labelDigest = (value) => {
+  const text = clean(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, "");
+  if (!text) return "";
+  let hash = 2166136261;
+  for (const char of text) {
+    hash ^= char.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+};
+
+// A stat's key, made from its label. Keys are ASCII (STAT_INDEX_KEY_PATTERN),
+// so a label written wholly in a-z and 0-9, case and accents aside, keeps the
+// camelCase key it always had, and any other label gets a key from its digest,
+// by the game's one rule for an id made from a name (server/nameId.js). One
+// written wholly in another script ("\u0421\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e\u0441\u0442\u044c", "\u519b\u529b") was given no key,
+// and the stat was dropped; one mixing scripts was cut down to its Latin words
+// or digits, so "\u0421\u0438\u043b\u0430 2" and "\u041c\u043e\u0449\u044c 2" were both "stat2".
 export const toStatIndexKey = (value) => {
+  if (!isLatinName(value)) {
+    const digest = labelDigest(value);
+    return digest ? `stat${digest}` : "";
+  }
   const words = clean(value)
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -72,7 +103,10 @@ export const toStatIndexKey = (value) => {
     .trim()
     .split(/\s+/)
     .filter(Boolean);
-  if (!words.length) return "";
+  if (!words.length) {
+    const digest = labelDigest(value);
+    return digest ? `stat${digest}` : "";
+  }
   let key = words
     .map((word, index) => {
       const lower = word.toLowerCase();
@@ -248,6 +282,19 @@ export const flattenStatSheetRows = (definitionInput) => {
 
 export const statSheetKeys = (definitionInput) => flattenStatSheetRows(definitionInput).map((stat) => stat.key);
 
+// Custom values are numbers, never JavaScript truthiness/coercion defaults.
+// Missing values stay omitted; zero is a recorded observation.
+export const readCustomStatNumber = (value) => {
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  if (typeof value === "string" && !value.trim()) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
+// Display can use a partial saved sheet; generation/tracking still require completeness.
+export const hasRecordedCustomStatValues = (values, definition) =>
+  flattenStatSheetRows(definition).some((stat) => readCustomStatNumber(values?.[stat.key]) !== null);
+
 export const normalizeCustomStatValues = (value, definitionInput, { partial = false } = {}) => {
   const definition = normalizeStatSheetDefinition(definitionInput);
   if (!definition.custom) return {};
@@ -258,8 +305,8 @@ export const normalizeCustomStatValues = (value, definitionInput, { partial = fa
       if (!partial) continue;
       continue;
     }
-    const numeric = Number(source[stat.key]);
-    if (!Number.isFinite(numeric)) continue;
+    const numeric = readCustomStatNumber(source[stat.key]);
+    if (numeric === null) continue;
     let next = numeric;
     if (Number.isFinite(stat.minimum)) next = Math.max(stat.minimum, next);
     if (Number.isFinite(stat.maximum)) next = Math.min(stat.maximum, next);

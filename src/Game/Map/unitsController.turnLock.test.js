@@ -64,7 +64,7 @@ test("while a turn runs, requesting orders still queues them and touches no unit
   // The units are loaded by the placement above.
   writes.length = 0;
   beginSimulation();
-  assert.equal(await requestUnitOrders("u1", "hold the Marne"), true);
+  assert.deepEqual(await requestUnitOrders("u1", "hold the Marne"), { ok: true });
   assert.deepEqual(writes, ["actions"]);
   assert.match(JSON.parse(store.get("actions")).at(-1).text, /hold the Marne/);
 });

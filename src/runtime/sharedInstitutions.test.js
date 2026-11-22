@@ -14,8 +14,8 @@ test.afterEach(() => setSharedRequester(null));
 
 test("the host's ids become the result the screens read, with the thread once the view has it", async () => {
   const asked = [];
-  setSharedRequester(async (t, fields, options) => {
-    asked.push({ t, fields, options });
+  setSharedRequester(async (...args) => {
+    asked.push(args);
     return { ok: true, result: { institutionId: "baltic-pact", proposalId: "p1", proposalStatus: "voting", chatId: "founding-1" } };
   });
   let reads = 0;
@@ -24,7 +24,8 @@ test("the host's ids become the result the screens read, with the thread once th
     return reads < 3 ? [] : [{ id: "founding-1", countries: ["Estonia"] }];
   };
   const result = await askHostForInstitution("lifecycle", { command: { type: "found", name: "Baltic Pact" } }, { readChats, waitMs: 5000 });
-  assert.deepEqual(asked, [{ t: "institution", fields: { call: "lifecycle", args: { command: { type: "found", name: "Baltic Pact" } } }, options: { timeoutMs: 30_000 } }]);
+  // Asked with no deadline of its own: the host's answer is waited for, a round being resolved or not.
+  assert.deepEqual(asked, [["institution", { call: "lifecycle", args: { command: { type: "found", name: "Baltic Pact" } } }]]);
   assert.deepEqual(result.institution, { id: "baltic-pact" });
   assert.deepEqual(result.proposal, { id: "p1", status: "voting" });
   assert.equal(result.createdChat.id, "founding-1");

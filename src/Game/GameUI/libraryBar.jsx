@@ -6,13 +6,16 @@ import { Presence } from "./presence.jsx";
 import {
   PROMPT_EDITOR_SECTIONS,
   PROMPT_GUIDANCE_DEFAULTS,
+  editablePromptPack,
+  guidanceLimitFor,
   localizedGuidanceDefaults,
   materializePromptPack,
-  normalizePromptPack,
+  overLimitEdits,
   serializePromptPack,
 } from "../AI/gameplayPrompts.js";
-import { guidanceSegmentsFor } from "../AI/promptGuidance.js";
+import { guidanceSegmentsFor, promptCharCount } from "../AI/promptGuidance.js";
 import { promptTranslationsVersion, subscribePromptTranslations } from "../../runtime/promptTranslations.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
 import {
   activateGame,
   clearGameAsset,
@@ -55,12 +58,17 @@ import PrehistoryPanel from "./PrehistoryPanel.jsx";
 import ScenarioFrontsPanel from "./ScenarioFrontsPanel.jsx";
 import ScenarioWarSettings from "./ScenarioWarSettings.jsx";
 import ScenarioMilitaryPanel from "./ScenarioMilitaryPanel.jsx";
+import ScenarioUnitTypes from "./ScenarioUnitTypes.jsx";
 import { compactWarSettings } from "./scenarioWarSettings.js";
+import { formUnitTypes, savedUnitTypes, withRenamedUnitTypeOwners } from "./scenarioUnitTypes.js";
 import { militaryDefaultsFor } from "../../Editor/militaryForm.js";
 import ScenarioMusicPanel, { ScenarioMusicCredits } from "./ScenarioMusicPanel.jsx";
 import { normalizeScenarioMusic } from "../../runtime/scenarioMusic.js";
+import ScenarioLanguagesPanel from "./ScenarioLanguagesPanel.jsx";
+import { normalizeScenarioLanguages } from "../../../server/scenarioLanguages.js";
 const PoliticalWorldAuthoringPanel = lazy(() => import("./PoliticalWorldAuthoringPanel.jsx"));
 const PoliticalWorldGenerationPanel = lazy(() => import("./PoliticalWorldGenerationPanel.jsx"));
+const ProjectRecoveryDialog = lazy(() => import("./ProjectRecoveryDialog.jsx"));
 import { isFeatureEnabled, normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
 import { flattenStatSheetRows, normalizeStatSheetDefinition, serializeStatSheet } from "../../runtime/statIndexDefinitions.js";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
@@ -75,6 +83,7 @@ import { zipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
 import { SCENARIO_LICENSE_FILE, SCENARIO_LICENSE_TEXT, SCENARIO_LICENSE_URL } from "../../runtime/scenarioLicense.js";
 import { formatGameDateShort } from "../../runtime/gameDates.js";
 import { getStoredLanguage } from "../../runtime/i18n.js";
+import { ECONOMIC_DISPLAY_CURRENCIES, normalizeEconomicDisplayCurrency } from "../../runtime/economicDisplayCurrency.js";
 import { splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js";
@@ -100,6 +109,7 @@ import {
   openSuggestionsOf,
 } from "./ScenarioSuggestions.jsx";
 import { CommunitySkeleton, LobbiesSkeleton, MenuCardSkeletons } from "./menuSkeleton.jsx";
+import { gameCardActions } from "./gameCardMenu.js";
 
 const UNIT_TYPE_LABELS = {
   infantry: "Infantry",
@@ -239,14 +249,15 @@ const actionButtonStyle = {
 
 const themeButtonStyle = {
   ...actionButtonStyle,
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.06))",
+  border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))",
   borderRadius: "9px",
   boxShadow: "none",
 };
 
 const themeSurfaceStyle = {
   background: "var(--oh-ui-surface, #12141a)",
-  border: "1px solid rgba(255,255,255,0.09)",
+  border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.09))",
   boxShadow: "0 14px 32px rgba(0,0,0,0.45)",
 };
 
@@ -441,7 +452,7 @@ const MenuRail = ({ activeTab, onTab, onOpenSettings, onOpenHistory }) => (
     style={{
       alignItems: "center",
       background: "var(--oh-ui-header, #0b0b0d)",
-      borderRight: "1px solid rgba(255,255,255,0.08)",
+      borderRight: "1px solid var(--oh-ui-line, rgba(255,255,255,0.08))",
       display: "flex",
       flexDirection: "column",
       flexShrink: 0,
@@ -473,6 +484,7 @@ const MenuRail = ({ activeTab, onTab, onOpenSettings, onOpenHistory }) => (
       <button
         key={tab.id}
         aria-current={activeTab === tab.id ? "page" : undefined}
+        data-oh-theme-nav=""
         className="oh-tap-row"
         onClick={() => onTab(tab.id)}
         style={railButtonStyle(activeTab === tab.id)}
@@ -484,7 +496,7 @@ const MenuRail = ({ activeTab, onTab, onOpenSettings, onOpenHistory }) => (
     ))}
     <div style={{ flex: 1, minHeight: "0.6rem" }} />
     {typeof onOpenSettings === "function" && (
-      <button className="oh-tap-row" onClick={onOpenSettings} style={railButtonStyle(false)} type="button">
+      <button className="oh-tap-row" data-oh-theme-nav="" onClick={onOpenSettings} style={railButtonStyle(false)} type="button">
         <ButtonIcon kind="settings" size={MENU_RAIL_ICON} />
         <span>Settings</span>
       </button>
@@ -568,6 +580,7 @@ const editorSectionLabels = {
   bundles: "Bundles",
   features: "Features",
   history: "Pre-history",
+  languages: "Languages",
   music: "Music",
   overview: "Overview",
   politics: "Politics",
@@ -581,7 +594,7 @@ const normalizeString = (value) => String(value ?? "").trim();
 const buildScenarioEditorState = (details) => {
   const scenario = details?.scenario ?? {};
   const game = details?.data?.game ?? {};
-  const prompts = normalizePromptPack(details?.data?.prompts ?? {});
+  const prompts = editablePromptPack(details?.data?.prompts ?? {});
   const world = details?.data?.world ?? {};
 
   return {
@@ -592,29 +605,35 @@ const buildScenarioEditorState = (details) => {
     eyebrow: scenario.eyebrow ?? "",
     features: normalizeFeatureSettings(scenario.features),
     gameDate: game.gameDate ?? "",
+    economicDisplayCurrency: normalizeEconomicDisplayCurrency(game.economicDisplayCurrency),
     heroSubtitle: scenario.heroSubtitle ?? "",
     heroTitle: scenario.heroTitle ?? "",
     language: game.language ?? world.language ?? "English",
     // The hub tracks it plays, by situation (the Music tab), or null for none.
     music: normalizeScenarioMusic(scenario.music),
+    // Its own text in other languages (the Languages tab), or null for none.
+    languages: normalizeScenarioLanguages(scenario.languages),
     name: scenario.name ?? "",
     prompts,
     labelFont: world.labelFont ?? "",
     labelHaloColor: world.labelHaloColor ?? "",
     labelTextColor: world.labelTextColor ?? "",
     simulationRules: world.simulationRules ?? "",
+    projectFundingMode: world.projectFundingMode === "nonmonetary" ? "nonmonetary" : "gdp-proxy",
     startingTimelineText: world.startingTimelineText ?? "",
     subtitle: scenario.subtitle ?? "",
     // How its wars are fought (the Fronts tab: ScenarioWarSettings.jsx), compact:
     // null for a scenario that sets nothing (scenarioWarSettings.js).
     warSettings: compactWarSettings(world.warSettings),
+    // Its own unit types (the Features tab, under Wars: ScenarioUnitTypes.jsx); [] for none.
+    unitTypes: formUnitTypes(world),
   };
 };
 
 const buildGameEditorState = (details) => {
   const gameMeta = details?.game ?? {};
   const game = details?.data?.game ?? {};
-  const prompts = normalizePromptPack(details?.data?.prompts ?? {});
+  const prompts = editablePromptPack(details?.data?.prompts ?? {});
   const world = details?.data?.world ?? {};
 
   return {
@@ -625,6 +644,7 @@ const buildGameEditorState = (details) => {
     features: normalizeFeatureOverrides(gameMeta.features),
     scenarioFeatures: normalizeFeatureSettings(details?.scenario?.features),
     gameDate: game.gameDate ?? "",
+    economicDisplayCurrency: normalizeEconomicDisplayCurrency(game.economicDisplayCurrency),
     heroSubtitle: gameMeta.heroSubtitle ?? "",
     heroTitle: gameMeta.heroTitle ?? "",
     language: game.language ?? world.language ?? "English",
@@ -649,6 +669,19 @@ const buildGameEditorState = (details) => {
 const saveJsonBundleToDisk = async (bundle, fileName) => {
   await saveBlobToDisk(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }), fileName);
 };
+
+// Every edited prompt passage may be at most 20% longer than the built-in one
+// (promptGuidance.js guidanceCharLimit). The Prompts tab counts each passage
+// as it is typed; a passage over its limit is kept in the form, marked, and
+// Save waits until it is shortened or reset, so nothing the author wrote is
+// cut or thrown away behind their back.
+const PROMPT_TOO_LONG_TEXT = "A prompt passage is longer than its limit. Shorten it or reset it in the Prompts tab to save.";
+// A scenario may bypass the limit (the Prompts tab's switch, bypassLengthLimit
+// on its prompt pack): nothing of it is over, and a new game from it warns the
+// player that it will use a lot more tokens (handleScenarioPlay).
+const promptsBypassLimit = (prompts) => prompts?.bypassLengthLimit === true;
+const promptsOverLimit = (prompts) => overLimitEdits(prompts?.guidance, promptsBypassLimit(prompts)).length > 0;
+export const BYPASS_LIMIT_WARNING = "This scenario's prompts are longer than the built-in ones, so it will use a lot more tokens than other scenarios.";
 
 // Prompt-pack files intentionally contain only scenario-author editable guidance.
 // The technical/tooling portions of prompts are app-owned and are recomposed from
@@ -680,6 +713,7 @@ const promptPackFromImport = (value) => {
 // passage stores nothing. The technical text never reaches the author, so it
 // cannot be broken here and it stays current as the game changes.
 const PromptSectionEditor = ({
+  onChangeBypassLimit = null,
   onChangePrompt,
   onExportPromptPack,
   onImportPromptPack,
@@ -717,6 +751,9 @@ const PromptSectionEditor = ({
     && edits[segment.id].trim() !== (defaults[segment.id] ?? "").trim()
     && edits[segment.id].trim() !== (englishDefaults[segment.id] ?? "").trim();
   const editedCount = segments.filter(isEdited).length;
+  // The sections with a passage over its limit, marked on their buttons.
+  const bypassLimit = promptsBypassLimit(promptPack);
+  const sectionsOverLimit = new Set(overLimitEdits(promptPack.guidance, bypassLimit).map((entry) => entry.sectionKey));
   const smallButtonStyle = { ...themeButtonStyle, fontSize: "0.72rem", minHeight: "1.7rem", padding: "0 0.6rem" };
 
   const handlePromptImportFile = async (event) => {
@@ -726,11 +763,16 @@ const PromptSectionEditor = ({
 
     try {
       const parsed = JSON.parse(await file.text());
-      onImportPromptPack(promptPackFromImport(parsed));
-      setPromptTransferStatus({
-        error: false,
-        text: `Imported ${file.name}. Save the scenario to persist these prompt edits.`,
-      });
+      const imported = onImportPromptPack(promptPackFromImport(parsed));
+      setPromptTransferStatus(promptsOverLimit(imported)
+        ? {
+          error: true,
+          text: `Imported ${file.name}. Some passages are longer than the limit and are marked in red: shorten or reset them to save.`,
+        }
+        : {
+          error: false,
+          text: `Imported ${file.name}. Save the scenario to persist these prompt edits.`,
+        });
     } catch (error) {
       setPromptTransferStatus({ error: true, text: `Import failed: ${error.message}` });
     }
@@ -738,6 +780,10 @@ const PromptSectionEditor = ({
 
   const handlePromptExport = () => {
     if (!onExportPromptPack) return;
+    if (promptsOverLimit(promptPack)) {
+      setPromptTransferStatus({ error: true, text: PROMPT_TOO_LONG_TEXT });
+      return;
+    }
     onExportPromptPack();
     setPromptTransferStatus({
       error: false,
@@ -851,8 +897,9 @@ const PromptSectionEditor = ({
               ...themeButtonStyle,
               background:
                 section.key === currentSection.key ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.05)",
-              borderColor:
-                section.key === currentSection.key ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)",
+              borderColor: sectionsOverLimit.has(section.key)
+                ? "rgba(248,113,113,0.7)"
+                : section.key === currentSection.key ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)",
               minHeight: "2rem",
               padding: "0 0.8rem",
             }, touch)}
@@ -882,12 +929,34 @@ const PromptSectionEditor = ({
         The technical parts of every prompt (the placeholders that inject the world, the output contracts,
         the map rules) are fixed in the app, so every scenario and game keeps up with the game as it changes.
         A placeholder such as {"${PLAYER_POLITY}"} inside a passage is filled in by the game.
+        {" "}
+        <span>Each passage can be up to 20% longer than the built-in one.</span>
       </div>
+
+      {onChangeBypassLimit ? (
+        <label style={{ alignItems: "flex-start", cursor: "pointer", display: "flex", gap: "0.55rem", marginBottom: "0.9rem" }}>
+          <input
+            checked={bypassLimit}
+            onChange={(event) => onChangeBypassLimit(event.target.checked)}
+            style={{ marginTop: "0.2rem" }}
+            type="checkbox"
+          />
+          <span>
+            <span style={{ color: "rgba(255,255,255,0.9)", display: "block", fontSize: "0.82rem", fontWeight: 700 }}>Bypass prompt length limit</span>
+            <span style={{ color: "rgba(255,255,255,0.48)", display: "block", fontSize: "0.72rem", lineHeight: 1.4, marginTop: "0.15rem" }}>
+              Passages can be any length. Players are warned when they start a game that it will use a lot more tokens.
+            </span>
+          </span>
+        </label>
+      ) : null}
 
       <div style={{ display: "grid", gap: "0.9rem" }}>
         {segments.map((segment) => {
           const value = typeof edits[segment.id] === "string" ? edits[segment.id] : defaults[segment.id] ?? "";
           const edited = isEdited(segment);
+          const count = promptCharCount(value);
+          const limit = guidanceLimitFor(currentSection.key, segment.id);
+          const over = bypassLimit ? 0 : count - limit;
           return (
             <div key={segment.id}>
               <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
@@ -912,11 +981,27 @@ const PromptSectionEditor = ({
                 </div>
               ) : null}
               <textarea
+                aria-invalid={over > 0 ? true : undefined}
                 aria-label={`${currentSection.label}: ${segment.label}`}
-                style={{ ...textareaStyle, minHeight: "7rem" }}
+                style={{ ...textareaStyle, minHeight: "7rem", ...(over > 0 ? { borderColor: "rgba(248,113,113,0.7)" } : null) }}
                 value={value}
                 onChange={(event) => onChangePrompt(currentSection, segment.id, event.target.value)}
               />
+              <div
+                aria-live="polite"
+                style={{
+                  color: over > 0 ? "#fca5a5" : "rgba(255,255,255,0.42)",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  fontSize: "0.7rem",
+                  gap: "0.2rem 0.6rem",
+                  justifyContent: "space-between",
+                  marginTop: "0.25rem",
+                }}
+              >
+                <span>{over > 0 ? `${over} characters over the limit: shorten it to save.` : ""}</span>
+                <span style={{ fontVariantNumeric: "tabular-nums", marginLeft: "auto" }}>{`${count} / ${limit} characters`}</span>
+              </div>
             </div>
           );
         })}
@@ -1271,7 +1356,17 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
 // face of the card. Three verbs compete for width with Play, and Play is the one a
 // player came to press; the other three are occasional, and none of them is
 // destructive, which is why Archive stays out here on its own.
-const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete = null, onEdit, onExport }) => {
+// Leaving the shared game a guest's stand-in card stands for, from the menu:
+// as its own Leave does (multiplayer/ui/SharedGameOverlay.jsx), every cache
+// back to this device's own game. Loaded only when pressed; the card is listed
+// only while a shared game is open, its code loaded already.
+const leaveSharedGameFromCard = async () => {
+  const { leaveSharedGame } = await import("../../multiplayer/client/sharedGame.js");
+  await leaveSharedGame();
+  window.location.reload();
+};
+
+const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete = null, onEdit, onExport, onRecover }) => {
   const cardImageUrl = game.coverImageUrl || DEFAULT_SCENARIO_COVER;
   const touch = useTouchPrimary();
   const isMobile = useIsMobile();
@@ -1322,14 +1417,19 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
     }
   };
 
-  const cardMenuItems = [
-    ["Edit", () => { setCardMenuOpen(false); onEdit(game.id); }, false],
-    ["Clone", () => { setCardMenuOpen(false); onClone(game); }, false],
-    [game.archived ? "Unarchive" : "Archive", () => { setCardMenuOpen(false); onArchive(game); }, false],
+  const cardMenuItemFor = {
+    edit: ["Edit", () => { setCardMenuOpen(false); onEdit(game.id); }, false],
+    clone: ["Clone", () => { setCardMenuOpen(false); onClone(game); }, false],
+    recover: ["Recover Projects…", () => { setCardMenuOpen(false); onRecover(game); }, false],
+    archive: [game.archived ? "Unarchive" : "Archive", () => { setCardMenuOpen(false); onArchive(game); }, false],
     // Offered everywhere, the Android app included: runtime/saveFile.js saves
     // the zip into Downloads/Open Historia there (runtime/native/fileSave.js).
-    [exporting ? "Exporting…" : "Export", runExport, exporting],
-  ];
+    export: [exporting ? "Exporting…" : "Export", runExport, exporting],
+    // A guest's stand-in: the shared game left, as its own Leave leaves it.
+    leave: ["Leave the shared game", () => { setCardMenuOpen(false); void leaveSharedGameFromCard(); }, false],
+  };
+  // What works on this card (gameCardMenu.js): a guest's stand-in offers only leaving.
+  const cardMenuItems = gameCardActions(game).map((action) => cardMenuItemFor[action]);
 
   return (
     <div
@@ -1841,8 +1941,8 @@ const CreateScenarioTile = ({ busy, onCreate }) => (
     type="button"
     style={{
       alignItems: "center",
-      background: "rgba(255,255,255,0.03)",
-      border: "2px dashed rgba(255,255,255,0.24)",
+      background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.03))",
+      border: "2px dashed var(--oh-ui-line, rgba(255,255,255,0.24))",
       borderRadius: "24px",
       color: "rgba(255,255,255,0.78)",
       cursor: busy ? "wait" : "pointer",
@@ -1861,7 +1961,7 @@ const CreateScenarioTile = ({ busy, onCreate }) => (
 );
 
 const EDITOR_SECTION_GROUPS = Object.freeze([
-  Object.freeze({ label: "Presentation", sections: Object.freeze(["overview", "assets", "music"]) }),
+  Object.freeze({ label: "Presentation", sections: Object.freeze(["overview", "assets", "music", "languages"]) }),
   Object.freeze({ label: "Setting", sections: Object.freeze(["world", "history", "politics"]) }),
   Object.freeze({ label: "Rules and AI", sections: Object.freeze(["stats", "features", "prompts"]) }),
   Object.freeze({ label: "Sharing", sections: Object.freeze(["bundles"]) }),
@@ -1871,6 +1971,7 @@ const EDITOR_SECTION_BLURBS = Object.freeze({
   overview: "How it appears in the library: its name, colour and the words on its card.",
   assets: "The cover and the files the map is drawn from.",
   music: "The hub's tracks it plays while a game opens, in the game, at war and in the war room.",
+  languages: "Its own text in other languages, translated once by your AI and shipped with it.",
   world: "Where play begins: the player's country, the date, the troops and the story so far.",
   history: "The events that led to the start date.",
   politics: "Governments, parties and institutions.",
@@ -1897,6 +1998,7 @@ const EditorSectionIcon = ({ kind, size = 17 }) => {
     overview: <><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M7 9h10M7 13h6" /></>,
     assets: <><rect x="3.5" y="5" width="17" height="14" rx="2.5" /><circle cx="9" cy="10" r="1.6" /><path d="m4 17 5-4.5 4 3.5 3-2.5 4 3.5" /></>,
     music: <><path d="M9 17.5V6l10-2v11.5" /><circle cx="6.5" cy="17.5" r="2.5" /><circle cx="16.5" cy="15.5" r="2.5" /></>,
+    languages: <><path d="M4 5.5h8M8 4v1.5c0 3.5-1.8 6.3-4 7.5M5.5 9c1 1.8 2.8 3.2 5 3.8" /><path d="m12 19.5 3.5-8.5 3.5 8.5M13.2 16.8h4.6" /></>,
     world: <><circle cx="12" cy="12" r="8.5" /><path d="M3.5 12h17M12 3.5c2.3 2.3 3.5 5.2 3.5 8.5s-1.2 6.2-3.5 8.5c-2.3-2.3-3.5-5.2-3.5-8.5s1.2-6.2 3.5-8.5z" /></>,
     history: <><path d="M5 4.5h11.5a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2z" /><path d="M5 17.5a2 2 0 0 1 2-2h11.5M9 8.5h6" /></>,
     politics: <><path d="M4 9.5 12 5l8 4.5M5.5 19.5h13M7 10.5v7M12 10.5v7M17 10.5v7" /></>,
@@ -1910,8 +2012,8 @@ const EditorSectionIcon = ({ kind, size = 17 }) => {
 
 const editorNavButtonStyle = (active) => ({
   ...themeButtonStyle,
-  background: active ? "rgba(255,255,255,0.1)" : "transparent",
-  border: `1px solid ${active ? "rgba(255,255,255,0.18)" : "transparent"}`,
+  background: active ? "var(--oh-ui-active, rgba(255,255,255,0.1))" : "transparent",
+  border: `1px solid ${active ? "var(--oh-ui-accent, rgba(255,255,255,0.18))" : "transparent"}`,
   color: active ? "#fff" : "rgba(236,236,240,0.72)",
   fontWeight: active ? 700 : 600,
   gap: "0.6rem",
@@ -1967,7 +2069,7 @@ const EditorDrawer = ({
   const record = kind === "scenario" ? details.scenario : details.game;
   const visibleSections =
     kind === "scenario"
-      ? ["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "music", "bundles"]
+      ? ["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "music", "languages", "bundles"]
       : ["overview", "world", "features", "prompts", "assets"];
   const groups = EDITOR_SECTION_GROUPS
     .map((group) => ({ ...group, sections: group.sections.filter((key) => visibleSections.includes(key)) }))
@@ -1987,17 +2089,25 @@ const EditorDrawer = ({
     ? details.scenario?.coverImageUrl
     : details.game?.coverImageUrl || details.scenario?.coverImageUrl;
   const accent = record.accentColor || "#a1a1aa";
+  const promptsTooLong = promptsOverLimit(formState.prompts);
 
   const actions = (
     <div style={{ display: "flex", flexDirection: isMobile ? "row" : "column", flexWrap: isMobile ? "wrap" : undefined, gap: "0.45rem" }}>
       <button
         className="oh-tap-row"
+        disabled={promptsTooLong}
         onClick={onSave}
-        style={touchFit({ ...themeButtonStyle, background: accent, borderColor: accent, borderRadius: "11px", boxShadow: `0 3px 12px ${accent}33`, color: "#fff", flex: isMobile ? "1 1 7rem" : undefined, fontWeight: 700, minHeight: "2.4rem", width: isMobile ? undefined : "100%" }, touch)}
+        style={touchFit({ ...themeButtonStyle, background: accent, borderColor: accent, borderRadius: "11px", boxShadow: `0 3px 12px ${accent}33`, color: "#fff", cursor: promptsTooLong ? "not-allowed" : themeButtonStyle.cursor, flex: isMobile ? "1 1 7rem" : undefined, fontWeight: 700, minHeight: "2.4rem", opacity: promptsTooLong ? 0.5 : 1, width: isMobile ? undefined : "100%" }, touch)}
+        title={promptsTooLong ? PROMPT_TOO_LONG_TEXT : undefined}
         type="button"
       >
         {isBusy ? "Saving..." : "Save"}
       </button>
+      {promptsTooLong ? (
+        <div role="alert" style={{ color: "#fca5a5", flex: isMobile ? "1 1 100%" : undefined, fontSize: "0.72rem", lineHeight: 1.4 }}>
+          {PROMPT_TOO_LONG_TEXT}
+        </div>
+      ) : null}
       {kind === "scenario" && onOpenMapEditor && (
         <button
           className="oh-tap-row"
@@ -2260,6 +2370,33 @@ const EditorDrawer = ({
                 <label style={fieldLabelStyle}>Language</label>
                 <input style={inputStyle} value={formState.language} onChange={(event) => onChange("language", event.target.value)} />
               </div>
+              <div>
+                <label style={fieldLabelStyle}>{kind === "scenario" ? "Default GDP display currency" : "GDP display currency"}</label>
+                <select style={inputStyle} value={formState.economicDisplayCurrency || "USD"} onChange={(event) => onChange("economicDisplayCurrency", event.target.value)}>
+                  {ECONOMIC_DISPLAY_CURRENCIES.map(({ code, name, symbol }) => (
+                    <option key={code} value={code}>{name} ({code}, {symbol})</option>
+                  ))}
+                </select>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.7rem", lineHeight: 1.4, marginTop: "0.35rem" }}>
+                  {kind === "scenario" ? "Suggested for new campaigns; players can override it." : "This campaign only."} GDP numbers remain in canonical 2026 USD.
+                </div>
+              </div>
+              {kind === "scenario" && (
+                <div>
+                  <label style={fieldLabelStyle}>Projects funding basis</label>
+                  <select
+                    style={inputStyle}
+                    value={formState.projectFundingMode || "gdp-proxy"}
+                    onChange={(event) => onChange("projectFundingMode", event.target.value)}
+                  >
+                    <option value="gdp-proxy">Estimated national GDP allowance</option>
+                    <option value="nonmonetary">Non-monetary time and effort</option>
+                  </select>
+                  <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.7rem", lineHeight: 1.4, marginTop: "0.35rem" }}>
+                    GDP allowance is an estimate, not treasury cash. Non-monetary scenarios advance projects by time and capacity without recording financial payments; no GDP is required.
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           {kind === "scenario" && (
@@ -2404,7 +2541,8 @@ const EditorDrawer = ({
       )}
 
       {/* The Features tab. Under Wars, on a scenario, what was its War tab: how its wars are fought
-          (ScenarioWarSettings.jsx, part of the form, which Save below writes); every country's military
+          (ScenarioWarSettings.jsx, part of the form, which Save below writes); its own unit types
+          (ScenarioUnitTypes.jsx, part of the form too); every country's military
           figures, rated by the AI against the others twenty to a request (ScenarioMilitaryPanel.jsx, saved
           batch by batch); and the fronts it begins with (ScenarioFrontsPanel.jsx, with a Save of its own). */}
       {editorSection === "features" && (
@@ -2416,6 +2554,11 @@ const EditorDrawer = ({
                   value={formState.warSettings ?? null}
                   gameDate={formState.gameDate}
                   onChange={(next) => onChange("warSettings", next)}
+                />
+                <ScenarioUnitTypes
+                  value={formState.unitTypes ?? []}
+                  countries={countryOptions.map((option) => option.code)}
+                  onChange={(next) => onChange("unitTypes", next)}
                 />
                 <ScenarioMilitaryPanel
                   details={details}
@@ -2434,6 +2577,7 @@ const EditorDrawer = ({
           features={formState.features}
           scenarioFeatures={kind === "scenario" ? formState.features : formState.scenarioFeatures}
           world={details?.data?.world ?? {}}
+          scenarioId={details?.scenario?.id || details?.game?.scenarioId || ""}
           onChange={(next) => onChange("features", next)}
           styles={{ actionButtonStyle: themeButtonStyle, fieldLabelStyle, inputStyle }}
           currentDate={formState.gameDate}
@@ -2443,6 +2587,7 @@ const EditorDrawer = ({
 
       {editorSection === "prompts" && (
         <PromptSectionEditor
+          onChangeBypassLimit={kind === "scenario" ? (on) => onChange("prompts", { ...formState.prompts, bypassLengthLimit: on }) : null}
           onChangePrompt={onChangePrompt}
           onExportPromptPack={kind === "scenario" ? onExportPrompts : null}
           onImportPromptPack={kind === "scenario" ? onImportPrompts : null}
@@ -2543,6 +2688,16 @@ const EditorDrawer = ({
         <ScenarioMusicPanel
           music={formState.music}
           onChange={(next) => onChange("music", next)}
+        />
+      )}
+
+      {/* Its own text in other languages, generated with the author's AI
+          (ScenarioLanguagesPanel.jsx). Part of the form: Save below writes it. */}
+      {editorSection === "languages" && kind === "scenario" && (
+        <ScenarioLanguagesPanel
+          details={details}
+          formState={formState}
+          onChange={(next) => onChange("languages", next)}
         />
       )}
 
@@ -2697,6 +2852,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const [editorSection, setEditorSection] = useState("overview");
   const [promptSectionKey, setPromptSectionKey] = useState("leader");
   const [isBusy, setIsBusy] = useState(false);
+  // Save-owner maintenance, accessible even when an over-cap old save cannot
+  // be normalized into a live world. Never a gameplay/foreign-intel view.
+  const [projectRecoveryGame, setProjectRecoveryGame] = useState(null);
   const assetFileInputsRef = useRef({});
   const importScenarioInputRef = useRef(null);
   const importGameInputRef = useRef(null);
@@ -2809,7 +2967,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
 
   // Create the game from the scenario with the starting country and difficulty
   // the player chose in the two-step picker, and go straight into it.
-  const startGameForCountry = async (scenario, countryCode, difficulty) => {
+  const startGameForCountry = async (scenario, countryCode, difficulty, displayCurrency) => {
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerColors(null); setPickerBackground(null);
     setEditorError(null);
@@ -2823,7 +2981,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // itself: patched in a second request, after `setActive` had switched to
       // the game, the opening cover and the HUD named the scenario's default
       // country until it landed.
-      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
+      const canonicalCountry = toCountryName(countryCode);
+      const gamePatch = { ...(canonicalCountry ? { country: canonicalCountry } : null), ...(difficulty ? { difficulty } : null) };
       await createGame({
         name: `${scenario.name} Session`,
         scenarioId: scenario.id,
@@ -2849,7 +3008,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // Create a game led by a player-invented faction. It is written into the game's
   // OWN world/colors/flags — a game carries its own copies and falls back to the
   // scenario only for what it doesn't set, so the scenario is never touched.
-  const startGameForFaction = async (scenario, faction, difficulty) => {
+  const startGameForFaction = async (scenario, faction, difficulty, displayCurrency) => {
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerColors(null); setPickerBackground(null);
     setEditorError(null);
@@ -2863,7 +3022,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         // The faction's name from the first moment the game is active (the
         // opening cover reads it); the save below writes it again once the
         // faction is in the world it resolves against.
-        gamePatch: { country: faction.name, ...(difficulty ? { difficulty } : null) },
+        gamePatch: { country: faction.name, ...(difficulty ? { difficulty } : null), economicDisplayCurrency: normalizeEconomicDisplayCurrency(displayCurrency) },
         setActive: true,
       });
       gameId = details.game.id;
@@ -2920,7 +3079,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // carries everything keyed by the player (flag, colour, diplomacy, orders), the
   // group the area the map draws and what the story knows the player is. Written
   // into the game's own world, like a faction, so the scenario is never touched.
-  const startGameForGroup = async (scenario, group, difficulty) => {
+  const startGameForGroup = async (scenario, group, difficulty, displayCurrency) => {
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerColors(null); setPickerBackground(null);
     setEditorError(null);
@@ -2932,7 +3091,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       const details = await createGame({
         name: `${name} — ${scenario.name}`,
         scenarioId: scenario.id,
-        gamePatch: { country: name, ...(difficulty ? { difficulty } : null) },
+        gamePatch: { country: name, ...(difficulty ? { difficulty } : null), economicDisplayCurrency: normalizeEconomicDisplayCurrency(displayCurrency) },
         setActive: true,
       });
       gameId = details.game.id;
@@ -2998,7 +3157,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setPlayGameId(null);
     setPickerTab("country");
     setPickerGroups([]);
+    setBypassWarning(null);
     setCountryPicker(scenario);
+    setPickerEconomicCurrency("USD");
     // A community basemap the import could not download is tried again (once a
     // session), and shown in the picker when it lands.
     retryMissingBasemap(scenario).then((retry) => {
@@ -3007,6 +3168,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     Promise.all([loadCountryNames().catch(() => []), loadScenarioDetails(scenario.id).catch(() => null)])
       .then(([allCountries, details]) => {
         if (!isCurrent()) return;
+        if (promptsBypassLimit(details?.data?.prompts)) setBypassWarning(scenario);
+        setPickerEconomicCurrency(normalizeEconomicDisplayCurrency(details?.data?.game?.economicDisplayCurrency));
         setCountryOptions(buildScenarioCountryOptions(
           details?.data?.world,
           [...getBaseCountryOptions(), ...allCountries],
@@ -3078,6 +3241,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // scenario they have edited, which the Update would replace (the question
   // is drawn below, beside the missing-map prompt).
   const [replaceEditsTarget, setReplaceEditsTarget] = useState(null);
+  // The scenario a new game is being started from, while its "will use a lot more
+  // tokens" warning is up (its prompts bypass the length limit).
+  const [bypassWarning, setBypassWarning] = useState(null);
 
   // Pull the post's current bundle and replace this scenario in place. The
   // scenario keeps its local id, so existing games keep pointing at it; the
@@ -3631,15 +3797,24 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   };
 
   const handleImportPrompts = (rawPromptPack) => {
-    if (editorKind !== "scenario") return;
+    if (editorKind !== "scenario") return null;
+    // A passage over the limit comes into the form marked, to be shortened.
+    const prompts = editablePromptPack(rawPromptPack);
     setEditorState((current) => ({
       ...current,
-      prompts: normalizePromptPack(rawPromptPack),
+      prompts,
     }));
+    return prompts;
   };
 
   const handleSave = async () => {
     if (!editorKind || !editorDetails || !editorState) {
+      return;
+    }
+
+    // Never written over the limit: serializing would drop the passage.
+    if (promptsOverLimit(editorState.prompts)) {
+      setEditorError(PROMPT_TOO_LONG_TEXT);
       return;
     }
 
@@ -3660,6 +3835,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             ...currentGame,
             country: editorState.country,
             gameDate: editorState.gameDate,
+            ...(editorState.economicDisplayCurrency !== normalizeEconomicDisplayCurrency(currentGame.economicDisplayCurrency)
+              ? { economicDisplayCurrency: editorState.economicDisplayCurrency }
+              : {}),
             language: editorState.language,
             startDate: editorState.gameDate || currentGame.startDate || "",
           },
@@ -3667,6 +3845,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           heroTitle: editorState.heroTitle,
           // null (no track in any situation) takes the scenario's music away.
           music: editorState.music ?? null,
+          // null (no pack in any language) takes them away.
+          languages: normalizeScenarioLanguages(editorState.languages),
           name: editorState.name,
           prompts,
           subtitle: editorState.subtitle,
@@ -3680,12 +3860,17 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             labelTextColor: editorState.labelTextColor,
             language: editorState.language,
             simulationRules: editorState.simulationRules,
+            projectFundingMode: editorState.projectFundingMode === "nonmonetary" ? "nonmonetary" : "gdp-proxy",
             startingTimelineText: editorState.startingTimelineText,
             // How its wars are fought (runtime/warSettings.js). A scenario that
             // never set any is written none; one whose author took every
             // setting back has its old ones cleared.
             ...(editorState.warSettings || currentWorld.warSettings !== undefined
               ? { warSettings: compactWarSettings(editorState.warSettings) }
+              : {}),
+            // Its own unit types (runtime/unitTypes.js): written only once it has had some.
+            ...(savedUnitTypes(editorState.unitTypes).length > 0 || currentWorld.unitTypes !== undefined
+              ? { unitTypes: savedUnitTypes(editorState.unitTypes) }
               : {}),
           },
         });
@@ -3716,7 +3901,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         // while turns are played, and writing back the game.json and world.json
         // it loaded rolled back the date, round, borders, units and polities.
         const baseline = buildGameEditorState(editorDetails);
-        const gamePatch = changedFields(editorState, baseline, ["country", "gameDate", "language"]);
+        const gamePatch = changedFields(editorState, baseline, ["country", "gameDate", "language", "economicDisplayCurrency"]);
         const worldPatch = changedFields(editorState, baseline, [
           "labelFont",
           "labelHaloColor",
@@ -3946,8 +4131,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // suggestion's map changes beside it (src/Editor/SuggestionReviewPanel.jsx).
   // `gameDate` and `warSettings` are the scenario's as its editor holds them,
   // saved or not (the world's settings where it holds none): what a country's
-  // military figures left empty stand for in the Workshop.
-  const openMapEditorFor = (scenario, world = {}, { review = null, gameDate = "", warSettings } = {}) => {
+  // military figures left empty stand for in the Workshop. `unitTypes` likewise:
+  // the unit types a unit placed there may be of.
+  const openMapEditorFor = (scenario, world = {}, { review = null, gameDate = "", warSettings, unitTypes } = {}) => {
     const isCurrent = mapEditorRequest.begin();
     setMapEditorScenario(scenario);
     setMapEditorSeed(null);
@@ -4028,6 +4214,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         customCities: Boolean(world.customCities),
         // The scenario's starting units, so the Units panel edits what the game starts with.
         units: Array.isArray(world.units) ? world.units : [],
+        // Its own unit types, which a unit placed there may be of (runtime/unitTypes.js).
+        unitTypes: savedUnitTypes(unitTypes === undefined ? world.unitTypes : unitTypes),
         // Its structures, edited as map features that are not cities.
         markers: Array.isArray(world.markers) ? world.markers : [],
         // Its puppet states, for the Countries panel.
@@ -4083,6 +4271,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // Step two of the new-game dialog: the chosen country waits here while the
   // player picks a difficulty.
   const [difficultyPick, setDifficultyPick] = useState(null);
+  const [pickerEconomicCurrency, setPickerEconomicCurrency] = useState("USD");
   // Which opening of the picker its loads belong to (handleScenarioPlay).
   const [pickerRequest] = useState(createLatestRequest);
 
@@ -4091,6 +4280,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setCountryPicker(null);
     setPlayGameId(null);
     setDifficultyPick(null);
+    setPickerEconomicCurrency("USD");
     setCustomRegionData(null);
     setPickerOwnerOverrides(null);
     setPickerColors(null);
@@ -4113,6 +4303,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   useBackToClose(Boolean(countryPicker && difficultyPick), () => setDifficultyPick(null));
   useBackToClose(Boolean(missingScenarioGame), () => setMissingScenarioGame(null));
   useBackToClose(Boolean(replaceEditsTarget), () => setReplaceEditsTarget(null));
+  const cancelBypassStart = () => { setBypassWarning(null); closeCountryPicker(); };
+  useBackToClose(Boolean(bypassWarning), cancelBypassStart);
 
   // Write a map built in the editor into its scenario (region geometry + ownership
   // + colors), then immediately spin up and activate a fresh game from it so the
@@ -4240,7 +4432,13 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     if (editorKind === "scenario" && editorDetails?.scenario?.id === scenarioId) {
       const drawerGame = editorDetails.data?.game ?? {};
       setEditorDetails(savedScenarioDetails);
-      setEditorState((current) => followSavedFields(current, drawerGame, savedScenarioDetails?.data?.game, ["country", "gameDate"]));
+      // (And the countries its unit types name follow the Workshop's renames, as the world's did.)
+      setEditorState((current) => {
+        const followed = followSavedFields(current, drawerGame, savedScenarioDetails?.data?.game, ["country", "gameDate"]);
+        return followed && Array.isArray(renames) && renames.length > 0 && Array.isArray(followed.unitTypes)
+          ? { ...followed, unitTypes: withRenamedUnitTypeOwners(followed.unitTypes, renames) }
+          : followed;
+      });
     }
 
     await uploadScenarioAsset(
@@ -4431,7 +4629,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     if (!gid) return;
     setMenuOpen(false);
     try {
-      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
+      const canonicalCountry = toCountryName(countryCode);
+      const gamePatch = { ...(canonicalCountry ? { country: canonicalCountry } : null), ...(difficulty ? { difficulty } : null) };
       if (Object.keys(gamePatch).length) {
         await saveGame(gid, { gamePatch });
       }
@@ -4454,18 +4653,18 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     const draft = difficultyPick;
     setDifficultyPick(null);
     if (draft?.faction) {
-      startGameForFaction(countryPicker, draft.faction, difficultyId);
+      startGameForFaction(countryPicker, draft.faction, difficultyId, pickerEconomicCurrency);
       return;
     }
     if (draft?.group) {
-      startGameForGroup(countryPicker, draft.group, difficultyId);
+      startGameForGroup(countryPicker, draft.group, difficultyId, pickerEconomicCurrency);
       return;
     }
     const countryCode = draft?.countryCode || "";
     if (playGameId) {
       choosePlayCountry(countryCode, difficultyId);
     } else {
-      startGameForCountry(countryPicker, countryCode, difficultyId);
+      startGameForCountry(countryPicker, countryCode, difficultyId, pickerEconomicCurrency);
     }
   };
 
@@ -4826,6 +5025,19 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     </div>
                   </div>
                 )}
+                {!playGameId && (
+                  <div style={{ marginBottom: "0.85rem" }}>
+                    <label style={{ color: "rgba(255,255,255,0.72)", display: "block", fontSize: "0.76rem", fontWeight: 700, marginBottom: "0.35rem" }}>GDP display currency</label>
+                    <select aria-label="GDP display currency" value={pickerEconomicCurrency} onChange={(event) => setPickerEconomicCurrency(event.target.value)} style={{ ...inputStyle, width: "100%" }}>
+                      {ECONOMIC_DISPLAY_CURRENCIES.map(({ code, name, symbol }) => (
+                        <option key={code} value={code}>{name} ({code}, {symbol})</option>
+                      ))}
+                    </select>
+                    <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.7rem", marginTop: "0.35rem", lineHeight: 1.4 }}>
+                      Display only · fixed 2026 reference rates. The simulation keeps USD accounting; you can change this later.
+                    </div>
+                  </div>
+                )}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem", overflowY: "auto" }}>
                   {DIFFICULTY_LEVELS.map((level) => (
                     <button
@@ -5106,6 +5318,49 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           hub's file in the scenario's place, so their changes go with it: it is
           asked here first, in the prompt above's own dress, and nothing happens
           on any answer but the first button's. */}
+      <Presence open={Boolean(bypassWarning && countryPicker)} value={bypassWarning}>
+        {(pending) => (
+          <div
+            onClick={cancelBypassStart}
+            style={{ alignItems: "center", background: "rgba(0,0,0,0.55)", display: "flex", inset: 0, justifyContent: "center", position: "fixed", zIndex: 10060 }}
+          >
+            <div
+              aria-modal="true"
+              data-testid="bypass-limit-warning"
+              onClick={(event) => event.stopPropagation()}
+              role="dialog"
+              style={{ ...themeSurfaceStyle, borderRadius: 16, color: "#fff", fontFamily: "sans-serif", padding: "1.1rem", width: "min(430px, 92vw)" }}
+            >
+              <div style={{ fontSize: "1rem", fontWeight: 800 }}>Longer prompts</div>
+              <div data-no-translate style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.86rem", fontWeight: 700, marginTop: "0.35rem", overflowWrap: "anywhere" }}>
+                {pending.name}
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.82rem", lineHeight: 1.5, margin: "0.5rem 0 1rem" }}>
+                {BYPASS_LIMIT_WARNING}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
+                <button
+                  className="oh-tap-row"
+                  onClick={() => setBypassWarning(null)}
+                  style={touchFit({ ...themeButtonStyle, minHeight: "2.6rem" }, touch)}
+                  type="button"
+                >
+                  Continue
+                </button>
+                <button
+                  className="oh-tap-row"
+                  onClick={cancelBypassStart}
+                  style={touchFit({ ...themeButtonStyle, minHeight: "2.6rem" }, touch)}
+                  type="button"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </Presence>
+
       <Presence open={Boolean(replaceEditsTarget)} value={replaceEditsTarget}>
         {(pending) => (
           <div
@@ -5210,6 +5465,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                   <button
                     key={tab.id}
                     aria-current={activeTab === tab.id ? "page" : undefined}
+                    data-oh-theme-nav=""
                     className="oh-tap-row"
                     onClick={() => setActiveTab(tab.id)}
                     style={touchFit({
@@ -5324,7 +5580,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                   {continueGames.length > 0 && (
                     <MenuRow description="Pick up exactly where you left off." icon="▶" title="Continue Playing">
                       {continueGames.map((game) => (
-                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} />
+                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} onRecover={setProjectRecoveryGame} />
                       ))}
                     </MenuRow>
                   )}
@@ -5355,7 +5611,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                         child either way, so an empty view still says so. */}
                     {loaded
                       ? browsedGames.map((game) => (
-                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} />
+                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} onRecover={setProjectRecoveryGame} />
                       ))
                       : <MenuCardSkeletons count={isMobile ? 3 : 8} kind="game" width={SHELF_CARD_WIDTH} />}
                   </LibraryCollection>
@@ -5441,6 +5697,15 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         </Suspense>
       )}
 
+      {menuOpen && projectRecoveryGame && (
+        <Suspense fallback={null}>
+          <ProjectRecoveryDialog
+            game={projectRecoveryGame}
+            onClose={() => setProjectRecoveryGame(null)}
+          />
+        </Suspense>
+      )}
+
       <EditorDrawer
         details={editorDetails}
         editorError={editorError || error}
@@ -5464,6 +5729,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         onOpenMapEditor={() => openMapEditorFor(editorDetails?.scenario || null, editorDetails?.data?.world ?? {}, {
           gameDate: editorState?.gameDate ?? editorDetails?.data?.game?.gameDate ?? "",
           warSettings: editorState?.warSettings,
+          unitTypes: editorState?.unitTypes,
         })}
         communityCard={drawerScenario ? (
           <ScenarioCommunityCard

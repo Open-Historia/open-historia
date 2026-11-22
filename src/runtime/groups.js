@@ -6,8 +6,13 @@
 // light tint over the countries' own colours — and it carries a description,
 // which is what the AI is told the group is.
 //
-//   world.groups     { [name]: { name, description, color, formerNames? } }
+//   world.groups     { [name]: { name, description, color, formerNames?, owner? } }
 //   world.groupAreas { [regionId]: groupName }   one group per region, sparse
+//
+// `owner`, where there is one, is the country whose force the group is: a
+// country at war with a group on a third country's land takes that ground as
+// such a group of its own, and annexes nothing (runtime/fronts/day.js
+// settleRegions). In a war its owner is in, its area is its owner's side's.
 //
 // Groups are keyed by their exact name, like countries, so the name the model
 // reads is the name it writes back. Pure: no IO, shared by the game, the
@@ -15,6 +20,7 @@
 
 import { normalizeMilitaryStats } from "./militaryStats.js";
 import { populationFigureOf } from "./populationFigure.js";
+import { firstSentence } from "../../server/sentences.js";
 
 export const GROUP_NAME_MAX = 80;
 export const GROUP_DESCRIPTION_MAX = 1200;
@@ -76,6 +82,7 @@ const normalizeGroup = (key, value) => {
   if (!name) return null;
   const record = isRecord(value) ? value : {};
   const formerNames = [...new Set((Array.isArray(record.formerNames) ? record.formerNames : []).map(normalizeGroupName).filter((former) => former && fold(former) !== fold(name)))].slice(0, 12);
+  const owner = normalizeGroupName(record.owner);
   return {
     name,
     description: normalizeGroupDescription(record.description ?? record.note),
@@ -85,8 +92,26 @@ const normalizeGroup = (key, value) => {
     // Its own military figures, where its author gives them (militaryStats.js).
     ...(normalizeMilitaryStats(record.military) ? { military: normalizeMilitaryStats(record.military) } : {}),
     ...(formerNames.length ? { formerNames } : {}),
+    // The country whose force it is, where it is one (above).
+    ...(owner && fold(owner) !== fold(name) ? { owner } : {}),
   };
 };
+
+// The country a group is the force of, or "" (above).
+export const groupOwnerOf = (groups, name) => {
+  const key = findGroupKey(groups, name);
+  return key ? normalizeGroupName(groups[key]?.owner) : "";
+};
+
+// What a country's force holding ground taken from a group on another country's land is called, and what the AI
+// is told it is. In English, as every name the story writes; the land stays its country's.
+export const forceGroupName = (owner, land) => {
+  const full = clean(`${clean(owner)} Forces in ${clean(land)}`);
+  return full.length <= GROUP_NAME_MAX ? full : normalizeGroupName(`${clean(owner)} Forces`);
+};
+export const forceGroupDescription = (owner, land, from) => normalizeGroupDescription(
+  `${clean(owner)}'s forces holding ground in ${clean(land)}${clean(from) ? ` taken from ${clean(from)}` : ""}. The land is still ${clean(land)}'s: ${clean(owner)} holds it without annexing it.`,
+);
 
 export const normalizeGroups = (raw) => {
   const out = {};
@@ -120,18 +145,22 @@ export const groupRegions = (groupAreas) => {
 
 // ---- the AI's operations ------------------------------------------------------
 
-const OP_ALIASES = {
-  create: "create", add: "create", new: "create", found: "create", form: "create",
-  update: "update", modify: "update", edit: "update", rename: "update", describe: "update", recolor: "update", recolour: "update",
-  dissolve: "dissolve", erase: "dissolve", delete: "dissolve", remove: "dissolve", disband: "dissolve", destroy: "dissolve",
-  take: "take", control: "take", seize: "take", expand: "take", spread: "take", occupy: "take", claim: "take",
-  release: "release", lose: "release", withdraw: "release", retreat: "release", abandon: "release", shrink: "release",
-};
 export const GROUP_OP_KINDS = ["create", "update", "dissolve", "take", "release"];
+const GROUP_OP_SET = new Set(GROUP_OP_KINDS);
+
+// The op exactly as one of GROUP_OP_KINDS (the schema offers no other), its
+// case and spacing aside; "" for any other word, and the op is then left out.
+// A table of English words for them read "claim" and "occupy" as take, a
+// region taken by a group that only claimed it, while the same op written in
+// any other language was dropped (the owner, 2026-11-13: no keywording).
+export const groupOpKind = (value) => {
+  const op = fold(value);
+  return GROUP_OP_SET.has(op) ? op : "";
+};
 
 export const normalizeGroupOp = (entry) => {
   if (!isRecord(entry)) return null;
-  const op = OP_ALIASES[fold(entry.op ?? entry.operation)] ?? "";
+  const op = groupOpKind(entry.op ?? entry.operation);
   const name = normalizeGroupName(entry.name ?? entry.group ?? entry.groupName);
   if (!op || !name) return null;
   const list = Array.isArray(entry.regionIds) ? entry.regionIds
@@ -141,6 +170,7 @@ export const normalizeGroupOp = (entry) => {
   const newName = normalizeGroupName(entry.newName);
   const description = normalizeGroupDescription(entry.description);
   const color = normalizeGroupColor(entry.color);
+  const owner = normalizeGroupName(entry.owner);
   return {
     op,
     name,
@@ -151,6 +181,8 @@ export const normalizeGroupOp = (entry) => {
     note: clean(entry.note).slice(0, 300),
     // An area the front engine moved with the line (see normalizeRegionControlOp).
     ...(entry.by === "front" ? { by: "front" } : {}),
+    // The country whose force a group this op founds is (above): given only when it is created.
+    ...(owner && fold(owner) !== fold(name) ? { owner } : {}),
   };
 };
 
@@ -186,9 +218,11 @@ export const applyGroupOps = ({ groups = {}, groupAreas = {} } = {}, ops = []) =
         name: key,
         description: op.description ?? "",
         color: op.color || defaultGroupColor(key),
+        ...(op.owner ? { owner: op.owner } : {}),
       };
       changes.push({ op: "create", name: key });
-    } else if (op.description || op.color) {
+    } else if ((op.description || op.color) && op.by !== "front") {
+      // (What the front engine says of a force it founds is said once, when it founds it.)
       nextGroups[key] = {
         ...nextGroups[key],
         ...(op.description ? { description: op.description } : {}),
@@ -228,20 +262,59 @@ export const applyGroupOps = ({ groups = {}, groupAreas = {} } = {}, ops = []) =
 // ---- what the AI and the player are shown -----------------------------------
 
 // One line per group for a prompt: exact name, what it is, where it holds.
-// `regionName(id)` turns an id into the name the model should read.
-export const describeGroupsForPrompt = (world, { regionName = (id) => id, maxRegions = 12 } = {}) => {
+// `regionName(id)` turns an id into the name the model should read
+// (nameRefs.js regionNamer), "" for a region the map does not have: such a
+// region is counted and never named, and its id is never shown.
+//
+// `inView(name, regionIds)`: a time skip's test for a group the turn is about
+// (gameplay.js buildGroupsContext). A group out of view keeps its name and its
+// area, which an op on it needs, and its description is cut to its first
+// sentence; the groups in view come first.
+export const GROUP_BRIEF_DESCRIPTION = 160;
+// Its first sentence of 21 characters or more, in any script (server/sentences.js).
+export const briefDescription = (text, max = GROUP_BRIEF_DESCRIPTION) => {
+  const flat = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (flat.length <= max) return flat;
+  const sentence = firstSentence(flat, { min: 21 });
+  if (sentence && sentence.length <= max) return sentence;
+  return `${flat.slice(0, max - 1).replace(/\s+\S*$/, "")}…`;
+};
+// "N regions: A, B, +M more", the first `maxRegions` the map has a name for.
+const describeArea = (regions, regionName, maxRegions) => {
+  const shown = [];
+  for (const id of regions) {
+    if (shown.length >= maxRegions) break;
+    const name = regionName(id);
+    if (name) shown.push(name);
+  }
+  const more = regions.length - shown.length;
+  const list = shown.length ? `: ${shown.join(", ")}${more > 0 ? `, +${more} more` : ""}` : "";
+  return `${regions.length} region${regions.length === 1 ? "" : "s"}${list}`;
+};
+// `standingOf(name)`: a short line of the group's relations and deals in force
+// (Game/AI/groupDealTalk.js describeGroupStanding), "" for none; appended after its area.
+export const describeGroupsForPrompt = (world, { regionName = () => "", maxRegions = 12, inView = null, standingOf = null } = {}) => {
   const groups = normalizeGroups(world?.groups);
   const names = Object.keys(groups);
   if (!names.length) return "";
   const areas = groupRegions(normalizeGroupAreas(world?.groupAreas, groups));
-  return names.map((name) => {
+  const viewed = typeof inView === "function"
+    ? new Set(names.filter((name) => inView(name, areas[name] ?? [])))
+    : null;
+  const ordered = viewed ? [...names.filter((name) => viewed.has(name)), ...names.filter((name) => !viewed.has(name))] : names;
+  return ordered.map((name) => {
     const group = groups[name];
     const regions = areas[name] ?? [];
-    const shown = regions.slice(0, maxRegions).map((id) => `${regionName(id)} (${id})`);
     const where = regions.length
-      ? `controls ${regions.length} region${regions.length === 1 ? "" : "s"}: ${shown.join(", ")}${regions.length > shown.length ? `, +${regions.length - shown.length} more` : ""}`
+      ? `controls ${describeArea(regions, regionName, maxRegions)}`
       : "controls no area on the map";
-    return `- ${name}${group.description ? ` — ${group.description.replace(/\n+/g, " ")}` : ""} [${where}]`;
+    const description = !group.description
+      ? ""
+      : viewed && !viewed.has(name)
+        ? briefDescription(group.description)
+        : group.description.replace(/\n+/g, " ");
+    const standing = typeof standingOf === "function" ? clean(standingOf(name)) : "";
+    return `- ${name}${description ? ` — ${description}` : ""} [${where}]${standing ? ` {${standing}}` : ""}`;
   }).join("\n");
 };
 
@@ -289,15 +362,14 @@ export const groupsOnTerritory = (world, polity, { ownerOf = () => "" } = {}) =>
 
 // What every task that concerns the player is told when the player leads a group.
 // Empty for a country, so nothing changes for anyone else.
-export const describePlayerGroupForPrompt = (world, playerName, { regionName = (id) => id, maxRegions = 12 } = {}) => {
+export const describePlayerGroupForPrompt = (world, playerName, { regionName = () => "", maxRegions = 12 } = {}) => {
   const key = playerGroupKey(world, playerName);
   if (!key) return "";
   const groups = normalizeGroups(world?.groups);
   const group = groups[key];
   const regions = groupRegions(normalizeGroupAreas(world?.groupAreas, groups))[key] ?? [];
-  const shown = regions.slice(0, maxRegions).map((id) => `${regionName(id)} (${id})`);
   const area = regions.length
-    ? `It controls ${regions.length} region${regions.length === 1 ? "" : "s"}: ${shown.join(", ")}${regions.length > shown.length ? `, +${regions.length - shown.length} more` : ""}.`
+    ? `It controls ${describeArea(regions, regionName, maxRegions)}.`
     : "It controls no area on the map yet.";
   const description = group.description ? `: ${group.description.replace(/\n+/g, " ")}` : "";
   return [

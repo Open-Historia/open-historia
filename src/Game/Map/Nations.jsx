@@ -5,7 +5,7 @@ import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { onRegionSelected, onOceanClicked, dismissRegionPopup } from "../Selection/Regions";
 import { onUnitSelected, dismissUnitPopup } from "../Selection/Units";
 import { onFeatureSelected, dismissFeaturePopup } from "../Selection/Features";
-import { saveSettledStructure } from "../../runtime/structurePlacement.js";
+import { SETTLE_NOT_SAVED, saveSettledStructure } from "../../runtime/structurePlacement.js";
 import {
   getInteractionMode,
   setInteractionMode,
@@ -16,7 +16,8 @@ import {
 } from "./unitsController.js";
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
-import { ensurePmtilesProtocol, forgetWorkerSourceCopies } from "./mapLibreSetup.js";
+import { ensurePmtilesProtocol } from "./mapLibreSetup.js";
+import { resolveMissingImages } from "./missingImages.js";
 import { getShownRelief, subscribeShownRelief } from "./scenarioTerrain.js";
 import {
   JSON_URLS,
@@ -33,7 +34,6 @@ import { isConstrainedDevice } from "../../runtime/deviceProfile.js";
 import { useWorkerFetchableUrl } from "./useWorkerFetchableUrl.js";
 import {
   REGIONS_PARSE_HOLD_MS,
-  forgetParsedSourceCopy,
   holdUntilSourceLoaded,
 } from "./regionsSourceMemory.js";
 import { publishGroupIndex, publishPolityIndex } from "../../runtime/placeSearch.js";
@@ -56,8 +56,13 @@ import {
   subscribeGroundWantedIds,
 } from "./frontGround.js";
 import { useActiveFeatures } from "../../runtime/gameFeatures.js";
-import { useActiveGameCountry } from "../../runtime/library.js";
-import { buildDiplomaticStanceMap, getDiplomaticOwnerColor } from "../../runtime/diplomaticStance.js";
+import { hexToRgb } from "../../runtime/diplomaticPalette.js";
+import { getDiplomaticMapState, setDiplomaticHover, setDiplomaticMapState } from "../../runtime/diplomaticMapSettings.js";
+import { readFrontCities } from "../../runtime/frontCities.js";
+import { publishLandedOwners, useDiplomaticMapState, useDiplomaticView } from "./useDiplomaticView.js";
+import DiplomaticLayers from "./DiplomaticLayers.jsx";
+import { buildHatchImage, parseHatchImageId } from "./diplomaticHatch.js";
+import { diplomaticLineFeatures, seatsByCountry } from "./diplomaticSeats.js";
 import { getWorldStateSnapshot, useWorldState } from "./useWorldState.js";
 import { cityPopulationOverridesByTileName, effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import { buildProvinceOutlinePaint, PROVINCE_OUTLINE_MIN_ZOOM } from "./provinceOutlineStyle.js";
@@ -72,7 +77,10 @@ import {
 } from "./ownerColors.js";
 import GroupAreaLayers from "./GroupAreaLayers.jsx";
 import { EMPTY_GROUP_AREA_DATA } from "./vnext/groupAreas.js";
+import { fillStateOperations } from "./vnext/fillStateDiff.js";
 import {
+  DIPLOMATIC_DIMMED_SHARE,
+  DIPLOMATIC_FILL_OPACITY_STOPS,
   POLITICAL_FILL_OPACITY_STOPS,
   POLITY_BOUNDARY_SHADOW_BLUR_STOPS,
   POLITY_BOUNDARY_SHADOW_WIDTH_STOPS,
@@ -86,6 +94,8 @@ import PolityTextLayer, {
   isPolityTextPtr1Enabled,
 } from "./labels/PolityTextLayer.jsx";
 import { buildPolityTextPtr1Records } from "./labels/polityTextRecords.js";
+import { withPlayerStars } from "./labels/playerStars.js";
+import { sharedGamePeople, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 import { POLITY_TEXT_MAX_ZOOM } from "./labels/polityTextLayout.js";
 import {
   buildOwnershipPresentationDelta,
@@ -103,6 +113,7 @@ import {
 
 ensurePmtilesProtocol();
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
+const EMPTY_DIPLOMATIC_AREAS = Object.freeze({ hatch: EMPTY_FEATURE_COLLECTION, outlines: EMPTY_FEATURE_COLLECTION });
 const EMPTY_CUSTOM_REGION_META = Object.freeze({
   ready: false,
   featureCount: 0,
@@ -280,7 +291,7 @@ const shallowEqualColors = (a, b) => {
 // A region whose `claimants` list names the countries contesting it renders
 // striped in their colors (current administrator first). The stripe tile's
 // image id encodes the rgb list itself ("oh-stripes-r_g_b-r_g_b"), so the
-// styleimagemissing handler can rebuild any tile the style asks for — including
+// missing-image resolver can rebuild any tile the style asks for — including
 // after the globe/mercator toggle remounts the map and its images are gone.
 const STRIPE_PREFIX = "oh-stripes-";
 const STRIPE_BAND_PX = 8;
@@ -373,6 +384,22 @@ const buildPoliticalFillOpacity = (hiddenExpression = null) => [
   ]),
 ];
 
+// The diplomatic map's ramp (DIPLOMATIC_FILL_OPACITY_STOPS). A legend entry
+// picked out (`highlight`, the colours its countries are filled with) keeps
+// their strength and draws every other country at DIPLOMATIC_DIMMED_SHARE of
+// it: one paint expression read against the fill colour each region already
+// carries, never a write per region.
+export const buildDiplomaticFillOpacity = (hiddenExpression = null, highlight = null) => [
+  "interpolate", ["linear"], ["zoom"],
+  ...DIPLOMATIC_FILL_OPACITY_STOPS.flatMap(([zoom, opacity]) => {
+    const strength = withTypeFillOpacity(opacity);
+    const shown = highlight?.length
+      ? ["case", ["in", ["to-string", ["feature-state", "fillColor"]], ["literal", highlight]], strength, ["*", strength, DIPLOMATIC_DIMMED_SHARE]]
+      : strength;
+    return [zoom, hiddenExpression ? ["case", hiddenExpression, 0, shown] : shown];
+  }),
+];
+
 // The same expression over a scenario's own lighter stops, used only while its
 // relief tiles are on screen (Map/scenarioTerrain.js). Same shape: zoom stays
 // the top-level input, visibility lives in each stop.
@@ -418,17 +445,22 @@ const WorldMap = ({ isGlobe = false }) => {
     polityOverrides,
     groups,
     groupAreas,
-    puppets,
-    wars,
-    relations,
-    agreements,
     regionTypes,
     labelFont,
     labelHaloColor,
     labelTextColor,
   } = useWorldState();
-  const playerCountry = useActiveGameCountry();
-  const mapMode = useMapSettingValue(MAP_SETTING_KEYS.mapMode, "political");
+  // The diplomatic map's view (useDiplomaticView.js), shared with the
+  // battlefields' ground (FrontLayers.jsx) and the legend: null on the
+  // political map.
+  const diplomaticView = useDiplomaticView();
+  const diplomaticHighlight = useDiplomaticMapState().highlight;
+  const diplomaticViewRef = useRef(diplomaticView);
+  diplomaticViewRef.current = diplomaticView;
+  // The Relations view draws each group's area in its standing with the focus (diplomaticViews.js `groups`).
+  const diplomaticGroupColors = useMemo(() => (diplomaticView?.view === "relations" && diplomaticView.groups?.length
+    ? Object.fromEntries(diplomaticView.groups.map((group) => [group.name, group.color]))
+    : null), [diplomaticView]);
   // A region a battlefield has taken in name but not yet in full is DRAWN as
   // its old holder's until all of it is held (frontOwnership.js). Everything
   // below that follows ownership (fills, borders, labels) reads this, and so
@@ -497,6 +529,11 @@ const WorldMap = ({ isGlobe = false }) => {
   const [groupAreaData, setGroupAreaData] = useState(EMPTY_GROUP_AREA_DATA);
   const groupAreaInputRef = useRef({ groupAreas, groups });
   const groupAreaRequestRef = useRef(null);
+  // The diplomatic map's hatching and an institution's outline (DiplomaticLayers.jsx),
+  // asked of the same worker the same way.
+  const [diplomaticAreaData, setDiplomaticAreaData] = useState(EMPTY_DIPLOMATIC_AREAS);
+  const diplomaticAreaInputRef = useRef(null);
+  const diplomaticAreaRequestRef = useRef(null);
   const [polityLabelCollections, setPolityLabelCollections] = useState(EMPTY_POLITY_LABEL_COLLECTIONS);
   const [derivedSourceEpoch, setDerivedSourceEpoch] = useState(0);
   const boundaryFeatureMapRef = useRef(new Map());
@@ -671,28 +708,36 @@ const WorldMap = ({ isGlobe = false }) => {
   useEffect(() => {
     const mapInstance = map?.getMap ? map.getMap() : map;
     if (!mapInstance?.on) return undefined;
-    const onMissing = (event) => {
-      const colors = parseStripeImageId(event?.id);
-      if (!colors) return;
-      if (mapInstance.hasImage?.(event.id)) return;
+    return resolveMissingImages(mapInstance, (id) => {
+      const colors = parseStripeImageId(id);
+      // The diplomatic map's hatching (diplomaticHatch.js), drawn the same way.
+      const hatch = colors ? null : parseHatchImageId(id);
+      if (!colors && !hatch) return;
+      if (mapInstance.hasImage?.(id)) return;
       try {
-        mapInstance.addImage(event.id, buildStripeImage(colors), { pixelRatio: 1 });
+        mapInstance.addImage(id, colors ? buildStripeImage(colors) : buildHatchImage(hatch), { pixelRatio: 1 });
       } catch (error) {
         console.warn("Failed to build stripe tile:", error);
       }
-    };
-    mapInstance.on("styleimagemissing", onMissing);
-    return () => mapInstance.off("styleimagemissing", onMissing);
+    });
   }, [map]);
 
   // Pipeline v2: live polity label geometry is worker-owned. The UI thread only
   // receives compact ready-to-render point/line collections; no polygon fitting
   // or territorial geometry work is allowed in React.
   const useLivePolityLabels = polityLabelCollections.labelData.features.length > 0;
-  const ptr1PolityTextRecords = useMemo(() => buildPolityTextPtr1Records({
+  const workerPolityTextRecords = useMemo(() => buildPolityTextPtr1Records({
     ptrLabelData: polityLabelCollections.ptrLabelData,
     labelData: polityLabelCollections.labelData,
   }), [polityLabelCollections.ptrLabelData, polityLabelCollections.labelData]);
+  // In a shared game the label of a country a person plays wears a star
+  // (labels/playerStars.js). The list changes only when the seats do, and in
+  // single player it is empty and the records go through untouched.
+  const sharedPeople = useSyncExternalStore(subscribeSharedGameRole, sharedGamePeople, sharedGamePeople);
+  const ptr1PolityTextRecords = useMemo(
+    () => withPlayerStars(workerPolityTextRecords, sharedPeople),
+    [workerPolityTextRecords, sharedPeople],
+  );
   const ptr1PolityTextRequested = Boolean(
     ptr1PolityTextEnabled
     && worldKnown
@@ -1129,17 +1174,31 @@ const WorldMap = ({ isGlobe = false }) => {
         };
     };
 
+    // On the diplomatic map's Relations view the country clicked (or the one a
+    // clicked city or structure stands in) becomes the focus; its card still
+    // opens, the way to its dossier as ever.
+    const focusDiplomacyOn = (owner) => {
+      if (owner && diplomaticViewRef.current?.view === "relations" && getDiplomaticMapState().focus !== owner) {
+        setDiplomaticMapState({ focus: owner });
+      }
+    };
+
     const mode = getInteractionMode();
     // The map draws world copies either side of the date line and a click on
     // one reports its unwrapped longitude (e.g. 210); a unit is stored in range.
     const clicked = event.lngLat?.wrap?.() ?? event.lngLat;
 
     // Move on an approximately placed structure's popup (Selection/Features.jsx):
-    // it goes where the player clicks, sea included, and is settled.
+    // it goes where the player clicks, sea included, and is settled. One the
+    // host refused (a shared game: onto another's land) stays armed and says
+    // why in the Forces banner, for another tap, as a deploy does.
     if (mode.kind === "structure-place") {
-      void saveSettledStructure(mode.markerId, { lng: event.lngLat.lng, lat: event.lngLat.lat })
-        .catch((error) => logDebugEvent("warn", "[map] Moving the structure failed.", error));
       clearInteractionMode();
+      void saveSettledStructure(mode.markerId, { lng: clicked.lng, lat: clicked.lat })
+        .catch((error) => {
+          logDebugEvent("warn", "[map] Moving the structure failed.", error);
+          if (getInteractionMode().kind === "idle") setInteractionMode({ ...mode, error: String(error?.message || "") || SETTLE_NOT_SAVED });
+        });
       return;
     }
 
@@ -1174,6 +1233,7 @@ const WorldMap = ({ isGlobe = false }) => {
 
     const featureHit = featureAt();
     if (featureHit) {
+      focusDiplomacyOn(featureHit.hostRegion?.owner);
       dismissRegionPopup();
       onFeatureSelected(featureHit);
       return;
@@ -1194,6 +1254,7 @@ const WorldMap = ({ isGlobe = false }) => {
       ? regionClaimants[regionId]
       : (Array.isArray(props.claimants) ? props.claimants : []);
     const claimants = Array.isArray(rawClaimants) ? rawClaimants : [];
+    focusDiplomacyOn(owner);
     onRegionSelected({
       GID_0: owner || (owner === "" ? "" : toCountryName(gid0)),
       COUNTRY: hit.country,
@@ -1212,6 +1273,49 @@ const WorldMap = ({ isGlobe = false }) => {
     map.on("click", handleRegionClick);
     return () => map.off("click", handleRegionClick);
   }, [handleRegionClick, map]);
+
+  // The diplomatic map's tooltip: the country under a mouse pointer, read once
+  // a frame from the fills the click reads (GameUI/DiplomaticLegend.jsx draws
+  // it). Not on a touch screen, where there is no pointer to follow.
+  const diplomaticOnMap = Boolean(diplomaticView);
+  useEffect(() => {
+    const mapInstance = map?.getMap ? map.getMap() : map;
+    if (!diplomaticOnMap || !mapInstance?.on) return undefined;
+    if (typeof window !== "undefined" && window.matchMedia?.("(hover: none)").matches) return undefined;
+    let frame = 0;
+    let pending = null;
+    const layers = ["custom-regions-repair-fill", "custom-regions-fill", "regions-fill", "custom-regions-repair-fill-far", "custom-regions-fill-far"];
+    const read = () => {
+      frame = 0;
+      const event = pending;
+      pending = null;
+      if (!event || !mapInstance.style) return;
+      const present = layers.filter((id) => mapInstance.getLayer(id));
+      const hit = present.length ? mapInstance.queryRenderedFeatures(event.point, { layers: present })[0] : null;
+      const props = hit?.properties ?? {};
+      const regionId = String(props.GID_1 ?? props.id ?? "");
+      const owner = regionId ? (ownerLookupRef.current.get(regionId) ?? props.owner ?? "") : "";
+      setDiplomaticHover(owner ? { owner: String(owner), x: Math.round(event.point.x), y: Math.round(event.point.y) } : null);
+    };
+    const move = (event) => {
+      pending = event;
+      if (!frame) frame = requestAnimationFrame(read);
+    };
+    const leave = () => {
+      pending = null;
+      setDiplomaticHover(null);
+    };
+    mapInstance.on("mousemove", move);
+    mapInstance.on("mouseout", leave);
+    mapInstance.on("movestart", leave);
+    return () => {
+      mapInstance.off("mousemove", move);
+      mapInstance.off("mouseout", leave);
+      mapInstance.off("movestart", leave);
+      if (frame) cancelAnimationFrame(frame);
+      setDiplomaticHover(null);
+    };
+  }, [diplomaticOnMap, map]);
 
   // The palette is re-read whenever colors.json is written (every AI turn can mint
   // or recolour a polity, and the main menu's faction creator writes the player's
@@ -1248,20 +1352,23 @@ const WorldMap = ({ isGlobe = false }) => {
     [colorMap, polityOverrides],
   );
 
-  const diplomaticStanceMap = useMemo(() => {
-    if (mapMode !== "diplomatic") return null;
-    return buildDiplomaticStanceMap({ playerCountry, wars, agreements, relations, puppets });
-  }, [mapMode, playerCountry, wars, agreements, relations, puppets]);
-
+  // A new view or focus gives a new colour function, and the fills' sync
+  // below writes only the regions whose colour it changed.
   const ownerColorCss = useCallback(
     (owner) => {
       if (!owner) return NEUTRAL_LAND_COLOR;
-      if (mapMode === "diplomatic" && diplomaticStanceMap) {
-        return getDiplomaticOwnerColor(owner, diplomaticStanceMap);
-      }
+      if (diplomaticView) return diplomaticView.colorOf(owner);
       return ownerDisplayCss(resolveOwnerRgb, owner, NEUTRAL_LAND_COLOR);
     },
-    [mapMode, diplomaticStanceMap, resolveOwnerRgb],
+    [diplomaticView, resolveOwnerRgb],
+  );
+  // A disputed or occupied region's stripes in the colours the map shows its
+  // claimants in: the view's on the diplomatic map, never the political ones.
+  const stripeRgbOf = useCallback(
+    (name) => (diplomaticView
+      ? hexToRgb(diplomaticView.colorOf(name)) ?? fallbackRgbFromOwner(name)
+      : resolveOwnerRgb(name) ?? fallbackRgbFromOwner(name)),
+    [diplomaticView, resolveOwnerRgb],
   );
 
   // Worker geometry is keyed by canonical political owner, so label metadata
@@ -1417,23 +1524,6 @@ const WorldMap = ({ isGlobe = false }) => {
     };
   }, [map, derivedSourceEpoch]);
 
-  // MapLibre keeps copies of the whole parsed regions file on the page and in its
-  // worker once it has loaded it; they are dropped as soon as it lands
-  // (regionsSourceMemory.js).
-  const regionsFetchUrlRef = useRef("");
-  regionsFetchUrlRef.current = regionsGeojsonFetchUrl || "";
-  useEffect(() => {
-    const mapInstance = map?.getMap ? map.getMap() : map;
-    if (!mapInstance?.on) return undefined;
-    const forget = (event) => {
-      if (event?.sourceId !== "custom-regions-source") return;
-      if (forgetParsedSourceCopy(mapInstance, "custom-regions-source", regionsFetchUrlRef.current)) forgetWorkerSourceCopies("custom-regions-source");
-    };
-    mapInstance.on("sourcedata", forget);
-    forget({ sourceId: "custom-regions-source" });
-    return () => mapInstance.off?.("sourcedata", forget);
-  }, [map]);
-
   // Political Cartography Pipeline v2. Canonical per-region ownership remains
   // the visual truth. The worker owns topology, political borders and polity
   // label geometry; only a result for the newest desired political revision may
@@ -1546,6 +1636,24 @@ const WorldMap = ({ isGlobe = false }) => {
     };
     groupAreaRequestRef.current = requestGroupAreas;
 
+    let diplomaticAreaRequest = 0;
+    let diplomaticAreaAsked = "";
+    const requestDiplomaticAreas = () => {
+      if (!groupAreasReady || worker !== polityBoundaryWorkerRef.current) return;
+      const input = diplomaticAreaInputRef.current;
+      if (!input || (!input.hatchCount && !input.outlineCount)) {
+        diplomaticAreaAsked = "";
+        diplomaticAreaRequest += 1;
+        setDiplomaticAreaData(EMPTY_DIPLOMATIC_AREAS);
+        return;
+      }
+      if (input.signature === diplomaticAreaAsked) return;
+      diplomaticAreaAsked = input.signature;
+      diplomaticAreaRequest += 1;
+      worker.postMessage({ type: "diplomatic-areas", requestId: `diplomatic-areas-${diplomaticAreaRequest}`, geometryEpoch, hatch: input.hatch, outline: input.outline });
+    };
+    diplomaticAreaRequestRef.current = requestDiplomaticAreas;
+
     // The battlefields' ground (frontGround.js): asked of THIS worker once it
     // has its catalog, whenever the battlefields change, and again once the
     // owners or the shapes it was worked out from have. A mesh is sent once:
@@ -1592,7 +1700,6 @@ const WorldMap = ({ isGlobe = false }) => {
           onRelease: (reason) => {
             parseHeld = false;
             recordMapTrace("nations:regions-parse-released", { reason });
-            if (forgetParsedSourceCopy(holdMap, "custom-regions-source", regionsGeojsonFetchUrl)) forgetWorkerSourceCopies("custom-regions-source");
             const message = heldMessage;
             heldMessage = null;
             if (message && worker === polityBoundaryWorkerRef.current) worker.postMessage(message);
@@ -1686,6 +1793,20 @@ const WorldMap = ({ isGlobe = false }) => {
         return;
       }
 
+      if (result?.messageType === "diplomatic-areas-result") {
+        if (result.geometryEpoch && result.geometryEpoch !== geometryEpoch) return;
+        if (result.requestId !== `diplomatic-areas-${diplomaticAreaRequest}`) return;
+        if (result.error) {
+          console.warn("The diplomatic map's hatching could not be drawn:", result.error);
+          return;
+        }
+        setDiplomaticAreaData({
+          hatch: result.hatch?.features ? result.hatch : EMPTY_FEATURE_COLLECTION,
+          outlines: result.outlines?.features ? result.outlines : EMPTY_FEATURE_COLLECTION,
+        });
+        return;
+      }
+
       if (result?.messageType === "group-areas-result") {
         if (result.geometryEpoch && result.geometryEpoch !== geometryEpoch) return;
         if (result.requestId !== `group-areas-${groupAreaRequest}`) return;
@@ -1717,9 +1838,11 @@ const WorldMap = ({ isGlobe = false }) => {
         setInitialRegionRepairSettled(true);
         if (result.disputedData) setDisputedRegionData(result.disputedData);
         // Repaired shapes replace malformed ones in the groups' tint too, and
-        // in the battlefields' ground.
+        // in the battlefields' ground, and in the diplomatic map's hatching.
         requestGroupAreas();
         requestBattlefieldGround();
+        diplomaticAreaAsked = "";
+        requestDiplomaticAreas();
         if (Number.isFinite(result.stats?.elapsedMs)) {
           reportPerfOperation("map targeted region render repair", result.stats.elapsedMs, {
             warnAt: PERF_MAP_WARN_MS,
@@ -1757,6 +1880,8 @@ const WorldMap = ({ isGlobe = false }) => {
         catalogReady = true;
         groupAreasReady = true;
         requestGroupAreas();
+        diplomaticAreaAsked = "";
+        requestDiplomaticAreas();
         groundReady = true;
         requestBattlefieldGround();
         const metadata = { ...EMPTY_CUSTOM_REGION_META, ...(result.metadata ?? {}), ready: true };
@@ -2200,7 +2325,7 @@ const WorldMap = ({ isGlobe = false }) => {
           const key = String(name ?? "").trim();
           if (!key || seen.has(key)) continue;
           seen.add(key);
-          stripeRgbs.push(resolveOwnerRgb(key) ?? fallbackRgbFromOwner(key));
+          stripeRgbs.push(stripeRgbOf(key));
         }
         const stripes = stripeRgbs.length >= 2 ? stripeImageId(stripeRgbs) : null;
         return {
@@ -2213,7 +2338,7 @@ const WorldMap = ({ isGlobe = false }) => {
         };
       }),
     };
-  }, [disputedRegionData, ownerColorCss, regionClaimants, regionOwnershipOverrides, resolveOwnerRgb]);
+  }, [disputedRegionData, ownerColorCss, regionClaimants, regionOwnershipOverrides, stripeRgbOf]);
 
   // GADM disputed regions also paint the stock tiles (the crisp close-detail
   // twin), read from the worker's compact metadata rather than a parsed
@@ -2233,12 +2358,12 @@ const WorldMap = ({ isGlobe = false }) => {
         const key = String(name ?? "").trim();
         if (!key || seen.has(key)) continue;
         seen.add(key);
-        stripeRgbs.push(resolveOwnerRgb(key) ?? fallbackRgbFromOwner(key));
+        stripeRgbs.push(stripeRgbOf(key));
       }
       if (stripeRgbs.length >= 2) stops.push(id, stripeImageId(stripeRgbs));
     }
     return stops;
-  }, [fullyAuthoredGeometry, customRegionMeta.records, regionClaimants, regionOwnershipOverrides, resolveOwnerRgb]);
+  }, [fullyAuthoredGeometry, customRegionMeta.records, regionClaimants, regionOwnershipOverrides, stripeRgbOf]);
 
   const ownerByRegionId = useMemo(() => {
     const lookup = new Map();
@@ -2265,6 +2390,67 @@ const WorldMap = ({ isGlobe = false }) => {
   useEffect(() => {
     ownerLookupRef.current = ownerByRegionId;
   }, [ownerByRegionId]);
+
+  // The owners of the map's land, which the diplomatic legend counts.
+  useEffect(() => {
+    publishLandedOwners([...new Set(ownerByRegionId.values())]);
+  }, [ownerByRegionId]);
+
+  // What the diplomatic map hatches and outlines, region by region, for the
+  // regions worker to cut (DiplomaticLayers.jsx); asked again only when it changes.
+  useEffect(() => {
+    let input = null;
+    if (diplomaticView) {
+      const hatch = {};
+      const outline = {};
+      const parts = [];
+      let hatchCount = 0;
+      let outlineCount = 0;
+      for (const [regionId, owner] of ownerByRegionId) {
+        if (!owner) continue;
+        const kind = diplomaticView.hatchOf(owner, regionId);
+        const area = diplomaticView.areaOf(owner);
+        if (kind) {
+          hatch[regionId] = kind;
+          hatchCount += 1;
+        }
+        if (area) {
+          outline[regionId] = area;
+          outlineCount += 1;
+        }
+        if (kind || area) parts.push(`${regionId}=${kind}|${area}`);
+      }
+      input = { hatch, outline, hatchCount, outlineCount, signature: parts.join(";") };
+    }
+    diplomaticAreaInputRef.current = input;
+    diplomaticAreaRequestRef.current?.();
+  }, [diplomaticView, ownerByRegionId]);
+
+  // The capitals the Relations view's lines run between (diplomaticSeats.js):
+  // the cities file is read once a map, and only when there are lines to draw.
+  const wantsSeats = Boolean(diplomaticView?.lines?.length);
+  const [seatCities, setSeatCities] = useState({ records: null, cities: null });
+  useEffect(() => {
+    if (!wantsSeats || seatCities.records === customRegionMeta.records) return undefined;
+    let cancelled = false;
+    const records = customRegionMeta.records;
+    readFrontCities(getWorldStateSnapshot() ?? {}, null)
+      .then((cities) => { if (!cancelled) setSeatCities({ records, cities: Array.isArray(cities) ? cities : [] }); })
+      .catch(() => { if (!cancelled) setSeatCities({ records, cities: [] }); });
+    return () => { cancelled = true; };
+  }, [customRegionMeta.records, seatCities.records, wantsSeats]);
+  const diplomaticSeats = useMemo(() => (wantsSeats && seatCities.cities && seatCities.records === customRegionMeta.records
+    ? seatsByCountry({ cities: seatCities.cities, records: customRegionMeta.records ?? [], ownerOf: (regionId) => ownerByRegionId.get(regionId) ?? "" })
+    : null), [customRegionMeta.records, ownerByRegionId, seatCities, wantsSeats]);
+  const diplomaticLines = useMemo(
+    () => (diplomaticSeats ? diplomaticLineFeatures(diplomaticView?.lines, diplomaticSeats) : EMPTY_FEATURE_COLLECTION),
+    [diplomaticSeats, diplomaticView],
+  );
+  const diplomaticSeat = useMemo(() => {
+    const focus = diplomaticView?.view === "relations" ? diplomaticView.focusOwners?.[0] ?? diplomaticView.focusName : "";
+    const seat = focus && diplomaticSeats?.get(diplomaticView.focusKey);
+    return seat ? { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [seat.lng, seat.lat] } }] } : EMPTY_FEATURE_COLLECTION;
+  }, [diplomaticSeats, diplomaticView]);
 
   const editedStockIds = useMemo(
     () => (customActive ? customRegionMeta.editedStockIds ?? [] : []),
@@ -2446,15 +2632,7 @@ const WorldMap = ({ isGlobe = false }) => {
       }
       const applied = appliedCustomFillStateRef.current;
       const held = ownershipPresentation.holds;
-      const operations = [];
-      for (const [regionId, fillColor] of next) {
-        if (held.has(regionId) || applied.get(regionId) === fillColor) continue;
-        operations.push({ kind: "set", regionId, fillColor });
-      }
-      for (const regionId of applied.keys()) {
-        if (held.has(regionId) || next.has(regionId)) continue;
-        operations.push({ kind: "remove", regionId });
-      }
+      const operations = fillStateOperations(next, applied, held);
 
       // Track only feature-state writes that actually reached MapLibre. Held
       // regions intentionally stay on their previous visual revision.
@@ -2983,17 +3161,7 @@ const WorldMap = ({ isGlobe = false }) => {
 
       const applied = appliedTileFillStateRef.current;
       const held = ownershipPresentation.holds;
-      const operations = [];
-
-      for (const [regionId, fillColor] of next) {
-        if (held.has(regionId) || applied.get(regionId) === fillColor) continue;
-        operations.push({ kind: "set", regionId, fillColor });
-      }
-
-      for (const regionId of applied.keys()) {
-        if (held.has(regionId) || next.has(regionId)) continue;
-        operations.push({ kind: "remove", regionId });
-      }
+      const operations = fillStateOperations(next, applied, held);
 
       // Small ownership changes should remain immediate. Initial scenario load can
       // involve several thousand feature-state writes; split that work into tiny
@@ -3158,22 +3326,27 @@ const WorldMap = ({ isGlobe = false }) => {
     () => (reliefFillStops ? buildScenarioReliefFillOpacity(reliefFillStops) : POLITICAL_FILL_OPACITY),
     [reliefFillStops],
   );
+  // The diplomatic map draws its colours stronger than the political map's,
+  // whatever relief is shown, and dims what a legend entry does not pick out.
+  const diplomaticOn = Boolean(diplomaticView);
+  const highlightColors = diplomaticOn ? diplomaticHighlight?.colors ?? null : null;
+  const hiddenAwareFillOpacity = useMemo(() => (diplomaticOn
+    ? buildDiplomaticFillOpacity(FILL_HIDDEN, highlightColors)
+    : reliefFillStops
+      ? buildScenarioReliefFillOpacity(reliefFillStops, FILL_HIDDEN)
+      : buildPoliticalFillOpacity(FILL_HIDDEN)), [diplomaticOn, highlightColors, reliefFillStops]);
   const stockRegionsFillPaint = useMemo(
     () => customActive
       ? {
           "fill-color": DETAIL_FILL_COLOR,
-          "fill-opacity": reliefFillStops ? buildScenarioReliefFillOpacity(reliefFillStops, FILL_HIDDEN) : buildPoliticalFillOpacity(FILL_HIDDEN),
+          "fill-opacity": hiddenAwareFillOpacity,
           "fill-antialias": false,
           "fill-outline-color": DETAIL_FILL_COLOR,
         }
       : { "fill-opacity": 0 },
-    [customActive, reliefFillStops],
+    [customActive, hiddenAwareFillOpacity],
   );
-  const transitionAwareFillOpacity = useMemo(() => (customFlag
-    ? (reliefFillStops
-      ? buildScenarioReliefFillOpacity(reliefFillStops, FILL_HIDDEN)
-      : buildPoliticalFillOpacity(FILL_HIDDEN))
-    : 0), [customFlag, reliefFillStops]);
+  const transitionAwareFillOpacity = customFlag ? hiddenAwareFillOpacity : 0;
   const customFarFillOpacity = transitionAwareFillOpacity;
   const customAuthoredFillOpacity = transitionAwareFillOpacity;
 
@@ -3508,7 +3681,7 @@ const WorldMap = ({ isGlobe = false }) => {
         </Source>
       )}
 
-      <GroupAreaLayers data={groupAreaData} visible={Boolean(customActive && worldKnown && groupsOn)} hasMapLayer={hasMapLayer} />
+      <GroupAreaLayers data={groupAreaData} visible={Boolean(customActive && worldKnown && groupsOn)} hasMapLayer={hasMapLayer} colorOf={diplomaticGroupColors} />
 
       <Source id="polity-boundaries-source" type="geojson" data={EMPTY_FEATURE_COLLECTION} tolerance={0.25}>
         <Layer
@@ -3535,6 +3708,17 @@ const WorldMap = ({ isGlobe = false }) => {
           }}
         />
       </Source>
+
+      <DiplomaticLayers
+        active={Boolean(diplomaticView && customActive && worldKnown)}
+        hatch={diplomaticAreaData.hatch}
+        outlines={diplomaticAreaData.outlines}
+        lines={diplomaticLines}
+        seat={diplomaticSeat}
+        frontPairs={diplomaticView?.frontPairs}
+        focusOwners={diplomaticView?.view === "relations" ? diplomaticView.focusOwners : null}
+        hasMapLayer={hasMapLayer}
+      />
 
       <PolityTextLayer
         map={map}

@@ -30,6 +30,7 @@ permissions:
 jobs:
   apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       # A dispatch run picks its own branch from a dropdown, and `beta` is in that
       # dropdown too — a run from there would publish the beta's code as the stable
@@ -61,16 +62,26 @@ jobs:
             exit 1
           fi
 
+      # The npm cache is keyed by package-lock.json alone, the same key the
+      # Tests and website workflows use, so it adds nothing to the cache storage.
       - uses: actions/setup-node@v5
         with:
+          cache: npm
           # Node 24 is the Active LTS; Node 20 went end-of-life in March 2026 and
           # GitHub removes the Node 20 action runtime on 23 Sep 2026.
           node-version: 24
 
+      # Gradle's dependencies and wrapper, kept between builds by the Android
+      # project's build files instead of downloaded again every run.
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
+          cache: gradle
+          cache-dependency-path: |
+            mobile/android/*.gradle*
+            mobile/android/app/*.gradle*
+            mobile/android/gradle/wrapper/gradle-wrapper.properties
 
       # VITE_APP_BUILD is what makes the in-app update banner take its APK path:
       # it compares this number against the one in the release manifest and offers

@@ -47,6 +47,11 @@ const ECONOMY_NUMERIC_KEYS = Object.freeze([
 ]);
 
 const clean = (value) => String(value ?? "").trim();
+// Structured tool calls sometimes double-escape line breaks within a row-based
+// string field. Decode ONLY line separators; keep each row's strict native
+// identity, bucket count, numeric and percentage validation unchanged.
+export const normalizeStatsTransportRows = (value) =>
+  clean(value).replace(/\\r\\n|\\n|\\r/g, "\n");
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const finite = (value) => Number.isFinite(Number(value));
 
@@ -142,47 +147,36 @@ export const countryStatsTrackingMonthsElapsed = (fromDate, toDate) => {
   return Math.max(0, months);
 };
 
-const STAT_SCALES = Object.freeze({
-  trillion: 1e12, tn: 1e12, t: 1e12,
-  billion: 1e9, bn: 1e9, b: 1e9,
-  million: 1e6, mn: 1e6, m: 1e6,
-  thousand: 1e3, k: 1e3,
-});
-const STAT_SCALE_AFTER_NUMBER = /^\s*(trillion|tn|t|billion|bn|b|million|mn|m|thousand|k)(?![a-z])/;
+// A figure as the sheet keeps it: a number in base units (dollars, people,
+// percent), as every schema asks for it. Text is read only when it IS a plain
+// number ("48500000000", "-3.5", "1.2e12"): what an old save or a line of the
+// game's own format ("~" rows) holds. Never by English scale words, and never
+// by guessing what a comma means: "1.2 trillion" was read, "1,2 billion" was
+// read as 12 and so was "1,2 milliard", and "1,2 Billionen" not at all.
+// Anything else is no figure.
+const PLAIN_NUMBER = /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?$/i;
 
 export const parseStatNumber = (value) => {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value !== "string") return null;
-
-  const text = value.trim();
-  if (!text) return null;
-
-  const normalized = text
-    .replace(/\u00a0/g, " ")
-    .replace(/,/g, "")
-    .replace(/−/g, "-")
-    .toLowerCase();
-
-  // The first number and the scale word written right after it, read together:
-  // "48.5 billion", "$48.5B", "€3.1tn", "850mn", "1.2 trillion". Only that
-  // number's own suffix scales it, so "€520 billion (about $0.6 trillion)" is
-  // 520 billion, and a unit word that merely starts with a scale letter
-  // ("5 months", "3 tonnes") scales nothing.
-  const match = normalized.match(/[-+]?\d+(?:\.\d+)?/);
-  if (!match) return null;
-
-  const scale = normalized.slice(match.index + match[0].length).match(STAT_SCALE_AFTER_NUMBER);
-  const number = Number(match[0]) * (scale ? STAT_SCALES[scale[1]] : 1);
+  // (The minus sign as typeset, U+2212, is a minus.)
+  const text = value.trim().replace(/^−/, "-");
+  if (!PLAIN_NUMBER.test(text)) return null;
+  const number = Number(text);
   return Number.isFinite(number) ? number : null;
 };
 
+// A percent field may carry its own unit, the sign "%", which says nothing
+// in any language that the field does not.
+const percentText = (value) => (typeof value === "string" ? value.trim().replace(/\s*%$/, "") : value);
+
 const normalizePercent = (value) => {
-  const parsed = parseStatNumber(value);
+  const parsed = parseStatNumber(percentText(value));
   return parsed == null ? null : clamp(parsed, 0, 100);
 };
 
 const normalizeSignedPercent = (value) => {
-  const parsed = parseStatNumber(value);
+  const parsed = parseStatNumber(percentText(value));
   return parsed == null ? null : clamp(parsed, -1000, 1000);
 };
 
@@ -344,12 +338,29 @@ const normalizeEconomy = (value) => {
   return Object.keys(out).length ? out : undefined;
 };
 
+// Whole-polity GDP/capita is arithmetic, never an independent AI reading.
+// Component-backed sheets use aggregateTerritorialEconomy; this handles old
+// and nonterritorial sheets where GDP and population exist without components.
+const withDerivedWholeGdpPerCapita = (sheet) => {
+  const population = parseStatNumber(sheet?.population?.total);
+  const gdp = parseStatNumber(sheet?.economy?.gdp);
+  if (!(population > 0) || !Number.isFinite(gdp) || gdp < 0) return sheet;
+  return {
+    ...sheet,
+    economy: { ...sheet.economy, gdpPerCapita: Math.round((gdp / population) * 100) / 100 },
+  };
+};
+
 const normalizePopulation = (value) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const out = {};
   for (const key of ["total", "coreIntegrated", "otherTerritories"]) {
     const number = parseStatNumber(value[key]);
     if (Number.isFinite(number) && number >= 0) out[key] = Math.round(number);
+  }
+  const annualGrowthRate = parseStatNumber(value.annualGrowthRate);
+  if (Number.isFinite(annualGrowthRate) && annualGrowthRate >= -20 && annualGrowthRate <= 20) {
+    out.annualGrowthRate = Math.round(annualGrowthRate * 10000) / 10000;
   }
   return Object.keys(out).length ? out : undefined;
 };
@@ -367,12 +378,26 @@ export const normalizeCountryStatContinuity = (value) => {
   const territorialFingerprint = clean(value.territorialFingerprint);
   const assessedRound = Number(value.assessedRound);
   const populationCalibrationVersion = Number(value.populationCalibrationVersion);
+  const lastProgressedDate = clean(value.lastProgressedDate);
+  const populationRemainder = Number(value.populationRemainder);
+  const gdpRemainder = Number(value.gdpRemainder);
 
   if (assessedDate) out.assessedDate = assessedDate;
+  if (lastProgressedDate) out.lastProgressedDate = lastProgressedDate;
+  if (Number.isFinite(populationRemainder) && Math.abs(populationRemainder) <= 0.5) out.populationRemainder = populationRemainder;
+  if (Number.isFinite(gdpRemainder) && Math.abs(gdpRemainder) <= 1e9) out.gdpRemainder = gdpRemainder;
+  if (typeof value.progressionBlocked === "boolean") out.progressionBlocked = value.progressionBlocked;
   if (Number.isFinite(assessedRound) && assessedRound >= 0) {
     out.assessedRound = Math.trunc(assessedRound);
   }
   if (stateFingerprint) out.stateFingerprint = stateFingerprint;
+  // Independent causal checkpoint for scenario-defined custom values; never
+  // overwrite the standard economic/territorial state fingerprint.
+  const customStatFingerprint = clean(value.customStatFingerprint).slice(0, 128);
+  if (customStatFingerprint) out.customStatFingerprint = customStatFingerprint;
+  if (Array.isArray(value.customStatEvidenceIds)) {
+    out.customStatEvidenceIds = [...new Set(value.customStatEvidenceIds.map((id) => clean(id).slice(0, 160)).filter(Boolean))].slice(-96);
+  }
   if (territorialFingerprint) out.territorialFingerprint = territorialFingerprint;
   if (Number.isInteger(populationCalibrationVersion) && populationCalibrationVersion > 0) {
     out.populationCalibrationVersion = populationCalibrationVersion;
@@ -484,7 +509,7 @@ export const normalizeCountryStatSheet = (value, { indexKeys: expectedIndexKeys 
   // of whatever total numbers an old save or model wrote beside it.
   if (components.length) return finalizeCountryStatSheet(out);
 
-  return out;
+  return withDerivedWholeGdpPerCapita(out);
 };
 
 export const finalizeCountryStatSheet = (value, { indexKeys: expectedIndexKeys } = {}) => {
@@ -528,6 +553,9 @@ export const finalizeCountryStatSheet = (value, { indexKeys: expectedIndexKeys }
       total: aggregate.population,
       coreIntegrated: aggregate.corePopulation,
       otherTerritories: aggregate.otherPopulation,
+      ...(normalizePopulation(value.population)?.annualGrowthRate !== undefined
+        ? { annualGrowthRate: normalizePopulation(value.population).annualGrowthRate }
+        : {}),
     };
 
     out.economy = {
@@ -554,7 +582,7 @@ export const finalizeCountryStatSheet = (value, { indexKeys: expectedIndexKeys }
         : 0;
   }
 
-  return out;
+  return withDerivedWholeGdpPerCapita(out);
 };
 
 const scaleComponentPopulation = (components, predicate, targetPopulation) => {
@@ -674,7 +702,7 @@ export const decodeTerritorialComponentSplit = (text, splitBuckets = []) => {
 
   const rows = new Map();
   const duplicated = new Set();
-  for (const rawLine of clean(text).split(/\r?\n/)) {
+  for (const rawLine of normalizeStatsTransportRows(text).split(/\r?\n/)) {
     const parts = rawLine.trim().split("~").map((part) => part.trim());
     if (parts.length !== 4) continue;
     const componentId = parts[0].replace(/^\[|\]$/g, "").toUpperCase();
@@ -956,7 +984,7 @@ const mergeComponentsByGeography = (base, patch) => {
 export const mergeCountryStatPatch = (
   baseValue,
   patchValue,
-  { replaceComponents = false, continuity = null, maxAggregateRescale = 0 } = {},
+  { replaceComponents = false, continuity = null, maxAggregateRescale = 0, allowPerCapitaRescale = true } = {},
 ) => {
   const base = normalizeCountryStatSheet(baseValue) || {};
   const written = patchValue && typeof patchValue === "object" && !Array.isArray(patchValue)
@@ -1025,6 +1053,13 @@ export const mergeCountryStatPatch = (
   }
 
   const economyPatch = normalizeEconomy(patch.economy) || {};
+  if (!allowPerCapitaRescale) {
+    // The generator has no authority to persist a derived per-capita figure,
+    // even on a legacy sheet without enough numbers to recompute it yet.
+    delete economyPatch.gdpPerCapita;
+    delete economyPatch.coreGdpPerCapita;
+    delete economyPatch.otherGdpPerCapita;
+  }
   merged.economy = {
     ...(base.economy || {}),
     ...economyPatch,
@@ -1056,7 +1091,30 @@ export const mergeCountryStatPatch = (
   // component ledger remains source-of-truth, so aggregate targets scale the
   // appropriate component populations rather than creating contradictory totals.
   const populationPatch = normalizePopulation(patch.population);
+  // A deliberate numeric baseline correction replaces the fractional carry
+  // from earlier automatic settlement. Rate-only edits do not reset it.
+  if (merged.continuity) {
+    const replacesPopulation = patchHasExplicitComponents
+      || [populationPatch?.total, populationPatch?.coreIntegrated, populationPatch?.otherTerritories]
+        .some((value) => Number.isFinite(value));
+    const replacesGdp = patchHasExplicitComponents || Number.isFinite(economyPatch.gdp);
+    if (replacesPopulation) delete merged.continuity.populationRemainder;
+    if (replacesGdp) delete merged.continuity.gdpRemainder;
+    // An authoritative map-backed reassessment lifts a territory-change hold.
+    // Restart prospectively from the actual assessment date, never compound the
+    // old economy over the period when its province ledger was out of date.
+    const assessed = mergeCountryStatContinuity(patch.continuity, continuity)?.assessedDate;
+    if (replaceComponents && patchHasExplicitComponents && assessed) {
+      merged.continuity.progressionBlocked = false;
+      merged.continuity.lastProgressedDate = assessed;
+    }
+  }
   if (components.length && populationPatch) {
+    // The optional national demographic rate is part of the saved sheet, not
+    // a substitute for changing the component populations.
+    if (populationPatch.annualGrowthRate !== undefined) {
+      merged.population = { ...(base.population || {}), annualGrowthRate: populationPatch.annualGrowthRate };
+    }
     const corePredicate = (component) => component.group !== "overseas/dependent";
     const otherPredicate = (component) => component.group === "overseas/dependent";
 
@@ -1094,9 +1152,19 @@ export const mergeCountryStatPatch = (
       return ratio > limit || ratio < 1 / limit ? null : requested;
     };
     const requestedGdp = plausible(parseStatNumber(patch.economy.gdp), before?.gdp);
-    const requestedWholePc = plausible(parseStatNumber(patch.economy.gdpPerCapita), before?.gdpPerCapita);
-    const requestedCorePc = plausible(parseStatNumber(patch.economy.coreGdpPerCapita), before?.coreGdpPerCapita);
-    const requestedOtherPc = plausible(parseStatNumber(patch.economy.otherGdpPerCapita), before?.otherGdpPerCapita);
+    // AI-generated event readings may contain GDP-per-capita guesses, but they
+    // are not independent economic mutations. GDP/population or an explicit
+    // component change is the authority; only deliberate author/GM corrections
+    // may target per-capita to rescale component productivity.
+    const requestedWholePc = allowPerCapitaRescale
+      ? plausible(parseStatNumber(patch.economy.gdpPerCapita), before?.gdpPerCapita)
+      : null;
+    const requestedCorePc = allowPerCapitaRescale
+      ? plausible(parseStatNumber(patch.economy.coreGdpPerCapita), before?.coreGdpPerCapita)
+      : null;
+    const requestedOtherPc = allowPerCapitaRescale
+      ? plausible(parseStatNumber(patch.economy.otherGdpPerCapita), before?.otherGdpPerCapita)
+      : null;
 
     // Total GDP is the strongest aggregate authority. If both GDP and GDP/capita
     // are supplied inconsistently, GDP wins and per-capita is recomputed.
@@ -1474,7 +1542,7 @@ export const buildCompactEconomicContext = (value, { name = "", conditions = tru
   const breakdown = sheet.gdpBreakdown || {};
   const indices = sheet.indices || {};
   const fields = [
-    Number.isFinite(Number(economy.gdp)) ? `GDP-eq €${compactEconomicNumber(economy.gdp)}` : "",
+    Number.isFinite(Number(economy.gdp)) ? `GDP-eq $${compactEconomicNumber(economy.gdp)}` : "",
     Number.isFinite(Number(economy.gdpGrowth)) ? `growth ${Number(economy.gdpGrowth)}%` : "",
     Number.isFinite(Number(economy.inflation)) ? `inflation ${Number(economy.inflation)}%` : "",
     Number.isFinite(Number(economy.unemployment)) ? `unemployment ${Number(economy.unemployment)}%` : "",
@@ -1513,7 +1581,7 @@ const describeStatsTrend = (samples, { limit = 6 } = {}) => {
     ["stability", "stability", (v) => `${Math.round(v)}`],
     ["foodAutonomy", "food", (v) => `${Math.round(v)}%`],
     ["energyAutonomy", "energy", (v) => `${Math.round(v)}%`],
-    ["gdp", "GDP", (v) => `€${compactEconomicNumber(v)}`],
+    ["gdp", "GDP", (v) => `$${compactEconomicNumber(v)}`],
     ["gdpGrowth", "growth", (v) => formatSignedPercent(v)],
     ["inflation", "inflation", (v) => `${formatStatFigure(v)}%`],
     ["unemployment", "unemployment", (v) => `${formatStatFigure(v)}%`],
@@ -1565,9 +1633,9 @@ export const describeCountryStatsForAdvisor = (value, { name = "", definition = 
 
   const economy = sheet.economy || {};
   const economic = [
-    finite(economy.gdp) ? `GDP €${compactEconomicNumber(economy.gdp)} (2026-EUR equivalent)` : "",
+    finite(economy.gdp) ? `GDP $${compactEconomicNumber(economy.gdp)} (2026-USD equivalent)` : "",
     finite(economy.gdpGrowth) ? `growth ${formatSignedPercent(economy.gdpGrowth)}` : "",
-    finite(economy.gdpPerCapita) ? `GDP per capita €${formatStatFigure(economy.gdpPerCapita, { decimals: 0 })}` : "",
+    finite(economy.gdpPerCapita) ? `GDP per capita $${formatStatFigure(economy.gdpPerCapita, { decimals: 0 })}` : "",
     finite(economy.inflation) ? `inflation ${formatStatFigure(economy.inflation)}%` : "",
     finite(economy.unemployment) ? `unemployment ${formatStatFigure(economy.unemployment)}%` : "",
     finite(economy.publicDebt) ? `public debt ${formatStatFigure(economy.publicDebt)}% of GDP` : "",

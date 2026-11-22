@@ -23,3 +23,29 @@ export const successorTransfers = (impacts) => {
       note: `${heir} succeeds ${polity}, which this event dissolves.`,
     }));
 };
+
+// The polities a skip founds (create or restore) that nothing in it gives any
+// land: no transfer or control op, in any of its events, names them as the side
+// that gains. "a movement ousted the Lebanese government ... nothing actually
+// changed on map despite the events and AI recognizing the new Republic" (a
+// player, 2026-11-10): the new republic was founded beside the old country, which
+// kept every region. Nothing here moves land itself, since a landless polity
+// can be meant (a government in exile, a movement); the next skip is told, and
+// decides. `events` is the skip's impacts objects, in order, with their titles.
+export const landlessFoundings = (events) => {
+  const gains = list(events).flatMap(({ impacts }) => [...list(impacts?.regionTransfers), ...list(impacts?.regionControlOps)])
+    .filter((entry) => clean(entry?.op).toLowerCase() !== "contest" && clean(entry?.op).toLowerCase() !== "clear_contest")
+    .map((entry) => clean(entry?.toCode))
+    .filter(Boolean);
+  const found = [];
+  for (const { impacts, title } of list(events)) {
+    for (const change of list(impacts?.polityChanges)) {
+      if (!["create", "restore"].includes(operationOf(change))) continue;
+      const polity = clean(change?.code);
+      if (!polity || gains.some((gainer) => samePolityName(gainer, polity))) continue;
+      if (found.some((entry) => samePolityName(entry.polity, polity))) continue;
+      found.push({ polity, title: clean(title) });
+    }
+  }
+  return found;
+};

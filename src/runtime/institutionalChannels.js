@@ -15,6 +15,7 @@ import {
   resolveInstitutionRecord,
 } from "./institutions.js";
 import { askHostForInstitution, institutionsGoToHost } from "./sharedInstitutions.js";
+import { ownedByPerson } from "./humanPolities.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -103,15 +104,18 @@ export const materializeInstitutionalChannel = ({
   world = { ...world, institutions };
 
   const members = institutionChannelParticipants(world, canonicalId);
-  const base = existingByInstitution || normalizeChatEntry({
+  // A Council opened for a person is theirs (humanPolities.js ownedByPerson):
+  // the post-turn ballots of a guest's institution opened it as the host's.
+  const base = existingByInstitution || normalizeChatEntry(ownedByPerson({
     id: resolvedChannelId,
     institutionId: canonicalId,
     countries: members,
-    messages: [institutionalSystemMessage(`${institution.name} institutional channel established.`, date)],
+    // Written as the thread shows it: nothing reads these words back.
+    messages: [institutionalSystemMessage(`${institution.name} council opened.`, date)],
     source: "institution",
     status: institution.status === "dissolved" ? "closed" : "open",
     title: institution.name,
-  });
+  }, playerCountry));
   if (!base) throw new Error(`Could not materialize institutional channel for ${institution.name}.`);
 
   const channel = normalizeChatEntry({
@@ -157,6 +161,7 @@ export const ensureInstitutionalChannel = async ({
   playerCountry = "",
   date = "",
   expectedGameId = "",
+  fence = null,
 } = {}) => {
   // In a shared game the host does this, for this player (sharedInstitutions.js).
   if (institutionsGoToHost()) return askHostForInstitution("channel", { institutionId });
@@ -176,6 +181,7 @@ export const ensureInstitutionalChannel = async ({
   }, {
     playerCountry,
     expectedGameId,
+    fence,
   });
   if (!result) throw new Error("Institutional channel was not committed.");
   const committedChats = committed.chat || committed.chats || result.chats;

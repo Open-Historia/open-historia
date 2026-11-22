@@ -8,6 +8,9 @@
 // IMPORT-FREE, the same trick eventFocus.js uses, so its tests run in a bare
 // checkout — which is also why the repairs below are reimplemented here rather
 // than imported from gameplay.js's lenientJsonParse, whose behaviour they mirror.
+//
+// Its one import, actionEdit.js, is import-free itself.
+import { rewordAction } from "../../runtime/actionEdit.js";
 
 const maybeJsonParse = (value) => {
   try {
@@ -64,6 +67,51 @@ const unwrapOpsArray = (value) => {
   // A single op sent bare rather than wrapped in an array.
   if (typeof value.op === "string") return [value];
   return null;
+};
+
+// Some providers emit two independently valid JSON arrays inside one fence:
+//   [{...}] [{...}]
+// JSON.parse rejects trailing content, and the projects recovery walker then
+// treats the second array as corruption. Split only at verified top-level array
+// boundaries, respecting strings, escapes and nested structures, and require
+// every byte to belong to a complete, strictly valid JSON array. A malformed
+// Action array must still fail closed rather than offering speculative orders.
+export const parseAdjacentJsonArrays = (value) => {
+  const source = String(value ?? "");
+  const arrays = [];
+  let offset = 0;
+  while (offset < source.length) {
+    while (/\s/.test(source[offset] ?? "") && offset < source.length) offset += 1;
+    if (offset === source.length) break;
+    if (source[offset] !== "[") return null;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let end = -1;
+    for (let index = offset; index < source.length; index += 1) {
+      const char = source[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') { inString = true; continue; }
+      if (char === "[" || char === "{") depth += 1;
+      else if (char === "]" || char === "}") {
+        depth -= 1;
+        if (depth < 0) return null;
+        if (depth === 0) { end = index + 1; break; }
+      }
+    }
+    if (end < 0) return null;
+    const array = maybeJsonParse(source.slice(offset, end));
+    if (!Array.isArray(array)) return null;
+    arrays.push(array);
+    offset = end;
+  }
+  return arrays.length > 1 ? arrays.flat() : null;
 };
 
 // Escapes what a model leaves unescaped INSIDE a JSON string value.
@@ -214,6 +262,39 @@ export const repairTruncatedJsonArray = (text) => {
   return ops.length > 0 ? ops : null;
 };
 
+// An object the model forgot to close before closing the list around it:
+// {"kind":"action"] for {"kind":"action"}] (a player's log, 2026-11-06: the
+// Advisor's suggested actions lost eighteen times to it). A `]` that meets an open
+// `{` is never valid JSON, so the missing `}` is all it can mean; nothing else is
+// touched. Null when there was nothing of the kind to close.
+export const closeObjectsBeforeList = (body) => {
+  const source = String(body ?? "");
+  const open = [];
+  let out = "";
+  let quoted = false;
+  let escaped = false;
+  let changed = false;
+  for (const char of source) {
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quoted = false;
+    } else if (char === '"') quoted = true;
+    else if (char === "{" || char === "[") open.push(char);
+    else if (char === "}") open.pop();
+    else if (char === "]") {
+      while (open.length && open[open.length - 1] === "{") {
+        open.pop();
+        out += "}";
+        changed = true;
+      }
+      open.pop();
+    }
+    out += char;
+  }
+  return changed ? out : null;
+};
+
 // The text around the character a JSON parse failed at, for showing the player.
 // V8's message carries "at position N"; without that, fall back to the head of
 // the block, which is still better than nothing.
@@ -246,12 +327,28 @@ export const excerptAroundError = (body, message, radius = 140) => {
 //
 // Returns `reason` describing why nothing came back, so the UI can say something
 // better than "it didn't work" and a bug report has something to go on.
+// Every structured channel an advisor reply carries (advisorReply.js reads each
+// with extractFencedJson): the openers a fused closing fence may run into. One
+// list, so a new channel gets the same recovery (advisorBlocks.test.js checks
+// advisorReply.js reads none outside it).
+export const ADVISOR_FENCE_LANGS = Object.freeze(["chart", "actions", "senddraft", "institutiondraft", "deploy", "projects"]);
+
 export const extractFencedJson = (text, lang, { salvageTruncated = false, streaming = false } = {}) => {
-  const regex = new RegExp("```" + lang + "\\s*([\\s\\S]*?)```");
+  // Markdown fences are block constructs, not arbitrary backtick runs in
+  // prose. An advisor can mention \`\`\`actions when explaining a past error;
+  // interpreting that inline mention as the opener consumes the *real* block
+  // later in the reply and silently discards otherwise valid proposals.
+  const opening = "(^|\\r?\\n)[ \\t]{0,3}```" + lang + "[ \\t]*\\r?\\n";
+  // A provider may fuse a closing fence with the next known structured opener,
+  // e.g. \`\`\`"\`\`\`senddraft. Consume only the closing backticks and
+  // stray quote; extracting the prior block leaves the next opener on its own
+  // line. The complete payload must still pass normal JSON validation.
+  const closing = "^[ \\t]{0,3}```[ \\t]*(?:\\r?\\n|$|[\"'](?=\\r?\\n|$)|[\"']?(?=```(?:" + ADVISOR_FENCE_LANGS.join("|") + ")[ \\t]*\\r?\\n))";
+  const regex = new RegExp(opening + "([\\s\\S]*?)" + closing, "m");
   const match = text.match(regex);
 
   if (match) {
-    const body = match[1];
+    const body = match[2];
     let json = null;
     let reason = "";
     let dropped = 0;
@@ -259,28 +356,51 @@ export const extractFencedJson = (text, lang, { salvageTruncated = false, stream
     try {
       json = JSON.parse(body.trim());
     } catch (err) {
-      json = salvageTruncated ? repairTruncatedJsonArray(body) : null;
-      excerpt = excerptAroundError(body, err.message);
+      // Multiple fully valid arrays are independent batches, not truncation.
+      // Only the upstream single-array closing-brace repair is attempted before
+      // the pre-existing Projects-only salvage; truncated Actions still fail closed.
+      const adjacent = lang === "actions" || lang === "projects" ? parseAdjacentJsonArrays(body) : null;
+      json = adjacent;
       if (json === null) {
-        reason = `invalid JSON (${err.message})`;
-        console.warn(`[advisor] malformed \`\`\`${lang} block, dropping it:`, err.message);
-        console.warn(`[advisor] the block that failed:\n${body.slice(0, 2000)}`);
-      } else {
-        // Something was recovered, but say how much was not: silently importing
-        // eight of ten and implying ten is worse than importing eight and saying so.
-        dropped = Math.max(0, recoverOpsElementwise(body).dropped);
-        console.warn(`[advisor] repaired a malformed \`\`\`${lang} block (${err.message})`);
+        // The latest upstream fix also repairs a single Action array whose
+        // final object was left open before its closing list bracket.
+        const closed = closeObjectsBeforeList(body.trim());
+        if (closed !== null) {
+          try {
+            json = JSON.parse(closed);
+          } catch {
+            json = null;
+          }
+        }
+      }
+      if (json === null) json = salvageTruncated ? repairTruncatedJsonArray(body) : null;
+      if (adjacent === null) {
+        excerpt = excerptAroundError(body, err.message);
+        if (json === null) {
+          reason = `invalid JSON (${err.message})`;
+          // Streaming bubbles reparse after every fragment. Report the completed
+          // failure at finalization, not once per incoming token.
+          if (!streaming) {
+            console.warn(`[advisor] malformed \`\`\`${lang} block, dropping it:`, err.message);
+            console.warn(`[advisor] the block that failed:\n${body.slice(0, 2000)}`);
+          }
+        } else {
+          // Something was recovered, but say how much was not: silently importing
+          // eight of ten and implying ten is worse than importing eight and saying so.
+          dropped = Math.max(0, recoverOpsElementwise(body).dropped);
+          if (!streaming) console.warn(`[advisor] repaired a malformed \`\`\`${lang} block (${err.message})`);
+        }
       }
     }
-    return { rest: text.replace(regex, ""), json, truncated: false, reason, dropped, excerpt };
+    return { rest: text.replace(regex, (_matched, precedingBreak) => precedingBreak), json, truncated: false, reason, dropped, excerpt };
   }
 
   if (!salvageTruncated && !streaming) return { rest: text, json: null, truncated: false, reason: "", dropped: 0, excerpt: "" };
 
-  const openRegex = new RegExp("```" + lang + "\\s*");
+  const openRegex = new RegExp(opening, "m");
   const open = text.match(openRegex);
   if (!open) return { rest: text, json: null, truncated: false, reason: "", dropped: 0, excerpt: "" };
-  if (streaming) return { rest: text.slice(0, open.index), json: null, truncated: false, reason: "", dropped: 0, excerpt: "" };
+  if (streaming) return { rest: text.slice(0, open.index + open[1].length), json: null, truncated: false, reason: "", dropped: 0, excerpt: "" };
 
   // Everything after the opening fence is the (incomplete) payload. Report
   // `truncated` even when the repair works, so the caller can tell the player the
@@ -292,7 +412,7 @@ export const extractFencedJson = (text, lang, { salvageTruncated = false, stream
     console.warn(`[advisor] the block that failed:\n${body.slice(0, 2000)}`);
   }
   return {
-    rest: text.slice(0, open.index),
+    rest: text.slice(0, open.index + open[1].length),
     json,
     truncated: true,
     reason: json === null ? "cut off before any entry finished" : "",
@@ -307,20 +427,21 @@ export const extractFencedJson = (text, lang, { salvageTruncated = false, stream
 // with nothing salvageable, JSON too broken to repair, valid JSON whose every op
 // was rejected — all look identical to the player: a wall of JSON in the chat (or
 // a reply that just stops) and a board that never changes.
-// Kept in step with normalizeProjectOp's verb list BY HAND — the two live in
-// different modules (this one is deliberately import-free so its tests run in a
-// bare checkout) and nothing can check them against each other. A verb missing
-// here is not a dropped op; it is a SILENT one: the block fails to parse, this
-// says "not a projects block", and the player gets no "Board not fully updated"
-// warning at all. cancelled/shelve/fail/failed/drop were all missing.
+// The board's own ops, kept in step with normalizeProjectOp BY HAND — the two
+// live in different modules (this one is deliberately import-free so its tests
+// run in a bare checkout). A verb missing here is not a dropped op; it is a
+// SILENT one: the block fails to parse, this says "not a projects block", and
+// the player gets no "Board not fully updated" warning at all. Only the board's
+// words: the English synonyms once accepted (start, launch, finish, abandon)
+// went on 2026-11-13, as no other language's ever were.
 const PROJECT_OP_VERBS = [
-  "create", "start", "launch", "open", "add",
-  "update", "progress", "edit",
+  "create",
+  "update",
   "milestone",
-  "complete", "finish", "completed",
-  "cancel", "cancelled", "abandon", "shelve",
-  "fail", "failed",
-  "remove", "delete", "drop",
+  "complete",
+  "cancel",
+  "fail",
+  "remove",
 ].join("|");
 
 export const looksLikeProjectOps = (text) => {
@@ -405,6 +526,8 @@ export const describeReplyProblems = (message) => {
   switch (String(message.projectsProblem ?? "")) {
     case "partial": problems.push(`in your projects block, ${detail || "some entries were malformed and skipped"}`); break;
     case "unusable": problems.push(`your projects block could not be used: ${detail || "nothing in it applied"}`); break;
+    // In a shared game: the host's own reason for not taking it.
+    case "refused": problems.push(`the host of this shared game refused your projects block, so nothing in it applied: ${detail || "it gave no reason"}`); break;
     case "truncated": problems.push("your projects block was cut off by the reply's length limit, so its last entries may be missing"); break;
     case "truncated-empty": problems.push("your projects block was cut off before any entry finished, so nothing on the board changed"); break;
     default: break;
@@ -469,12 +592,12 @@ export const planAdvisorActionEdits = (current, proposal, normalize, { repeatOf 
     const existingIndex = id ? next.findIndex((action) => action.id === id) : -1;
     if (existingIndex !== -1) {
       const existing = next[existingIndex];
-      const updated = {
-        ...existing,
+      // Given other words as the player's own Edit gives them (runtime/actionEdit.js).
+      const reworded = rewordAction(existing, {
         ...(raw.title ? { title: String(raw.title) } : {}),
         ...(raw.text ? { text: String(raw.text) } : {}),
-        ...(raw.kind === "chat" || raw.kind === "action" ? { kind: raw.kind } : {}),
-      };
+      });
+      const updated = raw.kind === "chat" || raw.kind === "action" ? { ...reworded, kind: raw.kind } : reworded;
       next[existingIndex] = updated;
       items.push({ change: "updated", title: updated.title });
       continue;

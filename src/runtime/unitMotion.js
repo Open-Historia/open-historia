@@ -230,13 +230,28 @@ export const daysBetweenDates = (from, to) => {
 // This SLERPs rather than lerping the coordinates. Interpolating longitude
 // linearly tears at the antimeridian: a fleet ordered Yokosuka -> San Diego
 // would track backwards across Eurasia instead of over the Pacific.
+// A place as [lng, lat], or null where either is missing or no number (null, "", NaN).
+const pointOf = (place) => {
+  const read = (value) => (typeof value === "number" || (typeof value === "string" && value.trim() !== "") ? Number(value) : NaN);
+  const lng = read(place?.lng);
+  const lat = read(place?.lat);
+  return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null;
+};
+
 export const stepToward = (from, to, maxKm, measure = currentMapMeasure()) => {
+  // A place that is not one is no lng 0, lat 0: a unit with nowhere to go
+  // stays where it stands, its journey done; one that stood nowhere is put
+  // where it was going. Both used to be read as 0, 0, so a standing order that
+  // had lost its place carried its unit to the equator in the middle of the
+  // ocean (a player's report, 2026-11-09).
+  const start = pointOf(from);
+  const end = pointOf(to);
+  if (!end) return { lng: start ? wrapLng(start[0]) : NaN, lat: start ? clampLat(start[1]) : NaN, arrived: true, remainingKm: 0 };
+  if (!start) return { lng: wrapLng(end[0]), lat: clampLat(end[1]), arrived: true, remainingKm: 0 };
   // A map that is not plain Mercator steps by its own measure (server/mapDistance.js).
   if (measure && !measure.plain) return mapStep(measure, from, to, maxKm);
-  const fromLat = Number(from?.lat) || 0;
-  const fromLng = Number(from?.lng) || 0;
-  const toLat = Number(to?.lat) || 0;
-  const toLng = Number(to?.lng) || 0;
+  const [fromLng, fromLat] = start;
+  const [toLng, toLat] = end;
 
   const distance = haversineKm(fromLat, fromLng, toLat, toLng);
   if (distance <= 0) {

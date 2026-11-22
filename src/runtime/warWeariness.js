@@ -72,7 +72,12 @@ export const normalizeWarWeariness = (value) => {
     if (!country || !(weary > 0)) continue;
     kept.set(fold(country), { country, value: weary });
   }
-  return [...kept.values()].slice(0, WEARINESS_KEPT_MOST);
+  // The wariest, past the most kept: the first ones listed were kept, so a
+  // country that wearied of a new war after 80 others had none.
+  const rows = [...kept.values()];
+  if (rows.length <= WEARINESS_KEPT_MOST) return rows;
+  const wariest = new Set([...rows].sort((a, b) => b.value - a.value).slice(0, WEARINESS_KEPT_MOST));
+  return rows.filter((row) => wariest.has(row));
 };
 
 // How weary a country is, 0 to 100.

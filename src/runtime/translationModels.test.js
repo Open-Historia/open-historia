@@ -148,12 +148,20 @@ test("an answer that ran on, echoed its token or lost a number or a slot is refu
 });
 
 // The page's side needs a browser, so it is read in its source.
-test("the translator never asks the AI; a language with a model is used only after a yes", () => {
+test("the translator asks the AI only with Translate with my AI on; a language with a model is used only after a yes", () => {
   const translator = read("src/runtime/translator.js");
-  assert.doesNotMatch(translator, /callAI|requestBudget|fallbackRunner|Background AI/, "no AI request anywhere");
+  assert.doesNotMatch(translator, /^import[^;]*(?:Game\/AI|requestBudget|fallbackRunner)/m, "no AI module up front");
+  assert.doesNotMatch(translator, /Background AI|fallbackRunner/);
+  // The one AI request is askAi's, and the router makes it only while the
+  // switch is on (aiTranslation.test.js).
+  assert.equal(translator.match(/callAI\(/g).length, 1);
+  const askAi = translator.slice(translator.indexOf("const askAi = async"), translator.indexOf("const aiFailed ="));
+  assert.match(askAi, /callAI\(/);
+  assert.match(translator, /isAiOn: \(\) => run === generation && aiShown && aiInUse\(\)/);
   const queue = translator.slice(translator.indexOf("const processQueue = async () => {"), translator.indexOf("// ---- content ----"));
-  assert.match(queue, /!modelInUse\(\)\) \{\n\s*return;/, "nothing is translated without the model");
-  assert.match(queue, /translateOnDevice\(planModelBatch\(\[\.\.\.pending\]\), run\)/);
+  assert.match(queue, /!translating\(\) \|\| !router\) \{\n\s*return;/, "nothing is translated without the model or the switch");
+  assert.match(queue, /await router\.step\(pending\)/);
+  assert.match(translator, /const translating = \(\) => modelInUse\(\) \|\| aiInUse\(\);/);
   assert.match(translator, /const modelInUse = \(\) => Boolean\(translationModelFor\(language\)\) && modelChoice\(\) === "yes" && !modelFailed;/);
   const switching = translator.slice(translator.indexOf("export const switchLanguage = "), translator.indexOf("export const stopTranslator"));
   assert.match(switching, /modelChoice\(wanted\) !== "yes" && !\(await askForModel\(wanted\)\)\) \{\n\s*return language;/, "declined: the language the game had");

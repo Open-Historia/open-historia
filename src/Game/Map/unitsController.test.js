@@ -145,13 +145,37 @@ test("disbanding a unit not yet confirmed withdraws its deploy request instead",
   assert.deepEqual(savedActions(), [], "no request to raise it again, and no disband order for a unit never raised");
 });
 
-test("a request for orders says whether it was saved", async () => {
+test("a request for orders says whether it was saved, and why not", async () => {
   await reset();
-  assert.equal(await requestUnitOrders("fleet-1", "Shadow the enemy squadron"), true);
+  assert.deepEqual(await requestUnitOrders("fleet-1", "Shadow the enemy squadron"), { ok: true });
   assert.match(savedActions()[0].text, /^Orders requested for Home Fleet/);
   failing.add("actions");
-  assert.equal(await requestUnitOrders("fleet-1", "Return to Scapa Flow"), false);
+  assert.deepEqual(await requestUnitOrders("fleet-1", "Return to Scapa Flow"), { ok: false, error: ORDER_NOT_SAVED });
   assert.equal(savedActions().length, 1);
+  assert.equal((await requestUnitOrders("no-such-unit", "Anything")).ok, false);
+});
+
+// In a shared game the order is the host's to take, and its refusal is the card's to show: the card said the order
+// could not be saved whatever the host had answered (the gap audit of 2026-11-18).
+test("in a shared game a request for orders is asked of the host, and comes back with the host's reason", async () => {
+  await reset();
+  const { setSharedRequester } = await import("../../multiplayer/client/sharedGameBridge.js");
+  const { startRemoteRuntime, stopRemoteRuntime } = await import("../../multiplayer/client/remoteRuntime.js");
+  const asked = [];
+  setSharedRequester(async (t, fields) => {
+    asked.push({ t, ...fields });
+    return asked.length === 1 ? { ok: true, error: "" } : { ok: false, error: "At most 12 orders a round." };
+  });
+  startRemoteRuntime({ publish: () => {}, urlFor: () => "" });
+  try {
+    assert.deepEqual(await requestUnitOrders("fleet-1", "Shadow the enemy squadron"), { ok: true });
+    assert.deepEqual(await requestUnitOrders("fleet-1", "Return to Scapa Flow"), { ok: false, error: "At most 12 orders a round." });
+    assert.deepEqual(asked.map((entry) => entry.t), ["order", "order"]);
+    assert.match(asked[1].text, /^Orders requested for Home Fleet .*Return to Scapa Flow/);
+  } finally {
+    stopRemoteRuntime();
+    setSharedRequester(null);
+  }
 });
 
 test("a deploy of a type the scenario does not allow is refused, whoever asks", async () => {

@@ -1,6 +1,7 @@
 /*! Open Historia — portions (standalone map-editor mode) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { Component, lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import UI from "./Game/GameUI/main.jsx";
+import { enterActiveGameFromOutside } from "./Game/GameUI/libraryBar.jsx";
 
 // Lazy so OpenLayers is only fetched when the editor is actually opened.
 const MapEditor = lazy(() => import("./Editor/MapEditor.jsx"));
@@ -8,6 +9,25 @@ const MapEditor = lazy(() => import("./Editor/MapEditor.jsx"));
 // it survives the UI remounting when the page switches to the shared game.
 const SharedGameOverlay = lazy(() => import("./multiplayer/ui/SharedGameOverlay.jsx"));
 const DiscordInvites = lazy(() => import("./multiplayer/ui/DiscordInvites.jsx"));
+// A tab that hosted a shared game before it reloaded goes back to it as the
+// host's screen (multiplayer/client/sharedGame.js resumeHosting). Desktop only:
+// nowhere else hosts, and the module is fetched only where one was hosted.
+const resumeHostingIfAny = () => {
+  try {
+    if (!sessionStorage.getItem("oh:mp:hosting")) return;
+  } catch {
+    return;
+  }
+  // Back in the game too, as hosting from the Lobbies tab goes into it: the
+  // round bar is drawn over the game, not the menu.
+  void import("./multiplayer/client/sharedGame.js")
+    .then((shared) => shared.resumeHosting())
+    .then((back) => {
+      if (back) enterActiveGameFromOutside();
+    })
+    .catch(() => {});
+};
+resumeHostingIfAny();
 // Lazy too: the map and MapLibre with it (over 1 MB) are fetched and parsed
 // only when a game is opened (runtime/gameEntry.js), never for the main menu,
 // and the editor never loads them. Nothing outside Game/Map imports maplibre-gl.
@@ -25,12 +45,14 @@ import {
   runStartupPreload,
 } from "./runtime/preload.js";
 import { ensureLibraryCatalog, useLibraryState } from "./runtime/library.js";
+import { closeAbandonedStandIns } from "./runtime/standInGames.js";
 import { hasEnteredGame, useGameEntered } from "./runtime/gameEntry.js";
 import { VaultDoor } from "./Game/GameUI/VaultDoor.jsx";
 import { holdMusicBehindDoor } from "./runtime/ambientMusic.js";
 import { vaultDoorAlways } from "./runtime/mapSettings.js";
 import { decideVaultDoor, rememberVaultDoorBuild } from "./runtime/vaultDoorDue.js";
-import { pendingUpdates, previewedUpdates, rememberUpdate } from "./Game/GameUI/updates/updateNotices.js";
+import { isWebsiteBuild } from "./runtime/websiteBuild.js";
+import { buildShowsUpdateNotices, pendingUpdates, previewedUpdates, rememberUpdate } from "./Game/GameUI/updates/updateNotices.js";
 import { firstSetupDue } from "./runtime/firstSetupDue.js";
 import { appBuildId } from "./runtime/buildId.js";
 import { announceMapRerender } from "./runtime/mapReadiness.js";
@@ -88,7 +110,11 @@ function GameApp() {
   // whether this opening is one is decided first ("deciding"): the running
   // build is asked of the desktop app's own server (runtime/buildId.js), and
   // the music is held meanwhile.
+  //
+  // The website's demo has no door (runtime/websiteBuild.js): it opens on the
+  // menu, and its music is never held.
   const [door, setDoor] = useState(() => {
+    if (isWebsiteBuild(import.meta.env)) return "open";
     holdMusicBehindDoor(true);
     return "deciding";
   });
@@ -121,10 +147,11 @@ function GameApp() {
   }, [door]);
   // What the update brings (Game/GameUI/updates/notes.js): each new update once a device, behind the door, so
   // the door opens onto it; shown as the leaves part (or at once, with the door off). ?updateNotice=<id> shows
-  // one whatever was seen, and keeps nothing.
+  // one whatever was seen, and keeps nothing. The website shows none (buildShowsUpdateNotices).
   const [notice, setNotice] = useState(() => {
     const asked = typeof window === "undefined" ? null : previewedUpdates(window.location.search);
-    return asked ? { updates: asked, preview: true } : { updates: pendingUpdates(), preview: false };
+    if (asked) return { updates: asked, preview: true };
+    return { updates: buildShowsUpdateNotices(import.meta.env) ? pendingUpdates() : [], preview: false };
   });
   const [parting, setParting] = useState(false);
   const closeNotice = useCallback(() => setNotice((now) => ({ updates: [], preview: now.preview })), []);
@@ -197,6 +224,10 @@ function GameApp() {
     }, STARTUP_TIME_BUDGET_MS);
 
     ensureLibraryCatalog()
+      // A shared game's stand-in that a page left behind (a reload, a crash) is
+      // closed before the menu shows (runtime/standInGames.js): it would be the
+      // active game, and Continue would open it as one of the player's.
+      .then(() => closeAbandonedStandIns())
       .catch((error) => {
         console.warn("Failed to load library catalog at startup:", error);
       })

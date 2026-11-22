@@ -21,21 +21,21 @@ const isRecord = (value) => Boolean(value) && typeof value === "object" && !Arra
 
 // The shape SENT (withSeatAdvice). The answer is READ against a loose one
 // (SEAT_ADVICE_ANSWER_SCHEMA): a malformed piece of advice costs that advice,
-// cleaned away by mergeSeatAdvice, and never the week.
+// cleaned away by mergeSeatAdvice, and never the week. Its field notes are the
+// [Each Player's Advisor] block's (buildSeatAdviceDirective), not the
+// contract's: a shared game's skip carries this on top of everything a skip
+// sends, and the whole is held under the size Gemini takes
+// (foldedSkipSent.test.js).
 export const SEAT_ADVICE_SCHEMA = {
   type: "array",
-  description: "Each player's advisor and three orders to consider next, one entry per polity named under [Each Player's Advisor], only when that block is present.",
+  description: "One entry per polity under [Each Player's Advisor]; rules there.",
   items: {
     type: "object",
     properties: {
-      polity: { type: "string", description: "The player's polity, exactly as named." },
-      advisorName: { type: "string", description: "The advisor's name: the one given, or a new one of that polity's own people." },
-      advisorTitle: { type: "string", description: "The advisor's office in that government." },
-      suggestions: {
-        type: "array",
-        description: "Three orders, each written as the player would send it.",
-        items: { type: "string" },
-      },
+      polity: { type: "string" },
+      advisorName: { type: "string" },
+      advisorTitle: { type: "string" },
+      suggestions: { type: "array", items: { type: "string" } },
     },
     required: ["polity", "advisorName", "advisorTitle", "suggestions"],
     additionalProperties: false,
@@ -77,7 +77,8 @@ export const buildSeatAdviceDirective = (people, world) => {
   if (!polities.length) return "";
   return [
     "[Each Player's Advisor]",
-    `Answer ${SEAT_ADVICE_FIELD} with one entry for each polity a person plays: ${polities.join("; ")}.`,
+    `Answer ${SEAT_ADVICE_FIELD} with one entry for each polity a person plays: ${polities.join("; ")}. `
+      + "Each entry gives the polity exactly as named here, the advisor's name (advisorName) and office in that government (advisorTitle), and the orders (suggestions).",
     "- The advisor is one person of that polity's own court, council or government, who fits its people, its customs and its way of speaking. Where an advisor is named below, keep them, name and office as written. Otherwise name one, from this world, never a real person.",
     ...polities.map((polity) => {
       const advisor = advisorOf(world, polity);

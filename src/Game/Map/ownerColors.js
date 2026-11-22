@@ -6,6 +6,7 @@
 // had its armies in an unrelated hash colour and its bases in parchment, beside
 // territory painted correctly.
 import { toCountryName } from "../../runtime/ownerNames.js";
+import { nameKey } from "../../../server/nameKey.js";
 
 // Procedural colour for an owner with no entry in the palette. Takes the owner —
 // a country NAME now ("Russia", "Roman Empire"), not a GID_0 code.
@@ -16,10 +17,30 @@ import { toCountryName } from "../../runtime/ownerNames.js";
 // accented or two-word name would collapse toward the same dark corner of the
 // space. Stripping gives "COTEDIVOIRE" and a colour that actually differs from its
 // neighbours'.
+//
+// A name with fewer than three of those letters (one in Cyrillic, Chinese,
+// Arabic or any other script, or a short code) was every one of it the same
+// grey: a map of countries named in Russian drew all of them alike. Such a name
+// is coloured by a hash of all of it (its case, marks and spacing folded,
+// server/nameKey.js), in the same range, so each is its own; a name of three
+// Latin letters or more keeps the colour it always had.
+const NAME_HASH_OFFSET = 2166136261;
+const NAME_HASH_PRIME = 16777619;
+const hashedRgb = (key) => {
+  let hash = NAME_HASH_OFFSET;
+  for (const character of key) hash = Math.imul(hash ^ character.codePointAt(0), NAME_HASH_PRIME);
+  hash >>>= 0;
+  const a = hash % 26;
+  const b = (hash >>> 8) % 26;
+  const c = (hash >>> 16) % 26;
+  return [64 + a * 5, 64 + c * 5, 64 + b * 5];
+};
+
 export const fallbackRgbFromOwner = (owner = "") => {
   const normalized = String(owner ?? "").toUpperCase().replace(/[^A-Z]/g, "");
   if (normalized.length < 3) {
-    return [96, 96, 96];
+    const key = nameKey(owner);
+    return key ? hashedRgb(key) : [96, 96, 96];
   }
 
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -89,13 +110,11 @@ export const normalizePoliticalRgb = (rgb) => {
   return [r, g, b].map((value) => Math.round(Math.max(0, Math.min(255, value))));
 };
 
-// Case/diacritic/punctuation-folded owner key, so "Côte d'Ivoire", "cote divoire"
-// and "COTE D'IVOIRE" all reach the same palette entry.
-export const ownerFoldKey = (value) =>
-  String(value ?? "")
-    .normalize("NFD")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "");
+// Case/accent/punctuation-folded owner key, so "Côte d'Ivoire", "cote divoire"
+// and "COTE D'IVOIRE" all reach the same palette entry, and "РОССИЯ" the one
+// under "Россия": the game's one name fold (server/nameKey.js), in which a
+// name in any script keeps its letters and "" is no name.
+export const ownerFoldKey = nameKey;
 
 // ONE owner -> rgb resolver for every paint path. colors.json and the live
 // polity registry (world.polityOverrides) are two different namespaces: a
@@ -105,14 +124,33 @@ export const ownerFoldKey = (value) =>
 // Resolving the name but not the colour painted those regions a muddy
 // procedural fallback, which reads to a player as "the map didn't annex it".
 // Order: code -> name, colors.json, the registry's colour, then folded names
-// (colors.json keys, registry keys and their aliases), then the hash.
+// (colors.json keys, registry keys with their aliases and former names), then
+// the hash. A registry record with no colour of its own takes the palette's
+// entry under any of its names: "Spain", formerly "Kingdom of Spain", is still
+// coloured by a palette that only knows the old name, and the other way round.
 // Memoised per owner: callers resolve one colour per REGION (3,662 in a played
 // save) across only ~231 owners, and a fold-fallback miss is O(colorMap) with
 // an allocation. Make a new resolver when either input changes.
+const namesOfRecord = (key, entry) => [
+  key,
+  ...(Array.isArray(entry?.aliases) ? entry.aliases : []),
+  ...(Array.isArray(entry?.formerNames) ? entry.formerNames : []),
+];
 export const createOwnerRgbResolver = (colorMap, polityOverrides) => {
-  const palette = colorMap && typeof colorMap === "object" ? colorMap : {};
+  const palette = colorMap && typeof colorMap === "object" && !Array.isArray(colorMap) ? colorMap : {};
   const registry = polityOverrides && typeof polityOverrides === "object" ? polityOverrides : {};
   const cache = new Map();
+  let foldedPalette = null;
+  const paletteByFold = (fold) => {
+    if (!foldedPalette) {
+      foldedPalette = new Map();
+      for (const [key, rgb] of Object.entries(palette)) {
+        const folded = ownerFoldKey(key);
+        if (folded && rgb && !foldedPalette.has(folded)) foldedPalette.set(folded, rgb);
+      }
+    }
+    return foldedPalette.get(fold);
+  };
   const resolve = (rawOwner) => {
     // Canonicalize an owner CODE ("ESP" from a transfer override) to the NAME the palette
     // is keyed by ("Spain") so a captured region takes its true owner's colour.
@@ -123,16 +161,25 @@ export const createOwnerRgbResolver = (colorMap, polityOverrides) => {
     if (registered) return registered;
     const fold = ownerFoldKey(owner);
     if (fold) {
-      for (const [key, rgb] of Object.entries(palette)) {
-        if (ownerFoldKey(key) === fold) return rgb;
-      }
-      for (const [key, entry] of Object.entries(registry)) {
-        const names = [key, ...(Array.isArray(entry?.aliases) ? entry.aliases : [])];
-        if (!names.some((name) => ownerFoldKey(name) === fold)) continue;
-        const rgb = parseColorToRgb(entry?.color);
-        if (rgb) return rgb;
-        const fromPalette = palette[key];
-        if (fromPalette) return fromPalette;
+      const folded = paletteByFold(fold);
+      if (folded) return folded;
+      // A record the owner names by its key or an alias first; only then one it
+      // names by a former name, so a country that has taken an old name back is
+      // never painted as the one that used to bear it.
+      const entries = Object.entries(registry);
+      for (const answersTo of [
+        (key, entry) => [key, ...(Array.isArray(entry?.aliases) ? entry.aliases : [])],
+        (key, entry) => (Array.isArray(entry?.formerNames) ? entry.formerNames : []),
+      ]) {
+        for (const [key, entry] of entries) {
+          if (!answersTo(key, entry).some((name) => ownerFoldKey(name) === fold)) continue;
+          const rgb = parseColorToRgb(entry?.color);
+          if (rgb) return rgb;
+          for (const name of namesOfRecord(key, entry)) {
+            const fromPalette = palette[name] || paletteByFold(ownerFoldKey(name));
+            if (fromPalette) return fromPalette;
+          }
+        }
       }
     }
     return fallbackRgbFromOwner(owner);

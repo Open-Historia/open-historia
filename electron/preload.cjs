@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("ohSetup", {
   onUpdate: (fn) => ipcRenderer.on("setup:update", (_event, payload) => fn(payload)),
   updateLater: () => ipcRenderer.invoke("setup:update-later"),
   openBeta: () => ipcRenderer.invoke("setup:open-beta"),
+  openNative: () => ipcRenderer.invoke("setup:open-native"),
   choose: (choice) => ipcRenderer.invoke("setup:choice", choice === "retry" ? "retry" : "continue"),
   cancel: () => ipcRenderer.invoke("setup:cancel"),
 });
