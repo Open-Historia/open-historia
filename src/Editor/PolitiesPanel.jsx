@@ -247,11 +247,13 @@ const PolitiesPanel = ({
     if (typeof commitCountryDraft !== "function") {
       return { ok: false, reason: "Atomic country creation is unavailable in this editor." };
     }
+    let confirmedSelection = null;
     if (plan.assignSelectedRegions) {
       if (!selection.length || typeof api?.setRegionAttrs !== "function") {
         return { ok: false, reason: "Select regions on the map before assigning starting territory." };
       }
-      const owners = [...new Set(selection.map((id) => api?.getRegionSummary?.(id)?.owner).filter(Boolean))];
+      confirmedSelection = [...selection];
+      const owners = [...new Set(confirmedSelection.map((id) => api?.getRegionSummary?.(id)?.owner).filter(Boolean))];
       const oldOwnerText = owners.length
         ? ` This changes the current ownership of regions belonging to: ${owners.join(", ")}.`
         : "";
@@ -286,13 +288,17 @@ const PolitiesPanel = ({
       [...live.polityChoices, { key: plan.key }],
     );
     if (!liveRelations.ok) return liveRelations;
-    if (plan.assignSelectedRegions && (!live.selection.length || typeof live.api?.setRegionAttrs !== "function")) {
+    const liveSelectionSet = new Set(live.selection);
+    const assignedSelection = plan.assignSelectedRegions
+      ? (confirmedSelection ? confirmedSelection.filter((id) => liveSelectionSet.has(id)) : live.selection)
+      : [];
+    if (plan.assignSelectedRegions && (!assignedSelection.length || typeof live.api?.setRegionAttrs !== "function")) {
       return { ok: false, reason: "Select regions on the map before assigning starting territory." };
     }
 
     // All canonical document metadata and selected region ownership are
     // committed together, then registered as one native Undo/Redo command.
-    const created = live.commitCountryDraft(plan, plan.assignSelectedRegions ? live.selection : []);
+    const created = live.commitCountryDraft(plan, plan.assignSelectedRegions ? assignedSelection : []);
     if (!created?.ok) return { ok: false, reason: created?.reason || "Country creation was refused." };
     setRefreshNonce((count) => count + 1);
     setSelectedKey(plan.key);

@@ -1023,7 +1023,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         // unmount the Workshop. Newer edits made during Save remain queued.
         flushSync(() => {
           d.settlePolityRenames(renames.length);
-          d.settleRelationEdits(startingRelationEdits);
+          d.settleRelationEdits(startingRelationEdits, (api?.listPolityUsage?.() || []).map((row) => row.key));
           d.settleActorGovernmentEdits(actorGovernmentEdits);
           if (replacementId) {
             d.setDoc((current) => settleGeneratedWorldReplacement(current, replacementId));

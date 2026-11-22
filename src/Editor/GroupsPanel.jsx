@@ -100,7 +100,8 @@ const GroupsPanel = ({
     if (assignSelection && selection.length && !api?.setRegionAttrs) {
       setNote("The map selection cannot be assigned here."); return;
     }
-    if (assignSelection && selection.length) {
+    const confirmedSelection = assignSelection && selection.length ? [...selection] : null;
+    if (confirmedSelection) {
       confirmingRef.current = true;
       let confirmed = false;
       try {
@@ -121,7 +122,14 @@ const GroupsPanel = ({
       return;
     }
     if (live.recordCount >= MAX_GROUPS) { setNote(`This scenario already has the maximum of ${MAX_GROUPS} groups.`); return; }
-    const targetSelection = assignSelection ? live.selection : [];
+    const liveSelectionSet = new Set(live.selection);
+    const targetSelection = assignSelection
+      ? (confirmedSelection ? confirmedSelection.filter((id) => liveSelectionSet.has(id)) : [])
+      : [];
+    if (confirmedSelection && !targetSelection.length) {
+      setNote("The selected regions changed before group creation completed.");
+      return;
+    }
     const liveApi = live.api;
     if (targetSelection.length && !liveApi?.setRegionAttrs) {
       setNote("The map selection cannot be assigned here."); return;
@@ -182,8 +190,9 @@ const GroupsPanel = ({
     setNote(`Dissolved ${name}; its territorial control was removed without transferring sovereignty.`);
   };
 
-  const changedAreas = async (ids, nextGroup, actionLabel) => {
-    if (confirmingRef.current || !ids.length || !api?.setRegionAttrs) return;
+  const changedAreas = async (inputIds, nextGroup, actionLabel) => {
+    if (confirmingRef.current || !inputIds.length || !api?.setRegionAttrs) return;
+    let ids = [...inputIds];
     if (ids.length > 1) {
       confirmingRef.current = true;
       let ok = false;
@@ -196,8 +205,19 @@ const GroupsPanel = ({
       }
       if (!ok) return;
     }
-    const liveApi = liveGroupStateRef.current.api;
+    const live = liveGroupStateRef.current;
+    const liveApi = live.api;
     if (!liveApi?.setRegionAttrs) return;
+    if (nextGroup !== null && !live.allNames.has(nextGroup)) {
+      setNote("That group is no longer available.");
+      return;
+    }
+    const liveSelectionSet = new Set(live.selection);
+    ids = ids.filter((id) => liveSelectionSet.has(id));
+    if (!ids.length) {
+      setNote("The selected regions changed before group control was updated.");
+      return;
+    }
     liveApi.setRegionAttrs(ids, { group: nextGroup });
     setNote(`${actionLabel}: ${ids.length} region${ids.length === 1 ? "" : "s"}. Undo restores previous control.`);
   };

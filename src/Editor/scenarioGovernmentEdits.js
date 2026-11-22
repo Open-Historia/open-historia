@@ -46,16 +46,34 @@ export const removeGovernmentEdits = (rows, keys) => {
   return (Array.isArray(rows) ? rows : []).filter((row) => !toRemove.some((key) => samePolityName(row?.polity, key)));
 };
 
+const replayPolityRenames = (polity, renames) => {
+  let key = str(polity);
+  if (!key || !Array.isArray(renames) || !renames.length) return key;
+  for (const rename of renames) {
+    const from = str(rename?.from);
+    const to = str(rename?.to);
+    if (from && to && samePolityName(key, from)) key = to;
+  }
+  return key;
+};
+
 // Remove only government fields successfully written to the scenario. If an
 // author changed a different field while the Save was in flight, that newer
 // explicit intent must survive. Operations are not persistent Political World
 // state, and leaving settled ones queued can overwrite later canonical edits.
-export const settleGovernmentEditRows = (currentRows, savedRows) => {
+export const settleGovernmentEditRows = (currentRows, savedRows, polityRenames = []) => {
   const current = Array.isArray(currentRows) ? currentRows : [];
   const saved = Array.isArray(savedRows) ? savedRows : [];
   if (!saved.length) return current;
+  const rebasedSaved = Array.isArray(polityRenames) && polityRenames.length
+    ? saved.map((item) => {
+      if (!item || typeof item !== "object") return item;
+      const polity = replayPolityRenames(item.polity, polityRenames);
+      return polity === item.polity ? item : { ...item, polity };
+    })
+    : saved;
   return current.flatMap((row) => {
-    const prior = saved.find((item) => samePolityName(item?.polity, row?.polity));
+    const prior = rebasedSaved.find((item) => samePolityName(item?.polity, row?.polity));
     if (!prior) return [row];
     const remaining = { polity: row.polity };
     for (const field of ALLOWED) {

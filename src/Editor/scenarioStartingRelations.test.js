@@ -189,3 +189,24 @@ test("settleStartingRelationEdits handles real in-flight Workshop renames (which
   assert.equal(settledCloned.document.relations[0].a, "Baltic Federation");
   assert.equal(settledCloned.document.relations[0].score, 25);
 });
+
+test("settleStartingRelationEdits settles edits involving territory-only polities supplied via extraKeys", () => {
+  const savedEdit = mergeStartingRelationEdit([], { a: "RegisteredPolity", b: "TerritoryOnlyPolity", score: -40 })[0];
+  const document = {
+    polities: { RegisteredPolity: { name: "RegisteredPolity" } },
+    relations: [],
+    relationEdits: [savedEdit],
+  };
+
+  // Without extraKeys, territory-only polity is rejected.
+  assert.equal(settleStartingRelationEdits(document, [savedEdit]).ok, false);
+
+  // With map-occupied extraKeys, the saved relation settles cleanly and leaves no stale pending edit.
+  const settled = settleStartingRelationEdits(document, [savedEdit], ["TerritoryOnlyPolity"]);
+  assert.equal(settled.ok, true);
+  assert.equal(settled.document.relations.length, 1);
+  assert.equal(settled.document.relations[0].a, "RegisteredPolity");
+  assert.equal(settled.document.relations[0].b, "TerritoryOnlyPolity");
+  assert.equal(settled.document.relations[0].score, -40);
+  assert.deepEqual(settled.document.relationEdits, []);
+});

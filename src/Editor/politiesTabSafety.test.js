@@ -57,7 +57,7 @@ test("new country only registers the validated, fully authored draft", () => {
   // mutations. One validated document plan and one native history step are
   // the accepted authoring seam.
   const mapEditor = readFileSync(new URL("./MapEditor.jsx", import.meta.url), "utf8");
-  assert.match(source, /(?:live\.)?commitCountryDraft\(plan, plan\.assignSelectedRegions \? (?:live\.)?selection : \[\]\)/);
+  assert.match(source, /(?:live\.)?commitCountryDraft\(plan, plan\.assignSelectedRegions \? (?:live\.selection|assignedSelection|selection) : \[\]\)/);
   assert.match(mapEditor, /planMapPolityCreation\(before, plan\)/);
   assert.match(mapEditor, /api\.setRegionAttrs\(ids, \{ owner: plan\.key \}, \{ deferHistory: true \}\)/);
   assert.match(mapEditor, /api\.pushStep\(\{/);

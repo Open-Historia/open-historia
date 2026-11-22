@@ -8,6 +8,7 @@ import {
   evaluateScriptedEventConditions,
   normalizeScriptedEventState,
   planScriptedEvents,
+  replanAfterSkippedScriptedBeats,
 } from "./scriptedEventResolution.js";
 
 const event = (id, trigger = { mode: "rules", operator: "all", conditions: [], percent: 100 }, date = "1914-03-21") => ({
@@ -371,4 +372,64 @@ test("N031 a known dissolved human seat in MP does not break player-control chec
     evaluateScriptedEventCondition({ type: "polity_player_controlled", polityId: "GER" }, mpWorld, { playerPolities: ["FRA", "GONE"] }).matched,
     false,
   );
+});
+
+test("replanAfterSkippedScriptedBeats clears stale dirty pending entries before Phase 2 for out-of-order [A, C, B] chains", () => {
+  const beatA = event("A", { mode: "rules", operator: "all", conditions: [], percent: 100 }, "1914-03-21");
+  const beatB = event("B", { mode: "rules", operator: "all", conditions: [{ type: "scripted_event_fired", eventId: "A" }], percent: 100 }, "1914-03-21");
+  const beatC = event("C", { mode: "rules", operator: "all", conditions: [{ type: "scripted_event_fired", eventId: "B" }], percent: 100 }, "1914-03-21");
+  const outOfOrder = [beatA, beatC, beatB];
+
+  // Cached pendingState already holds { A: fired, B: fired, C: fired } while
+  // the same-date input array places C before B.
+  const cachedAllFired = {
+    A: { outcome: "fired" },
+    B: { outcome: "fired" },
+    C: { outcome: "fired" },
+  };
+  const initialPlan = planScriptedEvents(outOfOrder, { world, pendingState: cachedAllFired, random: () => 0 });
+  assert.deepEqual(
+    initialPlan.resolutions.map((r) => [r.event.id, r.outcome]),
+    [["A", "fired"], ["C", "fired"], ["B", "fired"]],
+  );
+
+  // If A is later skipped while preservedPending still holds { A: fired, B: fired, C: fired },
+  // C must not read stale nextPending.B = fired and survive as fired.
+  const replanned = replanAfterSkippedScriptedBeats(
+    outOfOrder,
+    initialPlan,
+    [{ beat: beatA, reason: "impact skipped" }],
+    { world, random: () => 0, preservedPending: cachedAllFired },
+  );
+  const outcomesById = Object.fromEntries(replanned.resolutions.map((r) => [r.event.id, r.outcome]));
+  assert.deepEqual(outcomesById, { A: "skipped", B: "skipped", C: "skipped" });
+
+  // Conversely, when preservedPending already matches the post-skip chain
+  // (B requires A skipped; C requires B fired), fixpoint Phase 2 restores C's cached branch.
+  const altB = event("B", { mode: "rules", operator: "all", conditions: [{ type: "scripted_event_skipped", eventId: "A" }], percent: 100 }, "1914-03-21");
+  const altC = {
+    ...event("C", { mode: "rules", operator: "all", conditions: [{ type: "scripted_event_fired", eventId: "B" }], percent: 100 }, "1914-03-21"),
+    outcomes: [
+      { id: "branch-1", text: "Branch 1", weight: 50 },
+      { id: "branch-2", text: "Branch 2", weight: 50 },
+    ],
+  };
+  const altChain = [beatA, altC, altB];
+  const preservedAfterSkip = {
+    A: { outcome: "skipped", reason: "impact skipped" },
+    B: { outcome: "fired" },
+    C: { outcome: "fired", selectedOutcomeId: "branch-2" },
+  };
+  const altInitial = planScriptedEvents(altChain, { world, random: () => 0 });
+  const restoredPlan = replanAfterSkippedScriptedBeats(
+    altChain,
+    altInitial,
+    [{ beat: beatA, reason: "impact skipped" }],
+    { world, random: () => 0, preservedPending: preservedAfterSkip },
+  );
+  const restoredById = Object.fromEntries(restoredPlan.resolutions.map((r) => [r.event.id, r]));
+  assert.equal(restoredById.A.outcome, "skipped");
+  assert.equal(restoredById.B.outcome, "fired");
+  assert.equal(restoredById.C.outcome, "fired");
+  assert.equal(restoredById.C.selectedOutcomeId, "branch-2");
 });

@@ -555,29 +555,39 @@ export const replanAfterSkippedScriptedBeats = (eventsInput, plan, skippedEntrie
     }
   }
 
-  // Phase 2: update dependent entries in event order, reusing preservedPending
-  // when every referenced beat has the same outcome AND selectedOutcomeId.
-  for (const event of events) {
-    const id = text(event?.id);
-    if (!id || !dirty.has(id) || skippedMap.has(id)) continue;
-    const refs = referencedScriptedEventIds(event);
-    const preservedEntry = preserved[id];
-    const depsMatchPreserved = Boolean(preservedEntry)
-      && ["fired", "skipped"].includes(lower(preservedEntry.outcome))
-      && refs.every((refId) => {
-        const currentEntry = nextPending[refId] || resolvedState?.[refId];
-        const savedEntry = preserved[refId] || resolvedState?.[refId];
-        const currentOutcome = lower(currentEntry?.outcome);
-        const savedOutcome = lower(savedEntry?.outcome);
-        if (!currentOutcome || currentOutcome !== savedOutcome) return false;
-        const currentBranch = currentOutcome === "fired" ? text(currentEntry?.selectedOutcomeId) : "";
-        const savedBranch = savedOutcome === "fired" ? text(savedEntry?.selectedOutcomeId) : "";
-        return currentBranch === savedBranch;
-      });
-    if (depsMatchPreserved) {
-      nextPending[id] = { ...preservedEntry };
-    } else {
-      delete nextPending[id];
+  // Clear every non-skipped dirty entry before Phase 2 so out-of-order beats
+  // never observe stale pre-replan upstream outcomes from `plan.pendingState`.
+  for (const id of dirty) {
+    if (!skippedMap.has(id)) delete nextPending[id];
+  }
+
+  // Phase 2: iteratively restore dependent entries from preservedPending
+  // whenever every referenced beat resolves to the same outcome AND
+  // selectedOutcomeId. Running to fixpoint handles out-of-order chains.
+  let restored = true;
+  while (restored) {
+    restored = false;
+    for (const event of events) {
+      const id = text(event?.id);
+      if (!id || !dirty.has(id) || skippedMap.has(id) || nextPending[id]) continue;
+      const refs = referencedScriptedEventIds(event);
+      const preservedEntry = preserved[id];
+      const depsMatchPreserved = Boolean(preservedEntry)
+        && ["fired", "skipped"].includes(lower(preservedEntry.outcome))
+        && refs.every((refId) => {
+          const currentEntry = nextPending[refId] || resolvedState?.[refId];
+          const savedEntry = preserved[refId] || resolvedState?.[refId];
+          const currentOutcome = lower(currentEntry?.outcome);
+          const savedOutcome = lower(savedEntry?.outcome);
+          if (!currentOutcome || currentOutcome !== savedOutcome) return false;
+          const currentBranch = currentOutcome === "fired" ? text(currentEntry?.selectedOutcomeId) : "";
+          const savedBranch = savedOutcome === "fired" ? text(savedEntry?.selectedOutcomeId) : "";
+          return currentBranch === savedBranch;
+        });
+      if (depsMatchPreserved) {
+        nextPending[id] = { ...preservedEntry };
+        restored = true;
+      }
     }
   }
 

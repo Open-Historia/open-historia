@@ -454,7 +454,7 @@ export const useMapDocument = (initial) => {
     if (!Array.isArray(savedRows) || !savedRows.length) return;
     setDoc((current) => ({
       ...current,
-      actorGovernmentEdits: settleGovernmentEditRows(current.actorGovernmentEdits, savedRows),
+      actorGovernmentEdits: settleGovernmentEditRows(current.actorGovernmentEdits, savedRows, current.polityRenames),
     }));
     // Autosave the reconciled working copy, but never count this housekeeping
     // as a newly authored scenario change after a successful scenario Save.
@@ -464,10 +464,10 @@ export const useMapDocument = (initial) => {
     setDoc((d) => ({ ...d, relationEdits: mergeStartingRelationEdit(d.relationEdits, edit) }));
     setSaveStatus("dirty");
   }, [setSaveStatus]);
-  const settleRelationEdits = useCallback((savedEdits) => {
+  const settleRelationEdits = useCallback((savedEdits, extraKeys = []) => {
     if (!Array.isArray(savedEdits) || !savedEdits.length) return;
     setDoc((d) => {
-      const settled = settleStartingRelationEdits(d, savedEdits);
+      const settled = settleStartingRelationEdits(d, savedEdits, extraKeys);
       if (!settled.ok) {
         console.warn("[editor] could not settle authored starting relations:", settled.reason);
         return d;

@@ -189,12 +189,19 @@ export const withoutStartingRelations = (rows, removed, choices = []) => {
  * scenario write. Counting pending edits would erase a newer edit if the author
  * changed the same pair while that write was in flight.
  */
-export const settleStartingRelationEdits = (document, savedEdits) => {
+export const settleStartingRelationEdits = (document, savedEdits, extraKeys = []) => {
   const saved = Array.isArray(savedEdits) ? savedEdits : [];
   if (!saved.length) return { ok: true, document };
   const choices = Object.entries(document?.polities || {}).map(([key, record]) => ({
     ...(isRow(record) ? record : {}), key,
   }));
+  const seenKeys = new Set(choices.map((entry) => clean(entry.key)).filter(Boolean));
+  for (const rawKey of (Array.isArray(extraKeys) ? extraKeys : [])) {
+    const key = clean(rawKey);
+    if (!key || seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    choices.push({ key });
+  }
   const known = knownPolityKeys(choices);
   const pending = Array.isArray(document?.relationEdits) ? document.relationEdits : [];
   const pendingById = new Map(pending.filter((entry) => entry?._editId).map((entry) => [entry._editId, entry]));

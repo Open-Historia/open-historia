@@ -78,3 +78,15 @@ test("explicit null clears settle, while a newer clear survives an in-flight Sav
   assert.deepEqual(settleGovernmentEditRows(cleared,saved),[{polity:"A",form:null}]);
   assert.deepEqual(settleGovernmentEditRows(cleared,cleared),[]);
 });
+test("Save settlement replays in-flight polity renames so already-saved government edits do not stay queued",()=>{
+  const saved=stageGovernmentEdit([], "A", {form:"Parliamentary republic",ideology:"Liberal"});
+  // While Save was in flight, polity A was renamed A -> New A -> Newer A, and ideology was edited again.
+  let current=rekeyGovernmentEdits(saved,"A","New A");
+  current=rekeyGovernmentEdits(current,"New A","Newer A");
+  const renamedOnly=settleGovernmentEditRows(current,saved,[{from:"A",to:"New A"},{from:"New A",to:"Newer A"}]);
+  assert.deepEqual(renamedOnly,[]);
+
+  const editedInFlight=stageGovernmentEdit(current,"Newer A",{ideology:"Social democracy"});
+  const settled=settleGovernmentEditRows(editedInFlight,saved,[{from:"A",to:"New A"},{from:"New A",to:"Newer A"}]);
+  assert.deepEqual(settled,[{polity:"Newer A",ideology:"Social democracy"}]);
+});
