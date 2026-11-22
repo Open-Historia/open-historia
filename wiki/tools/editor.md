@@ -276,8 +276,7 @@ override:
 
 <p class="beta-note"><b>On beta there are more.</b> <b>Groups</b> switches the
 <a href="/wiki/territory/#groups">groups</a> and their areas off; <b>Fronts</b> switches off the
-land war fought on battlefields, with a <b>Pace of an advance</b> from 25 to 300% of the usual
-ground gained in a day;
+land war fought on battlefields;
 <b>Social media</b> takes away Rostra, the social network, and the time skip's posts with it; <b>Pre-game history</b> stops a new game asking the
 AI to turn the <i>World Before Round One</i> briefing into history; and <b>Player focus</b> sets
 where new games start on <a href="/wiki/time/#player-focus">how much of a skip is the player's

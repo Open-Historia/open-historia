@@ -1,22 +1,26 @@
 /*! Open Historia — which languages a translation model on the device covers © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// The translator (translator.js) sends what no language pack has (a scenario's
-// names and descriptions, a map's region names, the interface of a language
-// with no pack) to the player's AI model, a request at a time. On a free key a
-// request is scarce, so where a small open model translates English into the
-// player's language well, that model does it on the device instead, after the
-// player has seen its size and said yes. Everything it cannot do (a language it
-// does not cover, an answer that fails the checks below, a model that would not
-// load) goes to the AI as before.
+// What no language pack has (a scenario's names and descriptions, a map's
+// region names, the interface of a language with no pack) is translated on the
+// device by a small open model, where one translates English into the
+// player's language well. A language with a model is played in only once the
+// player has seen its size and said yes (translator.js switchLanguage); no
+// translation is an AI request unless the player turns on Translate with my AI
+// (aiTranslation.js), which needs the model all the same and falls back to it.
+// A language with a pack and no model shows
+// what its pack has, and an answer that fails the checks below stays English.
 //
 // The models are Opus-MT (Language Technology Research Group, University of
 // Helsinki; https://github.com/Helsinki-NLP/Opus-MT), one per language pair,
 // licensed CC BY 4.0, in the ONNX copies Transformers.js publishes
-// (huggingface.co/Xenova/opus-mt-en-*). Only the player's language is
-// downloaded: about 110 MB, int8. A language is listed only where a trial on the
-// game's own kind of text (polity names, scenario blurbs) read right; vi, hi,
-// sv and uk renamed places or ran on, and ja, ko, pl, tr, bn, fa, th and ur
-// have no model small enough. NLLB-200 (CC BY-NC, so not usable here) and
-// M2M100 (about 640 MB) were the multilingual alternatives.
+// (huggingface.co/Xenova/opus-mt-en-*), or, where nobody had published one,
+// converted for the game the same way (int8, the same six files) and kept on
+// the scenario repository (MIRROR below). Only the player's language is
+// downloaded: 110 to 150 MB, int8. A language is listed only where a trial on
+// the game's own kind of text (polity names, scenario blurbs) read right; vi,
+// hi and uk renamed places or ran on (as en-sv did for sv, before the North
+// Germanic model en-gmq, which keeps the places), and ja, ko, pl, tr, bn, fa,
+// th and ur have no model small enough. NLLB-200 (CC BY-NC, so not usable here)
+// and M2M100 (about 640 MB) were the multilingual alternatives.
 //
 // Pure: the worker (translationWorker.js) and the translator call it, and the
 // tests call it directly.
@@ -35,9 +39,26 @@ export const MODEL_FILES = Object.freeze([
 
 export const MODEL_HOST = "https://huggingface.co";
 
+// The models converted for the game (`converted` below), which nobody
+// publishes on Hugging Face, are kept on the scenario repository's
+// translation-models branch and read from there. GitHub's raw files carry the
+// header that lets the page read them; its release downloads do not. `commit`
+// pins the branch, so a file kept on the device never changes under it.
+export const MIRROR = Object.freeze({
+  host: "https://raw.githubusercontent.com/",
+  repo: "Open-Historia/Open-historia-scenarios",
+  commit: "d0336768dcc8bc368107ea199e4a74d66a590139",
+});
+
 // `token`: a model that writes several languages is told which by a token in
-// front of the text (Marian's ">>id<<").
-const model = (repo, revision, bytes, token = "") => Object.freeze({ repo, revision, bytes, token });
+// front of the text (Marian's ">>id<<"). `mirrorOnly`: on the mirror, not on
+// Hugging Face.
+const model = (repo, revision, bytes, token = "", { mirrorOnly = false } = {}) =>
+  Object.freeze({ repo, revision, bytes, token, mirrorOnly });
+// A Helsinki-NLP Opus-MT model converted for the game (ONNX through Optimum,
+// int8 through ONNX Runtime, a tokenizer.json from its own SentencePiece
+// model: the files Xenova's copies have), published only on the mirror.
+const converted = (name, bytes, token = "") => model(`Open-Historia/${name}`, MIRROR.commit, bytes, token, { mirrorOnly: true });
 
 export const TRANSLATION_MODELS = Object.freeze({
   ar: model("Xenova/opus-mt-en-ar", "034a684356c19021a187cda4d7f823298b913921", 117602786, ">>ara<<"),
@@ -50,12 +71,28 @@ export const TRANSLATION_MODELS = Object.freeze({
   // The Romance model, told Brazilian Portuguese: the pack's (pt.json) is.
   pt: model("Xenova/opus-mt-en-ROMANCE", "9d2ba69ac80c8e8453c3d9a1e2323a0e7b8ca3cd", 119232541, ">>pt_BR<<"),
   ru: model("Xenova/opus-mt-en-ru", "e050376e960175e8ddc5cff85025dc8436cddd68", 117767359),
+  // The North Germanic model, told Swedish. On the trial it kept the places
+  // en-sv renamed, though "Duchy of Milan" still came out "Domen i Milano".
+  // Only content goes to it: the interface is the pack's.
+  sv: converted("opus-mt-en-gmq", 135450767, ">>swe<<"),
   zh: model("Xenova/opus-mt-en-zh", "046f55aec303cdee3e0318604406d4df20f1e8ea", 119495576, ">>cmn_Hans<<"),
   // Languages with no shipped pack, whose whole interface would otherwise go
   // to the AI.
   da: model("Xenova/opus-mt-en-da", "33862dc071a5cc43e821e60742553c501c587e77", 112558991),
   hu: model("Xenova/opus-mt-en-hu", "1b7df958c1bd8f094eff1ce76d536468923ed7e3", 116699316),
   ro: model("Xenova/opus-mt-en-ro", "3d816891778276930df2a45cbfb70689b3fe8981", 113247006),
+  cs: model("Xenova/opus-mt-en-cs", "ed163ca109a93297e2f055eb3397bd33230141ad", 116695526),
+  fi: model("Xenova/opus-mt-en-fi", "4e5799273dbd7cce94c1e99cc9d3acb9f191b8eb", 119429988),
+  // Converted for the game (2026-11-06). The Baltic model writes both Latvian
+  // and Lithuanian, told which: the two share one download.
+  lv: converted("opus-mt-en-bat", 138610142, ">>lav<<"),
+  lt: converted("opus-mt-en-bat", 138610142, ">>lit<<"),
+  sk: converted("opus-mt-en-sk", 140111291),
+  et: converted("opus-mt-en-et", 138284229),
+  el: converted("opus-mt-en-el", 147803980),
+  he: converted("opus-mt-en-he", 149263371),
+  ga: converted("opus-mt-en-ga", 134889815),
+  mt: converted("opus-mt-en-mt", 133829428),
 });
 
 // "pt-BR", " DE " → "pt", "de".
@@ -63,47 +100,35 @@ const baseLanguage = (code) => String(code || "").trim().toLowerCase().split(/[-
 
 export const translationModelFor = (language) => TRANSLATION_MODELS[baseLanguage(language)] || null;
 
+// Where a model's files are read from: Hugging Face at the pinned revision, or,
+// for a model converted for the game, the scenario repository at the mirror's
+// commit. Each is a host and a path template as Transformers.js takes them
+// (env.remoteHost, env.remotePathTemplate), with the model name and revision to
+// fill them. A list, so the worker reads each the same way.
+export const modelSources = (entry) => [
+  entry.mirrorOnly
+    ? { host: MIRROR.host, path: `${MIRROR.repo}/{revision}/models/{model}/`, model: entry.repo.split("/")[1], revision: MIRROR.commit }
+    : { host: `${MODEL_HOST}/`, path: "{model}/resolve/{revision}/", model: entry.repo, revision: entry.revision },
+];
+
+export const sourceFileUrl = (source, file) =>
+  `${source.host}${source.path.replace("{model}", source.model).replace("{revision}", source.revision)}${file}`;
+
 // Where Transformers.js fetches a file from, which is also its key in the
 // browser's cache.
-export const modelFileUrl = (entry, file) => `${MODEL_HOST}/${entry.repo}/resolve/${entry.revision}/${file}`;
+export const modelFileUrl = (entry, file, source = modelSources(entry)[0]) => sourceFileUrl(source, file);
 
 // "112 MB": decimal megabytes, as the model host and the operating system's
 // download dialogs count them.
 export const formatModelSize = (bytes) => `${Math.max(1, Math.round((Number(bytes) || 0) / 1e6))} MB`;
 
 // ---------------------------------------------------------------------------
-// Who translates.
-//
 // The player's answer to the download prompt, per language, kept on this
-// device: "yes" (download it, and use it), "no" (the AI, as before). No answer
-// yet: the translator asks the first time it has something to translate, and
-// holds it meanwhile, so nothing is spent on the AI before the player chose.
+// device: "yes" (downloaded, and in use) or "no" (the game stayed English).
 
 export const MODEL_CHOICE_PREFIX = "oh:translation-model:";
 export const modelChoiceKey = (language) => `${MODEL_CHOICE_PREFIX}${baseLanguage(language)}`;
 export const readModelChoice = (value) => (value === "yes" || value === "no" ? value : "");
-
-export const ENGINES = Object.freeze({ MODEL: "model", AI: "ai", ASK: "ask" });
-
-// `failed`: the model would not download or load this session.
-export const translationEngineFor = ({ language, choice = "", failed = false } = {}) => {
-  if (!translationModelFor(language) || failed) return ENGINES.AI;
-  const answer = readModelChoice(choice);
-  if (answer === "no") return ENGINES.AI;
-  if (answer === "yes") return ENGINES.MODEL;
-  return ENGINES.ASK;
-};
-
-// Which of the queued strings the model takes and which go to the AI. With the
-// model in use, the AI gets only what the model's answer was refused for.
-export const splitPendingByEngine = (pending, { engine, refused = new Set() } = {}) => {
-  const all = [...(pending ?? [])];
-  if (engine !== ENGINES.MODEL) return { model: [], ai: engine === ENGINES.AI ? all : [] };
-  return {
-    model: all.filter((text) => !refused.has(text)),
-    ai: all.filter((text) => refused.has(text)),
-  };
-};
 
 // ---------------------------------------------------------------------------
 // Batching.
@@ -176,7 +201,7 @@ export const splitForModel = (text, { maxChars = MODEL_PIECE_CHARS } = {}) => {
 //
 // A small model sometimes runs on (repeating a word or a mark to the end of its
 // budget), echoes its language token, or drops a number. Such an answer is not
-// kept; the string goes to the AI instead (splitPendingByEngine).
+// kept; the string stays English.
 
 const PLACEHOLDER = /\{\{\s*[^}]+?\s*\}\}|\$\{[^}]*\}/g;
 const ARABIC_INDIC = /[٠-٩۰-۹]/g;

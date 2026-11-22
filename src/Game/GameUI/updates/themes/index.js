@@ -16,16 +16,28 @@
 
 import { lazy } from "react";
 
+import { AI_OVERHAUL_CHROME } from "./aiOverhaulChrome.js";
 import { AIR_RAID_CHROME } from "./airRaidChrome.js";
+import { BACK_CHANNELS_CHROME } from "./backChannelsChrome.js";
 import { CHRONICLE_CHROME } from "./chronicleChrome.js";
+import { DIPLOMATIC_ATLAS_CHROME } from "./diplomaticAtlasChrome.js";
 import { ESPIONAGE_2_CHROME } from "./espionage2Chrome.js";
 import { MUSIC_CHROME } from "./musicChrome.js";
+import { PROJECTS_CHROME } from "./projectsChrome.js";
 import { ROSTRA_CHROME } from "./rostraChrome.js";
 import { SEASONS_CHROME } from "./seasonsChrome.js";
+import { SHARED_WORLDS_CHROME } from "./sharedWorldsChrome.js";
 import { SWARMS_CHROME } from "./swarmsChrome.js";
+import { THEMES_CHROME } from "./themesChrome.js";
 import { WARS_AND_FRONTS_2_CHROME } from "./warsAndFronts2Chrome.js";
 
 export const THEMES = Object.freeze({
+  backChannels: { Page: lazy(() => import("./BackChannels.jsx")), chrome: BACK_CHANNELS_CHROME },
+  sharedWorlds: { Page: lazy(() => import("./SharedWorlds.jsx")), chrome: SHARED_WORLDS_CHROME },
+  diplomaticAtlas: { Page: lazy(() => import("./DiplomaticAtlas.jsx")), chrome: DIPLOMATIC_ATLAS_CHROME },
+  projects: { Page: lazy(() => import("./Projects.jsx")), chrome: PROJECTS_CHROME },
+  aiOverhaul: { Page: lazy(() => import("./AiOverhaul.jsx")), chrome: AI_OVERHAUL_CHROME },
+  themes: { Page: lazy(() => import("./Themes.jsx")), chrome: THEMES_CHROME },
   rostra: { Page: lazy(() => import("./Rostra.jsx")), chrome: ROSTRA_CHROME },
   airRaid: { Page: lazy(() => import("./AirRaid.jsx")), chrome: AIR_RAID_CHROME },
   espionage2: { Page: lazy(() => import("./Espionage2.jsx")), chrome: ESPIONAGE_2_CHROME },

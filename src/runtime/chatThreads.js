@@ -17,8 +17,11 @@
 // A thread saved before this existed is migrated on read, idempotently: its
 // countries become joins and its messages become message events, in order.
 //
-// DELIBERATELY IMPORT-FREE, like projects.js and reports.js: the rules on plain
-// data, tested on their own.
+// DELIBERATELY IMPORT-FREE, like projects.js and reports.js, but for the
+// import-free id maker (runtime/blindIds.js): the rules on plain data, tested
+// on their own.
+
+import { blindId } from "./blindIds.js";
 
 export const CHAT_EVENT_KINDS = Object.freeze([
     "chat_created",
@@ -75,11 +78,9 @@ const asText = (value) => String(value ?? "").trim();
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const fold = (value) => asText(value).toLowerCase();
 
-let sequence = 0;
-const mintId = (prefix) => {
-    sequence += 1;
-    return `${prefix}-${Date.now().toString(36)}-${sequence.toString(36)}`;
-};
+// Every member of a thread reads its ids: random, so that two of them never
+// tell what else was made between them, or when (runtime/blindIds.js).
+const mintId = (prefix) => blindId(prefix);
 
 // A participant is a name, or {name, code} — the shape chats have always
 // stored. Kept as an object so the projection can hand back what readers expect.
@@ -144,6 +145,12 @@ export const normalizeChatEvent = (entry, index = 0) => {
             // The catch-up the player's message was sent with
             // (AI/conversationCatchUp.js buildThreadCatchUp).
             ...(asText(entry.catchUp) ? { catchUp: asText(entry.catchUp), ...(asText(entry.catchUpLabel) ? { catchUpLabel: asText(entry.catchUpLabel) } : {}) } : {}),
+            // The advisor's drafted letter a player's line was sent from (GameUI/advisorDrafts.js).
+            ...(asText(entry.fromDraft) ? { fromDraft: asText(entry.fromDraft) } : {}),
+            // In a shared game, the country whose player's own device wrote this
+            // government's words (multiplayer/host/gameHost.js "reply"): its
+            // account, which binds the government to nothing.
+            ...(asText(entry.writtenBy) ? { writtenBy: asText(entry.writtenBy).slice(0, 200) } : {}),
         };
     }
     if (kind === "reaction") {
@@ -289,6 +296,8 @@ export const eventsFromLegacyChat = (chat) => {
             eventId: asText(message?.eventId),
             catchUp: asText(message?.catchUp),
             catchUpLabel: asText(message?.catchUpLabel),
+            fromDraft: asText(message?.fromDraft),
+            writtenBy: asText(message?.writtenBy),
         });
         // Reactions were a map on the message; each becomes its own event.
         const reactions = message?.reactions && typeof message.reactions === "object" ? message.reactions : {};
@@ -359,6 +368,8 @@ export const projectChatThread = (events) => {
                 heardBy: members.map((member) => member.name),
                 ...(event.eventId ? { eventId: event.eventId } : {}),
                 ...(event.catchUp ? { catchUp: event.catchUp, ...(event.catchUpLabel ? { catchUpLabel: event.catchUpLabel } : {}) } : {}),
+                ...(event.fromDraft ? { fromDraft: event.fromDraft } : {}),
+                ...(event.writtenBy ? { writtenBy: event.writtenBy } : {}),
             };
             messages.push(message);
             messageById.set(event.id, message);
@@ -580,6 +591,8 @@ export const withUnloggedMessages = (events, messages, { threadId = "" } = {}) =
             eventId: asText(message?.eventId),
             catchUp: asText(message?.catchUp),
             catchUpLabel: asText(message?.catchUpLabel),
+            fromDraft: asText(message?.fromDraft),
+            writtenBy: asText(message?.writtenBy),
         });
     }
     return additions.length ? normalizeChatEvents([...log, ...additions]) : log;

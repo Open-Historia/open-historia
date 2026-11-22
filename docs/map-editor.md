@@ -251,7 +251,7 @@ A "type" carries render + gameplay settings and is referenced by each region's `
 | `strokeWidth`, `strokeColor`, `strokeOpacity` | `olStyle.js`; game map | Border. |
 | `overrideColor` | `olStyle.js`; game map | Force a fixed fill instead of the owner colour (`null` = off). |
 | `pathfindingSpeed`, `passable`, `interactable` | the time skip, or the game's unit and structure directors | Rules for moving and placing, told to the AI (below). Tooltips on the rows say what each does. |
-| `water` | the land war (`runtime/fronts/`), and the AI's rules | The panel's **Water** switch: these regions are sea. Transporters sail through them, no army marches across them, and they are nobody's front. A type nobody has set it on is water when its name says so (Ocean, Sea, Water or Lake, alone or among other words: `isWaterType`), so a map made before the switch needs nothing done to it. |
+| `water` | the land war (`runtime/fronts/`), and the AI's rules | The panel's **Water** switch: these regions are sea. Transporters sail through them, no army marches across them, and they are nobody's front. Only the switch makes a type water (`isWaterType`): a type nobody has switched on is land, whatever its name. A map made before the switch existed turns it on for its sea types. |
 | `showToDefaultPrompt` | nothing | The official editor's flag. The game has no reader for it, so the panel does not offer it; a type keeps the value it has. |
 | `includedInLabels` | `OlMap` label layer | `false` suppresses the region label. Workshop only: the game labels countries, not regions. |
 | `zoomSettings: [{minZoom,maxZoom}]` | `pickZoomBand` (`olStyle.js`); game map | Hides the type outside the zoom band. |

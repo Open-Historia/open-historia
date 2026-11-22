@@ -20,6 +20,7 @@ import { offeredEvent } from "../../runtime/interactiveOffer.js";
 import { formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
 import { canRewindInteractiveTo, interactiveChoiceTexts, isSceneInProgress } from "../AI/interactiveRewind.js";
 import { advanceActiveInteractive, createInteractive, declineInteractiveOffer, endActiveInteractive, rewindActiveInteractive, setAsideActiveInteractive } from "../AI/gameplayLazy.js";
+import { sceneCompletionTitle } from "../AI/interactiveCompletion.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 
 const YELLOW = "#facc15";
@@ -29,7 +30,7 @@ const selectScene = (world) => (isSceneInProgress(world?.activeInteractive) ? wo
 const selectOffer = (world) => world?.interactiveOffer ?? null;
 
 const panelStyle = {
-    background: "rgba(18,18,22,0.97)",
+    background: "var(--oh-ui-overlay-strong, rgba(18,18,22,0.97))",
     border: "1px solid rgba(250,204,21,0.38)",
     borderRadius: "16px",
     boxShadow: "0 18px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(250,204,21,0.06) inset",
@@ -161,13 +162,13 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
         const title = scene?.title || "";
         const result = await advanceActiveInteractive(wording);
         setMove("");
-        if (result && !result.interactive) setFinished({ title: result.events?.at?.(-1)?.title || title });
+        if (result && !result.interactive) setFinished({ title: sceneCompletionTitle(result, title) });
     });
     const takeBack = (index) => run("Taking the move back…", () => rewindActiveInteractive({ beatIndex: index }));
     const end = () => run("Writing the scene into the record…", async () => {
         const title = scene?.title || "";
         const result = await endActiveInteractive();
-        if (result?.resolved) setFinished({ title: result.events?.at?.(-1)?.title || title });
+        if (result?.resolved) setFinished({ title: sceneCompletionTitle(result, title) });
     });
     const setAside = () => {
         if (beats.length > 0 && !confirmingAside) {

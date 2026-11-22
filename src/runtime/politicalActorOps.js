@@ -11,6 +11,7 @@ import {
   normalizePoliticalParty,
   normalizePoliticalPowerBloc,
   POLITICAL_ACTORS_SCHEMA_VERSION,
+  POLITICAL_SYSTEM_TYPES,
   resolvePoliticalParty,
   resolvePoliticalPowerBloc,
 } from "./politicalActors.js";
@@ -110,7 +111,9 @@ const GENERATED_OP_NOTES = Object.freeze({
   [POLITICAL_ACTOR_OPS.SET_PARTY_SUPPORT]: "use for electoral/popular support; percent is 0-100",
   [POLITICAL_ACTOR_OPS.SET_PARTY_INFLUENCE]: "use for non-electoral or party-state influence; percent is 0-100",
   [POLITICAL_ACTOR_OPS.SET_POWER_BLOC_INFLUENCE]: "percent is 0-100; label is optional",
-  [POLITICAL_ACTOR_OPS.SET_GOVERNMENT]: "government fields belong inside patch (form, ideology, legislature, legislatureSeats, nextElection among them); this does NOT establish governing party membership - use form-coalition for that",
+  [POLITICAL_ACTOR_OPS.SET_POLITICAL_SYSTEM]: `type is one of ${POLITICAL_SYSTEM_TYPES.join(", ")}`,
+  [POLITICAL_ACTOR_OPS.SET_GOVERNMENT]: "government fields belong inside patch (form, ideology, legislature, legislatureSeats, nextElection among them); this does NOT establish governing party membership - use form-coalition for that; a non-party or caretaker cabinet sets rulingPartyIds: []",
+  [POLITICAL_ACTOR_OPS.REPLACE_LEADER]: "leader is the person now in office; a caretaker government with no named holder is set-government",
   [POLITICAL_ACTOR_OPS.FORM_COALITION]: "use to establish governing party membership even for a single-party or minority government; REUSE exact existing canonical party ids when parties already exist; rulingPartyIds may contain one party and coalitionPartyIds may be empty",
   [POLITICAL_ACTOR_OPS.SET_TRAITS]: "trait keys must come from the canonical trait registry and values are 0-100",
   [POLITICAL_ACTOR_OPS.SET_PERCEPTIONS]: "perceptions are subjective beliefs keyed by target polity; common bounded metrics include threat, opportunity, weakness and cohesionEstimate",
@@ -228,8 +231,9 @@ const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {},
 // no-op such as {government:"Parliamentary Democracy"} instead of
 // {patch:{form:"Parliamentary Democracy"}}. State-dependent references (party ids,
 // power-bloc ids) are still checked by applyPoliticalActorOperation itself.
-const COLLECTIVE_LEADER_PLACEHOLDER_RE = /^(?:(?:caretaker|interim|provisional|transitional|acting)\s+)?(?:administration|government|cabinet)$/i;
-
+// Shape only: no name is judged by its words (a leader called "Interim
+// Government" was refused in English alone); what a leader is, is the prompt's
+// rule (GENERATED_OP_NOTES).
 export const validatePoliticalActorOperationShape = (operation, { allowNativeDerived = true } = {}) => {
   const op = clean(operation?.op);
   const polityKey = clean(operation?.polityKey || operation?.polity || operation?.country);
@@ -295,10 +299,6 @@ export const validatePoliticalActorOperationShape = (operation, { allowNativeDer
     if (office !== "headOfState" && office !== "headOfGovernment") return "replace-leader office must be headOfState or headOfGovernment.";
     const leader = operation.leader;
     if (!(typeof leader === "string" || objectPatch(leader))) return "replace-leader requires a leader name/object.";
-    const leaderName = clean(typeof leader === "string" ? leader : leader?.name);
-    if (leaderName && COLLECTIVE_LEADER_PLACEHOLDER_RE.test(leaderName)) {
-      return `replace-leader leader "${leaderName}" is an administration/cabinet placeholder, not an officeholder. Use set-government for the caretaker/interim government and only replace-leader when an actual officeholder is established.`;
-    }
   } else if (op === POLITICAL_ACTOR_OPS.SET_STRATEGY) {
     const patch = objectPatch(operation.patch);
     const allowed = ["goals", "fears", "ambitions", "domesticPressures"];
@@ -588,13 +588,10 @@ export const applyPoliticalActorOperation = (world, operation) => {
     if (!(typeof leader === "string" || (leader && typeof leader === "object" && !Array.isArray(leader)))) {
       return result({ op, error: "replace-leader requires a leader name/object." });
     }
-    const leaderName = clean(typeof leader === "string" ? leader : leader?.name);
-    if (leaderName && COLLECTIVE_LEADER_PLACEHOLDER_RE.test(leaderName)) {
-      return result({ op, error: `replace-leader leader "${leaderName}" is an administration/cabinet placeholder, not an officeholder.` });
-    }
     const before = actor.government && typeof actor.government === "object" ? actor.government : {};
     actor.government = { ...before, [office]: cloneValue(leader) };
-    if (office === "headOfState") actor.leader = cloneValue(leader);
+    // The head of state is the record's leader, and holds that office (politicalActors.js leaderOfOffices).
+    if (office === "headOfState") actor.leader = { ...(typeof leader === "string" ? { name: clean(leader) } : cloneValue(leader)), office };
     else if (actor.leader) actor.leader = leaderAfterOfficeChange(actor.leader, before, actor.government);
     return result({ applied: true, op, actor: commitActor(world, key, actor) });
   }

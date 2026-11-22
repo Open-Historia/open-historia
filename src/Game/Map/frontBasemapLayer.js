@@ -31,9 +31,15 @@
 // painted ground, and the map's copy of the picture could be a moment older
 // than this layer's.
 //
+// With the map's 3D terrain on, `put` lays its picture on the hills, as the
+// map lays its own fills (terrainDrape.js): its mesh as fine as the heights'
+// grid, each corner lifted by the ground's height there. (`take` copies what
+// is on the screen, the basemap on the hills included, so it needs nothing.)
+//
 // The pure parts (the mesh, the copies of the world) load in plain Node.
 
 import { worldCopies } from "./strikeCustomLayer.js";
+import { createTerrainHeights, liftToMetres, vertexHeights } from "./terrainDrape.js";
 
 export const FRONT_BASEMAP_TAKE_LAYER_ID = "fronts-basemap-take";
 export const FRONT_BASEMAP_PUT_LAYER_ID = "fronts-basemap-put";
@@ -48,20 +54,26 @@ const mercatorY = (lat) => {
   return 0.5 - Math.log(Math.tan(Math.PI / 4 + (held * Math.PI) / 360)) / TWO_PI;
 };
 
+// A picture's place on the flat sheet, [left, top, right, bottom], from its
+// corners as the map is given them; null when they are not four good ones.
+export const pictureBounds = (coordinates) => {
+  if (!Array.isArray(coordinates) || coordinates.length !== 4) return null;
+  const [[west, north], [east], [, south]] = coordinates;
+  if (![west, north, east, south].every(Number.isFinite)) return null;
+  return [mercatorX(west), mercatorY(north), mercatorX(east), mercatorY(south)];
+};
+
 // A picture's mesh: its place on the map's own flat sheet (0 to 1 each way)
 // and its place in the picture, four numbers a corner, two triangles a square.
 // `coordinates` are the picture's corners as the map is given them:
 // [[west, north], [east, north], [east, south], [west, south]]. Its rows are
-// even on the flat sheet, as the map lays a picture.
-export const pictureMesh = (coordinates, steps = MESH_STEPS) => {
-  if (!Array.isArray(coordinates) || coordinates.length !== 4) return new Float32Array(0);
-  const [[west, north], [east], [, south]] = coordinates;
-  if (![west, north, east, south].every(Number.isFinite)) return new Float32Array(0);
-  const left = mercatorX(west);
-  const right = mercatorX(east);
-  const top = mercatorY(north);
-  const bottom = mercatorY(south);
-  const out = new Float32Array(steps * steps * 6 * FLOATS);
+// even on the flat sheet, as the map lays a picture. `steps` squares across,
+// `rows` down (as many as across unless said).
+export const pictureMesh = (coordinates, steps = MESH_STEPS, rows = steps) => {
+  const bounds = pictureBounds(coordinates);
+  if (!bounds) return new Float32Array(0);
+  const [left, top, right, bottom] = bounds;
+  const out = new Float32Array(steps * rows * 6 * FLOATS);
   let at = 0;
   const put = (u, v) => {
     out[at] = left + (right - left) * u;
@@ -70,12 +82,12 @@ export const pictureMesh = (coordinates, steps = MESH_STEPS) => {
     out[at + 3] = v;
     at += FLOATS;
   };
-  for (let row = 0; row < steps; row += 1) {
+  for (let row = 0; row < rows; row += 1) {
     for (let col = 0; col < steps; col += 1) {
       const u0 = col / steps;
       const u1 = (col + 1) / steps;
-      const v0 = row / steps;
-      const v1 = (row + 1) / steps;
+      const v0 = row / rows;
+      const v1 = (row + 1) / rows;
       put(u0, v0); put(u1, v0); put(u1, v1);
       put(u0, v0); put(u1, v1); put(u0, v1);
     }
@@ -118,11 +130,13 @@ ${data.vertexShaderPrelude}
 ${data.define}
 in vec2 a_pos;
 in vec2 a_uv;
+// The ground's height here, in metres (0 with the terrain off).
+in float a_height;
 uniform float u_world;
 out vec2 v_uv;
 void main() {
   v_uv = a_uv;
-  gl_Position = projectTileWithElevation(a_pos + vec2(u_world, 0.0), 0.0);
+  gl_Position = projectTileWithElevation(a_pos + vec2(u_world, 0.0), a_height);
 }`;
 // The basemap as it was at this very pixel with the picture's colour over it
 // at the strength of a country's fill, as solid as the picture is painted
@@ -226,10 +240,13 @@ export const createFrontBasemapLayers = ({ pictures, strength, onState, onError 
     _uploaded: new Map(),
     _meshes: new Map(),
     _buffers: new Map(),
+    // Each picture laid on the 3D terrain: { grid, mesh, count, buffer, heights, version }.
+    _draped: new Map(),
     _matrices: { main: new Float32Array(16), fallback: new Float32Array(16) },
     drawn: 0,
     onAdd(map) {
       this._map = map;
+      this._heights = createTerrainHeights(map);
       // Everything made on a context that was lost is gone: made again on the one given back.
       this._restored = () => {
         shared.texture = null;
@@ -241,6 +258,7 @@ export const createFrontBasemapLayers = ({ pictures, strength, onState, onError 
         this._masks = new Map();
         this._uploaded = new Map();
         this._buffers = new Map();
+        this._draped = new Map();
       };
       this._canvas = map?.getCanvas?.() ?? null;
       this._canvas?.addEventListener?.("webglcontextrestored", this._restored);
@@ -252,12 +270,16 @@ export const createFrontBasemapLayers = ({ pictures, strength, onState, onError 
         if (this._program) gl.deleteProgram(this._program.handle);
         for (const buffer of this._buffers.values()) gl.deleteBuffer(buffer);
         for (const texture of this._masks.values()) gl.deleteTexture(texture);
+        for (const drape of this._draped.values()) this._releaseDrape(gl, drape);
       } catch { /* the context is gone */ }
+      this._heights?.dispose();
+      this._heights = null;
       this._program = null;
       this._masks = new Map();
       this._uploaded = new Map();
       this._meshes = new Map();
       this._buffers = new Map();
+      this._draped = new Map();
       this._map = null;
       tell(false);
     },
@@ -280,6 +302,7 @@ export const createFrontBasemapLayers = ({ pictures, strength, onState, onError 
           handle,
           pos: gl.getAttribLocation(handle, "a_pos"),
           uv: gl.getAttribLocation(handle, "a_uv"),
+          height: gl.getAttribLocation(handle, "a_height"),
           matrix: uniform("u_projection_matrix"),
           fallback: uniform("u_projection_fallback_matrix"),
           tile: uniform("u_projection_tile_mercator_coords"),
@@ -299,13 +322,46 @@ export const createFrontBasemapLayers = ({ pictures, strength, onState, onError 
         return false;
       }
     },
+    _releaseDrape(gl, drape) {
+      for (const buffer of [drape.buffer, drape.heights]) if (buffer) gl.deleteBuffer(buffer);
+    },
+    // A picture laid on the terrain: its mesh as fine as the heights' grid
+    // (remade when the grid is), each corner's height (when the heights change).
+    _drape(gl, key, picture, lift) {
+      let drape = this._draped.get(key);
+      if (!drape) {
+        drape = { grid: null, mesh: null, count: 0, buffer: null, heights: null, version: null };
+        this._draped.set(key, drape);
+      }
+      if (drape.grid !== lift.grid) {
+        drape.mesh = pictureMesh(picture.coordinates, lift.grid.nx, lift.grid.ny);
+        drape.buffer ??= gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, drape.buffer);
+        gl.bufferData(gl.ARRAY_BUFFER, drape.mesh, gl.STATIC_DRAW);
+        drape.count = drape.mesh.length / FLOATS;
+        drape.grid = lift.grid;
+        drape.version = null;
+      }
+      if (drape.version !== lift.version) {
+        drape.heights ??= gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, drape.heights);
+        gl.bufferData(gl.ARRAY_BUFFER, vertexHeights(drape.mesh, lift.grid, lift.heights, FLOATS), gl.STATIC_DRAW);
+        drape.version = lift.version;
+      }
+      return drape;
+    },
     render(gl, args) {
       this.drawn = 0;
       const list = listed();
       if (list.length === 0) return;
       const projection = projectionOf(args);
-      if (!shared.taken || !projection || !this._ensure(gl, shaderDataOf(args))) return tell(false);
+      const shaderData = shaderDataOf(args);
+      if (!shared.taken || !projection || !this._ensure(gl, shaderData)) return tell(false);
       const program = this._program;
+      let terrain = null;
+      try {
+        terrain = this._heights?.terrain() ?? null;
+      } catch { /* the terrain cannot be read: flat */ }
       const toFloat = (matrix, target) => {
         for (let index = 0; index < 16; index += 1) target[index] = Number(matrix[index]) || 0;
         return target;
@@ -325,8 +381,11 @@ export const createFrontBasemapLayers = ({ pictures, strength, onState, onError 
         gl.disable(gl.DEPTH_TEST);
         gl.disable(gl.STENCIL_TEST);
         gl.disable(gl.CULL_FACE);
-        if (program.matrix) gl.uniformMatrix4fv(program.matrix, false, toFloat(projection.mainMatrix, this._matrices.main));
-        if (program.fallback) gl.uniformMatrix4fv(program.fallback, false, toFloat(projection.fallbackMatrix ?? projection.mainMatrix, this._matrices.fallback));
+        const main = toFloat(projection.mainMatrix, this._matrices.main);
+        const fallback = toFloat(projection.fallbackMatrix ?? projection.mainMatrix, this._matrices.fallback);
+        if (terrain) liftToMetres(main, fallback, shaderData.variantName, this._map?.getCenter?.()?.lat);
+        if (program.matrix) gl.uniformMatrix4fv(program.matrix, false, main);
+        if (program.fallback) gl.uniformMatrix4fv(program.fallback, false, fallback);
         if (program.tile) gl.uniform4fv(program.tile, projection.tileMercatorCoords ?? [0, 0, 1, 1]);
         if (program.clip) gl.uniform4fv(program.clip, projection.clippingPlane ?? [0, 0, 0, 0]);
         if (program.transition) gl.uniform1f(program.transition, Number(projection.projectionTransition ?? 0));
@@ -365,41 +424,68 @@ export const createFrontBasemapLayers = ({ pictures, strength, onState, onError 
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, picture.canvas);
             this._uploaded.set(key, { canvas: picture.canvas, painted });
           }
-          let mesh = this._meshes.get(key);
-          if (!mesh) {
-            mesh = pictureMesh(picture.coordinates);
-            this._meshes.set(key, mesh);
-          }
-          if (mesh.length === 0) continue;
-          let buffer = this._buffers.get(key);
-          if (buffer) {
-            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+          // On the 3D terrain, the picture laid on the hills; otherwise flat, as it always was.
+          const bounds = terrain ? pictureBounds(picture.coordinates) : null;
+          const lift = bounds ? this._heights?.heights(key, bounds, terrain) : null;
+          let count = 0;
+          if (lift) {
+            const drape = this._drape(gl, key, picture, lift);
+            if (drape.count === 0) continue;
+            gl.bindBuffer(gl.ARRAY_BUFFER, drape.buffer);
+            gl.vertexAttribPointer(program.pos, 2, gl.FLOAT, false, FLOATS * 4, 0);
+            gl.vertexAttribPointer(program.uv, 2, gl.FLOAT, false, FLOATS * 4, 8);
+            if (program.height >= 0) {
+              gl.bindBuffer(gl.ARRAY_BUFFER, drape.heights);
+              gl.enableVertexAttribArray(program.height);
+              gl.vertexAttribPointer(program.height, 1, gl.FLOAT, false, 4, 0);
+            }
+            count = drape.count;
           } else {
-            buffer = gl.createBuffer();
-            this._buffers.set(key, buffer);
-            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-            gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
+            let mesh = this._meshes.get(key);
+            if (!mesh) {
+              mesh = pictureMesh(picture.coordinates);
+              this._meshes.set(key, mesh);
+            }
+            if (mesh.length === 0) continue;
+            let buffer = this._buffers.get(key);
+            if (buffer) {
+              gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            } else {
+              buffer = gl.createBuffer();
+              this._buffers.set(key, buffer);
+              gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+              gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
+            }
+            gl.vertexAttribPointer(program.pos, 2, gl.FLOAT, false, FLOATS * 4, 0);
+            gl.vertexAttribPointer(program.uv, 2, gl.FLOAT, false, FLOATS * 4, 8);
+            if (program.height >= 0) {
+              gl.disableVertexAttribArray(program.height);
+              gl.vertexAttrib1f(program.height, 0);
+            }
+            count = mesh.length / FLOATS;
           }
-          gl.vertexAttribPointer(program.pos, 2, gl.FLOAT, false, FLOATS * 4, 0);
-          gl.vertexAttribPointer(program.uv, 2, gl.FLOAT, false, FLOATS * 4, 8);
           for (const copy of copies) {
             if (program.world) gl.uniform1f(program.world, copy);
-            gl.drawArrays(gl.TRIANGLES, 0, mesh.length / FLOATS);
+            gl.drawArrays(gl.TRIANGLES, 0, count);
           }
-          this.drawn += mesh.length / FLOATS;
+          this.drawn += count;
         }
         gl.disableVertexAttribArray(program.pos);
         gl.disableVertexAttribArray(program.uv);
+        if (program.height >= 0) gl.disableVertexAttribArray(program.height);
         // A battlefield that is gone gives its picture back.
         for (const [key, texture] of this._masks) {
           if (seen.has(key)) continue;
           gl.deleteTexture(texture);
           if (this._buffers.has(key)) gl.deleteBuffer(this._buffers.get(key));
+          if (this._draped.has(key)) this._releaseDrape(gl, this._draped.get(key));
           this._masks.delete(key);
           this._uploaded.delete(key);
           this._meshes.delete(key);
           this._buffers.delete(key);
+          this._draped.delete(key);
         }
+        this._heights?.keep(seen);
         // The copy is this drawing's alone: the next has to take its own, or goes without
         // (a copy of the map as it was at another moment is not the map under the paint).
         shared.taken = false;

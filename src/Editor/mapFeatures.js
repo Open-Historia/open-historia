@@ -12,13 +12,18 @@
 //     createdAt, markerId?, markerExtra? }
 // markerId / markerExtra carry a marker that came from the scenario's world:
 // its id, and every field the Workshop does not edit, so a save hands it back
-// as it was. Import-free, so the export and the tests share it.
+// as it was. A feature of a kind the author typed carries the `family` the
+// author picked for it (MarkerPopup.jsx "Drawn as"). Import-light, so the
+// export and the tests share it.
 
 import { isCityFeature } from "./cityMarkers.js";
+import { kindFamily, normalizeMarkerFamily } from "../runtime/markerFamily.js";
+import { nameId } from "../../server/nameId.js";
 
-// What the Map feature tool offers. The game draws each family with its own
-// glyph from the kind's words (Game/Map/vnext/presentationPolicy.js), and any
-// other kind the author types is a landmark there.
+// What the Map feature tool offers. The game draws each with its family's
+// glyph (runtime/markerFamily.js KIND_FAMILIES, Game/Map/vnext/presentationPolicy.js);
+// a kind the author types is drawn as the family the author picks for it, a
+// landmark until they pick one.
 export const MAP_FEATURE_KINDS = Object.freeze([
   { id: "landmark", label: "Landmark" },
   { id: "military hq", label: "Military HQ" },
@@ -33,6 +38,26 @@ export const MAP_FEATURE_KINDS = Object.freeze([
   { id: "research facility", label: "Research facility" },
   { id: "embassy", label: "Embassy" },
 ]);
+
+// The families an author can draw a kind of their own as, in the order the
+// popup lists them, with the label each is shown by.
+export const MAP_FEATURE_FAMILIES = Object.freeze([
+  { id: "landmark", label: "Landmark" },
+  { id: "settlement", label: "Settlement" },
+  { id: "military", label: "Military" },
+  { id: "resource", label: "Resource" },
+  { id: "infrastructure", label: "Infrastructure" },
+  { id: "industry-science", label: "Industry and science" },
+  { id: "diplomatic", label: "Diplomatic" },
+]);
+
+// The family a feature is drawn as: its kind's, when the kind is one the tool
+// offers, else the one the author picked; "" for none (a landmark).
+export const mapFeatureFamily = (feature) => {
+  const kind = clean(feature?.kind).toLowerCase();
+  if (MAP_FEATURE_KINDS.some((entry) => entry.id === kind)) return kindFamily(kind);
+  return normalizeMarkerFamily(feature?.family);
+};
 
 // gameState.js MARKER_STATUSES (held equal by server/workshopAuthoring.test.js).
 export const MAP_FEATURE_STATUSES = Object.freeze([
@@ -69,11 +94,12 @@ export const newMapFeature = ({ id, coord, owner = null, regionId = null, countr
 // be placed.
 export const markerToFeature = (marker, id) => {
   if (!marker || typeof marker !== "object") return null;
-  const { name, kind, ownerCode, lng, lat, note, status, id: markerId, ...rest } = marker;
+  const { name, kind, ownerCode, lng, lat, note, status, family, id: markerId, ...rest } = marker;
   const lon = Number(lng);
   const la = Number(lat);
   const label = clean(name);
   if (!label || !Number.isFinite(lon) || !Number.isFinite(la)) return null;
+  const drawnAs = normalizeMarkerFamily(family);
   return {
     id,
     name: label,
@@ -88,6 +114,8 @@ export const markerToFeature = (marker, id) => {
     status: MAP_FEATURE_STATUSES.includes(clean(status)) ? clean(status) : "active",
     note: String(note ?? ""),
     createdAt: clean(rest.createdAt) || new Date().toISOString(),
+    // The family it was drawn as (the skip's, or an author's for a kind of their own).
+    ...(drawnAs ? { family: drawnAs } : {}),
     ...(clean(markerId) ? { markerId: clean(markerId) } : {}),
     ...(Object.keys(rest).length ? { markerExtra: rest } : {}),
   };
@@ -102,11 +130,17 @@ export const buildMarkersForGame = (features) => (Array.isArray(features) ? feat
     const coord = Array.isArray(feature.coord) ? feature.coord.map(Number) : [];
     const name = clean(feature.name);
     if (!name || coord.length < 2 || !coord.slice(0, 2).every(Number.isFinite)) return null;
-    const extra = feature.markerExtra && typeof feature.markerExtra === "object" ? feature.markerExtra : {};
+    const { family: _staleFamily, ...extra } = feature.markerExtra && typeof feature.markerExtra === "object" ? feature.markerExtra : {};
     const status = clean(feature.status);
+    // How the game draws it: its kind's family, or the author's pick for a
+    // kind of their own (never a family left over from before the kind changed).
+    const family = mapFeatureFamily(feature);
     return {
       ...extra,
-      id: clean(feature.markerId) || `marker-${clean(feature.id) || name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      // (A feature with no id of its own is named for its name, by the game's
+      // one rule for an id made from a name, server/nameId.js: cut to a-z and
+      // 0-9, every one named in another script was "marker--", one marker.)
+      id: clean(feature.markerId) || `marker-${clean(feature.id) || nameId(name, (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-"))}`,
       name,
       kind: clean(feature.kind).toLowerCase() || "landmark",
       ownerCode: clean(feature.owner),
@@ -115,6 +149,7 @@ export const buildMarkersForGame = (features) => (Array.isArray(features) ? feat
       note: String(feature.note ?? "").trim(),
       status: MAP_FEATURE_STATUSES.includes(status) ? status : "active",
       createdAt: clean(extra.createdAt) || clean(feature.createdAt) || "1970-01-01T00:00:00.000Z",
+      ...(family ? { family } : {}),
     };
   })
   .filter(Boolean);

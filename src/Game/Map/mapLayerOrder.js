@@ -30,6 +30,9 @@ export const MAP_LAYER_ORDER = [
   "custom-regions-local-outline",
   "custom-regions-repair-local-outline",
   "custom-regions-disputed-vnext",
+  // The diplomatic map's hatching (DiplomaticLayers.jsx): over the fills and a
+  // dispute's stripes, which it may lie across.
+  "diplomatic-hatch",
   // Over every political fill: where a battlefield's ground is painted, the
   // bare map is put back, so the territory's colour behind the paint is seen
   // through (frontBasemapLayer.js). That pair is the fallback for the
@@ -90,6 +93,13 @@ export const MAP_LAYER_ORDER = [
   // ...and its outline sits above the sovereign borders it may run along.
   "group-areas-outline-casing",
   "group-areas-outline",
+  // The diplomatic map over the sovereign borders: the fronts where
+  // belligerents meet, the focus country's border, an institution's outline.
+  "diplomatic-fronts-casing",
+  "diplomatic-fronts",
+  "diplomatic-focus-outline",
+  "diplomatic-bloc-outline-casing",
+  "diplomatic-bloc-outline",
   // A scenario's fortified lines (WarGeographyLayers.jsx), over the borders
   // they so often follow: the rubble of a breach, a line still being built,
   // and a standing line with its core and its teeth.
@@ -112,6 +122,13 @@ export const MAP_LAYER_ORDER = [
   "fronts-arrows-shadow",
   "fronts-arrows-edge",
   "fronts-arrows",
+  // The lines from the focus country's capital, over everything drawn on the
+  // land and under every name.
+  "diplomatic-lines-casing",
+  "diplomatic-lines-ally",
+  "diplomatic-lines-war",
+  "diplomatic-lines-ceasefire",
+  "diplomatic-seat",
 
   // Draped standing-order lines belong above map cartography but below symbols.
   "units-heading",
@@ -205,6 +222,9 @@ export const MAP_LAYER_ORDER = [
   // What flies over all of it: missiles, aircraft and what they do where they
   // arrive (StrikeLayers.jsx). Nothing in it can be clicked.
   "strikes-flight",
+
+  // The interface's glass, a blur of all of the above (frostedPanels.js).
+  "interface-frost",
 ];
 
 const NATGEO_REFERENCE_TIER_METADATA_KEY = "openhistoria:natgeo-reference-tier";

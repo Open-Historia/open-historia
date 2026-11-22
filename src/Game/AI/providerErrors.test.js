@@ -11,13 +11,14 @@ import {
   isStreamingRefusal,
   TOOL_CALL_INSISTENCE,
   isStreamingRequired,
-  looksLikeDeliberation,
+  isProseWithoutPayload,
   providerErrorReplyMessage,
   retryDelayMsFromPayload,
   shouldRetryProviderFailure,
   toolStreamRefusalError,
   describeHtmlErrorPage,
   isTemperatureRefusal,
+  errorParamOf,
 } from "./providerErrors.js";
 
 test("Anthropic's refusal of a temperature beside thinking is a temperature refusal", () => {
@@ -278,35 +279,39 @@ const NVIDIA_MONOLOGUE =
   + "interactions, military movements.\n\nWe must produce events with dates spread across period. "
   + "Probably 11 events.";
 
-test("a planning monologue is recognised as deliberation", () => {
-  assert.equal(looksLikeDeliberation(NVIDIA_MONOLOGUE), true);
-  assert.equal(looksLikeDeliberation("Let me think about what events to produce first."), true);
-  assert.equal(looksLikeDeliberation("Okay, I should start by listing the stalled projects."), true);
-  assert.equal(looksLikeDeliberation("First, we need to decide how many events this span warrants."), true);
+test("a planning monologue is words without a payload, in every language", () => {
+  assert.equal(isProseWithoutPayload(NVIDIA_MONOLOGUE), true);
+  assert.equal(isProseWithoutPayload("Let me think about what events to produce first."), true);
+  // The same planning in French, Russian and Chinese: the step down it earns is
+  // the one English earns. An English pattern list never matched these.
+  assert.equal(isProseWithoutPayload("Nous devons produire des événements entre 2032-11-15 et 2033-02-13. Probablement 11 événements."), true);
+  assert.equal(isProseWithoutPayload("Нужно создать события между 2032-11-15 и 2033-02-13. Вероятно, 11 событий."), true);
+  assert.equal(isProseWithoutPayload("我们需要在2032-11-15和2033-02-13之间生成事件。大概11个事件。"), true);
 });
 
 // The tolerant-parsing path (jsonSalvage.js) owns anything that might carry a
 // payload. Retrying would throw away an answer it could have salvaged.
 test("anything that might still parse is left to the salvage path", () => {
-  assert.equal(looksLikeDeliberation('We need to produce this: {"summary":"x","events":[]}'), false);
-  assert.equal(looksLikeDeliberation('```json\n{"summary":"x"}\n```'), false);
-  assert.equal(looksLikeDeliberation('[{"date":"2032-01-01"}]'), false);
+  assert.equal(isProseWithoutPayload('We need to produce this: {"summary":"x","events":[]}'), false);
+  assert.equal(isProseWithoutPayload('```json\n{"summary":"x"}\n```'), false);
+  assert.equal(isProseWithoutPayload('[{"date":"2032-01-01"}]'), false);
   // A truncated object is still the salvage path's problem, not a retry.
-  assert.equal(looksLikeDeliberation('We must produce {"summary":"x","events":[{"date"'), false);
+  assert.equal(isProseWithoutPayload('We must produce {"summary":"x","events":[{"date"'), false);
+  assert.equal(isProseWithoutPayload('Нужно вернуть {"summary":"x"'), false);
 });
 
-test("an ordinary answer is not mistaken for deliberation", () => {
-  assert.equal(looksLikeDeliberation(""), false);
-  assert.equal(looksLikeDeliberation(null), false);
-  assert.equal(looksLikeDeliberation(undefined), false);
-  assert.equal(looksLikeDeliberation("   "), false);
-  // Narrative prose that happens to contain the words, not at a sentence start
-  // in the planning register.
-  assert.equal(
-    looksLikeDeliberation("The delegation will need to cross the border before winter closes the passes."),
-    false,
-  );
-  assert.equal(looksLikeDeliberation("Algeria rejects the proposal and recalls its ambassador."), false);
+test("nothing at all is not words: the empty reply has its own handling", () => {
+  assert.equal(isProseWithoutPayload(""), false);
+  assert.equal(isProseWithoutPayload(null), false);
+  assert.equal(isProseWithoutPayload(undefined), false);
+  assert.equal(isProseWithoutPayload("   "), false);
+});
+
+// Where a structured answer was asked for, events written as prose are no
+// answer either, whatever their register: the step down asks for the JSON.
+test("an answer written as prose, with no payload, is decided the same as a plan", () => {
+  assert.equal(isProseWithoutPayload("Algeria rejects the proposal and recalls its ambassador."), true);
+  assert.equal(isProseWithoutPayload("L'Algérie rejette la proposition et rappelle son ambassadeur."), true);
 });
 
 test("the insistence directive is blunt and names the failure", () => {
@@ -596,4 +601,49 @@ test("an answer cut at the model's output limit is recognised in each provider's
   assert.equal(stoppedAtOutputLimit(null), false);
   assert.equal(stoppedAtOutputLimit("text"), false);
   assert.equal(OUTPUT_LIMIT_MESSAGE, "The model stopped at its output limit before it finished its answer.");
+});
+
+// ---------------------------------------------------------------------------
+// What the provider's JSON says decides before its words
+//
+// A provider's error is read by its HTTP status, its code, type or status, the
+// reason in Google's ErrorInfo and the parameter an OpenAI-shaped error names.
+// Its message's words are read only after those, for the providers that send
+// nothing else; the same error with its message in another language (a relay
+// that translates, a regional endpoint) is decided the same way.
+
+test("a bad key, a missing model and a spent balance are decided by their codes, whatever the message says", () => {
+  const geminiBadKey = {
+    error: {
+      code: 400, status: "INVALID_ARGUMENT", message: "Clé API non valide. Veuillez fournir une clé valide.",
+      details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "API_KEY_INVALID", domain: "googleapis.com" }],
+    },
+  };
+  assert.equal(classifyProviderFailure({ status: 400, payload: geminiBadKey }).kind, "unusable");
+  assert.equal(classifyProviderFailure({ status: 400, payload: { error: { code: "invalid_api_key", message: "Неверный ключ API" } } }).kind, "unusable");
+  const missing = classifyProviderFailure({ status: 400, payload: { error: { code: "model_not_found", message: "El modelo no existe" } } });
+  assert.deepEqual([missing.kind, missing.reason], ["unusable", "model not found (400)"]);
+  assert.equal(classifyProviderFailure({ status: 429, payload: { error: { code: "insufficient_quota", message: "您的余额不足" } } }).kind, "spent");
+  assert.equal(isQuotaExhaustedPayload({ error: { type: "insufficient_quota", message: "Guthaben aufgebraucht" } }), true);
+});
+
+test("load is decided by the code, type or status, in any language", () => {
+  assert.equal(isBusyErrorPayload({ type: "overloaded_error", message: "Surchargé" }), true);
+  assert.equal(isBusyErrorPayload({ code: 503, status: "UNAVAILABLE", message: "Модель перегружена." }), true);
+  assert.equal(isBusyErrorPayload({ code: 529, message: "过载" }), true, "Anthropic's own status for overloaded");
+  // A word alone that names no load is not read as load.
+  assert.equal(isBusyErrorPayload({ message: "Context capacity of this model is 8k tokens." }), false);
+});
+
+test("a refused temperature, stream or reasoning parameter is decided by the parameter the error names", () => {
+  const openai = (param, message) => ({ error: { message, type: "invalid_request_error", param, code: "unsupported_value" } });
+  assert.equal(errorParamOf(openai("temperature", "x")), "temperature");
+  assert.equal(errorParamOf({ param: "Stream" }), "stream");
+  assert.equal(errorParamOf(null), "");
+  assert.equal(isTemperatureRefusal("Valeur non prise en charge.", openai("temperature", "Valeur non prise en charge.")), true);
+  assert.equal(isTemperatureRefusal("Valeur non prise en charge.", openai("top_p", "Valeur non prise en charge.")), false);
+  assert.equal(isStreamingRefusal("Wert nicht unterstützt.", openai("stream", "Wert nicht unterstützt.")), true);
+  assert.equal(isStreamingRefusal("Wert nicht unterstützt.", null), false);
+  // Anthropic names no parameter: its words are still read.
+  assert.equal(isTemperatureRefusal("`temperature` is deprecated for this model."), true);
 });

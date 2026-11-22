@@ -273,3 +273,29 @@ test("a record already over its totals still saves other edits, a 0-seat legisla
   fresh.parties[0].color = "#2BC1F3";
   assert.equal(applyPoliticalEditorStateToWorld({ politicalActors: { byPolity: { "Test Empire": structuredClone(baseActor) } } }, "Test Empire", fresh).parties[0].color, "#2BC1F3");
 });
+
+test("freeform ideology and political position save without erasing legacy taxonomy and hidden state", () => {
+  const actor = structuredClone(baseActor);
+  actor.parties[0].ideologyFamily = "authoritarianDemocracy";
+  actor.parties[0].subideology = "Kleptocracy";
+  actor.parties[0].internalStrategy = "Sensitive internal plan";
+  const editor = politicalActorToEditorState(actor);
+  assert.equal(editor.parties[0].politicalPosition, "");
+  editor.parties[0].ideology = "Statism, civic nationalism";
+  editor.parties[0].politicalPosition = "Right-wing";
+  const world = { politicalActors: { byPolity: { "Test Empire": actor } } };
+  const saved = applyPoliticalEditorStateToWorld(world, "Test Empire", editor);
+  assert.equal(saved.parties[0].ideology, "Statism, civic nationalism");
+  assert.equal(saved.parties[0].politicalPosition, "Right-wing");
+  assert.equal(saved.parties[0].ideologyFamily, "authoritarianDemocracy");
+  assert.equal(saved.parties[0].subideology, "Kleptocracy");
+  assert.equal(saved.parties[0].internalStrategy, "Sensitive internal plan");
+  assert.equal(actor.parties[0].politicalPosition, undefined);
+  const roundtrip = politicalActorToEditorState(saved);
+  assert.equal(roundtrip.parties[0].politicalPosition, "Right-wing");
+  roundtrip.parties[0].politicalPosition = "";
+  const cleared = applyPoliticalEditorStateToWorld(
+    { politicalActors: { byPolity: { "Test Empire": saved } } }, "Test Empire", roundtrip);
+  assert.equal(cleared.parties[0].politicalPosition, undefined);
+  assert.equal(cleared.parties[0].subideology, "Kleptocracy");
+});

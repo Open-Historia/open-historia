@@ -45,20 +45,49 @@ import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
 
 // (12500, the line that teaches a country's forces at home and the sentence that it alone calls them up, so that the
 // battlefields keep their room: runtime/fronts/home.js.)
-export const FRONTS_BLOCK_MAX = 12910;
+// (14610: its rules had grown until one battlefield, the only one of a world war, was left about 700 characters and
+// was told with its line cut off ("Line: " and nothing after it). The room now holds one battlefield in full, with
+// where its line runs and who holds whose land: BRIEF_TEXT_FULL_MAX.)
+export const FRONTS_BLOCK_MAX = 14610;
 // The most that is told of transporters in it.
 export const TRANSPORTS_TEXT_MAX = 640;
 export const FRONTS_BLOCK_HEADING = "[Fronts]";
 // The most of what happened on one battlefield in a period that is told by date.
 export const PERIOD_NEWS_MOST = 9;
 export const PERIOD_TEXT_MAX = 560;
+// The most of one battlefield's own lines when it is told in full: room for where its line runs and who holds whose
+// land beside its strengths, orders and weather (runtime/fronts/brief.js). Where there is less room it is told in
+// BRIEF_TEXT_MAX, which keeps where the line runs and drops the weather first.
+export const BRIEF_TEXT_FULL_MAX = 1400;
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLowerCase();
 
 // How a line of orders is written: the same whichever way the period is fought.
-const ORDER_LINES = [
+// A time skip states it once, in the part of its prompt that never changes
+// (gameplay.js buildJumpStaticRules, as FRONT_ORDER_LINES_BLOCK), and its
+// [Fronts] block points there instead (buildFrontsBlock orderLines: false).
+// The line that sends a transporter, for what may carry troops in this game ("sea", "land", "air": the Wars
+// feature's switches, frontsGate.js transportMediaOn): none when nothing may, and the words of only those that may.
+// "make it so air transports work like train and boat except they can go over anywhere, but they can carry less
+// troops and there is a chance they can be intercepted (when over enemy territory but they can be deployed into
+// enemy territory)" (the owner, 2026-11-09).
+export const TRANSPORT_MEDIA_ALL = Object.freeze(["sea", "land", "air"]);
+const TRANSPORT_WORD = Object.freeze({ sea: "ship", land: "rail", air: "airlift" });
+const TRANSPORT_WAY = Object.freeze({ sea: "ships by sea", land: "rail through land its side holds", air: "aircraft by air, straight over anything and into enemy land, caught only over enemy ground" });
+const TRANSPORT_EXAMPLE = Object.freeze({ sea: "NAME~A~ship~~3~city: X~~~troop convoy~12~600", land: "NAME~A~rail~~3~city: X~~~troop trains~10~800", air: "NAME~A~airlift~~3~city: X~~~transport aircraft~4~5000" });
+export const transportOrderLines = (media = TRANSPORT_MEDIA_ALL) => {
+  const on = TRANSPORT_MEDIA_ALL.filter((medium) => asArray(media).includes(medium));
+  if (on.length === 0) return [];
+  const most = on.includes("air") ? (on.length > 1 ? "(1 to 40; an airlift far fewer, what its aircraft carry: the rest stay)" : "(an airlift carries few, what its aircraft carry: the rest stay)") : "(1 to 40)";
+  return [
+    `- ${on.map((medium) => TRANSPORT_WORD[medium]).join(" | ")} send a TRANSPORTER: troops carried to a place their side has no border with, to fight there. objective says where (\`city: X\`, \`region: X\` or \`country: X\`); battlefield names the front they open. After effort may come what carries them (any name), how many formations ${most} and its speed in km a day. The game finds the way (${on.map((medium) => TRANSPORT_WAY[medium]).join(", ")}); it sets out as the next period begins and can be intercepted. Sent in peace to another country's land it is an attack on it: the war begins the day its troops are put down.`,
+    TRANSPORT_EXAMPLE[on[0]],
+  ];
+};
+
+const orderLinesFor = (media = TRANSPORT_MEDIA_ALL) => [
   `Orders go in ${FRONT_ORDERS_FIELD}, one line each:`,
   "battlefield~side~order~sector~eventNumbers~objective~result~effort",
   "- battlefield: a name from the list below. A war begun in this answer has none yet: name its battlefield yourself in its first order. A border with no war is `border: A / B`, the two countries by their exact names: with dig in or hold, troops are sent to fortify it and attack nothing; with an order to attack from one of the two at effort major or total, that country invades the other and the war between them begins that day (the game enters it in the war ledger; its own warUpdates record, if you write one, is the same war). Any country may strike first so, at one a person plays as at any other, when the story has it do so.",
@@ -70,40 +99,46 @@ const ORDER_LINES = [
   "- sector: all, a sector word listed for that battlefield, or a place on its line.",
   "- reinforce brings FRESH formations to a side's line: a draft, a mobilisation, divisions sent from elsewhere. Its objective field is how many formations (1 to 60), judged against how many that side has there now (Strength): a few divisions sent are a tenth of it, a general mobilisation as many again. sector says where they go. A person's action that drafts troops or sends reinforcements to a front is such a line for their country; a country nobody plays gets one only with the number of the event in which it mobilises. The troops there are ordered by their own lines as before.",
   "NAME~A~reinforce~south~4~30",
-  "- ship | rail | airlift send a TRANSPORTER: troops carried to a place their side has no border with, to fight there. objective says where (`city: X`, `region: X` or `country: X`); battlefield names the front they open. After effort may come what carries them (any name), how many formations (1 to 40) and its speed in km a day. The game finds the way (ships by sea, rail through land its side holds, aircraft by air); it sets out as the next period begins and can be intercepted. Sent in peace to another country's land it is an attack on it: the war begins the day its troops are put down.",
-  "NAME~A~ship~~3~city: X~~~troop convoy~12~600",
-  "A missile launch or a bombing run that an event tells of is DRAWN on the map from a line of its own. It changes nothing by itself: what the strike did is what the event's own operations say. strike~side~weapon~from~eventNumbers~target~shot down~count",
-  "- weapon: silo missile | submarine missile | nuclear bomber (these three are nuclear) | missile strike | bombing run. from: where it is launched (`structure: X`, `unit: X`, `city: X`), or blank and the game picks. target: the place hit. count: how many missiles or aircraft. shot down: how many of them were intercepted on the way, as a number or all | most | half | some | none. An event that tells of an interception owes this field: those are seen to be met in the air and blown up there, and with all of them shot down nothing reaches the target.",
-  "strike~A~bombing run~city: X~4~city: Y~3~24",
+  ...transportOrderLines(media),
+  "A missile launch or a bombing run is not a front order: it goes in the impacts.strikes of the event that tells of it (see the levers), war or no war.",
   "Every war on the map is fought this way, between countries nobody plays as much as any other: when the story has two of them go to war, open it (its warUpdates record, or an order to attack across their border at effort major or total) and give each side its orders when it opens and whenever the story changes what that side does there.",
-  "A side nobody plays that you give no order is not idle. Its own staff decides for it, by how strong it stands against its enemy and whether it began the war: a general advance where it is much the stronger, an attack on one stretch of the line where it has the edge, holding at even odds, digging in where it is much the weaker. What it decided is among the standing orders shown. Your line for that side replaces it, and stands.",
+  "A side nobody plays that you give no order is not idle. Its own staff decides for it, by how strong it stands against its enemy and whether it began the war: a general advance where it is much the stronger, an attack on one stretch of the line where it has the edge, holding at even odds, digging in where it is much the weaker. What it decided is among the standing orders shown. Your line for that side replaces it, and stands. Its staff also calls up fresh formations when its line is thin, when it loses ground, and most when its capital or heartland is at stake, as far as its men, supplies and war weariness allow; an account tells when it did.",
   "A standing order shown as (the scenario's) is what the scenario's author made that front: a line dug in, a line held, a line attacked along. It stands until an event of the story changes what that side does there. An order to attack against it is carried out only when it carries the number of the event in which the side goes over to the attack; with no event it is ignored, and a quiet period is no reason to end it. The side's own staff leaves it alone.",
 ];
 
+const ORDER_LINES = orderLinesFor();
+
+export const FRONT_ORDER_LINES_HEADING = "[Front Orders]";
+export const FRONT_ORDER_LINES_BLOCK = [FRONT_ORDER_LINES_HEADING, ...ORDER_LINES].join("\n");
+// The same for a game some of whose transports are switched off: FRONT_ORDER_LINES_BLOCK when none is.
+export const frontOrderLinesBlock = (media = TRANSPORT_MEDIA_ALL) => [FRONT_ORDER_LINES_HEADING, ...orderLinesFor(media)].join("\n");
+// What stands in their place in a [Fronts] block that does not repeat them.
+const ORDER_LINES_POINTER = `How a line of ${FRONT_ORDERS_FIELD} is written, its first fields and its orders, is under ${FRONT_ORDER_LINES_HEADING} above; here, for this period:`;
+
 // The engine runs AFTER the answer: an order is carried out in this period.
-const FRONT_RULES = [
+const frontRules = (orderLines = true, media = TRANSPORT_MEDIA_ALL) => [
   FRONTS_BLOCK_HEADING,
-  "Land war is fought on battlefields: one opens by itself wherever the two sides of a war hold land that touches, and there the game raises the troops, moves them and decides who holds the ground. You give the orders and tell the story. On the battlefields below this replaces what the instructions above say of moving formations and taking regions: write no unitOps for their sides' land forces and no regionControlOps for their regions. Fleets, air wings, garrisons, bases and land forces away from every battlefield move as before. A country outside a war that sends land forces to fight beside one of its sides is entering that war: give it a warUpdates line joining that side, naming by number the event that tells it, and bring the forces to the line as a reinforce line of its own on the battlefield (NAME~that country~reinforce~sector~event~formations), never as unitOps. A land formation of a country outside a war, set down on a battlefield, takes no part in the fighting.",
-  ...ORDER_LINES,
+  "Land war is fought on battlefields: one opens by itself wherever the two sides of a war hold land that touches, and there the game raises the troops, moves them and decides who holds the ground. A war whose sides share no land border opens none by itself: an invasion across a sea or from a third country's soil needs a transporter line in frontOrders, or its troops moved up in unitOps first, and until then only the events' own regionControlOps move its map. You give the orders and tell the story. On the battlefields below this replaces what the instructions above say of moving formations and taking regions: write no unitOps for their sides' land forces and no regionControlOps for their regions. Fleets, air wings, garrisons, bases and land forces away from every battlefield move as before. A country outside a war that sends land forces to fight beside one of its sides is entering that war: give it a warUpdates line joining that side, naming by number the event that tells it, and bring the forces to the line as a reinforce line of its own on the battlefield (NAME~that country~reinforce~sector~event~formations), never as unitOps. A land formation of a country outside a war, set down on a battlefield, takes no part in the fighting.",
+  ...(orderLines ? orderLinesFor(media) : [ORDER_LINES_POINTER]),
   "- eventNumbers: the events of this answer that tell of it, counted from 1, with commas between; blank means from the first day.",
-  "- objective (a place with its kind: `city: Kharkiv`), result (breakthrough | captured | repulsed | stalemate | collapse | surrender: what the story itself decides, on that event's date) and effort (token | limited | major | total) may be left off.",
-  "Eastern Ukraine~Russia~spearhead~north~2,3~city: Kharkiv~~major",
-  "Eastern Ukraine~Russia~~south~5~city: Mariupol~captured",
-  "An order stands until another replaces it: write a line only for what changes, and an empty string when nothing does. An event of this answer in which a side on a battlefield attacks, presses on, breaks through, digs in, holds fast or falls back is such a change: the line that orders it is owed, with that event's number, and a formation moved in unitOps does not stand in for it. How far an advance gets is worked out by the game and told to you here next period, so an event says a named place fell only when a line gives it as the objective with the result captured.",
-].join("\n");
+  "- objective (a place with its kind: `city: X`), result (breakthrough | captured | repulsed | stalemate | collapse | surrender: what the story itself decides, on that event's date) and effort (token | limited | major | total) may be left off.",
+  "NAME~A~spearhead~north~2,3~city: X~~major",
+  "NAME~A~~south~5~city: Y~captured",
+  "An order stands until another replaces it: write a line only for what changes, and an empty string when nothing does. An event of this answer in which a side on a battlefield attacks, presses on, breaks through, digs in, holds fast or falls back is such a change: the line that orders it is owed, with that event's number, and a formation moved in unitOps does not stand in for it. How far an advance gets is worked out by the game and told to you here next period, so an event says a named place fell only when a line gives it as the objective with the result captured. Each event that tells a battlefield's fighting carries its war's warId, as [Wars] lists it, and its combatants, a member of each side.",
+];
 
 // The engine ran BEFORE the answer: the period is told, and an order is for the next.
-const FOUGHT_RULES = [
+const foughtRules = (orderLines = true, media = TRANSPORT_MEDIA_ALL) => [
   FRONTS_BLOCK_HEADING,
-  "Land war is fought on battlefields: one opens by itself wherever the two sides of a war hold land that touches, and there the game raises the troops, moves them and decides who holds the ground. It has ALREADY fought this period on every battlefield told in full below: what a battlefield's account says happened, happened, on the dates it gives. You tell that story, and give the orders for what comes next. On the battlefields below this replaces what the instructions above say of moving formations and taking regions: write no unitOps for their sides' land forces and no regionControlOps for their regions (the game changes the map itself, on the dates of the fighting). Fleets, air wings, garrisons, bases and land forces away from every battlefield move as before. A country outside a war that sends land forces to fight beside one of its sides is entering that war: give it a warUpdates line joining that side, naming by number the event that tells it, and bring the forces to the line as a reinforce line of its own on the battlefield (NAME~that country~reinforce~sector~event~formations), never as unitOps. A land formation of a country outside a war, set down on a battlefield, takes no part in the fighting.",
-  "Tell the war. A battlefield where ground changed hands is among the first things this period is about, whoever is fighting on it: give it at least three events of this answer (two, where the answer has fewer than six), each on a date from its account and saying what the account says: the places that fell and to whom, the troops cut off or lost, how far the line went and where it stands now, and then what that did to the countries fighting and how others answered. An account says who did what to whom: keep it that way round. Tell no encirclement, surrender, rout, breakthrough or ground retaken that the account does not give, and none with the two sides exchanged: a side the account shows taking ground was not stopped, trapped or thrown back anywhere the account does not say so, and a side it shows losing ground won no battle there. Where an account says a side sent its troops into a country that was not in the war, that country is in the war against it from that date, and the game has entered it in that war already: tell it as the invasion it is, with what the country and the others did about it. Where an account also says what happened before this period and was not yet told, tell that too, early in the answer, as what the fighting had come to by then. A war that is only mentioned in passing has not been told. Nothing in any event goes against an account: a place it does not say fell did not fall, and a side it shows giving ground was not advancing.",
-  ...ORDER_LINES,
+  "Land war is fought on battlefields: one opens by itself wherever the two sides of a war hold land that touches, and there the game raises the troops, moves them and decides who holds the ground. A war whose sides share no land border opens none by itself: an invasion across a sea or from a third country's soil needs a transporter line in frontOrders, or its troops moved up in unitOps first, and until then only the events' own regionControlOps move its map. It has ALREADY fought this period on every battlefield told in full below: what a battlefield's account says happened, happened, on the dates it gives. You tell that story, and give the orders for what comes next. On the battlefields below this replaces what the instructions above say of moving formations and taking regions: write no unitOps for their sides' land forces and no regionControlOps for their regions (the game changes the map itself, on the dates of the fighting). Fleets, air wings, garrisons, bases and land forces away from every battlefield move as before. A country outside a war that sends land forces to fight beside one of its sides is entering that war: give it a warUpdates line joining that side, naming by number the event that tells it, and bring the forces to the line as a reinforce line of its own on the battlefield (NAME~that country~reinforce~sector~event~formations), never as unitOps. A land formation of a country outside a war, set down on a battlefield, takes no part in the fighting.",
+  "Tell the war. A battlefield where ground changed hands is among the first things this period is about, whoever is fighting on it: give it at least three events of this answer (two, where the answer has fewer than six), each on a date from its account and saying what the account says: the places that fell and to whom, the troops cut off or lost, how far the line went and where it stands now, and then what that did to the countries fighting and how others answered. An account says who did what to whom: keep it that way round. Tell no encirclement, surrender, rout, breakthrough or ground retaken that the account does not give, and none with the two sides exchanged: a side the account shows taking ground was not stopped, trapped or thrown back anywhere the account does not say so, and a side it shows losing ground won no battle there. Where an account says a side sent its troops into a country that was not in the war, that country is in the war against it from that date, and the game has entered it in that war already: tell it as the invasion it is, with what the country and the others did about it. Where an account also says what happened before this period and was not yet told, tell that too, early in the answer, as what the fighting had come to by then. A war that is only mentioned in passing has not been told. Nothing in any event goes against an account: a place it does not say fell did not fall, and a side it shows giving ground was not advancing. Where this war has gone otherwise than real history's, its account is the war: tell it at the places the account names (its Line, the regions the line runs through, what is Occupied), on the dates it gives, and none of real history's campaigns, sieges or offensives of these dates that it does not give. Each event that tells a battlefield's fighting carries its war's warId, as [Wars] lists it, and its combatants, a member of each side: without them the game cannot tie the event to its war.",
+  ...(orderLines ? orderLinesFor(media) : [ORDER_LINES_POINTER]),
   "- eventNumbers: the events of this answer in which the order is given, counted from 1, with commas between; may be blank.",
-  "- objective (a place with its kind: `city: Kharkiv`), result (breakthrough | captured | repulsed | stalemate | collapse | surrender) and effort (token | limited | major | total) may be left off. A result is the story itself deciding what no account says (a garrison surrenders, an army collapses): it takes effect as the period ends. A surrender is of a whole side, or of troops the account or the list below shows surrounded, and of nobody else: the game refuses any other.",
-  "Eastern Ukraine~Russia~spearhead~north~2,3~city: Kharkiv~~major",
-  "Eastern Ukraine~Ukraine~dig in~south~5",
+  "- objective (a place with its kind: `city: X`), result (breakthrough | captured | repulsed | stalemate | collapse | surrender) and effort (token | limited | major | total) may be left off. A result is the story itself deciding what no account says (a garrison surrenders, an army collapses): it takes effect as the period ends. A surrender is of a whole side, or of troops the account or the list below shows surrounded, and of nobody else: the game refuses any other.",
+  "NAME~A~spearhead~north~2,3~city: X~~major",
+  "NAME~B~dig in~south~5",
   "An order written here is for what comes NEXT: it is put to the troops as this period ends and carried out in the one after, whose account you are given then. So, having told how the period went, write a line for each side nobody plays whose part in the war the story changes (it presses on, strikes somewhere else, digs in, falls back); a side with no line goes on under its standing orders, shown below, which is what a side does when nothing has changed for it, and an empty string means nothing changes. Only on a battlefield that first opens in this answer (a war begun here) is an order carried out from its event's date: of that fighting say only that it began, since its account comes next period. An event of this answer that ends a war, or halts it with a ceasefire, stops its battlefield on that date: tell nothing its account says happened after it.",
-].join("\n");
+];
 
 // The countries and groups people play: their troops are theirs to order.
 const playerRule = (players, fought, orderFunction = false) => {
@@ -240,6 +275,8 @@ const NEWS_WORDS = {
   reinforced: (who, at) => `${who} was reinforced at ${at}`,
   // More troops brought to a side's line by an order (a draft, reinforcements sent): `at` says how many and where.
   drafted: (who, at) => `${who} brought up ${at}`,
+  // Fresh troops a side nobody plays called up on its own staff's decision (runtime/fronts/engine.js staffCallUp).
+  mobilised: (who, at) => `${who} called up ${at}, on its own staff's decision`,
   city: (who, at) => `${who} took ${at}`,
   taken: (who, at) => `${who} took ${at}`,
   destroyed: (who, at) => `${who} destroyed ${at}`,
@@ -262,7 +299,7 @@ const newsWeight = (entry) => {
   if (entry.k === "invaded" || entry.k === "attacked") return 7e9;
   if (entry.k === "withdrew" || entry.k === "returned") return 5.5e9;
   if (entry.k === "landed") return 6.5e9;
-  if (entry.k === "reinforced" || entry.k === "drafted") return 2.2e9;
+  if (entry.k === "reinforced" || entry.k === "drafted" || entry.k === "mobilised") return 2.2e9;
   const size = Math.min(9e8, Math.max(0, Number(entry.size) || 0));
   if (entry.k === "city") return entry.capital ? 6e9 : size >= LARGE_TOWN ? 4e9 + size : 2e9 + size;
   if (entry.k === "breached") return 3.5e9;
@@ -348,8 +385,8 @@ export const describeUntold = (before) => {
 // was fought (`voyages`), and those still to arrive. "" when there are none.
 const VOYAGE_WORDS = {
   sailed: (voyage, what) => `${what} with ${voyage.n} formations set out${voyage.from ? ` from ${voyage.from}` : ""} for ${voyage.to}${voyage.due ? `, due ${voyage.due}` : ""}`,
-  intercepted: (voyage, what) => `${what} bound for ${voyage.to} was caught${voyage.by ? ` by ${voyage.by}${voyage.with ? ` (${voyage.with})` : ""}` : ""}${voyage.at ? ` near ${voyage.at}` : ""} and lost ${voyage.lost} of its formations`,
-  lost: (voyage, what) => `${what} bound for ${voyage.to} was caught${voyage.by ? ` by ${voyage.by}${voyage.with ? ` (${voyage.with})` : ""}` : ""}${voyage.at ? ` near ${voyage.at}` : ""} and lost with all aboard`,
+  intercepted: (voyage, what) => `${what} bound for ${voyage.to} was ${voyage.medium === "air" ? "intercepted" : "caught"}${voyage.by ? ` by ${voyage.by}${voyage.with ? ` (${voyage.with})` : ""}` : ""}${voyage.at ? ` near ${voyage.at}` : ""} and lost ${voyage.lost} of its formations`,
+  lost: (voyage, what) => `${what} bound for ${voyage.to} was ${voyage.medium === "air" ? "intercepted" : "caught"}${voyage.by ? ` by ${voyage.by}${voyage.with ? ` (${voyage.with})` : ""}` : ""}${voyage.at ? ` near ${voyage.at}` : ""} and lost with all aboard`,
   landed: (voyage, what) => `${what} put ${voyage.landed} formations ashore at ${voyage.at}${voyage.battlefield ? `, on ${voyage.battlefield}` : ""}`,
   reinforced: (voyage, what) => `${what} brought ${voyage.landed} formations to ${voyage.at}${voyage.battlefield ? `, on ${voyage.battlefield}` : ""}`,
   invaded: (voyage) => (voyage.opened === true
@@ -375,14 +412,21 @@ export const describeTransports = ({ transports = [], voyages = [], fought = fal
 // `orderFunction`: the skip has the function that gives a player's troops
 // their orders (frontOrderFunction.js). `listOnly`: the battlefields with no
 // rules above them, which is what that function answers with.
-export const buildFrontsBlock = ({ battlefields = [], players = [], max = FRONTS_BLOCK_MAX, period = null, transports = [], difficulty = "", orderFunction = false, listOnly = false } = {}) => {
+//
+// `orderLines: false`: the order lines are not repeated here, because the
+// prompt states them elsewhere (FRONT_ORDER_LINES_BLOCK); the battlefields are
+// given exactly the room they would have had with them.
+//
+// `transportMedia`: what may carry troops in the game (frontsGate.js transportMediaOn): the order lines tell only those.
+export const buildFrontsBlock = ({ battlefields = [], players = [], max: given = FRONTS_BLOCK_MAX, period = null, transports = [], difficulty = "", orderFunction = false, listOnly = false, orderLines = true, transportMedia = TRANSPORT_MEDIA_ALL } = {}) => {
+  const max = orderLines || listOnly ? given : given - (ORDER_LINES.join("\n").length - ORDER_LINES_POINTER.length);
   const began = normalizeBattlefields(battlefields);
   // A period that was fought: its battlefields, or a transporter that sailed in it.
   const fought = Boolean(period) && (asArray(period.battlefields).length > 0 || asArray(period.voyages).length > 0);
   const carried = describeTransports({ transports: fought ? period.transports : transports, voyages: fought ? period.voyages : [], fought });
   const rule = playerRule(players, fought, orderFunction === true);
   const records = fought ? normalizeBattlefields(period.battlefields) : began;
-  const head = listOnly ? "" : [fought ? FOUGHT_RULES : FRONT_RULES, rule, alliesRule(records, players), difficultyRule(records, players, difficulty)].filter(Boolean).join("\n");
+  const head = listOnly ? "" : [(fought ? foughtRules : frontRules)(orderLines, transportMedia).join("\n"), rule, alliesRule(records, players), difficultyRule(records, players, difficulty)].filter(Boolean).join("\n");
   const open = byWeight(records.filter(isOpen), players);
   // A battlefield that was open as the period began and that the period closed.
   const wasOpen = new Map(began.filter(isOpen).map((record) => [foldBattlefieldName(record.name), record]));
@@ -414,7 +458,7 @@ export const buildFrontsBlock = ({ battlefields = [], players = [], max = FRONTS
   const news = fought ? asArray(period.news) : [];
   // In full: the brief, and under it what the period did there by date.
   const inFull = (record) => {
-    const text = describeBattlefield(record);
+    const text = describeBattlefield(record, { max: BRIEF_TEXT_FULL_MAX });
     if (!fought || record.status !== "active") return text;
     const name = foldBattlefieldName(record.name);
     const before = wasOpen.get(name) ?? null;

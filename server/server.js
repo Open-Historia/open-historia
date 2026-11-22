@@ -24,6 +24,8 @@ import {
   getLibraryCatalog,
   getScenarioCatalog,
   getScenarioDetails,
+  scenarioMapFingerprint,
+  readScenarioLanguagePack,
   importGameBundle,
   importScenarioBundle,
   listScenariosNamingTiledBasemap,
@@ -58,6 +60,7 @@ import {
   writeGameParkedTurn,
   writeRuntimeJsonAsset,
   writeRuntimeTurnState,
+  MAP_ASSETS_DIR,
 } from "./libraryStore.js";
 import {
   createMapEditorDocument,
@@ -98,7 +101,7 @@ import {
   latestOfficialVersion,
 } from "./officialBasemaps.js";
 import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
-import { HUB_IMPORTED_KEY, mergeHubImported } from "./hubImported.js";
+import { HUB_COUNT_KEY, HUB_IMPORTED_KEY, keepHubCountKey, mergeHubImported } from "./hubImported.js";
 import { HUB_CACHE_NAMES_MARKER, renameHubCacheBundles, renameScenarioBundleBytes, writeFileAtomic } from "./scenarioBundleNames.js";
 import {
   clearHubCache,
@@ -139,6 +142,8 @@ import { handleMcpMessage, tokenMatches } from "./agentMcp.js";
 import { AGENT_WAIT_MS, createAgentQueue } from "./agentQueue.js";
 import { appKindOf } from "./appKind.js";
 import { createClockOffsetCache } from "./clockOffset.js";
+import { createStandInLeases } from "./standInLeases.js";
+import { ENGINE_CREDENTIAL_HEADER, hostedWriteRefusal } from "./oneWriter.js";
 import { createDiscordPresence, DISCORD_APPLICATION_ID, normalizePresence } from "./discordPresence.js";
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -542,6 +547,9 @@ app.put("/api/ui-settings", jsonParser, (req, res) => {
     if (Array.isArray(req.body?.[HUB_IMPORTED_KEY])) {
       next[HUB_IMPORTED_KEY] = mergeHubImported(next[HUB_IMPORTED_KEY], req.body[HUB_IMPORTED_KEY]);
     }
+    // The install's counting key (hubImported.js): set once, never replaced.
+    const countKey = keepHubCountKey(next[HUB_COUNT_KEY], req.body?.[HUB_COUNT_KEY]);
+    if (countKey) next[HUB_COUNT_KEY] = countKey;
     fs.mkdirSync(path.dirname(uiSettingsFile), { recursive: true });
     fs.writeFileSync(uiSettingsFile, JSON.stringify(next, null, 2));
     res.json(next);
@@ -601,8 +609,10 @@ app.get("/api/library", (_req, res) => {
 // thousands of clients polling don't each hit GitHub. We read the tiny latest.json
 // release asset (a CDN download, not the rate-limited REST API) for the app's track.
 const APP_UPDATE_MANIFESTS = {
-  stable: "https://github.com/Open-Historia/open-historia/releases/download/android/latest.json",
-  beta: "https://github.com/Open-Historia/open-historia/releases/download/android-beta/latest.json",
+  // The Android app's own feeds (src/runtime/web/router.js). latest.json beside
+  // them is the feed of the apps installed under the app's earlier id.
+  stable: "https://github.com/Open-Historia/open-historia/releases/download/android/update.json",
+  beta: "https://github.com/Open-Historia/open-historia/releases/download/android-beta/update.json",
   // The desktop app checks through here rather than from the page: a release asset
   // sends no CORS headers, and the GitHub API is rate limited per IP. Exactly the
   // reason the Android tracks are served this way.
@@ -673,6 +683,12 @@ const appUpdateReply = (res, feed = {}) => res.json({
 app.get("/api/app-update", async (req, res) => {
   const track = String(req.query.track || "stable");
   const manifestUrl = APP_UPDATE_MANIFESTS[track];
+  // The player switched update checks off on the Windows installer's privacy
+  // page (electron/installOptions.cjs): the app's own capability, no feed.
+  if (String(process.env.OH_UPDATE_CHECKS ?? "") === "0") {
+    appUpdateReply(res);
+    return;
+  }
   if (!manifestUrl) {
     res.json({}); // unknown track -> no update info, never an error
     return;
@@ -750,6 +766,24 @@ const sharedGameEngine = () => globalThis.__ohSharedGameEngine || null;
 export const HOSTING_HOLDS_THE_GAME = "This computer is hosting a shared game, and the game it hosts stays its open game. Stop sharing first.";
 setActiveGameHold(() => (sharedGameEngine()?.status?.().open ? HOSTING_HOLDS_THE_GAME : ""));
 
+// And it is written by that window alone (oneWriter.js): every route that
+// writes a game or a scenario asks, before it reads a byte of the body.
+// `target(req)` says what the write touches: { gameId, scenarioId, key }.
+const hostedGame = () => {
+  const catalog = getGameCatalog();
+  const game = (catalog.games ?? []).find((entry) => entry?.id === catalog.activeGameId);
+  return { gameId: String(catalog.activeGameId || ""), scenarioId: String(game?.scenarioId || "") };
+};
+const oneWriter = (target) => (req, res, next) => {
+  const engine = sharedGameEngine();
+  if (!engine?.status?.().open) return next();
+  const refusal = hostedWriteRefusal({ engine, hosted: hostedGame(), target: target(req) ?? {}, offered: req.get(ENGINE_CREDENTIAL_HEADER) });
+  if (!refusal) return next();
+  return res.status(423).json({ error: refusal });
+};
+// The open game: what the runtime routes write.
+const theOpenGame = (key = "") => () => ({ gameId: String(getGameCatalog().activeGameId || ""), key });
+
 // How far this computer's clock is from the signaling relays' (clockOffset.js):
 // { offsetMs, sources }. A shared game asks before it joins or hosts, and
 // stamps its signaling by the relays' time (src/multiplayer/client/clock.js).
@@ -760,6 +794,25 @@ app.get("/api/multiplayer/clock", async (_req, res) => {
   } catch (error) {
     sendError(res, 500, error);
   }
+});
+
+// Which shared games' stand-ins a page of this server shows now (standInLeases.js):
+// renewed by that page, read by any page that starts, so one browser's start
+// never closes the stand-in another browser or device is playing on.
+const standInLeases = createStandInLeases();
+app.put("/api/stand-ins/:gameId/lease", (req, res) => {
+  if (!standInLeases.touch(req.params.gameId)) {
+    res.status(400).json({ error: "No such stand-in." });
+    return;
+  }
+  res.status(204).end();
+});
+app.delete("/api/stand-ins/:gameId/lease", (req, res) => {
+  standInLeases.release(req.params.gameId);
+  res.status(204).end();
+});
+app.get("/api/stand-ins/leases", (_req, res) => {
+  res.json({ held: standInLeases.held() });
 });
 
 app.get("/api/multiplayer/engine", (req, res) => {
@@ -855,6 +908,16 @@ app.get("/api/scenarios/:scenarioId", (req, res) => {
   }
 });
 
+// One language's pack of a scenario's own text (server/scenarioLanguages.js),
+// for a game played in that language: { code, strings }.
+app.get("/api/scenarios/:scenarioId/languages/:code", (req, res) => {
+  try {
+    res.json({ code: req.params.code, strings: readScenarioLanguagePack(req.params.scenarioId, req.params.code) });
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
 app.post("/api/scenarios", jsonParser, (req, res) => {
   try {
     res.status(201).json(createScenario(req.body ?? {}));
@@ -879,7 +942,19 @@ app.put("/api/scenarios/selected", jsonParser, (req, res) => {
   }
 });
 
-app.put("/api/scenarios/:scenarioId", jsonParser, (req, res) => {
+// A scenario's map as one checksum (libraryStore.js scenarioMapFingerprint):
+// what a shared game's host states in its lobby, and what each guest's copy is
+// checked against before it takes a country.
+app.get("/api/scenarios/:scenarioId/fingerprint", (req, res) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ fingerprint: scenarioMapFingerprint(req.params.scenarioId) });
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
+app.put("/api/scenarios/:scenarioId", oneWriter((req) => ({ scenarioId: req.params.scenarioId })), jsonParser, (req, res) => {
   try {
     res.json(updateScenario(req.params.scenarioId, req.body ?? {}));
   } catch (error) {
@@ -910,7 +985,7 @@ app.post("/api/scenarios/import", largeJsonParser, async (req, res) => {
 
 // Replace an existing scenario's content with a fresh bundle — the community
 // hub's "Update" button for scenarios imported unmodified from a post.
-app.put("/api/scenarios/:scenarioId/import", largeJsonParser, async (req, res) => {
+app.put("/api/scenarios/:scenarioId/import", oneWriter((req) => ({ scenarioId: req.params.scenarioId })), largeJsonParser, async (req, res) => {
   try {
     updateScenarioFromBundle(req.params.scenarioId, req.body ?? {});
     await migrateEmbeddedTiledArchives();
@@ -922,7 +997,7 @@ app.put("/api/scenarios/:scenarioId/import", largeJsonParser, async (req, res) =
 
 // The community basemap an import or Update could not download, downloaded
 // since: { payload: { dataUrl } | { geojson } }.
-app.put("/api/scenarios/:scenarioId/basemap", largeJsonParser, (req, res) => {
+app.put("/api/scenarios/:scenarioId/basemap", oneWriter((req) => ({ scenarioId: req.params.scenarioId })), largeJsonParser, (req, res) => {
   try {
     res.json(restoreScenarioBasemap(req.params.scenarioId, req.body?.payload));
   } catch (error) {
@@ -944,7 +1019,7 @@ app.get("/api/scenarios/:scenarioId/assets/:assetKey", (req, res) => {
   }
 });
 
-app.put("/api/scenarios/:scenarioId/assets/:assetKey", uploadParser, (req, res) => {
+app.put("/api/scenarios/:scenarioId/assets/:assetKey", oneWriter((req) => ({ scenarioId: req.params.scenarioId })), uploadParser, (req, res) => {
   try {
     const buffer = Buffer.isBuffer(req.body)
       ? req.body
@@ -1019,7 +1094,7 @@ app.get("/api/games/:gameId/snapshots", (req, res) => {
   }
 });
 
-app.put("/api/games/:gameId/snapshots", largeJsonParser, (req, res) => {
+app.put("/api/games/:gameId/snapshots", oneWriter((req) => ({ gameId: req.params.gameId })), largeJsonParser, (req, res) => {
   try {
     res.json(writeGameSnapshots(req.params.gameId, req.body));
   } catch (error) {
@@ -1038,7 +1113,7 @@ app.get("/api/games/:gameId/parked-turn", (req, res) => {
   }
 });
 
-app.put("/api/games/:gameId/parked-turn", largeJsonParser, (req, res) => {
+app.put("/api/games/:gameId/parked-turn", oneWriter((req) => ({ gameId: req.params.gameId })), largeJsonParser, (req, res) => {
   try {
     res.json(writeGameParkedTurn(req.params.gameId, req.body));
   } catch (error) {
@@ -1046,7 +1121,7 @@ app.put("/api/games/:gameId/parked-turn", largeJsonParser, (req, res) => {
   }
 });
 
-app.delete("/api/games/:gameId/parked-turn", (req, res) => {
+app.delete("/api/games/:gameId/parked-turn", oneWriter((req) => ({ gameId: req.params.gameId })), (req, res) => {
   try {
     res.json(removeGameParkedTurn(req.params.gameId));
   } catch (error) {
@@ -1070,7 +1145,7 @@ app.put("/api/games/active", jsonParser, (req, res) => {
   }
 });
 
-app.put("/api/games/:gameId", jsonParser, (req, res) => {
+app.put("/api/games/:gameId", oneWriter((req) => ({ gameId: req.params.gameId })), jsonParser, (req, res) => {
   try {
     res.json(updateGame(req.params.gameId, req.body ?? {}));
   } catch (error) {
@@ -1087,7 +1162,7 @@ app.get("/api/games/:gameId/assets/:assetKey", (req, res) => {
   }
 });
 
-app.put("/api/games/:gameId/assets/:assetKey", uploadParser, (req, res) => {
+app.put("/api/games/:gameId/assets/:assetKey", oneWriter((req) => ({ gameId: req.params.gameId })), uploadParser, (req, res) => {
   try {
     const buffer = Buffer.isBuffer(req.body)
       ? req.body
@@ -1149,7 +1224,7 @@ app.delete("/api/trash", (req, res) => {
   }
 });
 
-app.delete("/api/games/:gameId/assets/:assetKey", (req, res) => {
+app.delete("/api/games/:gameId/assets/:assetKey", oneWriter((req) => ({ gameId: req.params.gameId })), (req, res) => {
   try {
     res.json(removeGameAsset(req.params.gameId, req.params.assetKey));
   } catch (error) {
@@ -1157,7 +1232,7 @@ app.delete("/api/games/:gameId/assets/:assetKey", (req, res) => {
   }
 });
 
-app.delete("/api/scenarios/:scenarioId/assets/:assetKey", (req, res) => {
+app.delete("/api/scenarios/:scenarioId/assets/:assetKey", oneWriter((req) => ({ scenarioId: req.params.scenarioId })), (req, res) => {
   try {
     res.json(removeScenarioAsset(req.params.scenarioId, req.params.assetKey));
   } catch (error) {
@@ -1165,7 +1240,7 @@ app.delete("/api/scenarios/:scenarioId/assets/:assetKey", (req, res) => {
   }
 });
 
-app.delete("/api/scenarios/:scenarioId", (req, res) => {
+app.delete("/api/scenarios/:scenarioId", oneWriter((req) => ({ scenarioId: req.params.scenarioId })), (req, res) => {
   try {
     res.json(deleteScenario(req.params.scenarioId));
   } catch (error) {
@@ -1217,7 +1292,7 @@ app.get("/api/runtime/snapshots/:snapshotId", (req, res) => {
   }
 });
 
-app.put("/api/runtime/turn-commit", jsonParser, (req, res) => {
+app.put("/api/runtime/turn-commit", oneWriter(theOpenGame()), jsonParser, (req, res) => {
   try {
     if (!Number(req.headers["content-length"])) {
       return sendError(res, 400, new Error("Refusing to commit turn: the request had no body."));
@@ -1239,7 +1314,7 @@ const runtimeJsonWriteParser = (req, res, next) => {
   parser(req, res, next);
 };
 
-app.put("/api/runtime/json/:assetKey", runtimeJsonWriteParser, (req, res) => {
+app.put("/api/runtime/json/:assetKey", oneWriter((req) => theOpenGame(req.params.assetKey)()), runtimeJsonWriteParser, (req, res) => {
   try {
     // express.json() hands us {} when the body was absent or unparseable, which is
     // indistinguishable from a genuine {} — and for an object-shaped asset like
@@ -2048,14 +2123,11 @@ app.delete("/api/music", (req, res) => {
   }
 });
 
-// Imports are no longer reported from here. A scenario's import count is how many
-// times its file has been downloaded from the hub's releases, as GitHub counts
-// it; the page reads the counts from the hub's own index (src/runtime/hubFiles.js).
-// The routes that pinged and read the old counter on Cloudflare
-// (/api/hub/import-log, /api/hub/import-counts, OH_IMPORT_COUNTER_URL) are gone:
-// its free allowance was spent within hours of every day. /api/hub/file above
-// serves a file it has already downloaded from its cache, so importing the same
-// file again on this machine does not count twice.
+// Imports are not reported from here. The page reports a post's first import
+// to the import counter itself and reads the counts from it
+// (src/runtime/hubImportCount.js, tools/import-counter/worker.js); downloading
+// a hub file, here or anywhere, counts nothing. The old routes
+// (/api/hub/import-log, /api/hub/import-counts, OH_IMPORT_COUNTER_URL) stay gone.
 
 // ---- Map editor documents ------------------------------------------------
 app.get("/api/mapeditor/documents", (_req, res) => {
@@ -2342,6 +2414,20 @@ if (fs.existsSync(fmgDistDir)) {
 }
 
 app.use(express.static(distDir));
+
+// The map files a packaged build downloads after install (scripts/map-assets.json,
+// electron/main.cjs OH_ASSETS_DIR) are in none of dist/: the world's cities
+// (cities-seed.json, the time skip's place finder, AI/worldCities.js) and the
+// editor's seed world. Served from where they were downloaded, after the build's
+// own files. Where dist/ is the source checkout's public/ copy the folder is the
+// same one and nothing changes. A player's log, 2026-11-06: "the world city list
+// could not be read", every skip, on the desktop beta.
+if (MAP_ASSETS_DIR && path.resolve(MAP_ASSETS_DIR) !== path.resolve(distDir, "assets")) {
+  app.use("/assets", express.static(MAP_ASSETS_DIR, { index: false }));
+}
+// A file under /assets that is nowhere is a 404, never the app's own page: the
+// page came back with a 200 where the city list was asked for.
+app.use("/assets", (_req, res) => { res.status(404).type("text/plain").send("Not found"); });
 
 app.get("*splat", (_req, res) => {
   res.sendFile(path.join(distDir, "index.html"));

@@ -11,6 +11,7 @@
 // Dependency-free but for node's events; the two updaters are handed in.
 
 const { EventEmitter } = require("node:events");
+const { uiWord } = require("./uiWords.cjs");
 
 // How much of the progress bar is the download when an update is made of chunks.
 const READING_SHARE = 0.25;
@@ -91,7 +92,7 @@ const createLayeredUpdater = ({
 
   const downloadUpdate = async () => {
     if (mode === "installer") return installer.downloadUpdate();
-    if (mode !== "payload") throw new Error("No update has been found to download.");
+    if (mode !== "payload") throw new Error(uiWord("No update has been found to download."));
     const version = String(manifest.version || manifest.build);
     try {
       const done = await payload.apply(manifest, {

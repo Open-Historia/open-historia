@@ -34,8 +34,15 @@
 //   no-welcome      the connection opens and the host never lets us in
 //   clock           the relays refused what we sent for its time stamp: this
 //                   computer's clock is wrong (signaling/nostr.js
-//                   CLOCK_REFUSAL), so the host never heard us
+//                   refusedForClock), so the host never heard us
 //   host-closed     the host closed the game
+//   host-gone       a player who was in lost the host, and the host is gone:
+//                   its lobby left the relays (no beacon for beaconGoneMs), or
+//                   it did not take them back in reconnectMostMs. A guest whose
+//                   host had closed its lobby (or its app) was left
+//                   "reconnecting" for good, playing a dead game with nothing
+//                   said (2026-11-18): a host that answers no offer was waited
+//                   on for as long as the screen was open.
 //   gave-up         a player who was in could not get back
 
 import { deriveRoomKeys, parseInvite } from "../invite.js";
@@ -74,6 +81,11 @@ export const createClientSession = ({
   connectTimeoutMs = 45_000,
   joinTimeoutMs = 20_000,
   maxReconnects = 20,
+  // A player who was in and lost the host: how long it is tried for, and how
+  // long the host's lobby may be silent on the relays (its beacon comes every
+  // 15 s: session/host.js) before the host is taken to be gone.
+  reconnectMostMs = 120_000,
+  beaconGoneMs = 90_000,
   // Answered connections that may fail to open, one after another, before a
   // player who was never in is told the two computers cannot reach each other.
   maxConnectFailures = 3,
@@ -96,10 +108,40 @@ export const createClientSession = ({
   let clockRefused = false;
   let connectFailures = 0;
   let joinFailures = 0;
+  // When the host's lobby was last heard on the relays (its beacon), and the
+  // watch on a player cut off from it (reconnectMostMs, beaconGoneMs).
+  let beaconAt = 0;
+  let back = null;
 
   const known = (extra = {}) => ({ room, heard, failures: connectFailures, clock: clockRefused, ...extra });
+  const stopBackWatch = () => {
+    if (!back) return;
+    timers.clearTimeout(back.timer);
+    timers.clearInterval(back.watch);
+    back = null;
+  };
+  // Cut off after being in: tried again (scheduleRetry), within bounds.
+  const startBackWatch = () => {
+    if (back || !player) return;
+    const since = now();
+    back = {
+      timer: timers.setTimeout(() => {
+        log(`the host did not take us back in ${Math.round(reconnectMostMs / 1000)} s`);
+        giveUp("lost", { reason: "host-gone" });
+      }, reconnectMostMs),
+      watch: timers.setInterval(() => {
+        // Only a lobby this device has heard can be found gone from the relays.
+        if (!beaconAt) return;
+        if (now() - Math.max(beaconAt, since) < beaconGoneMs) return;
+        log("the host's lobby is no longer on the relays");
+        giveUp("lost", { reason: "host-gone" });
+      }, Math.max(50, Math.min(5000, Math.round(beaconGoneMs / 4)))),
+    };
+  };
   const setState = (next, detail = {}) => {
     state = next;
+    if (next === "reconnecting") startBackWatch();
+    else if (next !== "connecting" && next !== "joining") stopBackWatch();
     onState(next, known(detail));
   };
   const hearHost = () => {
@@ -173,11 +215,20 @@ export const createClientSession = ({
     return undefined;
   };
 
+  // One message at a time to the host, as the host sends to each player
+  // (session/host.js sendTo): a large request goes out whole before the next.
+  const outboxes = new WeakMap();
   const sendNow = (message) => {
-    if (!attempt?.peer) return false;
+    const peer = attempt?.peer;
+    if (!peer) return false;
     const frames = encodeMessage(message);
-    if (frames.length === 1) return attempt.peer.send(frames[0]);
-    attempt.peer.sendAll(frames);
+    const busy = outboxes.get(peer);
+    if (!busy && frames.length === 1) return peer.send(frames[0]);
+    const next = (busy ?? Promise.resolve()).then(() => peer.sendAll(frames)).catch(() => false);
+    outboxes.set(peer, next);
+    void next.then(() => {
+      if (outboxes.get(peer) === next) outboxes.delete(peer);
+    });
     return true;
   };
 
@@ -308,6 +359,7 @@ export const createClientSession = ({
       const [label, fields] = signed.beacon(invite.roomId, message);
       if (!verifyFields(invite.hostKey, label, fields, message.sig)) return log("a beacon not signed by this game's host");
       room = { name: message.name, open: message.open, seats: message.seats, version: message.version };
+      beaconAt = now();
       onRoom(room);
       hearHost();
       return undefined;

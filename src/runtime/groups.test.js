@@ -13,9 +13,14 @@ import {
   GROUP_PALETTE,
   MAX_GROUPS,
   applyGroupOps,
+  briefDescription,
   defaultGroupColor,
   describeGroupsForPrompt,
   findGroupKey,
+  forceGroupDescription,
+  forceGroupName,
+  groupOpKind,
+  groupOwnerOf,
   groupsOnTerritory,
   normalizeGroupAreas,
   normalizeGroupColor,
@@ -55,14 +60,20 @@ test("an area row naming no group is dropped, and one region has one group", () 
   assert.deepEqual(normalizeGroupAreas({ r1: "cartel", r2: "Ghosts", r3: "Cartel" }, groups), { r1: "Cartel", r3: "Cartel" });
 });
 
-test("the model's verbs read as the five operations", () => {
-  assert.equal(normalizeGroupOp({ op: "erase", name: "X" }).op, "dissolve");
-  assert.equal(normalizeGroupOp({ op: "spread", name: "X", regions: ["a", "a", "b"] }).op, "take");
-  assert.deepEqual(normalizeGroupOp({ op: "spread", name: "X", regions: ["a", "a", "b"] }).regionIds, ["a", "b"]);
-  assert.equal(normalizeGroupOp({ op: "withdraw", group: "X", regionId: "a" }).op, "release");
-  assert.equal(normalizeGroupOp({ op: "found", name: "X" }).op, "create");
-  assert.equal(normalizeGroupOp({ op: "recolor", name: "X", color: "#123456" }).op, "update");
-  assert.equal(normalizeGroupOp({ op: "teleport", name: "X" }), null);
+test("an op is exactly one of the five operations, its case and spacing aside, and any other word is left out in every language", () => {
+  assert.equal(normalizeGroupOp({ op: " Dissolve ", name: "X" }).op, "dissolve");
+  assert.equal(normalizeGroupOp({ op: "take", name: "X", regions: ["a", "a", "b"] }).op, "take");
+  assert.deepEqual(normalizeGroupOp({ op: "take", name: "X", regions: ["a", "a", "b"] }).regionIds, ["a", "b"]);
+  assert.equal(normalizeGroupOp({ operation: "release", group: "X", regionId: "a" }).op, "release");
+  assert.equal(groupOpKind("CREATE"), "create");
+  // An English synonym is no more one of them than its French twin: "claim"
+  // once took a region for a group that only claimed it.
+  for (const [english, french] of [["claim", "revendiquer"], ["occupy", "occuper"], ["erase", "effacer"], ["spread", "étendre"], ["found", "fonder"], ["recolor", "recolorer"], ["teleport", "téléporter"]]) {
+    assert.equal(normalizeGroupOp({ op: english, name: "X", regionIds: ["a"] }), null, english);
+    assert.equal(normalizeGroupOp({ op: french, name: "X", regionIds: ["a"] }), null, french);
+    assert.equal(groupOpKind(english), "");
+  }
+  assert.deepEqual(applyGroupOps({}, [{ op: "claim", name: "Horde", regionIds: ["r1"] }]).groupAreas, {});
   assert.equal(normalizeGroupOp({ op: "create", name: "  " }), null);
 });
 
@@ -134,6 +145,16 @@ test("the model is taken at its word where the intent is plain, and nowhere else
   assert.deepEqual(full.changes, [{ op: "refused", name: "Latecomers", reason: "limit" }]);
 });
 
+// A group out of view keeps its description's first sentence: a Chinese one, whose full stop has no space after it,
+// was never cut there and lost its sentence to the word-cut instead.
+test("a group's brief description is its first sentence in any script", () => {
+  const english = `A militia of former soldiers that runs the checkpoints of the eastern hills. ${"It taxes the trucks that pass. ".repeat(6)}`;
+  const chinese = `一支由退伍军人组成的民兵组织，控制着东部山区的检查站。${"它向过往的卡车征税。".repeat(20)}`;
+  assert.equal(briefDescription(english), "A militia of former soldiers that runs the checkpoints of the eastern hills.");
+  assert.equal(briefDescription(chinese), "一支由退伍军人组成的民兵组织，控制着东部山区的检查站。");
+  assert.equal(briefDescription("Short."), "Short.", "a description that fits is kept whole");
+});
+
 test("the prompt names each group exactly, says what it is, and where it controls", () => {
   const world = {
     groups: { Cartel: { description: "Runs the\nborder towns.", color: "#e11d48" }, Exiles: { description: "" } },
@@ -141,10 +162,19 @@ test("the prompt names each group exactly, says what it is, and where it control
   };
   const text = describeGroupsForPrompt(world, { regionName: (id) => id.toUpperCase(), maxRegions: 2 });
   assert.equal(text, [
-    "- Cartel — Runs the border towns. [controls 3 regions: R1 (r1), R2 (r2), +1 more]",
+    "- Cartel — Runs the border towns. [controls 3 regions: R1, R2, +1 more]",
     "- Exiles [controls no area on the map]",
   ].join("\n"));
   assert.equal(describeGroupsForPrompt({}), "");
+  // A region the map has no name for is counted, never shown by its id.
+  assert.equal(
+    describeGroupsForPrompt(world, { regionName: (id) => (id === "r2" ? "Sonora" : ""), maxRegions: 2 }).split("\n")[0],
+    "- Cartel — Runs the border towns. [controls 3 regions: Sonora, +2 more]",
+  );
+  assert.equal(
+    describeGroupsForPrompt(world, { maxRegions: 2 }).split("\n")[0],
+    "- Cartel — Runs the border towns. [controls 3 regions]",
+  );
 });
 
 test("the world keeps its groups through every read, and an event's groupOps land on the map", () => {
@@ -153,8 +183,8 @@ test("the world keeps its groups through every read, and an event's groupOps lan
   assert.deepEqual(read.groupAreas, { r1: "Cartel" });
   assert.deepEqual(normalizeWorldState({}).groups, {});
 
-  const event = normalizeEventEntry({ title: "Spread", description: "It spreads.", date: "2025-01-01", impacts: { groupOps: [{ op: "spread", name: "Horde", regions: ["r5"], note: "The outbreak crossed the border." }, { op: "??", name: "x" }] } });
-  assert.equal(event.impacts.groupOps.length, 1, "a saved event keeps its groupOps, and drops what no operation reads as");
+  const event = normalizeEventEntry({ title: "Spread", description: "It spreads.", date: "2025-01-01", impacts: { groupOps: [{ op: "take", name: "Horde", regions: ["r5"], note: "The outbreak crossed the border." }, { op: "spread", name: "Horde", regions: ["r6"] }, { op: "??", name: "x" }] } });
+  assert.equal(event.impacts.groupOps.length, 1, "a saved event keeps its groupOps, and drops an op that is none of the five");
 
   const { world } = applyEventImpactsToWorld({
     world: read,
@@ -232,4 +262,26 @@ test("a polity that is a group sees its own area first, even an empty one", () =
   assert.deepEqual(rows.map((row) => [row.name, row.own, row.regionIds]), [["Cartel del Norte", true, ["r1"]]]);
   const empty = groupsOnTerritory({ ...world, groupAreas: {} }, "Cartel del Norte");
   assert.deepEqual(empty.map((row) => [row.name, row.regionIds]), [["Cartel del Norte", []]]);
+});
+
+test("a country's force: its owner is kept, said once when founded, and an old save without one loads as before", () => {
+  const before = normalizeGroups({ Cartel: { description: "Runs the towns." } });
+  assert.equal("owner" in before.Cartel, false, "no owner where none was given");
+  assert.equal(normalizeGroups({ "Aland Forces in Neutralia": { owner: " Aland " } })["Aland Forces in Neutralia"].owner, "Aland");
+  assert.equal(groupOwnerOf({ "Aland Forces in Neutralia": { owner: "Aland" } }, "aland forces in neutralia"), "Aland");
+  assert.equal(groupOwnerOf(before, "Cartel"), "");
+  assert.equal(forceGroupName("Aland", "Neutralia"), "Aland Forces in Neutralia");
+  assert.equal(forceGroupName("Aland", "N".repeat(80)), "Aland Forces", "a name too long for a group says whose force it is");
+  // The front engine's take founds it with its owner and what it is...
+  const take = { op: "take", name: "Aland Forces in Neutralia", regionIds: ["n1"], by: "front", owner: "Aland", description: forceGroupDescription("Aland", "Neutralia", "Free Hills") };
+  assert.equal(normalizeGroupOp(take).owner, "Aland");
+  const founded = applyGroupOps({ groups: {}, groupAreas: { n1: "Free Hills" } }, [take]);
+  assert.equal(founded.groups["Aland Forces in Neutralia"].owner, "Aland");
+  assert.match(founded.groups["Aland Forces in Neutralia"].description, /Neutralia's: Aland holds it without annexing it/);
+  assert.equal(founded.groupAreas.n1, "Aland Forces in Neutralia");
+  // ...and its later takes leave what the story has since said of it alone.
+  const told = { groups: { ...founded.groups, "Aland Forces in Neutralia": { ...founded.groups["Aland Forces in Neutralia"], description: "Dug in for the winter." } }, groupAreas: founded.groupAreas };
+  const later = applyGroupOps(told, [{ ...take, regionIds: ["n2"] }]);
+  assert.equal(later.groups["Aland Forces in Neutralia"].description, "Dug in for the winter.");
+  assert.deepEqual(later.changes, [{ op: "take", name: "Aland Forces in Neutralia", regionIds: ["n2"] }]);
 });

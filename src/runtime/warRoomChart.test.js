@@ -123,6 +123,18 @@ test("a blockade is laid from open water off the coast, the stretch nearest the 
   assert.ok(chart.coastOff("Borduria", null));
 });
 
+test("whether a country's own land lies within a distance of a place: its shore across a strait, not the far side of the sea", () => {
+  const { chart } = chartedWorld();
+  // The sea between lies about a hundred kilometres from either shore.
+  assert.equal(chart.landNear("Aland", ...SEA, 300), true);
+  assert.equal(chart.landNear("Borduria", ...SEA, 300), true);
+  assert.equal(chart.landNear("Aland", ...SEA, 20), false);
+  assert.equal(chart.landNear("Aland", 2.5, 53.5, 0), true, "on its own land it is there already");
+  assert.equal(chart.landNear("Neutralia", -1.5, 52.5, 300), false, "nowhere near");
+  assert.equal(chart.landNear("Aland", 400, 52.5, 300), false, "off the sheet");
+  assert.equal(chart.landNear("", ...SEA, 300), false);
+});
+
 test("no sheet, no chart", () => {
   assert.equal(chartOf({ grid: null, controllerOf: () => "" }), null);
   const { grid } = chartedWorld();

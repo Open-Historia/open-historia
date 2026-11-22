@@ -12,7 +12,7 @@
 // whose FEATURE_DEFINITIONS has no "fronts", fronts are off.
 
 import { FRONT_PACE_SHARE } from "../../runtime/fronts/constants.js";
-import { FEATURE_KEYS, activeWars, getActiveFeatures } from "../../runtime/gameFeatures.js";
+import { FEATURE_KEYS, activeTransportMedia, activeWars, getActiveFeatures } from "../../runtime/gameFeatures.js";
 
 export const FRONTS_FEATURE = "fronts";
 
@@ -23,6 +23,9 @@ export const frontsOn = () => FEATURE_KEYS.includes(FRONTS_FEATURE) && activeWar
 export const airOn = () => !FEATURE_KEYS.includes(FRONTS_FEATURE) || activeWars().air;
 // Navies: fleets raised, fighting, blockading and carrying troops by sea. Off, none is.
 export const naviesOn = () => !FEATURE_KEYS.includes(FRONTS_FEATURE) || activeWars().navies;
+// What may carry troops: "sea", "land" (rail) and "air", less what the Wars feature switched off
+// (server/gameFeatures.js transportMediaOf: nothing by sea without navies, nor by air without air units).
+export const transportMediaOn = () => (FEATURE_KEYS.includes(FRONTS_FEATURE) ? activeTransportMedia() : ["sea", "land", "air"]);
 
 // What a time skip is told of the parts of war the scenario has switched off:
 // "" when it has all of them, so the prompt is then what it always was. The game
@@ -36,14 +39,12 @@ export const warPartsOffBlock = () => {
 
 // The pace the engine is told for its advances, as a factor of the game's own
 // paces for a formation on the move: the part of them that is the built-in
-// pace of a front (FRONT_PACE_SHARE says why it is a part), times the
-// scenario's setting, which is a percentage, 25 to 300, and 100 where it is
-// not set.
-export const frontsPace = () => {
-  const percent = Number(getActiveFeatures()?.[FRONTS_FEATURE]?.pace);
-  const setting = !Number.isFinite(percent) || percent <= 0 ? 1 : Math.max(0.25, Math.min(3, percent / 100));
-  return FRONT_PACE_SHARE * setting;
-};
+// pace of a front (FRONT_PACE_SHARE says why it is a part). The Wars feature's
+// Pace of an advance setting is gone ("remove the pace of an advance setting
+// from features", the owner, 2026-11-04): a pace a scenario or game saved
+// before is dropped when it is read (gameFeatures.js keeps only the settings
+// it defines), and every game advances at this one.
+export const frontsPace = () => FRONT_PACE_SHARE;
 
 // EXPERIMENT, in the lab only (runtime/fronts/mind/). Whether the sides nobody
 // plays are led by the lab's own staff (mind/trained.js: on this branch the

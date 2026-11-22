@@ -21,7 +21,44 @@
 // keeping only the world left the player's own key behind a rename.
 
 import { applyEventImpactsToWorld } from "../../runtime/gameState.js";
+import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
 import { materiallyChangedEntryIds } from "../../runtime/projects.js";
+
+const clean = (value) => String(value ?? "").trim();
+const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+// A project's focus is where on the map it happens: for an operation, the place
+// the war room sends its troops at (runtime/fronts/plans.js operationsOn); for
+// any project, where a structure its plan builds stands when the plan gives it
+// no coordinates (gameState.js applyProjectOutcomesToWorld). A time skip's board
+// ops carry none (gameplaySchemas.js FOLDED_PROJECT_OP_OMITS), and the place used
+// to be found by reading the operation's name and summary for an enemy city, in
+// English only. Where an op that opens a project, or moves an operation, gives
+// no focus, and the entry has none yet, the event that carries the op says where
+// it happens: the first of its places (its `places` field, as found on the map,
+// runtime/eventPlaces.js) that is a point. Nothing is read from its words.
+const placePointOf = (event) => {
+  const place = normalizeEventPlaces(event?.places).find((entry) => Number.isFinite(entry.lng) && Number.isFinite(entry.lat));
+  return place ? { lng: place.lng, lat: place.lat } : null;
+};
+export const withEventFocus = (ops, event, projects = []) => {
+  const point = placePointOf(event);
+  if (!point) return ops;
+  const entryOf = (op) => (Array.isArray(projects) ? projects : []).find((entry) => (clean(op.projectId) && clean(entry?.id) === clean(op.projectId))
+    || (!clean(op.projectId) && clean(entry?.name).toLowerCase() === clean(op.name ?? op.project?.name).toLowerCase()));
+  return (Array.isArray(ops) ? ops : []).map((op) => {
+    if (!isRecord(op)) return op;
+    const kind = clean(op.op).toLowerCase();
+    // Where the op's own fields are: a nested create's are its `project`, an update's its `patch` or `project`.
+    const body = kind === "create" ? (isRecord(op.project) ? op.project : op) : (isRecord(op.patch) ? op.patch : isRecord(op.project) ? op.project : op);
+    if (body.focus) return op;
+    const placed = kind === "create"
+      ? !entryOf(op)
+      : kind === "update" && entryOf(op)?.kind === "operation" && !entryOf(op)?.focus;
+    if (!placed) return op;
+    return body === op ? { ...op, focus: point } : { ...op, [body === op.project ? "project" : "patch"]: { ...body, focus: point } };
+  });
+};
 
 export const applyBoardCarriers = ({
   world,
@@ -30,6 +67,7 @@ export const applyBoardCarriers = ({
   visibleEvents = [],
   hiddenEvents = [],
   provisionalIndexes = new Set(),
+  regionCatalog = null,
   date = "",
   round = 0,
 } = {}) => {
@@ -47,8 +85,10 @@ export const applyBoardCarriers = ({
   let hiddenEventsThatMoved = 0;
   const applyCarrier = (before, carrier, event, { stamped }) => applyEventImpactsToWorld({
     colors: nextColors,
-    events: [{ id: event.id, date: event.date || date, title: event.title, description: "", impacts: { projectOps: carrier.ops } }],
+    // A fallback rides on an event it did not come from, whose places are not its.
+    events: [{ id: event.id, date: event.date || date, title: event.title, description: "", impacts: { projectOps: carrier.fallback ? carrier.ops : withEventFocus(carrier.ops, event, before?.projects) } }],
     world: before,
+    regionCatalog,
     motion: null,
     round,
     boardOnlyEventIds: stamped ? [] : [event.id],

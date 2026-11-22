@@ -12,7 +12,6 @@ import {
     classifyPolityRegions,
     createBriefingCache,
     createEventMatcher,
-    knownPolityNames,
     resolvePanelPolity,
     sortEventsNewestFirst,
 } from "../../runtime/countryInfoPanel.js";
@@ -298,14 +297,15 @@ const CountryInfoPanel = () => {
     // The log is stored oldest first; the panel leads with what just happened.
     const events = useMemo(() => {
         if (!identity) return [];
+        // By what each event says it is about, never its words (countryInfoPanel.js).
         const involves = createEventMatcher({
             key: identity.stableKey,
             name: identity.currentName,
             aliases,
-            knownNames: knownPolityNames(worldState),
+            formerNames: Array.isArray(identity.polity?.formerNames) ? identity.polity.formerNames : [],
         });
         return sortEventsNewestFirst(loaded.allEvents.filter(involves));
-    }, [identity, aliases, loaded, worldState]);
+    }, [identity, aliases, loaded]);
 
     // The campaign, polity, round and prompt languages a briefing answers for.
     // The prompt names the save's language ("Respond in ...") and callAI adds

@@ -100,10 +100,12 @@ test("a part of a phrase that is a phrase of its own places the thing when the r
     // Seen in the same test: a carrier group sent to "South Sea, west of the
     // Philippines" went to the Philippine Sea, on the far side of the islands.
     const map = mapOf([{ id: "ph-1", name: "Luzon", owner: "Philippines", geometry: box(120, 14) }]);
-    const placed = resolvePlacement("South Sea, west of the Philippines", map, { owner: "United States", seedText: "Carrier Strike Group 5" });
+    const placed = resolvePlacement("South Sea, west of country: Philippines", map, { owner: "United States", seedText: "Carrier Strike Group 5" });
     assert.equal(placed.error, undefined);
     assert.equal(placed.regionId, "ph-1");
     assert.ok(placed.lng < 122, `the western half of it, got ${placed.lng}`);
+    // "the Philippines" is a name the map does not spell: an article is part of a name.
+    assert.ok(resolvePlacement("South Sea, west of the Philippines", map, { owner: "United States" }).error);
     // A part that is only a name is not tried by itself: nothing is guessed from half an address.
     assert.ok(resolvePlacement("Nowhere, Luzon", { ...map, find: (name, options) => (fold(name) === "luzon" ? null : map.find(name, options)) }).error);
 });

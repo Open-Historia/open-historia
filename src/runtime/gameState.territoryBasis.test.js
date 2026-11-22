@@ -96,20 +96,31 @@ test("the claim a screened transfer leaves behind is settled by a real transfer 
   assert.equal(second.world.regionClaimants.TIGRAY, undefined, "the dispute ends when the ground is taken");
 });
 
-test("the basis survives a save, a synonym is folded, and an entry without one is unchanged", () => {
+test("the basis survives a save, a word that is none of ours is left out in any language, and an entry without one is unchanged", () => {
   const [stored] = normalizeEvents(JSON.parse(JSON.stringify([event({
     regionTransfers: [
-      { regionId: "A", toCode: "Italy", basis: "Proclamation" },
+      { regionId: "A", toCode: "Italy", basis: "Claim" },
       { regionId: "B", toCode: "Italy", basis: "vibes" },
       { regionId: "C", toCode: "Italy" },
+      { regionId: "E", toCode: "Italy", basis: "Proclamation" },
+      { regionId: "F", toCode: "Italy", basis: "proclamation" },
     ],
-    regionControlOps: [{ op: "control", regionId: "D", fromCode: "Ethiopia", toCode: "Italy", basis: "liberation" }],
+    regionControlOps: [
+      { op: "control", regionId: "D", fromCode: "Ethiopia", toCode: "Italy", basis: "occupation" },
+      { op: "control", regionId: "G", fromCode: "Ethiopia", toCode: "Italy", basis: "liberation" },
+      { op: "control", regionId: "H", fromCode: "Ethiopia", toCode: "Italy", basis: "libération" },
+    ],
   })])));
   assert.equal(stored.impacts.regionTransfers[0].basis, "claim");
   assert.equal("basis" in stored.impacts.regionTransfers[1], false, "an unknown word is treated as absent");
   // Byte-for-byte what a transfer looked like before the field existed.
   assert.deepEqual(stored.impacts.regionTransfers[2], { fromCode: "", note: "", regionId: "C", regionName: "", toCode: "Italy" });
+  // An English synonym is no more one of ours than its French twin.
+  assert.equal("basis" in stored.impacts.regionTransfers[3], false);
+  assert.equal("basis" in stored.impacts.regionTransfers[4], false);
   assert.equal(stored.impacts.regionControlOps[0].basis, "occupation");
+  assert.equal("basis" in stored.impacts.regionControlOps[1], false);
+  assert.equal("basis" in stored.impacts.regionControlOps[2], false);
 });
 
 test("only the newest receipt keeps its notes, and an entry above it that has none does not cost them", () => {

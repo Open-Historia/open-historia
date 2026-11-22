@@ -169,7 +169,14 @@ test("every installer packs the generator", () => {
   const configs = fs.readdirSync(new URL("../", import.meta.url)).filter((name) => /^electron-builder\..+\.yml$/.test(name));
   assert.ok(configs.includes("electron-builder.beta.yml"));
   for (const config of configs) {
-    assert.match(read(`../${config}`), /^files:\n(?: {2}- .+\n)* {2}- fmg\/dist\/\*\*\n/m, config);
+    const text = read(`../${config}`);
+    // A config that extends another (electron-builder.beta-win.yml) packs the files that one names.
+    const base = text.match(/^extends: (electron-builder\..+\.yml)$/m)?.[1];
+    if (base && !/^files:/m.test(text)) {
+      assert.ok(configs.includes(base), `${config} extends ${base}`);
+      continue;
+    }
+    assert.match(text, /^files:\n(?: {2}- .+\n)* {2}- fmg\/dist\/\*\*\n/m, config);
   }
   // A local build fetches it too; best effort there, since it is not a release.
   for (const [name, script] of Object.entries(packageJson.scripts)) {

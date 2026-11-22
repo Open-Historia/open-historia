@@ -23,24 +23,21 @@ const body = (source, start) => {
     return source.slice(from, ends.length ? Math.min(...ends) : undefined);
 };
 
-test("a failed turn review holds the turn before anything is applied", () => {
+// The turn review a skip a provider refused folded used to ask was the first
+// check, and held the turn before anything was applied. It went on 2026-11-07:
+// such a skip has no review, and its record is the empty one.
+test("a skip has no review to hold it: a skip asked the old way is written as the simulator wrote it", () => {
     const finish = body(gameplay, "const finishTimelineJump = async");
-    const review = finish.indexOf('checks.run("review", () => runTurnReview(');
-    const hold = finish.indexOf("holdTurn(HELD_TURN.checks, { context, state })");
-    const thrown = finish.indexOf("throw checksHeldError(");
-    const applied = finish.indexOf("applySimulationResult(");
-    assert.ok(review > -1 && hold > review, "the hold follows the review");
-    assert.ok(thrown > hold, "the turn is held before the error is thrown");
-    assert.ok(applied > thrown, "nothing is applied until the review is settled");
+    assert.doesNotMatch(finish, /checks\.run\("review"/);
+    assert.match(finish, /: \{ asked: false, folded: false, parts: \{\}, reasons: \[\], boardShownEvents: \[\], agentReports: \[\], actionOutcomePlan: null \};/);
+    assert.equal(gameplay.includes("runTurnReview"), false);
 });
 
-// A skip is one request, so the checks left to ask are few: the review of a
-// skip a provider refused folded, and what the apply still asks for a turn
-// that has no review. Order attribution and the three Directors ride the
+// A skip is one request, so the checks left to ask are few: what the apply
+// still asks for a turn that has no review. The three Directors read the
 // review and ask nothing.
 test("what a skip still asks goes through the turn's checks, and the rest asks nothing", () => {
     const finish = body(gameplay, "const finishTimelineJump = async");
-    assert.match(finish, /: await checks\.run\("review", \(\) => runTurnReview\(\{ context, merged, signal, state \}\), reviewFailure, \{ copy: copyReviewParts \}\);/);
     assert.doesNotMatch(finish, /checks\.run\(\s*"actions"/);
     assert.match(finish, /applyArgs\.projects = \{[^}]*checks \}/);
     const directors = body(gameplay, "const directorAnalyzers = ");
@@ -158,8 +155,9 @@ test("a canned turn's checks never hold it: the fallback page and its Rollback d
     const finish = body(gameplay, "const finishTimelineJump = async");
     const created = finish.indexOf("createTurnChecks()");
     const accepted = finish.indexOf('=== "fallback") checks.accept();');
-    const firstHold = finish.indexOf("checksHoldTurn(checks)");
-    assert.ok(created > -1 && accepted > created && firstHold > accepted);
+    // Every hold is made inside the apply, which the finish calls after.
+    const applied = finish.indexOf("applySimulationResult(");
+    assert.ok(created > -1 && accepted > created && applied > accepted);
 });
 
 test("a held turn's retry can be cancelled from its notice", () => {

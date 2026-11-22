@@ -39,7 +39,10 @@ const savedRequests = (requests) => (requests?.budget
 
 // A turn kept by a build from before a skip was one request in every mode has
 // no `only`, and may say `unlimited` (Save AI requests was off): it is written
-// under the skip's own list and cap all the same.
+// under the skip's own list and cap all the same. That old field is not the
+// no-request-limit switch and is never read: the cap a skip was given (the
+// higher one when that setting was on, requestBudget.js jumpRequestCap) is
+// kept, so a kept skip goes on under it whatever the setting says now.
 export const restoreJumpRequests = (saved) => {
   if (!isObject(saved) || !isObject(saved.budget)) return null;
   const { cap, only, spends, reservations } = saved.budget;

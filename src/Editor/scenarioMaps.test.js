@@ -166,6 +166,21 @@ test("the detailed starting map moved over another drawing names the old one as 
   assert.ok(view(doc).includes(`own:westeros-map vector "Westeros map"`), view(doc).join("\n"));
 });
 
+test("a drawing moved into the list is named for its name in any script, as its English twin is", () => {
+  // Cut to a-z and 0-9, a scenario named in another script gave every such
+  // drawing the id "map".
+  const movedId = (scenarioName) => {
+    const base = { customBackground: WESTEROS, tiledBasemap: RELIEF, ownBasemaps: [{ id: "essos", name: "Essos", background: ESSOS }] };
+    return apply(base, setShownOver(base, "start", "own:essos", { scenarioName })).ownBasemaps.find((entry) => entry.id !== "essos").id;
+  };
+  assert.equal(movedId("Westeros"), "westeros-map", "as it always was");
+  for (const [first, second] of [["Вестерос", "Эссос"], ["维斯特洛", "厄斯索斯"]]) {
+    assert.notEqual(movedId(first), "map", first);
+    assert.notEqual(movedId(first), movedId(second), first);
+    assert.equal(movedId(first), movedId(first), first);
+  }
+});
+
 test("making the drawn map under a detailed starting map the starting one, with no drawing left, changes nothing", () => {
   const base = { basemap: "ocean" };
   assert.deepEqual(apply(base, makeStartingMap(base, "start:drawn", { scenarioName: "Westeros" })), apply(base, makeStartingMap(base, "start")));

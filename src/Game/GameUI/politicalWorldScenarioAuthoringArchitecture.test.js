@@ -31,8 +31,10 @@ test("Scenario Political World authoring exposes full legislature and party deta
   assert.match(source, /renderInput\("Next election", "nextElection"\)/);
   assert.match(source, /Native name/);
   assert.match(source, /Native abbreviation/);
-  assert.match(source, /Ideology family/);
-  assert.match(source, /Subideology/);
+  assert.match(source, /\["Ideology", "ideology"\]/);
+  assert.match(source, /\["Political position", "politicalPosition"\]/);
+  assert.doesNotMatch(source, /<label style=\{labelStyle\}>Ideology family/);
+  assert.doesNotMatch(source, /<label style=\{labelStyle\}>Subideology/);
   assert.match(source, /Party role/);
   assert.match(source, /Seats held/);
   assert.match(source, /Founded/);

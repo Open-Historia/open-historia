@@ -15,6 +15,11 @@ registerHooks({
 
 const { createPoliticalWorldV2Checkpoint } = await import("./checkpoint.js");
 const { runSimplePoliticalWorldV2 } = await import("./simpleRunner.js");
+const { connectionClosedError, couldNotBeReached, unreachableServerError } = await import("../providerErrors.js");
+
+// An error as the request path throws it (main.jsx providerFailureError): the
+// failure's kind recorded on it, its message whatever the provider said.
+const providerError = (message, kind, reason = kind) => Object.assign(new Error(message), { providerFailure: { kind, reason } });
 
 const polities = ["A", "B", "C"];
 const inputs = { scenarioDate: "2014-03-22", polities };
@@ -150,7 +155,8 @@ test("a task that throws after its answer came back counts an attempt; a failed 
     createExecutor: () => ({
       executeJob: async (_task, _checkpoint, { consumeModelCall }) => {
         await consumeModelCall();
-        const error = new Error("Failed to fetch");
+        // fetch()'s own network TypeError, before anything marked it.
+        const error = new TypeError("Failed to fetch");
         error.politicalWorldV2ProviderCall = true;
         throw error;
       },
@@ -162,33 +168,47 @@ test("a task that throws after its answer came back counts an attempt; a failed 
   assert.equal(providerDown.modelCalls, 1);
 });
 
-// The words a dead connection has in the request path (AI/providerErrors.js):
-// each must still read as the provider being unavailable, not as a task error.
+// A dead connection as the request path marks it (AI/providerErrors.js): each
+// must read as the provider being unavailable, not as a task error.
 test("a connection that closed mid-answer, or a server that could not be reached, pauses as unavailable", async () => {
-  for (const message of [
-    "The connection closed before the model finished its answer.",
-    "http://localhost:5001 could not be reached (ENOTFOUND). Check that the AI server is running and that its address in Settings → AI is right.",
+  for (const error of [
+    connectionClosedError(),
+    unreachableServerError("http://localhost:5001", "ENOTFOUND"),
   ]) {
     const result = await runSimplePoliticalWorldV2({
       checkpoint: withUncoveredInstitution(),
       inputs,
       maxModelCalls: 5,
-      callModel: async () => { throw new Error(message); },
+      callModel: async () => { throw error; },
     });
-    assert.equal(result.pauseReason, "provider-unavailable", message);
+    assert.equal(result.pauseReason, "provider-unavailable", error.message);
     assert.equal(result.attempts["institution-membership-resolution:pact"], undefined);
   }
 });
 
-test("the real executor marks a failed provider call so the run pauses without penalizing the target", async () => {
-  const result = await runSimplePoliticalWorldV2({
-    checkpoint: withUncoveredInstitution(),
-    inputs,
-    maxModelCalls: 5,
-    callModel: async () => { throw new Error("429 Too Many Requests"); },
-  });
-  assert.equal(result.pauseReason, "provider-rate-limit");
-  assert.equal(result.attempts["institution-membership-resolution:pact"], undefined);
+// The pause reason was read from the message's words ("quota", "rate limit",
+// "network"): a provider or relay answering in another language paused every
+// failure as a task error. It is the failure's recorded kind now.
+test("the real executor marks a failed provider call so the run pauses without penalizing the target, in any language", async () => {
+  for (const [error, pauseReason] of [
+    [providerError("429 Too Many Requests", "rateLimited"), "provider-rate-limit"],
+    [providerError("Trop de requêtes, réessayez plus tard", "rateLimited"), "provider-rate-limit"],
+    [providerError("Ваш дневной лимит исчерпан", "spent"), "provider-quota"],
+    [providerError("Clé API invalide", "unusable"), "provider-config"],
+    [providerError("服务器繁忙", "busy", "busy"), "provider-unavailable"],
+    [Object.assign(new Error("Сервер недоступен"), { providerFailure: couldNotBeReached() }), "provider-unavailable"],
+    // Unmarked, whatever it says: a task error.
+    [new Error("429 Too Many Requests"), "task-error"],
+  ]) {
+    const result = await runSimplePoliticalWorldV2({
+      checkpoint: withUncoveredInstitution(),
+      inputs,
+      maxModelCalls: 5,
+      callModel: async () => { throw error; },
+    });
+    assert.equal(result.pauseReason, pauseReason, error.message);
+    assert.equal(result.attempts["institution-membership-resolution:pact"], undefined);
+  }
 });
 
 test("a landscape-only actor and a new actor are two one-call tasks, not one task that breaks its ceiling", async () => {

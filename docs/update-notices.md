@@ -11,9 +11,10 @@ Both read one list: `src/Game/GameUI/updates/notes.js`. **Writing that list is p
 | `src/Game/GameUI/updates/notes.js` | `NEW_UPDATES`, where new updates go, newest first. `UPDATES` is every update, merged with the past and ordered by date. **The only file most updates touch.** |
 | `src/Game/GameUI/updates/notesPast.js` | `PAST_UPDATES`: the two months of updates from before notices existed (2026-08-15 to 2026-10-14), written from what reached players. Never add to it. |
 | `src/Game/GameUI/updates/updateNotices.js` | Which updates a device is shown (`pendingUpdates`), what it has seen (`rememberUpdate`, localStorage `oh-update-note-seen`), and the `?updateNotice=` preview. |
-| `src/Game/GameUI/updates/UpdateNotice.jsx` | The notice. It pages through banners (‹ › arrows, markers, Skip, Next and the last banner's button), and draws a minor banner (`MinorBanner`), a major banner without a theme (`DefaultBanner`), or a theme's own page. |
+| `src/Game/GameUI/updates/UpdateNotice.jsx` | The notice. It pages through banners (‹ › arrows, markers, Skip, Next and the last banner's button), and draws a minor banner (`MinorBanner`), several minor updates as one changelog (`ChangelogBanner`), a major banner without a theme (`DefaultBanner`), or a theme's own page. |
 | `src/Game/GameUI/updates/UpdateHistory.jsx` | The timeline opened from the menu's logo (`libraryBar.jsx` `MenuRail`). |
 | `src/Game/GameUI/updates/updateKit.jsx` | The parts a theme is built from (see [The kit](#the-kit)). |
+| `src/Game/GameUI/updates/notesReleases.js`, `ReleaseNotice.jsx`, `releaseNotice.css` | Releases: a version jump told as a page that scrolls (see [Releases](#releases-a-version-jump-told-in-full)). |
 | `src/Game/GameUI/updates/themes/` | One theme per major update that has its own look: `<Name>.jsx` (its pages), `<name>Chrome.js` (its arrows, markers, Skip and button), `index.js` (the registry), and `ThemeTemplate.jsx` to copy. |
 | `src/App.jsx` | Shows the notice as the door's leaves part, or at once when the door is off. |
 
@@ -31,6 +32,21 @@ Do **not** write one for refactors, tests, CI, documentation, build or training 
 - **Ids are permanent.** Devices remember which ids they have shown. Never reuse or rename an id that has shipped, and only fix typos in shipped text. A new batch gets a new id.
 - **The entry follows its feature.** It goes on the branch where the change lands. When a feature is promoted to another branch (alpha, then beta, then main), its entry goes with it. Promote only the lines for what was promoted.
 - **The date** is the day the change reaches players on that branch (`YYYY-MM-DD`).
+
+## Coordinating one Beta release across multiple PRs
+
+When two or more PRs are deliberately shipped in **one Beta build**, prepare **one player-facing update entry for the combined release**, rather than making one announcement per PR. Place that entry in the integration/last-to-merge PR, after reviewing the actual scope of *every* contributing PR. Do not claim that a feature is in the release merely because a PR exists or the local preview works; verify that the published build includes all corresponding commits. Do not publish an incomplete combined notice if only one PR reaches players.
+
+**Git branch caution:** If PR A is already open from a branch and PR B's changes are still uncommitted on that **same branch**, pushing B there silently expands PR A; it does **not** create a second independent PR. Preserve the dirty worktree and its checkpoint, merge A first, and prepare B on a separate branch based on the post-merge Beta source (or use an explicitly reviewed stacked-PR sequence). Both can still reach the same release build. Never reset, stash, rebase, cherry-pick, commit or push a user's branch as an automatic workaround.
+
+- **Choose the kind by player impact, not PR count.** Several bug fixes and smaller settings can share one `minor` entry. A genuine new headline system or substantial experience rework warrants `major` and its own themed banner(s).
+- **Set a release-specific id and date.** Reserve a fresh permanent id; set `date` to the intended Beta delivery day before building. If the release slips, adjust the date before publication. Never rename, remove, re-date or repurpose an entry that devices may already have seen.
+- **Write what's shipped, not what's proposed.** Keep 3–6 concise player-facing lines for a minor batch. Mention actions players can take and visible fixes, not PR numbers, internal ownership, build commands or unverified consequences. Preserve earlier shipped entries instead of rewriting history when a later feature supersedes one.
+- **Run the notice gate with the same code as the release.** Test `?updateNotice=<id>`, the logo-opened Update History timeline, narrow-screen layout and Reduce motion; verify the English catalog and notice tests, then run the complete repository tests and production build.
+- **Verify publication separately.** Confirm both PRs merged, compare the Beta branch SHA against the GitHub Actions workflow `headSha`, and verify the actual desktop-beta installer/update feeds and all target platform jobs. A merged PR, green test job or local localhost preview alone is **not** a published release.
+- **Coordinate outward messaging.** Once the player-distributed build is verified, the in-game notice is the enduring changelog; Discord's `#updates` message summarizes the same user-facing changes and links the verified build. A version-jump **stable** release instead gets its separate `notesReleases.js` chapter-based announcement, referencing the included update ids.
+
+The notice entry belongs on the feature branch and ships with source. It is not a separate website announcement deployed afterward. The website browser demo suppresses automatic notices, but explicit preview URLs still work; desktop/Android clients show them once per device when owed. Check `updateNotices.js` before changing any of this delivery behavior.
 
 ## How to write one
 
@@ -83,7 +99,7 @@ A **major** update. It has one banner per headline: several banners are paged wi
 
 An update that reached players first on a test channel says so with `channel: "beta"` or `channel: "alpha"`; the history marks it.
 
-`icon` is one of the kit's `ICONS`: `chess`, `swords`, `snow`, `wall`, `plane`, `ship`, `flag`, `eye`, `map`, `gear`, `star`, `book`, `people`, `phone` or `note`. Add one to `ICONS` if none fits.
+`icon` is one of the kit's `ICONS`: `chess`, `swords`, `snow`, `sun`, `rain`, `leaf`, `wall`, `plane`, `ship`, `flag`, `eye`, `map`, `gear`, `star`, `book`, `people`, `phone`, `palette` or `note`. Add one to `ICONS` if none fits.
 
 ### 2. Write for a player
 
@@ -150,17 +166,29 @@ node --test src/Game/GameUI/updates/updateNotices.test.js src/noGradients.test.j
 
 Then run the full suite, `npm test`.
 
+## Releases: a version jump told in full
+
+A **release** is a version jump on the stable channel (2.5.0 was the first). It is not a banner but a page of its own that scrolls (`ReleaseNotice.jsx`, `releaseNotice.css`): a panorama the page opens on, the contents, then each chapter's picture held in place while its words pass over it and the picture plays out with the scroll, every line of every update in the chapter, and a way out at the end. The pictures run through the whole page, never only at the top.
+
+- Write it in `src/Game/GameUI/updates/notesReleases.js` (`RELEASES`), not in `notes.js`: `{ id, kind: "release", version, date, title, subtitle, lead, button, chapters, omit, leftOut }`.
+- A **chapter** is `{ key, scene, title, subtitle, lead, highlights: [{ heading, text }], updates: [ref] }`. `scene` is one of `RELEASE_SCENES` (`front`, `skies`, `table`, `world`, `map`, `yours`, `engine`); a new scene is a component in `ReleaseNotice.jsx` and its rules in `releaseNotice.css`, moved by `--p` (how far the page has scrolled through the chapter, 0 to 1) and `data-step` (which passage is in view).
+- `updates` names the updates the chapter tells: an id for the whole update, `<id>#<n>` for one banner. The page lists every line of them in their own words, which are already in the language packs, less the lines in `omit` (what a later update in the same release undid). Every notice since the release before must be named by exactly one chapter, or be in `leftOut` with why: `releaseNotice.test.js` checks.
+- A device owed a release is shown it alone (`pendingUpdates`): it tells everything under it. The history lists it as Version x.y.z, and View opens the page.
+- The release's own words (titles, leads, highlights) go into `catalog-en.json` and the 22 packs like any notice's.
+- Look at it with `?updateNotice=<its id>`.
+
 ## How a device is shown updates
 
 `pendingUpdates()` decides which updates a device sees:
 
 - A device that has seen the newest update is shown nothing.
-- One that missed several updates is shown all it missed, newest first, at most `UPDATES_SHOWN_MOST`.
+- One that missed several updates is shown all it missed, newest first, at most `UPDATES_SHOWN_MOST`. The major ones come first, each on its own pages. Several minor ones are one card after them, a changelog headed "What's new" listing each with its date, titles and lines, newest first (`noticePages`, `ChangelogBanner`): "make it so if there are multiple minor update annoucements, it merges them all into one changelog" (the owner, 2026-11-09). A single minor update is its own card, as before.
 - A device that has never been shown a notice is shown the newest update and the major ones released within `FIRST_LOOK_DAYS` of it.
 - Only entries of `NEW_UPDATES` are ever shown behind the door (`NOTICE_UPDATES`); the history from before notices (`notesPast.js`) is never shown as a notice, only in the history.
 - A build with no new entry (a hotfix, or a notice someone forgot) shows nothing: only a new entry is an update here.
 - The newest update shown is remembered the moment it is shown, so closing the game on it does not bring it back.
 - Where the browser refuses storage, nothing is shown, since it could not be remembered and would come back at every opening.
+- The website's browser version shows none (`buildShowsUpdateNotices(import.meta.env)` in `App.jsx`: a web build, `VITE_OH_WEB`, that is not the Android app, `VITE_OH_NATIVE`): "make update announcements not appear on the website beta" (the owner, 2026-11-09). The Android app and the desktop app show them; `?updateNotice=` previews still work there.
 
 The history shows every entry, whatever the device has seen.
 

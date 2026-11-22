@@ -22,7 +22,7 @@ const roots = [];
 
 // A v1 bundle: no ownerSchema marker, owners named by code.
 const LEGACY_BUNDLE = {
-  schema: "pax-historia-scenario-bundle",
+  schema: "old-scenario-bundle",
   scenario: { id: "hub", name: "Hub World" },
   data: {
     game: { country: "ROM", gameDate: "0100-01-01", round: 1 },
@@ -60,7 +60,7 @@ after(() => {
 
 test("a hub Update that brings a legacy world is migrated on the next read", () => {
   const result = run(`
-    store.importScenarioBundle({ ...legacy, schema: "pax-historia-scenario-bundle/2", data: { ...legacy.data, world: { ownerSchema: ${OWNER_SCHEMA} } } });
+    store.importScenarioBundle({ ...legacy, schema: "old-scenario-bundle/2", data: { ...legacy.data, world: { ownerSchema: ${OWNER_SCHEMA} } } });
     store.createGame({ id: "campaign", scenarioId: "hub", setActive: true });
     store.readRuntimeJsonAsset("world");
     store.readRuntimeJsonAsset("regionsGeojson");

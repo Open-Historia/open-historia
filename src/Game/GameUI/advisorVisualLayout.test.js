@@ -54,6 +54,19 @@ test("Conversation picker is a low-chrome ledger and preserves contact maintenan
   assert.match(styles, /\.oh-advisor-contact-select\[aria-current="true"\]/);
 });
 
+test("The box has no words in it; the microphone sits inside it and steps aside for typed words", () => {
+  const mic = read("./AdvisorMic.jsx");
+  assert.match(advisor, /<div className="oh-advisor-composer-field">\s*<textarea\s+className="oh-advisor-composer-input"/);
+  assert.match(advisor, /placeholder=\{recipientUnavailableReason \|\| undefined\}/, "only why a contact cannot be written to");
+  assert.doesNotMatch(advisor, /Ask your advisor…/);
+  assert.match(advisor, /setTyped\(Boolean\(e\.target\.value\.trim\(\)\)\);/);
+  assert.match(advisor, /hidden=\{typed && Boolean\(input\.trim\(\)\)\}/);
+  assert.match(advisor, /onInput=\{\(text\) => \{ setTyped\(false\); setInput\(text\); \}\}/, "words heard are not typed words");
+  assert.match(mic, /const showButton = !\(hidden && phase === "idle"\);/, "a turn under way keeps its button");
+  assert.match(styles, /\.oh-advisor-composer-field:focus-within/);
+  assert.match(styles, /\.oh-advisor-mic \{[\s\S]*?background: transparent;[\s\S]*?border: 0;/);
+});
+
 test("Composer retains send/key/disabled mechanics but uses a conventional accessible send glyph", () => {
   assert.match(advisor, /className="oh-advisor-composer-input"/);
   assert.match(advisor, /className="oh-advisor-send"/);

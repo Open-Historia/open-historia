@@ -17,13 +17,14 @@ import {
   getPlayerCode,
   disbandUnit,
   requestUnitOrders,
+  unitOrderRoom,
   ORDER_NOT_SAVED,
 } from "../Map/unitsController.js";
 import { useEventsById } from "./eventLookup.js";
 // One posture vocabulary and one set of strength bands for the popup and the
 // Forces panel — duplicates of either would drift and describe the same formation
 // two different ways on two screens.
-import { POSTURE_LABEL, strengthColor } from "../GameUI/forces.jsx";
+import { POSTURE_LABEL, strengthColor, unitKindGlyph, unitKindLabel } from "../GameUI/forces.jsx";
 import { kmOnMap } from "../../runtime/unitMotion.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -60,23 +61,6 @@ export const focusUnit = ({ id, lngLat }) => {
 // two popups never show at once.
 export const dismissUnitPopup = () => {
   if (_currentSelection) _dismiss?.();
-};
-
-const TYPE_LABEL = {
-  infantry: "Infantry",
-  armor: "Armor",
-  air: "Air",
-  naval: "Naval",
-  artillery: "Artillery",
-  garrison: "Garrison",
-};
-const TYPE_GLYPH = {
-  infantry: "🛡",
-  armor: "⚙",
-  air: "✈",
-  naval: "⚓",
-  artillery: "💥",
-  garrison: "🏰",
 };
 
 const ANIM_ID = "unit-popup-anims";
@@ -335,20 +319,21 @@ const UnitPopup = () => {
     else setOrderError(result?.error || ORDER_NOT_SAVED);
   };
 
-  // A request that could not be saved keeps its text in the box, to try again.
+  // A request that could not be saved keeps its text in the box, to try again,
+  // and says why: in a shared game, the host's own reason.
   const sendRequest = async () => {
     if (!request.trim() || requestState === "sending") return;
     setOrderError("");
     setRequestState("sending");
-    let queued = false;
+    let result = null;
     try {
-      queued = await requestUnitOrders(unit.id, request);
+      result = await requestUnitOrders(unit.id, request);
     } catch (error) {
       console.error("Failed to request unit orders:", error);
     }
-    setRequestState(queued ? "queued" : "idle");
-    if (queued) setRequest("");
-    else setOrderError(ORDER_NOT_SAVED);
+    setRequestState(result?.ok ? "queued" : "idle");
+    if (result?.ok) setRequest("");
+    else setOrderError(result?.error || ORDER_NOT_SAVED);
   };
 
   return createPortal(
@@ -384,11 +369,12 @@ const UnitPopup = () => {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "9px", padding: "10px 12px 8px" }}>
-          <span style={{ fontSize: "1.5rem", lineHeight: 1 }}>{TYPE_GLYPH[unit.type] ?? "🛡"}</span>
+          {/* (A unit of one of the scenario's own unit types by its type's icon and name: forces.jsx unitKindLabel.) */}
+          <span style={{ fontSize: "1.5rem", lineHeight: 1 }}>{unitKindGlyph(unit)}</span>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontWeight: 700, fontSize: "13px", wordBreak: "break-word" }}>{unit.name}</div>
             <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.6)" }}>
-              {TYPE_LABEL[unit.type] ?? unit.type} · {ownerName}
+              {unitKindLabel(unit)} · {ownerName}
             </div>
           </div>
           <button
@@ -482,6 +468,9 @@ const UnitPopup = () => {
                   the next jump. Nothing on the map moves now. */}
               <textarea
                 value={request}
+                // A shared game's order is held to what the host's request
+                // takes, here as there (unitsController.js unitOrderRoom).
+                maxLength={unitOrderRoom(unit.id) ?? undefined}
                 onChange={(e) => {
                   setRequest(e.target.value);
                   if (requestState === "queued") setRequestState("idle");

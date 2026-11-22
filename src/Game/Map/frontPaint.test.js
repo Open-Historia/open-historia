@@ -7,7 +7,7 @@ import { HOLDER_SIDE_A, HOLDER_SIDE_B, HOLDER_WALL } from "../../runtime/fronts/
 import { frontViewOf, normalizeBattlefield } from "../../runtime/fronts/record.js";
 import { createReplayRecorder } from "../../runtime/fronts/replay.js";
 import { projectorOf } from "../../runtime/fronts/frame.js";
-import { FILL_DAYS, createFrontField, createPaintPlayer, landMask, paintPixels, paintScaleFor, pictureFits, pictureCorners, touchedCells, writeFrontField } from "./frontPaint.js";
+import { FILL_DAYS, createFrontField, createPaintPlayer, landMask, paintPixels, paintScaleFor, pictureFits, pictureCorners, touchedCells, writeFrontField , viewWithin } from "./frontPaint.js";
 
 const COLS = 24;
 const ROWS = 12;
@@ -326,14 +326,14 @@ test("a picture's corners lie in the map's own copy of the world, whatever turn 
   assert.ok(layers.includes("coordinates: onto?.coordinates ?? pictureCorners(west, north, east, south),"));
 });
 
-test("on the diplomatic map a battlefield's ground is painted in the stances' colours, as the regions round it are", () => {
+test("on the diplomatic map a battlefield's ground is painted in the view's colours, as the regions round it are", () => {
   // "the drawn territory remains the same color on the diplomatic map making it not be the same color as your country"
-  // (the owner, 2026-10-15).
+  // (the owner, 2026-10-15). One view for the whole map (useDiplomaticView.js), the fills' and the ground's.
   const layers = fs.readFileSync(new URL("./FrontLayers.jsx", import.meta.url), "utf8");
-  assert.ok(layers.includes("mapMode === \"diplomatic\" ? buildDiplomaticStanceMap({ playerCountry, wars, agreements, relations, puppets }) : null"));
-  assert.ok(layers.includes("stances ? parseColorToRgb(getDiplomaticOwnerColor(name, stances)) ?? UNOWNED_RGB : rgbOf(name)"));
+  assert.ok(layers.includes("const diplomaticView = useDiplomaticView();"));
+  assert.ok(layers.includes("diplomaticView ? parseColorToRgb(diplomaticView.colorOf(name)) ?? UNOWNED_RGB : rgbOf(name)"));
   assert.ok(layers.includes("const [red, green, blue] = colorRef.current.groundRgbOf(name);"));
-  assert.ok(layers.includes("}, [colorMap, polityOverrides, groups, stances]);"), "a change of map repaints the ground");
+  assert.ok(layers.includes("}, [colorMap, polityOverrides, groups, diplomaticView]);"), "a change of map repaints the ground");
 });
 
 test("the front's field: half-way where the two sides' ground meets, and nowhere else", () => {
@@ -484,4 +484,13 @@ test("a frame of a playing whose cells are as the last left them paints nothing,
   }
   const layers = fs.readFileSync(new URL("./FrontLayers.jsx", import.meta.url), "utf8");
   assert.ok(layers.includes("const area = paintPixels(player, picture.palette, target, null, { unlessUnchanged: !atRest && !redressed && !picture.blank });"));
+});
+
+test("a view inside the one already masked needs no new mask", () => {
+  const masked = { west: -10, south: 30, east: 40, north: 60 };
+  assert.equal(viewWithin({ west: -5, south: 35, east: 35, north: 55 }, masked), true);
+  assert.equal(viewWithin(masked, masked), true);
+  assert.equal(viewWithin({ west: -11, south: 35, east: 35, north: 55 }, masked), false);
+  assert.equal(viewWithin({ west: -5, south: 35, east: 35, north: 61 }, masked), false);
+  assert.equal(viewWithin(masked, null), false);
 });

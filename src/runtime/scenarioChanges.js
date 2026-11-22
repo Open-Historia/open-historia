@@ -20,6 +20,7 @@
 
 import { FEATURE_DEFINITIONS, normalizeFeatureSettings } from "../../server/gameFeatures.js";
 import { normalizeScenarioMusic } from "../../server/scenarioMusic.js";
+import { normalizeScenarioLanguages } from "../../server/scenarioLanguages.js";
 import { PROMPT_GUIDANCE, normalizePackGuidance } from "../Game/AI/promptGuidance.js";
 import { normalizeGroups } from "./groups.js";
 import { normalizeClimateZones, normalizeFortifications, normalizeFreezingRegions, normalizeTerrainAreas } from "./warGeography.js";
@@ -629,6 +630,8 @@ export const buildScenarioSnapshot = (bundle) => {
     // Which hub tracks it plays, by situation (server/scenarioMusic.js), or
     // null when it names none: read as the stores read it.
     music: normalizeScenarioMusic(scenario.music),
+    // Its own text in other languages (server/scenarioLanguages.js), or null.
+    languages: normalizeScenarioLanguages(scenario.languages),
     game: Object.fromEntries(GAME_FIELDS.map((key) => [key, clean(game[key])])),
     world: Object.fromEntries(WORLD_DETAIL_FIELDS.map((key) => [key, key === "allowedUnitTypes"
       ? (Array.isArray(world[key]) ? [...new Set(world[key].map(clean).filter(Boolean))].sort() : [])
@@ -764,6 +767,7 @@ const diffPolitics = (field, from, to, changes) => {
     return;
   }
   const container = shape === "list" ? "list" : "map";
+  // i18n-ignore: a key prefix.
   const within = shape.startsWith("ledger:") ? shape.slice("ledger:".length) : "";
   // The wrapper a first entry is put into, when the author has no ledger yet.
   const ledger = within ? { within, shell: politicsLedgerShellOf(isEmptyValue(to) ? from : to, within) } : {};
@@ -863,6 +867,14 @@ const diffDetails = (base, next, changes) => {
   // chosen together, and an author takes or leaves them together.
   if (!sameValue(base.music, next.music)) {
     changes.push({ id: "music", area: "details", kind: "music", from: base.music ?? null, to: next.music ?? null });
+  }
+  // A language pack is one change per language: an author may take the German
+  // and leave the French.
+  const codes = [...new Set([...Object.keys(base.languages ?? {}), ...Object.keys(next.languages ?? {})])].sort();
+  for (const code of codes) {
+    const from = base.languages?.[code] ?? null;
+    const to = next.languages?.[code] ?? null;
+    if (!sameValue(from, to)) changes.push({ id: `languages:${code}`, area: "details", kind: "languages", code, from, to });
   }
   if ((base.cover?.hash || "") !== (next.cover?.hash || "")) {
     changes.push({
@@ -1396,6 +1408,7 @@ export const summarizeChangesForComment = (changes, { maxLines = 14 } = {}) => {
   if (byKind.stats) lines.push("Stats sheet changed");
   if (byKind.institutionLogos) lines.push("Institution logos changed");
   if (byKind.music) lines.push("Music changed");
+  if (byKind.languages) lines.push("Language packs changed");
   if (byKind.cover) lines.push("New cover image");
   if (byKind["region-owner"]) lines.push(`${plural(byKind["region-owner"], "region changes", "regions change")} owner`);
   if (byKind.borders) {

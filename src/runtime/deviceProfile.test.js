@@ -31,10 +31,11 @@ test("a phone gets two MapLibre workers and eight requests; a desktop what it ha
   assert.deepEqual(mapRuntimeLimits({}), { workerCount: 2, parallelImageRequests: 16 });
 });
 
-test("a phone's browser range-reads the big map archives; the Android app and a desktop load them whole", async () => {
-  assert.equal(warmsWholeMapArchives({ native: false, constrained: true }), false, "iOS Safari, a phone's Chrome");
-  assert.equal(warmsWholeMapArchives({ native: false, constrained: false }), true, "a desktop browser");
-  assert.equal(warmsWholeMapArchives({ native: true, constrained: true }), true, "the Android app cannot range-read its APK");
+test("a phone's browser and the desktop app range-read the big map archives; the Android app and the website load them whole", async () => {
+  assert.equal(warmsWholeMapArchives({ native: false, constrained: true, localServer: false }), false, "iOS Safari, a phone's Chrome");
+  assert.equal(warmsWholeMapArchives({ native: false, constrained: false, localServer: false }), true, "a desktop browser at the website");
+  assert.equal(warmsWholeMapArchives({ native: false, constrained: false, localServer: true }), false, "the desktop app reads its own server");
+  assert.equal(warmsWholeMapArchives({ native: true, constrained: true, localServer: false }), true, "the Android app cannot range-read its APK");
   const fs = await import("node:fs");
   const preload = fs.readFileSync(new URL("./preload.js", import.meta.url), "utf8");
   for (const key of ["countries", "regions"]) {

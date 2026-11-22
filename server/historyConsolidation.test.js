@@ -186,11 +186,14 @@ test("a document edited by hand while the pass ran is not overwritten by the pas
   assert.match(next.historyDocument.text, /^Edited by hand\.\n\nThrough 2002-01-01:\nNew period\.$/);
 });
 
-test("the consolidator is told the current document and its budget; a campaign from before the document sees its pass summaries as the document", () => {
-  const fresh = buildHistoryDocumentDirective({});
-  assert.match(fresh, /no history document yet/);
-  assert.match(fresh, new RegExp(`near ${documentWordBudget} words and never above ${documentWordCeiling}`));
-  assert.match(fresh, /removing the LEAST important older material first/);
+test("the consolidator is told the history in tiers and the canon; a campaign from before the document sees its pass summaries as its history", () => {
+  const fresh = buildHistoryDocumentDirective({}, { span: [1936, 1937] });
+  assert.match(fresh, /There is no history yet: write the years of the material below\./);
+  assert.match(fresh, /"years": a paragraph for each game year the material below covers \(1936 to 1937\)/);
+  assert.match(fresh, /"canon": the facts in the material below that must never fade/);
+  assert.match(fresh, /The campaign has no canon yet\./);
+  assert.doesNotMatch(fresh, /"eras":/, "eras are asked for only when they are over their budget");
+  assert.ok(documentWordBudget > 0 && documentWordCeiling > documentWordBudget);
 
   const legacy = { consolidatedHistory: [
     { summary: "Old one.", throughDate: "2000-01-01" },
@@ -198,12 +201,21 @@ test("the consolidator is told the current document and its budget; a campaign f
   ] };
   assert.equal(seedHistoryDocumentText(legacy), "Through 2000-01-01: Old one.\n\nThrough 2000-06-01: Old two.");
   const migrating = buildHistoryDocumentDirective(legacy);
-  assert.match(migrating, /The current document \(\d+ words\) follows/);
+  assert.match(migrating, /The history as it stands \(fold the new material into its years\):\nThrough 2000-01-01: Old one\./);
   assert.match(migrating, /Through 2000-06-01: Old two\./);
 
   const live = { historyDocument: { text: "Live text.", revision: 2 }, consolidatedHistory: legacy.consolidatedHistory };
   assert.equal(seedHistoryDocumentText(live), "Live text.", "the live document wins over the ledger");
-  assert.match(buildHistoryDocumentDirective({ historyDocument: { text: Array.from({ length: documentWordBudget + 1 }, () => "word").join(" ") } }), /over the .*-word budget, so condense it/);
+  // Measured in characters, as the prompt gives the eras their room: a text with
+  // no spaces between its words (Chinese) is as long as it looks.
+  const longEras = { historyDocument: { text: "", eras: [{ from: 1900, to: 1930, text: Array.from({ length: 1300 }, () => "word").join(" ") }], revision: 3 } };
+  assert.match(buildHistoryDocumentDirective(longEras), /"eras": the earlier years below run to 6499 characters, over the 4500 they are kept within/);
+  const chineseEras = { historyDocument: { text: "", eras: [{ from: 1900, to: 1930, text: "战争与和平".repeat(1000) }], revision: 3 } };
+  assert.match(buildHistoryDocumentDirective(chineseEras), /"eras": the earlier years below run to 5000 characters/);
+  const shortEras = { historyDocument: { text: "", eras: [{ from: 1900, to: 1930, text: "战争与和平".repeat(100) }], revision: 3 } };
+  assert.doesNotMatch(buildHistoryDocumentDirective(shortEras), /"eras":/);
+  const withCanon = { ...longEras, canonFacts: [{ date: "1919-06-28", kind: "treaty", text: "Treaty of Zenda." }] };
+  assert.match(buildHistoryDocumentDirective(withCanon), /CANON \(standing facts[^\n]*\n- 1919-06-28 \(treaty\): Treaty of Zenda\./);
   assert.equal(countWords("  one two\nthree  "), 3);
 });
 
@@ -296,12 +308,12 @@ test("a fold is taken only when there is something to keep the folded events in"
   // document is left out and the summary appended, so nothing is lost.
   const stub = judgeSkipHistoryAnswer({ summary: words(60), document: words(90) }, { currentText: current });
   assert.deepEqual([stub.ok, stub.document], [true, ""]);
-  assert.match(stub.reason, /its document came back at 90 words against the 1400 the campaign has; its summary is appended instead/);
+  assert.match(stub.reason, /its document came back at 449 characters against the 6999 the campaign has; its summary is appended instead/);
   const applied = applyHistoryDocumentUpdate({ historyDocument: { text: current, revision: 3 } }, { document: stub.document, summary: stub.summary, throughDate: "2001-03-01", baseRevision: 3 });
   assert.equal(applied.mode, "appended");
   assert.ok(applied.historyDocument.text.startsWith(current), "the campaign's document is still all there");
   // No document at all, with a real summary: the same.
-  const summaryOnly = judgeSkipHistoryAnswer({ summary: words(HISTORY_CONSOLIDATION.minSummaryWords) }, { currentText: current });
+  const summaryOnly = judgeSkipHistoryAnswer({ summary: "x".repeat(HISTORY_CONSOLIDATION.minSummaryChars) }, { currentText: current });
   assert.deepEqual([summaryOnly.ok, summaryOnly.document], [true, ""]);
   // Too little of either: not a fold. What it would have covered stays on the
   // record, in full, for the next skip.
@@ -322,14 +334,29 @@ test("a fold is taken only when there is something to keep the folded events in"
 });
 
 test("the first document a campaign gets must be a document too", () => {
-  const first = judgeSkipHistoryAnswer({ summary: words(50), document: words(HISTORY_CONSOLIDATION.minDocumentWords) }, { currentText: "" });
+  const first = judgeSkipHistoryAnswer({ summary: words(50), document: "x".repeat(HISTORY_CONSOLIDATION.minDocumentChars) }, { currentText: "" });
   assert.equal(first.ok && Boolean(first.document), true);
   const thin = judgeSkipHistoryAnswer({ summary: words(50), document: "Not much happened." }, { currentText: "" });
   assert.deepEqual([thin.ok, thin.document], [true, ""], "three words are not a history: the summary is kept instead");
   assert.equal(judgeSkipHistoryAnswer({ summary: "Nothing.", document: "Not much happened." }, { currentText: "" }).ok, false);
 });
 
-test("a fold that fails only waits so long", () => {
-  assert.equal(HISTORY_CONSOLIDATION.ownRequestThreshold, sizeThreshold * 2, "twice the pile that makes a turn fold by itself");
-  assert.ok(HISTORY_CONSOLIDATION.ownRequestThreshold > sizeThreshold + batchSize - retainEvents);
+// Counted in characters in every script: split on spaces, a Chinese document
+// was one word, and every fold of a Chinese campaign was refused.
+test("a fold written in Chinese is judged as its English twin is, by its characters", () => {
+  const current = "一九三六年西班牙内战爆发，各国纷纷表态。".repeat(150);
+  const document = "一九三六年至一九三八年，内战持续，国际纵队参战，各国政府的立场逐渐分化。".repeat(110);
+  const summary = "内战持续两年，国际纵队参战，各国立场分化，战线在马德里周围僵持不下，后方经济困难。".repeat(3);
+  const whole = judgeSkipHistoryAnswer({ summary, document }, { currentText: current });
+  assert.deepEqual([whole.ok, whole.document === document, whole.reason], [true, true, ""]);
+  const summaryOnly = judgeSkipHistoryAnswer({ summary }, { currentText: current });
+  assert.deepEqual([summaryOnly.ok, summaryOnly.document], [true, ""]);
+  assert.equal(judgeSkipHistoryAnswer({ summary: "无事。" }, { currentText: current }).ok, false);
+});
+
+// A fold that failed was asked for as a request of its own once the pile was
+// twice its size, until the event consolidator went (2026-11-07): it waits for
+// the next skip's fold, however long.
+test("a fold that fails waits for the next skip, however long", () => {
+  assert.equal("ownRequestThreshold" in HISTORY_CONSOLIDATION, false);
 });

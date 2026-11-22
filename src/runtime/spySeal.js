@@ -47,6 +47,28 @@ export const newSpyReportId = () => `spy-report-${toHex(globalThis.crypto.getRan
 
 export const isSeal = (value) => /^[0-9a-f]{64}$/i.test(String(value ?? ""));
 
+// ONE SEAL PER SPYMASTER. The game's own country seals its table with
+// world.spySeal, as single player always has. In a shared game each other
+// player's table (spycraft.js interceptTableOf) is sealed with a seal of its
+// own, kept by the host in world.seatSeals by country and sent to that player
+// alone, as its view's spySeal (multiplayer/host/projection.js): no player
+// holds a key to another's traffic. `gameCountry`: the game's own country.
+const sameOwner = (left, right) => String(left ?? "").trim().toLowerCase() === String(right ?? "").trim().toLowerCase();
+const seatSealsOf = (world) => (world?.seatSeals && typeof world.seatSeals === "object" && !Array.isArray(world.seatSeals) ? world.seatSeals : {});
+export const sealOf = (world, owner, { gameCountry = "" } = {}) => {
+  if (!String(owner ?? "").trim() || sameOwner(owner, gameCountry)) return isSeal(world?.spySeal) ? String(world.spySeal) : "";
+  const seals = seatSealsOf(world);
+  const key = Object.keys(seals).find((name) => sameOwner(name, owner));
+  return key && isSeal(seals[key]) ? String(seals[key]) : "";
+};
+// The world with `owner`'s seal made if it has none yet; the same world when it has.
+export const withSealFor = (world, owner, { gameCountry = "" } = {}) => {
+  if (sealOf(world, owner, { gameCountry })) return world;
+  if (!String(owner ?? "").trim() || sameOwner(owner, gameCountry)) return { ...world, spySeal: newSeal() };
+  const others = Object.fromEntries(Object.entries(seatSealsOf(world)).filter(([name]) => !sameOwner(name, owner)));
+  return { ...world, seatSeals: { ...others, [String(owner).trim()]: newSeal() } };
+};
+
 const keyCache = new Map();
 const importKey = async (webCrypto, seal) => {
   if (keyCache.has(seal)) return keyCache.get(seal);

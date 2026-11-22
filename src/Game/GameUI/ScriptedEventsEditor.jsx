@@ -1,14 +1,20 @@
 /*! Open Historia — structured scenario scripted-event authoring © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { compileImpactRows } from "../../../server/scriptedImpacts.js";
+import ScriptedImpactsEditor from "./ScriptedImpactsEditor.jsx";
 import { INSTITUTION_MEMBER_STATUSES } from "../../runtime/institutions.js";
 import { PUPPET_KINDS, puppetKindLabel } from "../../runtime/puppets.js";
 import {
+  insertAtCursor,
+  regionNameList,
   scriptedEventInstitutionOptions,
   scriptedEventPickerLabel,
   scriptedEventPickerValue,
   scriptedEventPolityOptions,
 } from "./scriptedEventAuthoring.js";
+
+const ScriptedRegionPicker = lazy(() => import("./ScriptedRegionPicker.jsx"));
 
 const clean = (value) => String(value ?? "").trim();
 const array = (value) => Array.isArray(value) ? value : [];
@@ -190,6 +196,7 @@ const ScriptedEventsEditor = ({
   isGame = false,
   overridden = true,
   world = {},
+  scenarioId = "",
   onChange,
   onUseScenarioDefault,
   onStartOverride,
@@ -203,6 +210,13 @@ const ScriptedEventsEditor = ({
   const [query, setQuery] = useState("");
   const [sortDirection, setSortDirection] = useState("asc");
   const [filterMode, setFilterMode] = useState("all");
+  const [regionPicker, setRegionPicker] = useState(null);
+  const textAreas = useRef({});
+  const pickerSource = useMemo(() => ({
+    scenarioId: clean(scenarioId),
+    customRegions: Boolean(world?.customRegions),
+    ownerOverrides: world?.regionOwnershipOverrides && typeof world.regionOwnershipOverrides === "object" ? world.regionOwnershipOverrides : null,
+  }), [scenarioId, world]);
 
   useEffect(() => {
     if (!managerOpen) return undefined;
@@ -248,6 +262,7 @@ const ScriptedEventsEditor = ({
     const definition = CONDITION_BY_TYPE[type] || CONDITION_BY_TYPE.polity_exists;
     const next = { type };
     for (const field of definition.fields) {
+      if (field === "regionId" && clean(current.regionName)) next.regionName = clean(current.regionName);
       if (field === "status") next.status = clean(current.status) || "member";
       else if (field === "kind") next.kind = clean(current.kind);
       else next[field] = clean(current[field]);
@@ -276,6 +291,66 @@ const ScriptedEventsEditor = ({
     onChange(events.filter((_, row) => row !== index));
     if (expandedKey === key) setExpandedKey("");
   };
+  const patchOutcome = (eventIndex, outcomeIndex, patch) => {
+    const rows = [...array(events[eventIndex]?.outcomes)];
+    rows[outcomeIndex] = { ...rows[outcomeIndex], ...patch };
+    patchEvent(eventIndex, { outcomes: rows });
+  };
+  const impactPatch = (rows) => ({ impactRows: rows, impacts: compileImpactRows(rows) });
+  const impactHolder = (eventIndex, outcomeIndex) => (outcomeIndex === null ? events[eventIndex] : array(events[eventIndex]?.outcomes)[outcomeIndex]);
+  const openTextPicker = (eventIndex, outcomeIndex = null) => {
+    const key = outcomeIndex === null ? `event-${eventIndex}` : `outcome-${eventIndex}-${outcomeIndex}`;
+    const area = textAreas.current[key];
+    setRegionPicker({ kind: "text", eventIndex, outcomeIndex, key, start: area?.selectionStart ?? null, end: area?.selectionEnd ?? null });
+  };
+  const finishRegionPicker = (regions) => {
+    const picker = regionPicker;
+    setRegionPicker(null);
+    if (!picker || !regions.length) return;
+    if (picker.kind === "condition") {
+      const [region] = regions;
+      const condition = array(rulesFromTrigger(events[picker.eventIndex]?.trigger).conditions)[picker.conditionIndex] || {};
+      patchCondition(picker.eventIndex, picker.conditionIndex, {
+        regionId: region.id,
+        regionName: region.name,
+        ...(clean(condition.baseOwner) || !region.baseOwner ? {} : { baseOwner: region.baseOwner }),
+      });
+      return;
+    }
+    const holder = impactHolder(picker.eventIndex, picker.outcomeIndex);
+    if (picker.kind === "impact") {
+      const rows = array(holder?.impactRows).map((row, at) => (at === picker.rowIndex ? { ...row, regions: regions.map(({ id, name }) => ({ id, name })) } : row));
+      if (picker.outcomeIndex === null) patchEvent(picker.eventIndex, impactPatch(rows));
+      else patchOutcome(picker.eventIndex, picker.outcomeIndex, impactPatch(rows));
+      return;
+    }
+    const next = insertAtCursor(holder?.text || "", regionNameList(regions), picker.start, picker.end);
+    if (picker.outcomeIndex === null) patchEvent(picker.eventIndex, { text: next.value });
+    else patchOutcome(picker.eventIndex, picker.outcomeIndex, { text: next.value });
+    const area = textAreas.current[picker.key];
+    if (area) {
+      window.requestAnimationFrame(() => {
+        area.focus();
+        area.setSelectionRange(next.cursor, next.cursor);
+      });
+    }
+  };
+  const pickerInitial = (() => {
+    if (!regionPicker) return [];
+    if (regionPicker.kind === "condition") {
+      const condition = array(rulesFromTrigger(events[regionPicker.eventIndex]?.trigger).conditions)[regionPicker.conditionIndex] || {};
+      return clean(condition.regionId) ? [{ id: clean(condition.regionId), name: clean(condition.regionName) || clean(condition.regionId) }] : [];
+    }
+    if (regionPicker.kind === "impact") {
+      return array(array(impactHolder(regionPicker.eventIndex, regionPicker.outcomeIndex)?.impactRows)[regionPicker.rowIndex]?.regions);
+    }
+    return [];
+  })();
+  const pickRegionsButton = (onClick) => (
+    <button type="button" className="oh-tap-row" title="Pick regions on a map of this scenario and insert their names, spelled as the map spells them, where the cursor is" style={buttonStyle(styles, { minHeight: "1.7rem", padding: "0 0.55rem" })} onClick={onClick}>
+      Pick regions
+    </button>
+  );
 
   const datedEvents = events.map((event, index) => ({ event, index, key: eventKey(event, index) }));
   const sortedEvents = [...datedEvents].sort((a, b) => {
@@ -334,8 +409,12 @@ const ScriptedEventsEditor = ({
         </div>
 
         <div style={{ marginTop: "0.55rem" }}>
-          <label style={styles.fieldLabelStyle}>Event instruction</label>
+          <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
+            <label style={styles.fieldLabelStyle}>Event instruction</label>
+            {pickRegionsButton(() => openTextPicker(index))}
+          </div>
           <textarea
+            ref={(node) => { textAreas.current[`event-${index}`] = node; }}
             data-no-translate
             aria-label="Scripted event text"
             rows={4}
@@ -363,6 +442,18 @@ const ScriptedEventsEditor = ({
               ? "The timeline body uses these exact words. The AI can still supply canonical consequences such as Political World, map, institution, unit or Stats changes."
               : "This text tells the simulation what must happen. The AI writes the final timeline event in the campaign's context."}
           </div>
+        </section>
+
+        <section data-scripted-event-impacts="true" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", marginTop: "0.65rem", minWidth: 0, padding: "0.65rem" }}>
+          <div style={{ color: "rgba(255,255,255,0.66)", fontSize: "0.72rem", fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>Impacts</div>
+          <ScriptedImpactsEditor
+            idPrefix={`scripted-${event?.id || index}`}
+            rows={event?.impactRows}
+            polityOptions={polityOptions}
+            styles={styles}
+            onChange={(rows) => patchEvent(index, impactPatch(rows))}
+            onPickRegions={(rowIndex) => setRegionPicker({ kind: "impact", eventIndex: index, outcomeIndex: null, rowIndex })}
+          />
         </section>
 
         <section style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", marginTop: "0.65rem", minWidth: 0, padding: "0.65rem" }}>
@@ -442,7 +533,19 @@ const ScriptedEventsEditor = ({
                       {definition.fields.includes("overlordId") && (
                         <EntityField ariaLabel="Overlord polity" id={`${prefix}-overlord`} options={polityOptions} placeholder="Search overlord" styles={styles} value={condition?.overlordId || ""} onChange={(overlordId) => patchCondition(index, conditionIndex, { overlordId })} />
                       )}
-                      {definition.fields.includes("regionId") && <input aria-label="Region id" placeholder="Stable region ID" style={flexibleInputStyle(styles)} value={condition?.regionId || ""} onChange={(e) => patchCondition(index, conditionIndex, { regionId: e.target.value })} />}
+                      {definition.fields.includes("regionId") && (
+                        <div style={{ flex: "1 1 13rem", minWidth: 0 }}>
+                          <div style={{ display: "flex", gap: "0.3rem", minWidth: 0 }}>
+                            <input aria-label="Region id" placeholder="Stable region ID" style={flexibleInputStyle(styles)} value={condition?.regionId || ""} onChange={(e) => patchCondition(index, conditionIndex, { regionId: e.target.value, regionName: "" })} />
+                            <button type="button" className="oh-tap-row" title="Pick the region on a map of this scenario" style={buttonStyle(styles, { flex: "0 0 auto" })} onClick={() => setRegionPicker({ kind: "condition", eventIndex: index, conditionIndex })}>
+                              Pick on map
+                            </button>
+                          </div>
+                          {clean(condition?.regionName) && (
+                            <div data-no-translate style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.66rem", lineHeight: 1.35, marginTop: "0.18rem" }}>{condition.regionName}</div>
+                          )}
+                        </div>
+                      )}
                       {definition.fields.includes("baseOwner") && <EntityField ariaLabel="Base region owner" id={`${prefix}-base-owner`} options={polityOptions} placeholder="Base owner" styles={styles} value={condition?.baseOwner || ""} onChange={(baseOwner) => patchCondition(index, conditionIndex, { baseOwner })} />}
                       {definition.fields.includes("eventId") && (() => {
                         const prior = priorScriptedEvents(events, index);
@@ -527,10 +630,24 @@ const ScriptedEventsEditor = ({
                     <button type="button" className="oh-tap-row" style={buttonStyle(styles,{color:"#fecaca"})} onClick={() => patchEvent(index,{outcomes:array(event.outcomes).filter((_,row)=>row!==outcomeIndex)})}>Remove</button>
                   </div>
                   <div style={{ marginTop: "0.45rem" }}>
-                    <label style={styles.fieldLabelStyle}>What happens</label>
-                    <textarea aria-label="Outcome text" rows={3} style={{...styles.inputStyle,resize:"vertical",width:"100%"}} value={outcome.text || ""} onChange={(e) => { const rows=[...array(event.outcomes)]; rows[outcomeIndex]={...outcome,text:e.target.value}; patchEvent(index,{outcomes:rows}); }} placeholder="What happens if this outcome is selected?" />
+                    <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
+                      <label style={styles.fieldLabelStyle}>What happens</label>
+                      {pickRegionsButton(() => openTextPicker(index, outcomeIndex))}
+                    </div>
+                    <textarea ref={(node) => { textAreas.current[`outcome-${index}-${outcomeIndex}`] = node; }} aria-label="Outcome text" rows={3} style={{...styles.inputStyle,resize:"vertical",width:"100%"}} value={outcome.text || ""} onChange={(e) => { const rows=[...array(event.outcomes)]; rows[outcomeIndex]={...outcome,text:e.target.value}; patchEvent(index,{outcomes:rows}); }} placeholder="What happens if this outcome is selected?" />
                   </div>
                   {!hasText && <div style={{ color: "#fbbf24", fontSize: "0.62rem", lineHeight: 1.35, marginTop: "0.25rem" }}>Add outcome text before saving. Blank outcomes are discarded.</div>}
+                  <div style={{ marginTop: "0.45rem" }}>
+                    <label style={styles.fieldLabelStyle}>Impacts of this outcome</label>
+                    <ScriptedImpactsEditor
+                      idPrefix={`scripted-${event?.id || index}-${outcome.id || outcomeIndex}`}
+                      rows={outcome?.impactRows}
+                      polityOptions={polityOptions}
+                      styles={styles}
+                      onChange={(rows) => patchOutcome(index, outcomeIndex, impactPatch(rows))}
+                      onPickRegions={(rowIndex) => setRegionPicker({ kind: "impact", eventIndex: index, outcomeIndex, rowIndex })}
+                    />
+                  </div>
                 </div>
               );
             })}
@@ -647,6 +764,17 @@ const ScriptedEventsEditor = ({
           )}
         </div>
       </div>
+      {regionPicker && (
+        <Suspense fallback={null}>
+          <ScriptedRegionPicker
+            mapSource={pickerSource}
+            initialSelected={pickerInitial}
+            single={regionPicker.kind === "condition"}
+            onDone={finishRegionPicker}
+            onClose={() => setRegionPicker(null)}
+          />
+        </Suspense>
+      )}
     </div>,
     document.body,
   ) : null;

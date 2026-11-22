@@ -232,6 +232,35 @@ test("a malformed old Conditional with no conditions remains fail-closed", () =>
   assert.deepEqual(event.trigger, { mode: "invalid" });
 });
 
+test("a beat's own id in another script is its own, as its English twin's is", () => {
+  // Cut to a-z and 0-9, "Событие 1" and "Глава 1" were both "1" (the second
+  // "1-2"), so which beat held "1", and so counted as fired, hung on the order
+  // they were written in.
+  const ids = (rows) => normalizeScriptedEvents(rows.map(([id, date]) => ({ id, date, text: "A beat." }))).map((event) => event.id);
+  assert.deepEqual(ids([["beat-1", "1914-01-01"], ["Chapter 1", "1915-01-01"], ["already.v2:a", "1916-01-01"]]), ["beat-1", "chapter-1", "already.v2:a"], "as they always were");
+  for (const pair of [["Событие 1", "Глава 1"], ["事件一", "第一章"], ["حدث ١", "فصل ١"]]) {
+    const [first, second] = ids([[pair[0], "1914-01-01"], [pair[1], "1915-01-01"]]);
+    assert.notEqual(first, second, pair[0]);
+    assert.match(first, /^u-[a-z0-9]+$/, pair[0]);
+    // The same beat whatever the order, or whatever else, it is written with.
+    assert.deepEqual(ids([[pair[1], "1915-01-01"], [pair[0], "1914-01-01"]]), [first, second], pair[0]);
+    assert.deepEqual(ids([[pair[0], "1914-01-01"]]), [first], pair[0]);
+  }
+});
+
+test("a beat's title is its first sentence in every script, and an English beat keeps the title it had", () => {
+  const titleOf = (text) => normalizeScriptedEvents(`1914-06-28 ${text}`)[0].title;
+  assert.equal(titleOf("Archduke Franz Ferdinand is assassinated in Sarajevo. War follows within weeks."), "Archduke Franz Ferdinand is assassinated in Sarajevo");
+  assert.equal(titleOf("Germany's GDP grew 3.5 percent in the year. Then the crash came."), "Germany's GDP grew 3.5 percent in the year");
+  assert.equal(titleOf("The U.S. Congress declares war on Spain. Fighting begins in Cuba."), "The U.S. Congress declares war on Spain");
+  // Read as ". ! ?" and a space, a beat in Chinese or Japanese was one sentence.
+  assert.equal(titleOf("第一次世界大战在欧洲全面爆发。德国入侵比利时，英国随即宣战。"), "第一次世界大战在欧洲全面爆发");
+  assert.equal(titleOf("ドイツがベルギーに侵攻しました。イギリスはドイツに宣戦布告しました。"), "ドイツがベルギーに侵攻しました");
+  assert.equal(titleOf("هل ستعلن مصر الحرب على جارتها الشمالية؟ الحكومة تجتمع."), "هل ستعلن مصر الحرب على جارتها الشمالية");
+  // A beat of one sentence, or none, is its own title.
+  assert.equal(titleOf("战争爆发"), "战争爆发");
+});
+
 // ---- World direction: the director's settings ----
 
 test("world direction ships on, at the built-in pace, with the one-third floor checked and no priority rules", () => {

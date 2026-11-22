@@ -33,8 +33,8 @@ test("the advisor reads the war ledger, the relations and the other powers' figu
   const text = describeWorldLedgersForAdvisor(world, [{ countries: [{ name: "United States" }] }], "Republic of China");
   assert.match(text, /border-war \| ACTIVE \| SIDE A: Republic of China \| SIDE B: Soviet Union/);
   assert.match(text, /United States/);
-  assert.match(text, /Soviet Union: GDP-eq €1.2T/);
-  assert.match(text, /United States: GDP-eq €2.9T/);
+  assert.match(text, /Soviet Union: GDP-eq \$1.2T/);
+  assert.match(text, /United States: GDP-eq \$2.9T/);
   // The player's own sheet is described elsewhere, in full.
   assert.doesNotMatch(text, /Republic of China: GDP-eq/);
   // One list of powers, not a paragraph of simulator guidance per power.

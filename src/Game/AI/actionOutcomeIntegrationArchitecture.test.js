@@ -16,27 +16,12 @@ test("normal jump validation receives the live Action queue for exact actionId r
   assert.match(source, /validateGeneratedWorldChanges\(candidate, bundle\.world, \{[\s\S]{0,300}?actions: bundle\.actions,/);
 });
 
-test("saving-mode turn review can carry queued-order attribution and final events receive the validated associations before directors", () => {
-  assert.match(source, /key: "actions"[\s\S]{0,350}?ACTION_OUTCOME_ASSOCIATION_SCHEMA/);
-  const finish = source.indexOf("const finishTimelineJump");
-  // The Directors run through mapConsequences.js, which a Scene outcome shares.
-  const directors = source.indexOf("applyMapConsequences(", finish);
-  const apply = source.indexOf("applyActionOutcomeAssociations", finish);
-  assert.ok(finish >= 0 && apply > finish && directors > apply, "association repair must happen before unit/territory/structure directors and final curation");
-});
-
-test("attribution is never a request of its own: it rides the one review a refused skip gets, in every mode", () => {
+test("attribution is never a request of its own: a skip's events cite their own orders", () => {
   // With Save AI requests off this used to be one more request after the skip
-  // (runStandaloneActionOutcomeReview). A skip is one request in every mode now
-  // (requestBudget.js): its events cite their own orders, and the association
-  // pass exists only as a job of the combined review.
-  assert.doesNotMatch(source, /runStandaloneActionOutcomeReview|ACTION_OUTCOME_ASSOCIATION_TOOL/);
-  const finish = source.slice(source.indexOf("const finishTimelineJump"), source.indexOf("export const simulateTimelineJump"));
-  assert.match(finish, /const actionPlan = review\.actionOutcomePlan \?\? null;/);
-  assert.match(finish, /const actionAnswer = review\.parts\?\.actions \?\? null;/);
-  // The one place the plan is built is the review, which asks the skip's budget.
-  assert.equal(source.match(/buildActionOutcomeAssociationPlan\(/g)?.length, 1);
-  const review = source.slice(source.indexOf("const runTurnReview = async"), source.indexOf("const fileReviewedAgentReports"));
-  assert.match(review, /buildActionOutcomeAssociationPlan\(/);
-  assert.match(review, /requests\.budget\.take\("review"\)/);
+  // (runStandaloneActionOutcomeReview), and then a job of the turn review a
+  // refused skip got. The turn review went on 2026-11-07 ("remove the stuff
+  // relating to those things entirely", the owner): a skip's events cite the
+  // orders they answer, and nothing repairs the attribution after it.
+  assert.doesNotMatch(source, /runStandaloneActionOutcomeReview|ACTION_OUTCOME_ASSOCIATION_TOOL|runTurnReview/);
+  assert.doesNotMatch(source, /buildActionOutcomeAssociationPlan\(|applyActionOutcomeAssociations\(/);
 });

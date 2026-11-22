@@ -86,12 +86,18 @@ export const normalizeUsage = (data) => {
             outputTokens,
             totalTokens: promptTokens + (outputTokens ?? 0) > 0 ? promptTokens + (outputTokens ?? 0) : null,
             cachedTokens: cacheRead > 0 ? cacheRead : null,
+            // Written to the cache by this request: billed above the input price
+            // (1.25 times for five minutes, twice for an hour), and paid back by
+            // the reads that follow. Recorded on its own, so a prefix that is
+            // written every call and never read shows up as just that.
+            cacheWriteTokens: cacheWrite > 0 ? cacheWrite : null,
         });
     }
 
     // OpenAI-shaped: { prompt_tokens, completion_tokens, total_tokens,
     // prompt_tokens_details: { cached_tokens } }. Most compatible gateways copy
-    // this, including llama.cpp and Ollama.
+    // this, including llama.cpp and Ollama. DeepSeek reports its cache hits as
+    // prompt_cache_hit_tokens instead (and the misses beside them).
     const promptTokens = firstCount(usage.prompt_tokens);
     const outputTokens = firstCount(usage.completion_tokens);
     return compact({
@@ -99,7 +105,7 @@ export const normalizeUsage = (data) => {
         outputTokens,
         totalTokens: firstCount(usage.total_tokens)
             ?? (promptTokens !== null && outputTokens !== null ? promptTokens + outputTokens : null),
-        cachedTokens: firstCount(usage.prompt_tokens_details?.cached_tokens),
+        cachedTokens: firstCount(usage.prompt_tokens_details?.cached_tokens) ?? firstCount(usage.prompt_cache_hit_tokens),
     });
 };
 

@@ -13,6 +13,7 @@ import { handleFlags } from "./flagStore.js";
 import { handleLibrary, handleScenarios, handleGames, handleTrash, handleRuntimeJson, handleRuntimeSnapshot, handleRuntimeTurnCommit, handleScenarioInstitutionLogo, handleRuntimeInstitutionLogo, getScenarioPmtilesOverride, earlierBuiltInMapUrl } from "./libraryStore.js";
 import { handleLang, handleUiSettings } from "./settingsStore.js";
 import { mapArchiveUrl } from "../worldFiles.js";
+import { isHandoverBuild } from "../native/appMove.js";
 
 let installed = false;
 
@@ -34,7 +35,16 @@ const isAssetUpload = (domain, segments, method) =>
   (domain === "scenarios" || domain === "games") && segments.includes("assets") && method === "PUT";
 
 // Same manifests the desktop server proxies (server/server.js APP_UPDATE_MANIFESTS).
+// The app reads update.json. latest.json is the feed of the apps installed under
+// the id the app had until November 2026, which can never be changed: it offers
+// them the handover build (native/appMove.js, android-apk.yml), and the handover
+// build updates from it too. Asked with `of=app`, the handover build reads the
+// app's feed, for the APK of the app it installs.
 const APP_UPDATE_MANIFESTS = {
+  stable: "https://github.com/Open-Historia/open-historia/releases/download/android/update.json",
+  beta: "https://github.com/Open-Historia/open-historia/releases/download/android-beta/update.json",
+};
+const HANDOVER_UPDATE_MANIFESTS = {
   stable: "https://github.com/Open-Historia/open-historia/releases/download/android/latest.json",
   beta: "https://github.com/Open-Historia/open-historia/releases/download/android-beta/latest.json",
 };
@@ -173,7 +183,8 @@ const route = async (request, url) => {
   // simply sees no update, exactly as it does today.
   if (domain === "app-update") {
     const track = url.searchParams.get("track") || "stable";
-    const manifest = APP_UPDATE_MANIFESTS[track];
+    const handover = url.searchParams.get("of") !== "app" && await isHandoverBuild();
+    const manifest = (handover ? HANDOVER_UPDATE_MANIFESTS : APP_UPDATE_MANIFESTS)[track];
     if (!manifest) return jsonResponse({});
     try {
       return jsonResponse(await readAppUpdateManifest(manifest));

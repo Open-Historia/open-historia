@@ -135,6 +135,13 @@ const WarRoomTools = () => {
   // Where an air strike would fall if the pointer were clicked: { x, y, r } in px of the map, or null.
   const [aim, setAim] = useState(null);
   const sheetRef = useRef(null);
+  // The ring is as wide as the strike radius set (the store's `blast`): set on the aircraft's slider while the
+  // pointer stands still (from the keyboard), it grows or shrinks where it is.
+  const blast = useWarRoom((state) => state.blast);
+  const ringAtRef = useRef(null);
+  useEffect(() => {
+    setAim((now) => (now && ringAtRef.current ? ringAtRef.current([now.x, now.y]) : now));
+  }, [blast]);
 
   // The battlefield fitted into what the drawer leaves of the map: when the war
   // room opens, when another battlefield is shown, and when the panel asks.
@@ -218,6 +225,7 @@ const WarRoomTools = () => {
         return null;
       }
     };
+    ringAtRef.current = ringAt;
     const down = (event) => {
       if (event.button !== undefined && event.button !== 0) return;
       event.preventDefault();
@@ -296,10 +304,10 @@ const WarRoomTools = () => {
       if (tool === "aircraft") {
         if ((done.moved ?? 0) >= CLICK_PX) return;
         const place = map.unproject(point);
-        // (Read from the store now: which air unit, and what it is to strike.)
-        const { wing, strikeKind } = getWarRoom();
+        // (Read from the store now: which air unit, what it is to strike, and over how wide a circle.)
+        const { wing, strikeKind, strikeRadius } = getWarRoom();
         takeTool("pan");
-        reportWarRoomWay("aircraft", [[unwrapLng(place.lng, 0), place.lat]], { wing, kind: strikeKind });
+        reportWarRoomWay("aircraft", [[unwrapLng(place.lng, 0), place.lat]], { wing, kind: strikeKind, radius: strikeRadius });
         return;
       }
       if (tool === "fleet") {
@@ -367,6 +375,7 @@ const WarRoomTools = () => {
       // A tool put down in the middle of a drag leaves nothing half drawn.
       setDraft(null);
       setAim(null);
+      ringAtRef.current = null;
     };
   }, [drawing, map, tool, side, replan, medium, deployForm]);
 

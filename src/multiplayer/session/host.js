@@ -18,7 +18,7 @@
 import { deriveRoomKeys } from "../invite.js";
 import { fromBase64Url, equalBytes, randomBytes, toHex } from "../bytes.js";
 import { signFields, verifyFields } from "../identity.js";
-import { createDecoder, encodeMessage } from "../protocol/codec.js";
+import { PLAYER_MESSAGE_MAX_CHARS, createDecoder, encodeMessage } from "../protocol/codec.js";
 import { validate } from "../protocol/validate.js";
 import { createNostrChannel } from "../signaling/nostr.js";
 import { createPeer } from "../transport/peer.js";
@@ -38,9 +38,13 @@ const DEFAULT_LIMITS = Object.freeze({
   unreachableMemoryMs: 5 * 60_000,
   messagesPerSecond: 30,
   messageBurst: 60,
-  // The largest thing a player sends is its own Projects board (a few hundred
-  // KB at the board's limit); nothing a player sends is ever larger.
-  maxMessageChars: 512 * 1024,
+  // The largest thing a player sends is the answer its own AI gave to a round
+  // it pays for (host/settings.js payment "cycle"; game/messages.js "paid", at
+  // most PAID_ANSWER_MAX characters of text and as many of a function call's
+  // input, escaped once more inside the message). Before that it was its own
+  // Projects board, a few hundred KB at the board's limit. A player's page
+  // reads the same number, and sends nothing larger (protocol/codec.js).
+  maxMessageChars: PLAYER_MESSAGE_MAX_CHARS,
   strikesToRemove: 5,
   pendingTimeoutMs: 30_000,
   helloTimeoutMs: 10_000,
@@ -66,6 +70,16 @@ export const createHostSession = ({
   peerFactory = (options) => createPeer(options),
   peerOptions = {},
   isBanned = () => false,
+  // Whether a device may come in, and how many seats a newcomer could still
+  // take, as the game counts its players (host/gameHost.js roomFor,
+  // openSeats): a player whose device holds a seat is let back in whoever has
+  // come meanwhile, and after the game is shared again, when this session has
+  // never seen them. Without them, the connections open now are counted.
+  roomFor = null,
+  openSeats = null,
+  // Whether a device is a player of the game (host/gameHost.js isMember): it
+  // is let through however many others are asking to join.
+  knows = null,
   onJoin = () => {},
   onLeave = () => {},
   onMessage = () => {},
@@ -93,9 +107,13 @@ export const createHostSession = ({
   const answered = new Map();
   const banned = new Set();
   const offerLog = [];
+  // When this minute's offers were told "busy".
+  const busyLog = [];
   const deviceOffers = new Map();
 
   const seated = () => [...players.values()].filter((player) => player.status === "connected").length;
+  const hasRoom = (device) => (typeof roomFor === "function" ? Boolean(roomFor(device)) : seated() < roomInfo.seats);
+  const openNow = () => (typeof openSeats === "function" ? Math.max(0, Math.trunc(Number(openSeats()) || 0)) : Math.max(0, roomInfo.seats - seated()));
   const publicPlayer = (player) => ({ id: player.id, name: player.name, device: player.device, status: player.status, rttMs: player.rttMs ?? null });
 
   // Joiners the host answered whose connection never opened: device → { name,
@@ -130,7 +148,7 @@ export const createHostSession = ({
     if (!running) return;
     channel?.publish(signPayload("beacon", {
       t: "beacon", v: PROTOCOL_VERSION, name: roomInfo.name,
-      open: Math.max(0, roomInfo.seats - seated()), seats: roomInfo.seats, version: roomInfo.version, ts: now(),
+      open: openNow(), seats: roomInfo.seats, version: roomInfo.version, ts: now(),
     }));
   };
 
@@ -138,22 +156,43 @@ export const createHostSession = ({
     channel?.publish(signPayload("deny", { t: "deny", v: PROTOCOL_VERSION, session, reason, ts: now() }));
   };
 
+  // "" when an offer may be answered; "device" when its device has asked too
+  // often (ignored), "busy" when everyone together has (denied "busy", so the
+  // joiner tries again later and is told why). A device the game knows (a
+  // player in it: `knows`) is never held to what everyone together may ask:
+  // the per-device limit is by a key a joiner makes for itself, so a flood of
+  // offers under fresh keys kept every seated player out, and they waited
+  // without a word (the review of 2026-11-18, security S12).
   const withinRate = (device) => {
     const cutoff = now() - 60_000;
     while (offerLog.length && offerLog[0] < cutoff) offerLog.shift();
-    if (offerLog.length >= limits.offersPerMinute) return false;
+    while (busyLog.length && busyLog[0] < cutoff) busyLog.shift();
+    for (const [key, times] of deviceOffers) if (!times.some((at) => at >= cutoff)) deviceOffers.delete(key);
     const mine = (deviceOffers.get(device) ?? []).filter((at) => at >= cutoff);
-    if (mine.length >= limits.offersPerDevicePerMinute) return false;
-    offerLog.push(now());
+    if (mine.length >= limits.offersPerDevicePerMinute) return "device";
+    const member = byDevice.has(device) || (typeof knows === "function" && Boolean(knows(device)));
+    if (!member && offerLog.length >= limits.offersPerMinute) return "busy";
+    if (!member) offerLog.push(now());
     mine.push(now());
     deviceOffers.set(device, mine);
-    return true;
+    return "";
   };
 
+  // One message at a time to each player: a large one (a view of the world is
+  // megabytes, many frames) goes out whole before the next one's first frame.
+  // A small message sent while a large one drained used to go out between its
+  // parts, arrive first, and the view it had overtaken was then dropped as
+  // older: the player never had the world, and the host thought it had.
+  const outboxes = new WeakMap();
   const sendTo = (peer, message) => {
     const frames = encodeMessage(message);
-    if (frames.length === 1) return peer.send(frames[0]);
-    peer.sendAll(frames);
+    const busy = outboxes.get(peer);
+    if (!busy && frames.length === 1) return peer.send(frames[0]);
+    const next = (busy ?? Promise.resolve()).then(() => peer.sendAll(frames)).catch(() => false);
+    outboxes.set(peer, next);
+    void next.then(() => {
+      if (outboxes.get(peer) === next) outboxes.delete(peer);
+    });
     return true;
   };
 
@@ -237,7 +276,7 @@ export const createHostSession = ({
 
     const knownId = byDevice.get(hello.device);
     const known = knownId ? players.get(knownId) : null;
-    if (!known && seated() >= roomInfo.seats) return reject("full");
+    if (!known && !hasRoom(hello.device)) return reject("full");
 
     timers.clearTimeout(entry.timer);
     pending.delete(entry.session);
@@ -271,9 +310,14 @@ export const createHostSession = ({
 
   const handleMessage = (player, frame) => {
     if (player.status !== "connected") return;
-    if (!allowMessage(player)) return strike(player, "too many messages");
+    // A message is charged once, when it is whole or refused. A large one comes
+    // in many frames (protocol/codec.js), and charging each frame struck a paying
+    // device's own answer to a round (near PLAYER_MESSAGE_MAX_CHARS, 50 to 300
+    // frames) as a flood and removed the player. A message's frames are bounded
+    // by the decoder itself: its size, its number of parts, two at once.
     const decoded = player.decoder.feed(frame);
     if (decoded.pending) return;
+    if (!allowMessage(player)) return strike(player, "too many messages");
     if (decoded.error) return strike(player, decoded.error);
     const checked = validate(schema, decoded.message);
     if (!checked.ok) return strike(player, `an invalid message (${checked.error})`);
@@ -305,7 +349,14 @@ export const createHostSession = ({
       return;
     }
     if (pending.has(offer.session)) return;
-    if (!withinRate(offer.device)) return log(`an offer from ${offer.name} was over the rate limit and was ignored`);
+    const rate = withinRate(offer.device);
+    if (rate === "busy" && busyLog.length < limits.offersPerMinute) {
+      // As many denials a minute as offers, at most: a flood is not answered in kind.
+      busyLog.push(now());
+      log(`an offer from ${offer.name} came while too many were asking at once, and was told to try again`);
+      return deny(offer.session, "busy");
+    }
+    if (rate) return log(`an offer from ${offer.name} was over the rate limit and was ignored`);
     if (banned.has(offer.device) || isBanned(offer.device)) return deny(offer.session, "banned");
     if (offer.version !== roomInfo.version) {
       log(`${offer.name} is on another version of the game (${offer.version}, this is ${roomInfo.version}) and was turned away`);
@@ -314,7 +365,7 @@ export const createHostSession = ({
     // The seats are who is IN. Connections still opening are held to a limit
     // of their own: the hello decides who gets a seat (handleHello), so a
     // joiner who cannot be reached costs nobody theirs.
-    if (!byDevice.has(offer.device) && seated() >= roomInfo.seats) return deny(offer.session, "full");
+    if (!byDevice.has(offer.device) && !hasRoom(offer.device)) return deny(offer.session, "full");
     if (pending.size >= roomInfo.seats + limits.pendingBeyondSeats) return deny(offer.session, "busy");
 
     // The connection opening again for a device already being opened is the

@@ -89,10 +89,27 @@ const setHold = (holds, value, campaignId) => {
   if (value == null) {
     if (campaignId === undefined) releaseHere(holds);
     else holds.delete(String(campaignId ?? "").trim());
+    grantWaiting();
     return;
   }
   holds.set(String(campaignId ?? campaignOfHold(value)).trim(), value);
 };
+
+// Those waiting to take the lock (enterSimulation), in the order they asked.
+const lockWaiters = [];
+// Hands the lock to the first who waits, if nothing holds it now. Taking it is
+// the counter going up in the same step as the check, so two who waited
+// cannot both find it free: with "wait until idle, then begin" as two steps,
+// two writers woken by the same idle moment both began.
+function grantWaiting() {
+  while (lockWaiters.length && !isSimulationBusy()) {
+    const waiter = lockWaiters.shift();
+    if (waiter.done) continue;
+    waiter.done = true;
+    activeSimulations += 1;
+    waiter.resolve();
+  }
+}
 
 // The idle chat poll is mid-generation ("someone might be typing").
 let chatGenerationInFlight = false;
@@ -116,7 +133,40 @@ export const endSimulation = () => {
   for (const listener of [...simulationIdleListeners]) {
     try { listener(); } catch { /* a listener must never break the end of a turn */ }
   }
+  grantWaiting();
 };
+
+// Waits until nothing holds the simulation, and takes it, in one step and in
+// the order asked (lockWaiters): what it writes then cannot meet a turn or
+// another writer half-way. Ended with endSimulation, as beginSimulation is.
+// Rejects with `signal`'s reason if that is aborted while waiting.
+export const enterSimulation = ({ signal = null } = {}) => new Promise((resolve, reject) => {
+  if (signal?.aborted) {
+    reject(signal.reason ?? new DOMException("Aborted.", "AbortError"));
+    return;
+  }
+  const waiter = { resolve, done: false };
+  lockWaiters.push(waiter);
+  grantWaiting();
+  if (waiter.done) return;
+  // A hold can be let go where nothing tells this file (a campaign switched):
+  // the waiters look again now and then, and take it the moment it is free.
+  const look = setInterval(() => {
+    if (waiter.done) clearInterval(look);
+    else grantWaiting();
+  }, 500);
+  signal?.addEventListener?.("abort", () => {
+    if (waiter.done) return;
+    waiter.done = true;
+    clearInterval(look);
+    reject(signal.reason ?? new DOMException("Aborted.", "AbortError"));
+  }, { once: true });
+  const original = waiter.resolve;
+  waiter.resolve = () => {
+    clearInterval(look);
+    original();
+  };
+});
 
 export const getHeldTurn = (kind) => heldHere(holdsOf(kind));
 export const holdTurn = (kind, value, campaignId) => {
@@ -148,6 +198,7 @@ export const parkFinishedTurn = (value) => {
 export const takeParkedTurn = () => {
   const parked = heldHere(parkedTurns);
   if (parked) parkedTurns.delete(campaignOfHold(parked));
+  if (parked) grantWaiting();
   return parked;
 };
 
@@ -245,6 +296,7 @@ export const attemptHeldTurn = async (kind, held, attempt, { signal = null, onCa
 export const discardHeldTurn = (kind) => {
   const had = releaseHere(holdsOf(kind));
   if (had) logDebugEvent("turn", DISCARD_NOTES[kind] ?? "Held turn discarded; nothing was written.");
+  if (had) grantWaiting();
   return had;
 };
 
@@ -260,6 +312,7 @@ export const discardHeldTurns = () => {
 export const discardParkedTurn = () => {
   const had = releaseHere(parkedTurns);
   if (had) logDebugEvent("turn", "Parked turn discarded; it was never written.");
+  if (had) grantWaiting();
   return had;
 };
 

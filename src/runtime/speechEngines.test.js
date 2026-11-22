@@ -70,9 +70,13 @@ test("a browser recogniser that failed this session falls through to Whisper", (
   assert.equal(pickSpeechEngine({ language: "es", browserRecognizer: true, browserBroken: true, onDevice: false }), null);
 });
 
-test("Whisper is the on-device engine for every language of the game's picker", () => {
+test("Whisper is the on-device engine for every language of the game's picker but Irish", () => {
   assert.deepEqual(Object.keys(ON_DEVICE_MODELS), [WHISPER]);
-  for (const { code } of LANGUAGES) assert.equal(onDeviceEngineFor(code), WHISPER, code);
+  for (const { code } of LANGUAGES) {
+    if (code !== "ga") assert.equal(onDeviceEngineFor(code), WHISPER, code);
+  }
+  assert.equal(onDeviceEngineFor("ga"), null, "Whisper was never taught Irish");
+  assert.equal(pickSpeechEngine({ language: "ga", browserRecognizer: true }), "browser", "a platform's recogniser may still have it");
 });
 
 test("no recogniser anywhere hides the microphone", () => {

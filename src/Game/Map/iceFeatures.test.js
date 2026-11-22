@@ -60,7 +60,7 @@ test("the ice lies over the season's tint and under the borders, on the regions'
   // The ice is shown whatever the switch says, and water that could freeze is not marked at all.
   assert.doesNotMatch(component, /hint|freezingRegions|seasonsWeather/);
   assert.ok(!MAP_LAYER_ORDER.some((id) => /ice-hint/.test(id)));
-  assert.match(component, /map\.on\("styleimagemissing", asked\);/);
+  assert.match(component, /resolveMissingImages\(map, \(id\) => provide\(map, id\)\)/);
   assert.match(read("MapScene.jsx"), /<SeasonLayers isGlobe=\{isGlobe\} \/>\s*<IceLayers \/>/);
   // Nations.jsx still keys its regions the way the ice picks them out.
   assert.match(read("Nations.jsx"), /const SCENARIO_REGION_ID_EXPRESSION = \["to-string", \["coalesce", \["get", "id"\], \["get", "GID_1"\], ""\]\];/);

@@ -9,7 +9,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { applyWorldStorylineUpdates } from "./nativeWorldDirector.js";
+import { applyWorldStorylineUpdates, buildWorldInitiativeContext, directorRegionIds } from "./nativeWorldDirector.js";
 
 const storyline = (overrides = {}) => ({
   id: "st-hannibal",
@@ -65,4 +65,24 @@ test("merged duplicates keep the earliest start and the latest visible event by 
   assert.equal(storylines.length, 1);
   assert.equal(storylines[0].startedDate, "-0219-03-01");
   assert.equal(storylines[0].lastVisibleEventDate, "-0217-01-20");
+});
+
+// Names, never ids: a pressure and a unit's whereabouts read "Active
+// territorial pressure: GEO.11_1" and "region 2104" until the caller handed
+// the names over (gameplay.js, from the region catalog).
+test("the director's pressures and units name their regions, never an id", () => {
+  const world = {
+    regionOwnershipOverrides: { 2104: "Russia" },
+    regionClaimants: { 2104: ["Ukraine"], "GEO.11_1": ["Georgia"] },
+    units: [{ id: "u1", name: "1st Army", ownerCode: "Russia", status: "moving", regionId: "2104" }],
+  };
+  assert.deepEqual(directorRegionIds(world).sort(), ["2104", "GEO.11_1"]);
+  const { text } = buildWorldInitiativeContext(
+    { game: { country: "Ukraine", gameDate: "2026-03-01" }, world, events: [], chats: [] },
+    { targetDate: "2026-04-01", regionNames: { 2104: "Zaporizhzhia" } },
+  );
+  assert.match(text, /Active territorial pressure: Zaporizhzhia/);
+  assert.match(text, /Active territorial pressure: an unnamed region/, "a region with no name is not shown by its id");
+  assert.match(text, /status moving; in Zaporizhzhia/);
+  assert.doesNotMatch(text, /2104|GEO\.11_1/);
 });

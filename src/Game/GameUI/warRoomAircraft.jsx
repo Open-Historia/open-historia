@@ -15,11 +15,12 @@
 // the rail, these only show and ask: the panel (warRoom.jsx) sends every order
 // through runtime/warRoomWrites.js.
 
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
+import { AIR_STRIKE_RADIUS_LEAST, AIR_STRIKE_RADIUS_MOST, AIR_STRIKE_RADIUS_STEP } from "../../runtime/fronts/airStrike.js";
 import { useWarRoom } from "../Map/warRoomStore.js";
 import { placeName } from "./warRoomData.js";
 import { besideRailStyle } from "./warRoomFortify.jsx";
-import { AMBER, BONE, BONE_SOFT, keyStyle, linkStyle, stencilStyle, trayStyle } from "./warRoomTheme.js";
+import { AMBER, BONE, BONE_SOFT, RED, keyStyle, linkStyle, stencilStyle, trayStyle } from "./warRoomTheme.js";
 
 const softText = { color: BONE_SOFT, fontSize: "0.72rem", lineHeight: 1.4 };
 const smallKey = (on, disabled) => ({ ...keyStyle(on, disabled), fontSize: "0.7rem", padding: "0.34rem 0.45rem" });
@@ -79,14 +80,86 @@ const Heading = ({ children, style = null }) => (
   </div>
 );
 
+// The strike radius, a slider. "make the bombing radius be a slider not buttons, and dont have it actually say how
+// big it is, just the visual circle" (the owner, 2026-11-09): no figure beside it, and its size is told only by the
+// circles on the map, which follow it as it moves (onRadius). While it is pointed at, held or focused, the map shows
+// a circle of the radius set even where nothing is aimed (onSizing: WarRoomMarks.jsx); a strike waiting is ordered
+// again with it only once it is let go (onRadiusSet), not at every step it passes.
+const RadiusSlider = ({ radius, disabled, onRadius, onRadiusSet, onSizing }) => {
+  const slider = useRef(null);
+  const pointing = useRef(false);
+  const holding = useRef(false);
+  // (The latest handlers, for a release the window hears and for the slider taken away while it was being set.)
+  const latest = useRef({ onRadiusSet, onSizing });
+  useEffect(() => {
+    latest.current = { onRadiusSet, onSizing };
+  }, [onRadiusSet, onSizing]);
+  const valueOf = () => Number(slider.current?.value);
+  useEffect(() => () => latest.current.onSizing(false), []);
+  // A drag may end off the slider: the window hears it let go.
+  const hold = () => {
+    holding.current = true;
+    onSizing(true);
+    const letGo = () => {
+      window.removeEventListener("pointerup", letGo);
+      window.removeEventListener("pointercancel", letGo);
+      holding.current = false;
+      latest.current.onRadiusSet(valueOf());
+      if (!pointing.current) latest.current.onSizing(false);
+    };
+    window.addEventListener("pointerup", letGo);
+    window.addEventListener("pointercancel", letGo);
+  };
+  return (
+    <input
+      ref={slider}
+      type="range"
+      aria-label="Strike radius"
+      data-oh-war-room-strike-radius=""
+      min={AIR_STRIKE_RADIUS_LEAST}
+      max={AIR_STRIKE_RADIUS_MOST}
+      step={AIR_STRIKE_RADIUS_STEP}
+      value={radius}
+      disabled={disabled}
+      onChange={(event) => onRadius(Number(event.target.value))}
+      onPointerDown={hold}
+      onPointerEnter={() => {
+        pointing.current = true;
+        onSizing(true);
+      }}
+      onPointerLeave={() => {
+        pointing.current = false;
+        if (!holding.current) onSizing(false);
+      }}
+      onFocus={() => {
+        if (!pointing.current && !holding.current) onSizing(true);
+      }}
+      onKeyDown={() => onSizing(true)}
+      onKeyUp={() => onRadiusSet(valueOf())}
+      onBlur={() => {
+        if (!pointing.current && !holding.current) onSizing(false);
+        onRadiusSet(valueOf());
+      }}
+      style={{ accentColor: RED, cursor: disabled ? "default" : "pointer", margin: 0, width: "100%" }}
+    />
+  );
+};
+
 //   wings      the player's air units (runtime/fronts/airStrikeOps.js airUnitsOf); picked, the id of the one picked out
 //   kind       what a click on the map is to strike: "troops", "structure" or "city"
+//   radius     the strike radius set (runtime/fronts/airStrike.js strikeRadiusOf); blast, how far the bombs of one
+//              strike fall at the default radius, in km (none: no radius to set)
 //   reach      how far an air unit reaches, in km
 //   flown      the player's strikes of the last turn (runtime/fronts/airStrike.js normalizeAirStrikes)
-//   locked     nothing can be ordered now
+//   locked     nothing can be ordered now; radiusLocked, the strike radius cannot be set now (only while a turn
+//              runs: the slider is not taken out of the player's hand while one of its own orders is being sent,
+//              which would take the keyboard's focus off it at every step)
 //   tool       the tool in hand
 //   onPick(id), onKind(kind), onAim(), onCallOff(id), onClose()
-export const AircraftPlate = ({ isMobile, wings, picked, kind, reach, flown, locked, tool, onPick, onKind, onAim, onCallOff, onClose }) => {
+//   onRadius(radius)     the slider moved: as it moves (the circles on the map follow it)
+//   onRadiusSet(radius)  the slider let go: what is to be ordered
+//   onSizing(on)         the slider pointed at, held or focused, or no longer
+export const AircraftPlate = ({ isMobile, wings, picked, kind, radius = 1, blast = 0, reach, flown, locked, radiusLocked = locked, tool, onPick, onKind, onRadius = () => {}, onRadiusSet = () => {}, onSizing = () => {}, onAim, onCallOff, onClose }) => {
   const rail = useWarRoom((state) => state.rail);
   const wing = wings.find((entry) => entry.id === picked) ?? null;
   // The first is picked out while none is (and when the one picked is gone).
@@ -140,6 +213,12 @@ export const AircraftPlate = ({ isMobile, wings, picked, kind, reach, flown, loc
               ><KindKey kind={entry} /></button>
             ))}
           </div>
+          {blast > 0 && (
+            <>
+              <RadiusSlider radius={radius} disabled={radiusLocked || wing.pending} onRadius={onRadius} onRadiusSet={onRadiusSet} onSizing={onSizing} />
+              <div style={softText}>Smaller is deadlier; wider touches more, each less.</div>
+            </>
+          )}
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem" }}>
             <button type="button" className="oh-tap" aria-pressed={aiming} disabled={off} data-oh-war-room-aim-key="" onClick={onAim} style={smallKey(aiming, off)}>{aiming ? <>Cancel</> : <>Choose target</>}</button>
             {wing.order && <button type="button" className="oh-tap" disabled={locked} onClick={() => onCallOff(wing.id)} style={smallKey(false, locked)}>Call off</button>}

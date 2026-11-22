@@ -2,6 +2,7 @@
 // Run: node --test src/Game/AI/chatFold.test.js
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
 import { foldGeneratedChatsIntoStorage } from "./chatFold.js";
 
@@ -30,6 +31,22 @@ test("an ordinary note from Germany lands in the open Germany thread", () => {
   assert.equal(chats.length, 1);
   assert.equal(chats[0].messages.length, 2);
   assert.equal(chats[0].messages[1].time, "1950-05-09");
+});
+
+// A note is never judged by its words against the thread's: one that quotes
+// the line it answers used to be dropped as an "echo", and the same note in
+// Chinese was not (a line of seven characters fell under the check's floor of
+// twelve, a few words in English). Both land alike now.
+test("a note that quotes the line it answers lands, in any language", () => {
+  const quoting = { id: "note-2", countries: [{ name: "Germany" }], messages: [{ role: "leader", speaker: "Germany", text: "\"Shall we talk about coal?\" Yes: on Monday." }] };
+  const landed = foldGeneratedChatsIntoStorage([germanyThread], [quoting], { stampTime: "1950-05-09" });
+  assert.equal(landed[0].messages.length, 2);
+  const chinese = { ...germanyThread, countries: [{ name: "China" }], messages: [{ role: "user", speaker: "France", text: "我们谈谈煤炭吧？" }] };
+  const reply = { id: "note-3", countries: [{ name: "China" }], messages: [{ role: "leader", speaker: "China", text: "“我们谈谈煤炭吧？”好的，星期一。" }] };
+  assert.equal(foldGeneratedChatsIntoStorage([chinese], [reply], { stampTime: "1950-05-09" })[0].messages.length, 2);
+  // And the idle note's path asks for no such check.
+  const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  assert.doesNotMatch(gameplay, /dropEchoes|nextChats\.dropped/);
 });
 
 test("an institution invitation is its own negotiation, not a message in the ordinary thread", () => {

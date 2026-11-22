@@ -86,15 +86,20 @@ test("existing Project updates and completion receipts reflect actual applied st
   assert.equal(h.world.projects[0].name, "New");
 });
 
-test("held world-affecting completions report deferred but do not write or claim completion", async () => {
+test("a project the advisor calls off reports closed, and the advisor writes through the door as itself", async () => {
   const h = makeHarness({ projects: [project("p1", "Unification")], flags: {} });
+  let actor = "";
   const result = await applyAdvisorProjectProposal({
-    proposal: [{ op: "complete", id: "p1" }],
+    proposal: [{ op: "cancel", name: "Unification" }],
     mutateWorldState: h.mutateWorldState,
-    applyProjectOpsToWorld: ({ world }) => ({ deferredProjectIds: ["p1"], world }),
+    applyProjectOpsToWorld: ({ world, actor: who }) => {
+      actor = who;
+      return { world: { ...world, projects: [project("p1", "Unification", "later", "cancelled")] } };
+    },
   });
-  assert.deepEqual(result, [{ change: "deferred", title: "Unification" }]);
-  assert.equal(h.writes, 0);
+  assert.equal(actor, "ai");
+  assert.deepEqual(result, [{ change: "closed", title: "Unification" }]);
+  assert.equal(h.writes, 1);
 });
 
 test("empty/no-op Projects do not write world; storage failure is not falsely acknowledged", async () => {

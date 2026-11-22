@@ -22,6 +22,7 @@ import {
   ensureInstitutionLifecycleNegotiationChatCore,
 } from "./institutionLifecycleCore.js";
 import { askHostForInstitution, institutionsGoToHost } from "./sharedInstitutions.js";
+import { humanCountriesWith } from "./humanPolities.js";
 
 export {
   advanceInstitutionLifecycleCore,
@@ -39,7 +40,7 @@ const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => Array.isArray(value) ? value : [];
 
 export const commitInstitutionLifecycleCommand = async ({
-  playerCountry = "", date = "", expectedGameId = "", command = {},
+  playerCountry = "", date = "", expectedGameId = "", command = {}, fence = null,
 } = {}) => {
   // In a shared game the host does this, for this player (sharedInstitutions.js).
   if (institutionsGoToHost()) return askHostForInstitution("lifecycle", { command });
@@ -52,12 +53,14 @@ export const commitInstitutionLifecycleCommand = async ({
       chats: normalizeChats(chats),
       events: normalizeEvents(events),
       playerCountry: player,
+      // Who acts is the seat; no one decides for any other person.
+      people: humanCountriesWith(game, player),
       date: moment,
       command: { ...command, authority: command?.authority || "player" },
     });
     const nextChats = reconcileChatsForPlayer(normalizeChats(result.chats), result.world, player);
     return { world: result.world, chats: nextChats, events: normalizeEvents(result.events) };
-  }, { expectedGameId });
+  }, { expectedGameId, fence });
   if (!result || committed?.skipped) throw new Error("Institution lifecycle command was not committed.");
   const committedChats = committed.chat || committed.chats || result.chats;
   return {
@@ -73,7 +76,7 @@ export const commitInstitutionLifecycleCommand = async ({
 
 
 export const ensureInstitutionLifecycleNegotiationChat = async ({
-  institutionId = "", caseIds = [], playerCountry = "", date = "", expectedGameId = "",
+  institutionId = "", caseIds = [], playerCountry = "", date = "", expectedGameId = "", fence = null,
 } = {}) => {
   // In a shared game the host does this, for this player (sharedInstitutions.js).
   if (institutionsGoToHost()) return askHostForInstitution("negotiation", { institutionId, caseIds });
@@ -92,7 +95,7 @@ export const ensureInstitutionLifecycleNegotiationChat = async ({
     const nextChats = reconcileChatsForPlayer(normalizeChats(result.chats), result.world, player);
     result = { ...result, chats: nextChats };
     return { world: result.world, chats: nextChats };
-  }, { expectedGameId });
+  }, { expectedGameId, fence });
   if (!result || committed?.skipped) throw new Error("Institution lifecycle negotiation was not opened.");
   const committedChats = committed.chat || committed.chats || result.chats;
   return {
@@ -105,7 +108,7 @@ export const ensureInstitutionLifecycleNegotiationChat = async ({
 
 export const commitInstitutionLifecycleChatBatch = async ({
   chatId = "", institutionId = "", lifecycleCaseIds = [], playerCountry = "", date = "",
-  chatEvents = [], lifecycleActions = [], cursors = null, expectedGameId = "",
+  chatEvents = [], lifecycleActions = [], cursors = null, expectedGameId = "", fence = null,
 } = {}) => {
   let result = null;
   const committed = await mutateCanonicalTurnState(({ world, chats, events, game }) => {
@@ -126,6 +129,8 @@ export const commitInstitutionLifecycleChatBatch = async ({
       chats: nextChats,
       events: normalizeEvents(events),
       playerCountry: player,
+      // The model answers for the AI's governments alone: none of the people.
+      people: humanCountriesWith(game, player),
       date: moment,
       institutionId,
       lifecycleActions,
@@ -137,7 +142,7 @@ export const commitInstitutionLifecycleChatBatch = async ({
     nextChats = reconcileChatsForPlayer(normalizeChats(result.chats), nextWorld, player);
     result = { ...result, world: nextWorld, chats: nextChats };
     return { world: nextWorld, chats: nextChats, events: normalizeEvents(result.events) };
-  }, { expectedGameId });
+  }, { expectedGameId, fence });
   if (!result || committed?.skipped) throw new Error("Institution lifecycle chat turn was not committed.");
   const committedChats = committed.chat || committed.chats || result.chats;
   return {

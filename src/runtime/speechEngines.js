@@ -17,8 +17,8 @@
 //             macOS refusing, the language not installed, any failure) the
 //             same press goes on with Whisper.
 //   whisper   OpenAI's Whisper base in a worker (Transformers.js on ONNX
-//             Runtime Web), for every language of the game: it was trained on
-//             all fifty, and its download is small enough to ask for.
+//             Runtime Web), for every language of the game but Irish: it was
+//             trained on the rest, and its download is small enough to ask for.
 //
 // Pure: everything about the platform comes in as arguments, so the choice is
 // tested without a browser.
@@ -61,12 +61,14 @@ export const systemSpeechPlatform = (userAgent) => /\bWindows NT\b|\bMacintosh\b
 const WHISPER_CODES = Object.freeze({ fil: "tl" });
 
 // Every language of the game's picker (src/runtime/i18n.js) that Whisper was
-// trained on, under Whisper's code. All fifty are.
+// trained on, under Whisper's code. All are but Irish (ga), which Whisper
+// was never taught: in Irish only a platform's recogniser listens.
 const WHISPER_LANGUAGES = Object.freeze(new Set([
   "en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ur", "id", "de", "ja",
   "sw", "mr", "te", "tr", "ta", "vi", "ko", "it", "ha", "th", "gu", "kn", "fa",
   "pl", "uk", "ml", "my", "pa", "ro", "nl", "el", "cs", "hu", "sv", "he", "ms",
   "tl", "am", "ne", "si", "km", "so", "az", "uz", "yo", "fi", "da",
+  "lv", "lt", "sk", "et", "mt",
 ]));
 
 // A region for each language, for the recognisers that take a locale (the Web
@@ -81,7 +83,8 @@ const LOCALES = Object.freeze({
   pa: "pa-IN", ro: "ro-RO", nl: "nl-NL", el: "el-GR", cs: "cs-CZ", hu: "hu-HU",
   sv: "sv-SE", he: "he-IL", ms: "ms-MY", fil: "fil-PH", am: "am-ET", ne: "ne-NP",
   si: "si-LK", km: "km-KH", so: "so-SO", az: "az-AZ", uz: "uz-UZ", yo: "yo-NG",
-  fi: "fi-FI", da: "da-DK",
+  fi: "fi-FI", da: "da-DK", lv: "lv-LV", lt: "lt-LT", sk: "sk-SK", et: "et-EE",
+  ga: "ga-IE", mt: "mt-MT",
 });
 
 // "pt-BR", "PT", " en " → the game's code ("pt", "en").

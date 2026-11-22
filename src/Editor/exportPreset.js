@@ -280,10 +280,13 @@ const buildUnitsForGame = (units) => (Array.isArray(units) ? units : [])
     const ownerCode = String(unit?.ownerCode || "").trim();
     if (!Number.isFinite(lng) || !Number.isFinite(lat) || !ownerCode) return null;
     const strength = Number(unit?.strength);
+    const unitType = String(unit?.unitType || "").trim();
     return {
       id: String(unit?.id || `scenario-unit-${index + 1}`),
       name: String(unit?.name || "").trim() || "Unit",
       type: String(unit?.type || "infantry").trim().toLowerCase() || "infantry",
+      // One of the scenario's own unit types (runtime/unitTypes.js), by its id; the game checks it against them.
+      ...(unitType ? { unitType } : {}),
       ownerCode,
       strength: Number.isFinite(strength) ? Math.max(1, Math.min(100, Math.round(strength))) : 100,
       lng: Number(lng.toFixed(5)),

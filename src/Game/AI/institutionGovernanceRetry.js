@@ -28,8 +28,10 @@ const ruleError = (message) => Object.assign(new Error(message), { code: INSTITU
 // The resolver's final word that no rule exists (institutionGovernanceBackfill.js).
 export const votingRuleMissingError = (name) => ruleError(votingRuleMissingMessage(name));
 
+// `fence`: the entry of a shared game's host queue the vote is asked in, which
+// the backfill's commit carries too.
 export const createVotingRuleRetry = ({ backfill, busy = () => false, attempted = new Set() } = {}) => async (commit, {
-  institutionId = "", proposalId = "", expectedGameId = "",
+  institutionId = "", proposalId = "", expectedGameId = "", fence = null,
 } = {}) => {
   try {
     return await commit();
@@ -41,7 +43,7 @@ export const createVotingRuleRetry = ({ backfill, busy = () => false, attempted 
     if (busy()) throw ruleError("The world is still updating. Ask for the vote again in a moment.");
     attempted.add(key);
     try {
-      await backfill({ institutionId, proposalId, expectedGameId });
+      await backfill({ institutionId, proposalId, expectedGameId, ...(fence ? { fence } : {}) });
     } catch (backfillError) {
       // Only the resolver's answer that there is no rule is final. Anything
       // else (the campaign moved on while it answered, the provider failed)

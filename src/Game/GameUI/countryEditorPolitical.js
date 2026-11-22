@@ -77,6 +77,7 @@ const partyToEditor = (party, index) => {
     ideology: clean(party?.ideology),
     ideologyFamily: clean(party?.ideologyFamily),
     subideology: clean(party?.subideology),
+    politicalPosition: clean(party?.politicalPosition),
     role: party?.ruling === true ? "governing" : party?.coalition === true ? "coalition" : clean(party?.role) || "opposition",
     seats: party?.seats == null || party?.seats === "" ? "" : String(party.seats),
     founded: clean(party?.founded),
@@ -260,6 +261,7 @@ const applyPartyEditor = (draft, base = {}) => {
   replaceText(next, "ideology", draft.ideology);
   if (Object.prototype.hasOwnProperty.call(draft, "ideologyFamily")) replaceText(next, "ideologyFamily", draft.ideologyFamily);
   if (Object.prototype.hasOwnProperty.call(draft, "subideology")) replaceText(next, "subideology", draft.subideology);
+  if (Object.prototype.hasOwnProperty.call(draft, "politicalPosition")) replaceText(next, "politicalPosition", draft.politicalPosition);
   if (Object.prototype.hasOwnProperty.call(draft, "role")) {
     const role = draft.ruling === true ? "governing" : draft.coalition === true ? "coalition"
       : (draft.role === "governing" || draft.role === "coalition" ? "opposition" : draft.role);

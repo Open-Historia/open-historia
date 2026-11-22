@@ -8,7 +8,7 @@ import { buildProvinceOutlinePaint, PROVINCE_OUTLINE_COLOR, PROVINCE_OUTLINE_MIN
 // Evaluate the real paint expressions with MapLibre, not a second implementation
 // of interpolation: invalid camera expressions should fail here, not at runtime.
 const evaluate = (paint, property, zoom, featureState = {}) => {
-  const compiled = createPropertyExpression(paint[property], latest.paint_line[property]);
+  const compiled = createPropertyExpression(paint[property], `layers[0].paint.${property}`, latest.paint_line[property]);
   assert.equal(compiled.result, "success", JSON.stringify(compiled.value));
   return compiled.value.evaluate({ zoom }, { properties: {} }, featureState);
 };
@@ -77,8 +77,8 @@ test("without region types the outline is drawn exactly as before, and reads no 
     }
   }
   for (const property of ["line-color", "line-width"]) {
-    const was = createPropertyExpression(typed[property], latest.paint_line[property]).value;
-    const now = createPropertyExpression(untyped[property], latest.paint_line[property]).value;
+    const was = createPropertyExpression(typed[property], `layers[0].paint.${property}`, latest.paint_line[property]).value;
+    const now = createPropertyExpression(untyped[property], `layers[0].paint.${property}`, latest.paint_line[property]).value;
     // Still worked out per region, so MapLibre draws it the same way; only no state is read.
     assert.equal(now.kind, was.kind, property);
     assert.equal(was.isStateDependent, true, property);

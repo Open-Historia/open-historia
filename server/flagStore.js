@@ -13,6 +13,7 @@ import path from "path";
 import crypto from "crypto";
 import { DATA_DIR } from "./dataDir.js";
 import { validateFlagDataUrl } from "./flagValidation.js";
+import { nameId } from "./nameId.js";
 
 const FLAGS_PATH = path.join(DATA_DIR, "flags-library.json");
 
@@ -35,8 +36,11 @@ const writeAll = (flags) => {
 // index so a later genuine upload is silently discarded.
 const hashOf = (dataUrl) => crypto.createHash("sha256").update(String(dataUrl)).digest("hex");
 
+// A flag's id, from its name by the game's one rule for an id made from a name
+// (nameId.js): a Latin name keeps its slug, a name in another script is its own
+// hash instead of "flag". The same rule as the website's (runtime/web/flagStore.js).
 const slug = (raw, fallback = "flag") =>
-  String(raw ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || fallback;
+  nameId(raw, (name) => String(name ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48)) || fallback;
 
 // A polity name is an exact key: kept as given, never cut short. One too long
 // to be a name is dropped rather than truncated into a different one.

@@ -71,9 +71,10 @@
         </div>
       </div>
       <div class="beta" id="beta" hidden>
-        <p><b>Do you want to download the beta version for the best experience?</b> We HIGHLY recommend playing the beta. It is a separate app: it installs beside this one and keeps its own saves.</p>
+        <p><b>Do you want the Native or the Beta version for the best experience?</b> Native runs smoothest, with the best performance; the beta gets new features first. Each is a separate app: it installs beside this one and keeps its own saves.</p>
         <div class="actions">
-          <button type="button" class="recommended" id="getBeta">Download the beta</button>
+          <button type="button" class="recommended" id="getNative">Download Native</button>
+          <button type="button" class="quiet" id="getBeta">Download the beta</button>
         </div>
       </div>
     </div>
@@ -91,6 +92,7 @@
       const later = document.getElementById("later");
       const beta = document.getElementById("beta");
       const getBeta = document.getElementById("getBeta");
+      const getNative = document.getElementById("getNative");
       const mb = (n) => (n / 1e6).toFixed(0);
 
       // The same window shows two things: an update installing as the game opens
@@ -129,8 +131,11 @@
         update.hidden = false;
       });
 
+      // Both in the player's browser; this window goes on updating.
+      getNative.addEventListener("click", () => {
+        window.ohSetup.openNative().catch(() => {});
+      });
       getBeta.addEventListener("click", () => {
-        // In the player's browser; this window goes on updating.
         window.ohSetup.openBeta().catch(() => {});
       });
 

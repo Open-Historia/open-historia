@@ -1,9 +1,11 @@
-/*! Open Historia — language setting & top-50 language catalog © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+/*! Open Historia — language setting & language catalog © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // UI language: chosen in Settings, stored on the SERVER (shared by every
 // device that plays through it — desktop browser and the Android app see the
 // same choice) and mirrored in localStorage so boot doesn't wait on a fetch.
 // "en" (the authored language) means no translation work happens at all.
+import { translationModelFor } from "./translationModels.js";
+
 const STORAGE_KEY = "ui_language";
 export const DEFAULT_LANGUAGE = "en";
 
@@ -13,8 +15,9 @@ export const DEFAULT_LANGUAGE = "en";
 // Device-local: it only steers prompts.
 const CHAT_STORAGE_KEY = "ai_chat_language";
 
-// The 50 most spoken languages, hand-curated: recognizable English name
-// first, endonym after. A full ISO dump read like random letters here.
+// The 50 most spoken languages, hand-curated, and the few more a translation
+// model covers: recognizable English name first, endonym after. A full ISO
+// dump read like random letters here.
 export const LANGUAGES = [
   { code: "en", name: "English", native: "English" },
   { code: "zh", name: "Chinese (Mandarin)", native: "中文" },
@@ -66,6 +69,14 @@ export const LANGUAGES = [
   { code: "yo", name: "Yoruba", native: "Yorùbá" },
   { code: "fi", name: "Finnish", native: "Suomi" },
   { code: "da", name: "Danish", native: "Dansk" },
+  // Not among the fifty, but a translation model on the device covers them
+  // (translationModels.js), so the interface can be played in them.
+  { code: "lv", name: "Latvian", native: "Latviešu" },
+  { code: "lt", name: "Lithuanian", native: "Lietuvių" },
+  { code: "sk", name: "Slovak", native: "Slovenčina" },
+  { code: "et", name: "Estonian", native: "Eesti" },
+  { code: "ga", name: "Irish", native: "Gaeilge" },
+  { code: "mt", name: "Maltese", native: "Malti" },
 ];
 
 const RTL_LANGUAGES = new Set(["ar", "he", "fa", "ur"]);
@@ -78,7 +89,6 @@ const RTL_LANGUAGES = new Set(["ar", "he", "fa", "ur"]);
 // made (scenario and game names and descriptions, custom polities, custom
 // stats, the region names of a map that is not built in, community posts) is
 // translated live.
-// Every other language in the picker still translates the interface live.
 export const SHIPPED_PACK_LANGUAGES = Object.freeze([
   "ar", "bn", "de", "es", "fa", "fr", "hi", "id", "it", "ja", "ko", "nl",
   "pl", "pt", "ru", "sv", "th", "tr", "uk", "ur", "vi", "zh",
@@ -86,7 +96,16 @@ export const SHIPPED_PACK_LANGUAGES = Object.freeze([
 
 export const hasShippedPack = (code) => SHIPPED_PACK_LANGUAGES.includes(code);
 
+// The languages the interface can be shown in: English, a shipped pack, or a
+// translation model on the device (translationModels.js). No translation is
+// an AI request, so a language with neither is not offered.
+export const canTranslateTo = (code) => code === DEFAULT_LANGUAGE || hasShippedPack(code) || Boolean(translationModelFor(code));
+
+// Every language, for what the AI writes in (the chat language).
 export const getLanguageOptions = () => LANGUAGES;
+
+// The languages the interface can be shown in, for its picker.
+export const getUiLanguageOptions = () => LANGUAGES.filter((entry) => canTranslateTo(entry.code));
 
 export const languageDisplayName = (code) =>
   LANGUAGES.find((entry) => entry.code === code)?.name || code;
@@ -234,7 +253,8 @@ export const chatTextDirection = () => {
 
 // Appended to every AI system prompt (see callAI) so replies arrive in the
 // player's language natively instead of being machine-translated after.
-export const languageDirective = (code = getStoredLanguage(), { force = false } = {}) => {
+// In a shared game the world's language (setWorldLanguage below), on every call.
+export const languageDirective = (code = worldLanguage || getStoredLanguage(), { force = false } = {}) => {
   if (code === DEFAULT_LANGUAGE && !force) {
     return "";
   }
@@ -257,7 +277,7 @@ export const languageDirective = (code = getStoredLanguage(), { force = false } 
 // messages" clause, which also stops a conversation drifting once one reply
 // slips) makes the chat-language setting actually hold, English included.
 export const chatLanguageDirective = () => {
-  const code = resolveChatLanguage();
+  const code = worldLanguage || resolveChatLanguage();
   const directive = languageDirective(code, { force: true });
   if (!directive) {
     return "";
@@ -274,7 +294,31 @@ export const chatLanguageDirective = () => {
 // so an Arabic player's prompt told the model "English" three times and Arabic
 // once, and the suggested actions came back in English (2026-10-29).
 // `chat`: the advisor and the leaders, who answer in the chat language.
+// A shared game's world is written in one language, a rule of the game the
+// host sets in the lobby (multiplayer/host/settings.js `language`; the owner,
+// 2026-11-18). While a game is shared it outranks what each device reads in,
+// for every request the game makes on any screen: one device's interface
+// language wrote the host's world, another's its own replies, and the world
+// came out in several. Each player translates on their own device. "" when no
+// game is shared.
+let worldLanguage = "";
+export const setWorldLanguage = (code) => {
+  const wanted = String(code ?? "").trim();
+  worldLanguage = LANGUAGES.some((entry) => entry.code === wanted) ? wanted : "";
+};
+export const worldLanguageCode = () => worldLanguage;
+
+// The code of the language this device writes a game in, by the rule below:
+// what a shared game's host offers as its world language.
+export const writingLanguageCode = (saveLanguage = "") => {
+  const code = getStoredLanguage();
+  if (code && code !== DEFAULT_LANGUAGE) return code;
+  const saved = String(saveLanguage ?? "").trim().toLowerCase();
+  return LANGUAGES.find((entry) => entry.code === saved || entry.name.toLowerCase() === saved || entry.native.toLowerCase() === saved)?.code || DEFAULT_LANGUAGE;
+};
+
 export const readingLanguageName = (saveLanguage = "", { chat = false } = {}) => {
+  if (worldLanguage) return languageDisplayName(worldLanguage);
   const code = chat ? resolveChatLanguage() : getStoredLanguage();
   if (code && code !== DEFAULT_LANGUAGE) return languageDisplayName(code);
   const saved = typeof saveLanguage === "string" ? saveLanguage.trim() : "";

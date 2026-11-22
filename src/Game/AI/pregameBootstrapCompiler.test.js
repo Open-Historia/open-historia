@@ -137,12 +137,18 @@ test("repeated war episodes with different known start dates do not collapse", (
   assert.equal(second.projectedWorld.wars.length, 2);
 });
 
-test("a conflicting date for an already-live same war fails closed instead of forking identity", () => {
+// The same belligerents are not fighting each other twice at once: another
+// date for the one live war between them is that war, never a second one
+// beside it, and the earlier of the two known dates is kept.
+test("a conflicting date for an already-live same war is that war, never a fork of it", () => {
   const first = compile([warFact()]);
   assert.equal(first.ok, true, first.error);
-  const conflict = compile([warFact({ ref: "w2", startedDate: "2021-05-01" })], { world: first.projectedWorld });
-  assert.equal(conflict.ok, false);
-  assert.match(conflict.error, /same sides\/title but a different known start date/);
+  for (const [date, kept] of [["2021-05-01", "2020-11-18"], ["2019-02-01", "2019-02-01"]]) {
+    const restated = compile([warFact({ ref: "w2", startedDate: date })], { world: first.projectedWorld });
+    assert.equal(restated.ok, true, restated.error);
+    assert.equal(restated.projectedWorld.wars.length, 1, `${date}: no second live war between the same sides`);
+    assert.equal(restated.projectedWorld.wars[0].startedDate, kept, date);
+  }
 });
 
 // This was "an agreement with incomplete identity fails closed rather than
@@ -312,7 +318,10 @@ test("puppet baseline rejects chains instead of silently reparenting Round-Zero 
   assert.match(result.error, /puppet chain is forbidden/);
 });
 
-test("final-state conservation refuses a baseline that would evict existing authoritative canon", () => {
+// The world kept at most 64 wars, and a new one evicted the oldest ended war
+// (here, refusing the whole baseline). Nothing live is cut now, and ended wars
+// are history kept well past it.
+test("a baseline beside sixty-four wars of history evicts none of them", () => {
   const world = makeWorld();
   world.wars = Array.from({ length: 64 }, (_, index) => ({
     id: `existing-war-${index + 1}`,
@@ -326,8 +335,8 @@ test("final-state conservation refuses a baseline that would evict existing auth
   }));
 
   const result = compile([warFact({ ref: "w-new", title: "Current War", startedDate: "2020-11-18" })], { world });
-  assert.equal(result.ok, false);
-  assert.match(result.error, /would evict existing authoritative war record/);
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.projectedWorld.wars.length, 65);
 });
 
 test("successful receipt conserves every candidate fact and native-derived war mirror", () => {
@@ -391,12 +400,20 @@ test("semantic baseline contract rejects clamped numeric ranges and lossy polity
   );
 
   const thirteen = Array.from({ length: 13 }, (_, index) => `Polity ${index + 1}`);
-  assert.match(
+  // A war's side holds what any war's does (runtime/warRecord.js MAX_WAR_SIDE_MEMBERS).
+  assert.equal(
     validatePregameBootstrapCandidateShape({
       contractVersion: 1,
       facts: [{ ref: "w1", kind: "war", title: "War", status: "active", sideA: thirteen, sideB: ["Beta"] }],
     }),
-    /war sides may contain at most 12 distinct polities/,
+    "",
+  );
+  assert.match(
+    validatePregameBootstrapCandidateShape({
+      contractVersion: 1,
+      facts: [{ ref: "w1", kind: "war", title: "War", status: "active", sideA: Array.from({ length: 65 }, (_, index) => `Polity ${index + 1}`), sideB: ["Beta"] }],
+    }),
+    /war sides may contain at most 64 distinct polities/,
   );
   assert.match(
     validatePregameBootstrapCandidateShape({
@@ -417,21 +434,24 @@ test("semantic baseline contract rejects clamped numeric ranges and lossy polity
   );
 });
 
-test("same-batch war facts resolve against staged canon and conflicts fail closed in either order", () => {
+test("same-batch war facts resolve against staged canon: the first stands, a conflicting second is left out, in either order", () => {
   const active = warFact({ ref: "w-active", status: "active" });
   const ceasefire = warFact({ ref: "w-ceasefire", status: "ceasefire" });
   for (const facts of [[active, ceasefire], [ceasefire, active]]) {
     const result = compile(facts);
-    assert.equal(result.ok, false);
-    assert.match(result.error, /conflicts on status/);
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.projectedWorld.wars.length, 1, "one war, never two between the same sides");
+    assert.equal(result.projectedWorld.wars[0].status, facts[0].status, "the first fact's war stands");
+    assert.deepEqual(result.receipt.omitted.map((entry) => entry.ref), [facts[1].ref]);
   }
 
   const renamed = compile([
     warFact({ ref: "w1" }),
     warFact({ ref: "w2", title: "A Different Label For The Same Live War" }),
   ]);
-  assert.equal(renamed.ok, false);
-  assert.match(renamed.error, /identity is ambiguous/);
+  assert.equal(renamed.ok, true, renamed.error);
+  assert.deepEqual(renamed.receipt.omitted.map((entry) => entry.ref), ["w2"]);
+  assert.match(renamed.receipt.omitted[0].reason, /identity is ambiguous/);
 });
 
 test("war merge enriches unknown date and provenance and conserves them into the native mirror", () => {
@@ -636,7 +656,10 @@ test("scenario-authored war mirror linkage is authoritative even when its id is 
   assert.deepEqual(result.projectedWorld.wars.find((entry) => entry.id === "scenario-war")?.storylineIds, ["scenario-war-mirror"]);
 });
 
-test("war mirror cardinality fails closed above twelve total belligerents", () => {
+// A war of more belligerents than a storyline follows used to refuse the whole
+// pre-game history. The war keeps every member; its scheduler storyline
+// follows the leading members of both sides.
+test("a war of more than twelve belligerents is kept whole; its mirror follows twelve of them", () => {
   const names = Array.from({ length: 24 }, (_, index) => `Polity ${index + 1}`);
   const world = makeWorld(names);
   const twelve = compile([warFact({
@@ -645,17 +668,15 @@ test("war mirror cardinality fails closed above twelve total belligerents", () =
   assert.equal(twelve.ok, true, twelve.error);
   assert.equal(twelve.projectedWorld.storylines.find((entry) => entry.kind === "war")?.participants.length, 12);
 
-  const thirteen = compile([warFact({
-    sideA: names.slice(0, 6), sideB: names.slice(6, 13), title: "Thirteen-Party War",
+  const twentyFour = compile([warFact({
+    sideA: names.slice(0, 12), sideB: names.slice(12, 24), title: "Twenty-Four-Party War",
   })], { world });
-  assert.equal(thirteen.ok, false);
-  assert.match(thirteen.error, /at most 12 total belligerents|more than 12 total belligerents/);
-
-  const twentyFourShape = validatePregameBootstrapCandidateShape({
-    contractVersion: 1,
-    facts: [warFact({ sideA: names.slice(0, 12), sideB: names.slice(12, 24), title: "Twenty-Four-Party War" })],
-  });
-  assert.match(twentyFourShape, /at most 12 total belligerents/);
+  assert.equal(twentyFour.ok, true, twentyFour.error);
+  const war = twentyFour.projectedWorld.wars[0];
+  assert.deepEqual([war.sideA.length, war.sideB.length], [12, 12]);
+  const mirror = twentyFour.projectedWorld.storylines.find((entry) => entry.kind === "war");
+  assert.equal(mirror.participants.length, 12);
+  assert.deepEqual(mirror.participants.slice(0, 4), ["Polity 1", "Polity 13", "Polity 2", "Polity 14"], "both sides' leaders, in turn");
 });
 
 test("known Day-One baseline dates may not be later than the campaign start", () => {
@@ -667,6 +688,12 @@ test("known Day-One baseline dates may not be later than the campaign start", ()
   ];
   for (const fact of cases) {
     const result = compile([fact], { startDate: "2021-07-18" });
+    if (fact.kind === "war") {
+      // A war fact is left out on its own; the rest of the baseline would stand.
+      assert.equal(result.ok, true, result.error);
+      assert.match(result.receipt.omitted[0].reason, /after the Round-One campaign start/);
+      continue;
+    }
     assert.equal(result.ok, false);
     assert.match(result.error, /after the Round-One campaign start/);
   }
@@ -995,8 +1022,8 @@ test("a restated war still has to agree on its status, and two wars on record ar
   const ceasefire = [warFact({ ref: "w2", title: "The Northern War", status: "ceasefire" })];
   for (const leaveOutAmbiguous of [false, true]) {
     const result = compile(ceasefire, { world: first.projectedWorld, leaveOutAmbiguous });
-    assert.equal(result.ok, false);
-    assert.match(result.error, /conflicts on status \(active vs ceasefire\)/);
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(result.projectedWorld.wars.map((war) => [war.title, war.status]), [["Alpha-Beta War", "active"]], "canon's title and status stand");
   }
 
   const world = makeWorld();
@@ -1005,11 +1032,11 @@ test("a restated war still has to agree on its status, and two wars on record ar
     startedDate: "2020-11-18", sourceEventIds: [], storylineIds: [],
   }));
   const third = [warFact({ ref: "w3", title: "A Third Name For It" })];
-  const strict = compile(third, { world });
-  assert.equal(strict.ok, false);
-  assert.match(strict.error, /^\$\.facts\[0\] Round-Zero war identity is ambiguous: the same live sides\/date already exist under a different canonical title\.$/);
+  // (Left out on any attempt: a war fact that cannot be made never refuses the rest.)
+  for (const leaveOutAmbiguous of [false, true]) assert.equal(compile(third, { world, leaveOutAmbiguous }).ok, true);
   const last = compile(third, { world, leaveOutAmbiguous: true });
   assert.equal(last.ok, true, last.error);
+  assert.match(last.receipt.omitted[0].reason, /Round-Zero war identity is ambiguous/);
   assert.deepEqual(last.receipt.omitted.map((entry) => [entry.ref, entry.kind, entry.title]), [["w3", "war", "A Third Name For It"]]);
   assert.deepEqual(last.receipt.facts, []);
   assert.deepEqual(last.receipt.derived, [], "no mirror is made for a war that is not in the baseline");

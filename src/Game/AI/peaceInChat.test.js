@@ -17,11 +17,11 @@ import { fileURLToPath } from "node:url";
 
 import { normalizeChatEntry, normalizeWorldState } from "../../runtime/gameState.js";
 import { parseDiplomaticEnvelope } from "../../runtime/diplomaticEnvelope.js";
-import { TERRITORY_AS_HELD, termsOfLetter } from "../../runtime/peaceTerms.js";
+import { TERRITORY_AS_HELD, readPeaceVerdict, termsOfLetter } from "../../runtime/peaceTerms.js";
 import { peaceOffersForThread, placePeaceOffers } from "../GameUI/peacePlacement.js";
 import { GAMEPLAY_TOOLS, normalizeGameplayPayload, validateGameplayPayload } from "./gameplaySchemas.js";
 import { mergeSegmentPayloads } from "./jumpSegments.js";
-import { buildPeaceBlock } from "./peacePrompt.js";
+import { PEACE_BLOCK_MAX, buildPeaceBlock } from "./peacePrompt.js";
 import { answerPeaceProposal, offerPeace, playerDiplomacy, turnWarAndPeace } from "./warAndPeace.js";
 import { PEACE_ANSWERS_FIELD, PEACE_LINE, WAR_STATS_HEADING, buildWarStatsBlock, describePeaceTalk, describeWarStats, isAtWar } from "./warStatsPrompt.js";
 
@@ -86,6 +86,8 @@ test("the war's figures are in every prompt where a country at war speaks or dec
   // The time skip.
   const skip = buildPeaceBlock({ world: world(), game: { round: 9 }, players: ["Aland"] });
   assert.ok(skip.includes(`\n${WAR_STATS_HEADING}\n`) && skip.includes("Borduria:\n- The Border War:"), skip);
+  assert.ok(skip.includes("Bound to defend:\n- Borduria is defended by Dorland."), "war facts must not crowd out the alliance obligations");
+  assert.ok(skip.length <= PEACE_BLOCK_MAX, `the war evidence must fit the existing ${PEACE_BLOCK_MAX}-character cap`);
   // A leader's reply in a one-on-one chat.
   const main = read("main.jsx");
   const leader = main.slice(main.indexOf("export async function buildDiplomaticSystemPrompt("), main.indexOf("const advisorSessions = createAdvisorSessionRegistry();"));
@@ -119,14 +121,43 @@ test("a leader at war with the player is told what is on the table, and how to s
   // Not at war: nothing.
   assert.equal(describePeaceTalk({ world: world(), speaker: "Dorland", player: "Aland" }), "");
   // The hidden line comes off the reply, wherever it stands.
-  assert.deepEqual(parseDiplomaticEnvelope("We will not sign this.\nPEACE:decline\nDIPLOMATIC_MEMORY:Borduria refused Aland's terms.\nREACTION:😠"), { reply: "We will not sign this.", reaction: "😠", memorySummary: "Borduria refused Aland's terms.", peace: "decline" });
+  assert.deepEqual(parseDiplomaticEnvelope("We will not sign this.\nPEACE:decline\nDIPLOMATIC_MEMORY:Borduria refused Aland's terms.\nREACTION:😠"), { reply: "We will not sign this.", reaction: "😠", memorySummary: "Borduria refused Aland's terms.", peace: "decline", treaty: "" });
   assert.equal(parseDiplomaticEnvelope("Good day.\nDIPLOMATIC_MEMORY:Nothing.").peace, "");
   // And what it said is carried out; a reply that says nothing of peace leaves the terms open.
   const accepted = answerPeaceProposal(put, { from: "Borduria", to: "Aland", verdict: { verdict: "accept" }, players: ["Aland"], date: "1915-01-12", round: 8 });
   assert.equal(accepted.world.wars[0].status, "ended");
   const chat = read("../GameUI/chat.jsx");
-  assert.ok(chat.includes("const { reply, reaction, memorySummary, peace } = await sendDiplomaticMessage("));
+  assert.ok(chat.includes("const { reply, reaction, memorySummary, peace, treaty } = await sendDiplomaticMessage("));
   assert.ok(chat.includes("void answerPeaceInChat({ speaker: country.name, line: peace, chatId: chat.id, messageId: leaderMessage.id })"));
+});
+
+// "accepte" from a leader writing in French made no peace: the verdict was read
+// as an English word, with English inflections and synonyms. It is one of the
+// game's four words now, written so whatever language the reply is in, and its
+// terms are the game's records, whose conditions are the leader's own words.
+test("a French leader's acceptance makes the peace exactly as an English one does", () => {
+  const put = playerDiplomacy(world(), { op: "propose", ref: "war-1", terms: { territory: TERRITORY_AS_HELD }, country: "Aland", players: ["Aland"], date: "1915-01-10", round: 8 }).world;
+  const settle = (raw) => {
+    const { peace } = parseDiplomaticEnvelope(raw);
+    return answerPeaceProposal(put, { from: "Borduria", to: "Aland", verdict: readPeaceVerdict(peace, { from: "Borduria", to: "Aland" }), players: ["Aland"], date: "1915-01-12", round: 8 });
+  };
+  const french = settle("Nous acceptons vos conditions. La guerre est finie.\nPEACE:accept\nDIPLOMATIC_MEMORY:La Bordurie a accepté la paix d'Aland.");
+  const english = settle("We accept your terms. The war is over.\nPEACE:accept\nDIPLOMATIC_MEMORY:Borduria accepted Aland's peace.");
+  assert.deepEqual([french.outcome, french.world.wars[0].status], ["peace", "ended"]);
+  assert.deepEqual(french.world.regionOwnershipOverrides, english.world.regionOwnershipOverrides);
+  assert.deepEqual(french.world.peaceTreaties, english.world.peaceTreaties);
+
+  // A counter in French: the terms are records, the condition its own words.
+  const counter = settle("Nous proposons d'autres conditions.\nPEACE:counter as held; pay~Aland~1~3; condition~la frontière est démilitarisée");
+  const offer = counter.world.peaceOffers.find((entry) => entry.status === "open");
+  assert.equal(counter.outcome, "offered");
+  assert.deepEqual(offer.terms, { territory: TERRITORY_AS_HELD, reparations: { payer: "Aland", receiver: "Borduria", share: 0.01, years: 3 }, conditions: ["la frontière est démilitarisée"] });
+
+  // A word the game does not use, in any language, does nothing: the terms put stay open.
+  for (const word of ["accepte", "accepted", "refuse", "counter-offer as held"]) {
+    const none = settle(`...\nPEACE:${word}`);
+    assert.deepEqual([none.outcome, none.world.peaceOffers[0].status], ["", "open"], word);
+  }
 });
 
 test("a skip's answer with a peace offer lands as a chat message carrying its terms, and only when the skip says so", () => {
@@ -165,7 +196,8 @@ test("a skip's answer with a peace offer lands as a chat message carrying its te
   const gameplay = read("gameplay.js");
   assert.ok(gameplay.includes("const terms = peaceOffer && typeof peaceOffer === \"object\" ? termsOfLetter(peaceOffer) : null;"));
   assert.ok(gameplay.includes("const nextChat = await opening({ ...letter, source: \"outreach\", ...(offerMessageId ? { openingMessageId: offerMessageId } : {}) }, \"\", { revealWith: lastTurnEventId });"));
-  assert.ok(gameplay.includes("treaties: readTreatyLines(result.peaceTreaties),"));
+  // The skip's treaty lines, with the offers its end of a player's war accepted (playersWarsHold.js), reach the turn.
+  assert.ok(gameplay.includes("const toldTreaties = readTreatyLines(result.peaceTreaties);") && gameplay.includes("treaties: turnTreaties,"));
   assert.ok(gameplay.includes("peaceTreaties: merged.peaceTreaties,"));
   // Weariness 90 alone sends nothing.
   const spent = turnWarAndPeace({ world: world({ warWeariness: [{ country: "Borduria", value: 90 }] }), baseWorld: world(), days: 30, date: "1915-02-01", round: 9, players: ["Aland"] });
@@ -173,10 +205,10 @@ test("a skip's answer with a peace offer lands as a chat message carrying its te
 });
 
 test("an offer of peace no longer pops up over the map, and the skip's contract carries it safely", () => {
+  // Nor a call to arms (2026-11-06): nothing is drawn over the map for either; both are answered in a chat.
   const cards = fs.readFileSync(path.join(here, "../GameUI/warAndPeace.jsx"), "utf8").split("\r\n").join("\n");
-  const popup = cards.slice(cards.indexOf("export const WarAndPeaceCards = () => {"), cards.indexOf("// ---- in a diplomatic chat"));
-  assert.equal(popup.includes("offer"), false, "the cards over the map are calls to arms only");
-  assert.ok(popup.includes("openCallsFor(calls, country)"));
+  assert.equal(cards.includes("WarAndPeaceCards"), false);
+  assert.equal(read("../GameUI/main.jsx").includes("WarAndPeaceCards"), false);
   const chat = read("../GameUI/chat.jsx");
   assert.ok(chat.includes("{(peaceByMessage.get(String(msg.id ?? \"\")) ?? []).map(renderPeaceCard)}") && chat.includes("{strandedPeace.map(renderPeaceCard)}"));
   // The letter's terms and the treaties' lines ride in the skip's one answer: no array bounds (Gemini rejects them).

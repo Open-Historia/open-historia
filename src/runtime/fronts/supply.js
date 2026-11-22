@@ -27,7 +27,8 @@
 // home ground but joined to its mainland only by sea must not count as cut off
 // merely for being the smaller piece. So home ground is read in its connected
 // pieces, and of all the bodies a side holds, the one holding the most of a
-// piece of home ground is the one that piece feeds. A body the other side's
+// piece of home ground is the one that piece feeds, so long as that piece is
+// no mere scrap of what the body holds. A body the other side's
 // ground touches nowhere is left alone: it is cut off from no one.
 //
 // For a group, which is sovereign nowhere, the area it held when the run began
@@ -51,6 +52,7 @@ import {
   SUPPLY_FAR_FACTOR,
   SUPPLY_FULL_KM,
   SUPPLY_LEAST,
+  SUPPLY_PIECE_SHARE,
 } from "./constants.js";
 import { bodiesOf, ownCell, takeCells } from "./field.js";
 import { distanceFrom } from "./ground.js";
@@ -127,10 +129,15 @@ const homePieces = (battle, side) => {
 // the other side's ground touches.
 //
 // A body is supplied when, of all the bodies its side holds, it is the one
-// holding the most of the piece of home ground it holds most of: the main
-// part of the mainland, the main part of a peninsula. Every other body is cut
-// off: a lesser part of a piece of home ground (a pocket on a side's own soil),
-// or ground with no home in it at all (taken ground severed from the rest).
+// holding the most of a piece of home ground that is a good part of what it
+// holds (SUPPLY_PIECE_SHARE of the piece it holds most of, or more): the main
+// part of the mainland, the main part of a peninsula, a province of its own
+// that only it holds. Every other body is cut off: a lesser part of a piece of
+// home ground (a pocket on a side's own soil), or ground with no home in it at
+// all (taken ground severed from the rest). Read off the one piece it holds
+// most of alone, a body that held all of a province of its own and one cell
+// more of another piece the side's main body holds was cut off, and the whole
+// of it gave up ten days later: an army, and everything it stood on, gone.
 // Where a side has landed, that body is supplied whatever else is true.
 const suppliedBodies = (battle, side) => {
   const { field } = battle;
@@ -154,7 +161,8 @@ const suppliedBodies = (battle, side) => {
     if ((row > 0 && holders[index - cols] === other) || (col > 0 && holders[index - 1] === other)
       || (col < cols - 1 && holders[index + 1] === other) || (row < rows - 1 && holders[index + cols] === other)) touched[body] = 1;
   }
-  // The piece each body holds most of, and for each piece the body that holds most of it.
+  // The most each body holds of any piece, and for each piece the body that holds most of it,
+  // of the bodies for which it is no scrap.
   const mostOf = new Int32Array(bodies.count).fill(-1);
   const mostHeld = new Int32Array(bodies.count);
   const holderOf = new Int32Array(pieces.count).fill(-1);
@@ -169,10 +177,13 @@ const suppliedBodies = (battle, side) => {
     }
   }
   for (let body = 0; body < bodies.count; body += 1) {
-    const piece = mostOf[body];
-    if (piece >= 0 && mostHeld[body] > heldBy[piece]) {
-      heldBy[piece] = mostHeld[body];
-      holderOf[piece] = body;
+    if (mostOf[body] < 0) continue;
+    for (let piece = 0; piece < pieces.count; piece += 1) {
+      const cells = held.get(body * pieces.count + piece) ?? 0;
+      if (cells > 0 && cells >= mostHeld[body] * SUPPLY_PIECE_SHARE && cells > heldBy[piece]) {
+        heldBy[piece] = cells;
+        holderOf[piece] = body;
+      }
     }
   }
   const supplied = new Uint8Array(bodies.count);

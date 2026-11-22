@@ -18,6 +18,7 @@ import url from "url";
 import { resolveChildPath } from "./security.js";
 import { hashPayload } from "./basemapHash.js";
 import { hashFile, inspectTiledArchive } from "./tiledBasemaps.js";
+import { nameId } from "./nameId.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 import { DATA_DIR } from "./dataDir.js";
@@ -41,21 +42,27 @@ const writeJson = (target, value) => {
   fs.writeFileSync(target, JSON.stringify(value));
 };
 
+// A basemap's id, from its name by the game's one rule for an id made from a
+// name (nameId.js): a Latin name keeps its slug, a name in another script is its
+// own hash instead of "basemap".
 const normalizeId = (raw, fallback = "basemap") => {
-  const base = String(raw ?? "")
+  const base = nameId(raw, (name) => String(name ?? "")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
+    .slice(0, 48));
   return base || fallback;
 };
 
 // get/delete pass the raw route :id here (only create normalizes), so the
 // shared containment guard keeps ..%2f..%2f from escaping BASEMAPS_DIR.
+// i18n-ignore: what a path is called in a refusal for a bad id.
 const metaPath = (id) => resolveChildPath(BASEMAPS_DIR, `${id}.json`, "basemap id");
+// i18n-ignore: what a path is called in a refusal for a bad id.
 const payloadPath = (id) => resolveChildPath(BASEMAPS_DIR, `${id}.payload.json`, "basemap id");
 // A Tiled Basemap's archive: the PMTiles file itself, never read whole.
+// i18n-ignore: what a path is called in a refusal for a bad id.
 const archivePath = (id) => resolveChildPath(BASEMAPS_DIR, `${id}.pmtiles`, "basemap id");
 
 const getManifest = () => {

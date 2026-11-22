@@ -12,69 +12,14 @@
 
   var data = window.OH_STORY_MAP;
   var calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  var SVGNS = "http://www.w3.org/2000/svg";
 
-  // ---- the hero (SVG: a still map) ------------------------------------------------------
-  function svgNode(tag, attrs, parent) {
-    var element = document.createElementNS(SVGNS, tag);
-    for (var name in attrs) if (attrs[name] != null) element.setAttribute(name, attrs[name]);
-    if (parent) parent.appendChild(element);
-    return element;
-  }
-  function heroMap() {
-    var svg = document.getElementById("heroMap");
-    if (!svg || !data) return;
-    svg.setAttribute("viewBox", "0 0 " + data.w + " " + data.h);
-    svgNode("path", { d: data.graticule.world, class: "grat" }, svg);
-    var frag = document.createDocumentFragment();
-    data.countries.forEach(function (country) { svgNode("path", { d: country.d }, frag); });
-    svg.appendChild(frag);
-    var lanes = [["London", "Washington"], ["Paris", "Cairo"], ["Moscow", "Beijing"], ["Tokyo", "Canberra"], ["Madrid", "Brasília"], ["Cairo", "New Delhi"], ["Pretoria", "Brasília"], ["Beijing", "Tokyo"]];
-    lanes.forEach(function (pair, index) {
-      var a = data.places[pair[0]];
-      var b = data.places[pair[1]];
-      if (!a || !b) return;
-      var my = (a[1] + b[1]) / 2 - Math.abs(a[0] - b[0]) * 0.18;
-      var lane = svgNode("path", { d: "M" + a.join(" ") + "Q" + (a[0] + b[0]) / 2 + " " + my + " " + b.join(" "), class: "lane" + (index % 2 ? " p" : "") }, svg);
-      lane.style.animationDelay = -index * 1.3 + "s";
-    });
-    ["Washington", "Brasília", "London", "Paris", "Berlin", "Moscow", "Cairo", "Pretoria", "New Delhi", "Beijing", "Tokyo", "Canberra", "Madrid", "Seoul"].forEach(function (name, index) {
-      var at = data.places[name];
-      if (!at) return;
-      var dot = svgNode("circle", { cx: at[0], cy: at[1], r: 9, class: "ember" + (index % 2 ? " p" : "") }, svg);
-      dot.style.animationDelay = (index * 0.9) % 7 + "s";
-      svgNode("circle", { cx: at[0], cy: at[1], r: 2.6, class: "cap" }, svg);
-    });
-    requestAnimationFrame(function () { svg.classList.add("ready"); });
-  }
-  function scales() {
-    var svg = document.getElementById("scales");
-    var hero = svg && svg.closest(".hero");
-    if (!svg || !hero) return;
-    var idle = 0;
-    function set(deg) { svg.style.setProperty("--tilt", deg.toFixed(2) + "deg"); }
-    set(-4);
-    var timer = calm ? 0 : setInterval(function () { if (Date.now() - idle > 2500) set(Math.sin(Date.now() / 1000 * 0.7) * 4); }, 1200);
-    hero.addEventListener("pointermove", function (event) {
-      idle = Date.now();
-      var box = hero.getBoundingClientRect();
-      set(((event.clientX - box.left) / box.width - 0.5) * 18);
-    }, { passive: true });
-    window.addEventListener("pagehide", function () { clearInterval(timer); });
-  }
-  function astrolabe() {
-    var ticks = document.getElementById("astroTicks");
-    if (!ticks) return;
-    for (var a = 0; a < 360; a += 2) {
-      var long = a % 10 === 0;
-      var r0 = long ? 338 : 344;
-      var rad = a * Math.PI / 180;
-      svgNode("line", { x1: Math.sin(rad) * r0, y1: -Math.cos(rad) * r0, x2: Math.sin(rad) * 350, y2: -Math.cos(rad) * 350, class: long ? "long" : "" }, ticks);
-      if (a % 30 === 0) {
-        var t = svgNode("text", { x: Math.sin(rad) * 372, y: -Math.cos(rad) * 372 + 4 }, ticks);
-        t.textContent = a + "°";
-      }
-    }
+  // ---- the hero: four ages, drawn in the page; their motion rests while off screen ------
+  function realms() {
+    var hero = document.querySelector(".hero");
+    if (!hero || calm || !("IntersectionObserver" in window)) return;
+    new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) { hero.classList.toggle("asleep", !entry.isIntersecting); });
+    }).observe(hero);
   }
   // The doves of the congress, five of them, the first with an olive sprig.
   // Side on, flying right: the far wing behind, the body, the near wing with
@@ -98,24 +43,8 @@
     for (var i = 1; i <= 5; i += 1) html += '<svg class="dove d' + i + '" viewBox="0 0 126 64">' + DOVE + (i === 1 ? SPRIG : "") + "</svg>";
     box.innerHTML = html;
   }
-  function slips() {
-    var list = Array.prototype.slice.call(document.querySelectorAll(".slip"));
-    if (!list.length || calm) return;
-    var queued = 0;
-    function place() {
-      queued = 0;
-      var y = window.scrollY;
-      if (y > window.innerHeight * 1.5) return;
-      list.forEach(function (slip) {
-        slip.style.transform = "translateY(" + (-y * (parseFloat(slip.getAttribute("data-depth")) || 0.2)).toFixed(1) + "px) rotate(" + slip.getAttribute("data-rot") + "deg)";
-      });
-    }
-    window.addEventListener("scroll", function () { if (!queued) queued = requestAnimationFrame(place); }, { passive: true });
-    place();
-  }
-
   if (!data) {
-    document.addEventListener("DOMContentLoaded", function () { scales(); astrolabe(); slips(); doves(); });
+    document.addEventListener("DOMContentLoaded", function () { realms(); doves(); });
     return;
   }
 
@@ -367,6 +296,7 @@
     }
     m.on("load", function () {
       mapState.loaded = true;
+      if (mapState.mode !== "political") setMapMode(mapState.mode);
       if (quality.tier >= 2) dropTerrain();
       lastCamera = "";
       mapState.step = -1;
@@ -378,7 +308,31 @@
     return m;
   }
   // What the map shows that changes with the story: the North's regions and the front, France picked out.
-  var mapState = { loaded: false, step: -1, france: null };
+  var mapState = { loaded: false, step: -1, france: null, mode: "political" };
+  // MapModeSelector.jsx + diplomaticStance.js: in Diplomatic mode every country takes France's stance
+  // towards it (first mark wins: you, allies, friendly, hostile, neutral) instead of its own colour.
+  var STANCE_COLOURS = { you: "rgb(37, 99, 235)", ally: "rgb(56, 189, 248)", friendly: "rgb(34, 197, 94)", hostile: "rgb(249, 115, 22)", neutral: "rgb(100, 116, 139)" };
+  var STANCES = {
+    you: ["France"],
+    ally: ["United States", "United Kingdom", "Germany", "Italy", "Spain", "Canada", "Poland", "Turkey", "Netherlands", "Belgium", "Portugal", "Norway", "Denmark", "Greece", "Czechia", "Czech Republic", "Hungary", "Romania", "Bulgaria", "Slovakia", "Slovenia", "Croatia", "Albania", "Estonia", "Latvia", "Lithuania", "Luxembourg", "Iceland"],
+    friendly: ["Ireland", "Austria", "Sweden", "Finland", "Cyprus", "Malta", "Japan", "Australia", "South Korea", "India", "Brazil", "Morocco", "Tunisia", "Senegal", "Switzerland", "Mexico", "New Zealand", "Lebanon", "China"],
+    hostile: ["Russia", "North Korea", "Syria"]
+  };
+  function stanceExpression() {
+    var expr = ["match", ["get", "n"]];
+    Object.keys(STANCES).forEach(function (stance) { STANCES[stance].forEach(function (name) { expr.push(name, STANCE_COLOURS[stance]); }); });
+    expr.push(STANCE_COLOURS.neutral);
+    return expr;
+  }
+  function setMapMode(mode) {
+    mapState.mode = mode;
+    if (!map || !mapState.loaded) return;
+    var diplomatic = mode === "diplomatic";
+    try {
+      map.setPaintProperty("countries", "fill-color", diplomatic ? stanceExpression() : ["get", "c"]);
+      map.setPaintProperty("korea", "fill-color", ["match", ["get", "side"], "n", diplomatic ? STANCE_COLOURS.hostile : "#c4432c", diplomatic ? STANCE_COLOURS.friendly : "#2f6fb0"]);
+    } catch (error) { /* the style is not ready yet: the load handler applies the mode */ }
+  }
   function syncMap(T, kStep) {
     if (!map || !mapState.loaded) return;
     if (kStep !== mapState.step) {
@@ -1180,17 +1134,14 @@
   }
 
   function start() {
-    heroMap();
-    scales();
-    astrolabe();
-    slips();
+    realms();
     doves();
     canvas = document.getElementById("stageCanvas");
     if (!canvas || !canvas.getContext) return;
     ctx = canvas.getContext("2d");
     map = buildMap(document.getElementById("stageMap"));
     steps = Array.prototype.slice.call(document.querySelectorAll(".step[data-step]"));
-    if (window.OH_GAME_UI) window.OH_GAME_UI.init({ steps: STEPS, goTo: goTo, regionNames: regionNames, order: koreaOrder });
+    if (window.OH_GAME_UI) window.OH_GAME_UI.init({ steps: STEPS, goTo: goTo, regionNames: regionNames, order: koreaOrder, mapMode: setMapMode });
     resize();
     measure();
     readScroll();

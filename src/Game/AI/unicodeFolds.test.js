@@ -60,25 +60,20 @@ const lowered = (value) => cleaned(value).toLocaleLowerCase();
 // [file, the fold, what it reads from its file's scope, whether it folds accents away]
 const FOLDS = [
     ["src/Game/AI/nativeDiplomaticDirector.js", "pregameTitleKey", { clean: cleaned }, true],
-    ["src/Game/AI/nativeDiplomaticDirector.js", "diplomaticSearchText", {}, true],
     ["src/Game/AI/nativeWarLedger.js", "pregameWarTitleKey", { normalizeString: trimmed }, true],
     ["src/Game/AI/nativeWorldDirector.js", "pregameStorylineTitleKey", { normalizeString: trimmed }, true],
-    ["src/Game/AI/nativeWorldDirector.js", "storylineLinkText", { normalizeString: trimmed }, true],
-    ["src/Game/AI/nativeTimelineCurator.js", "normalizeText", { normalizeString: trimmed }, true],
-    ["src/Game/AI/nativeWorldIntegrity.js", "normalizeInstitutionAuthorityPhrase", { normalizeString: trimmed }, true],
+    // (nativeWorldDirector.js storylineLinkText, nativeWorldIntegrity.js
+    // normalizeInstitutionAuthorityPhrase and nativeTimelineCurator.js
+    // normalizeText went on 2026-11-13 with what they fed: a storyline is tied
+    // to its events by their ids, an institution is found by its exact name,
+    // case and spacing aside, and the curator reads the analyst's own fields.)
     ["src/Game/AI/pregameBootstrapCompiler.js", "titleKey", { lower: lowered }, true],
-    ["src/Game/AI/lookupTools.js", "foldForSearch", {}, true],
     ["src/Game/AI/playerFocus.js", "fold", { asText: trimmed }, true],
-    ["src/Game/AI/worldDirection.js", "fold", {}, true],
-    ["src/Game/AI/worldDirection.js", "words", { STOP_WORDS: new Set() }, true],
+    // (worldDirection.js `fold` and `words`, and projects.js `foldWords`, are
+    // gone: the player's share counts the playerRelated mark, scripted beats are
+    // matched by their ids, and Board entries by the events' own board ops.)
     ["src/Game/AI/regionFocus.js", "foldName", {}, true],
-    ["src/Game/AI/promptContext.js", "markerAttentionTokens", {
-        MARKER_ATTENTION_STOP_WORDS: new Set(),
-        markerAttentionKey: evaluate(statementOf("src/Game/AI/promptContext.js", "markerAttentionKey"), "markerAttentionKey", { normalizeString: trimmed }),
-    }, true],
     ["src/Game/AI/chatActions.js", "refFromLabel", { asText: trimmed, fold: (value) => trimmed(value).toLowerCase() }, false],
-    ["src/runtime/projects.js", "foldWords", {}, true],
-    ["src/runtime/demandCheck.js", "shorn", { str: trimmed, norm: (value) => trimmed(value).toLocaleLowerCase() }, false],
     ["src/runtime/placeSearch.js", "normalizePlaceText", {}, true],
 ];
 
@@ -153,7 +148,7 @@ test("a word keeps its marks: a vowel sign or a voicing mark does not cut it in 
     // Devanagari and Thai write vowels as marks on a consonant, Arabic may, and
     // decomposed kana carry their voicing as one. A fold that kept letters and
     // dropped marks would hand back a string of single consonants.
-    const { now } = folds.find((fold) => fold.label.startsWith("normalizeText "));
+    const { now } = folds.find((fold) => fold.label.startsWith("normalizePlaceText "));
     assert.equal(now("शिमला समझौता"), "शिमला समझौता");
     assert.equal(now("สนธิสัญญา"), "สนธิสัญญา");
     assert.equal(now("ポーツマス条約").split(" ").length, 1);
@@ -215,11 +210,17 @@ const generatorNow = generatorReaders(statementOf(GENERATOR, "slug"));
 const generatorThen = generatorReaders(SLUG_AS_IT_WAS);
 
 test("the generator's id is the one it made for ASCII, and the catalog's for every name", () => {
-    // Any name the old slug made an id from keeps that id, which is the rule
-    // stableAsciiId keeps for the catalog: "Договор 1997 года" is still "1997".
-    for (const text of [...ASCII, ...fuzz, "Traité de Paris", "Śląsk Agreement", "Договор 1997 года"]) {
+    // A Latin name keeps the id the old slug made of it, which is the rule
+    // stableAsciiId keeps for the catalog (server/nameId.js).
+    for (const text of [...ASCII, ...fuzz, "Traité de Paris", "Śląsk Agreement"]) {
         assert.equal(generatorNow.slug(text), generatorThen.slug(text), JSON.stringify(text));
     }
+    // A name that mixes scripts was cut down to its ASCII: "Договор 1997 года"
+    // was "1997", and so was every other treaty of that year. It has its own
+    // id now, the one the catalog gives it.
+    assert.equal(generatorThen.slug("Договор 1997 года"), "1997", "the test is not showing the fault");
+    assert.notEqual(generatorNow.slug("Договор 1997 года"), generatorNow.slug("Соглашение 1997 года"));
+    assert.equal(generatorNow.slug("Договор 1997 года"), canonicalInstitutionIdentity({ name: "Договор 1997 года" }).id);
     for (const [script, [first, second]] of Object.entries(TITLES)) {
         assert.equal(generatorThen.slug(first), "", `${script}: the old slug made an id; the test is not showing the fault`);
         assert.match(generatorNow.slug(first), /^u-[a-z0-9]+$/, script);

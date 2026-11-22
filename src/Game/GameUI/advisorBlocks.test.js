@@ -2,8 +2,11 @@
 // Runs in a BARE CHECKOUT: advisorBlocks.js is import-free on purpose.
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
 import {
+  ADVISOR_FENCE_LANGS,
+  closeObjectsBeforeList,
   extractFencedJson,
   looksLikeProjectOps,
   recoverOpsElementwise,
@@ -13,6 +16,45 @@ import {
 
 const fence = (lang, body) => "```" + lang + "\n" + body + "\n```";
 
+test("every channel the reply parser reads can follow a fused closing fence", () => {
+  const parser = fs.readFileSync(new URL("./advisorReply.js", import.meta.url), "utf8");
+  const read = [...parser.matchAll(/extractFencedJson\([^,]+,\s*"([a-z]+)"/g)].map((match) => match[1]);
+  assert.ok(read.length >= 6, "the parser's channels were found");
+  for (const lang of new Set(read)) assert.ok(ADVISOR_FENCE_LANGS.includes(lang), `${lang} is missing from ADVISOR_FENCE_LANGS`);
+  for (const lang of ADVISOR_FENCE_LANGS) {
+    const result = extractFencedJson(["```actions", '[{"title":"A"}]', `\`\`\`"\`\`\`${lang}`, "[]", "```"].join("\n"), "actions");
+    assert.deepEqual(result.json, [{ title: "A" }], lang);
+    assert.match(result.rest, new RegExp(`^\`\`\`${lang}\\n`), lang);
+  }
+});
+
+test("1912 Tangier: fused closing and next opening are separated without changing the JSON", () => {
+  const actions = [{ title: "Tangier Protocol Signature and Ratification Coordination", text: "Coordinate signature and ratification." }];
+  const raw = ["Proposed for Proceed.", "```actions", JSON.stringify(actions),
+    '```"```senddraft', '[{"country":"Kingdom of Spain"}]', '```"'].join("\n");
+  const result = extractFencedJson(raw, "actions", { streaming: true });
+  assert.deepEqual(result.json, actions);
+  assert.equal(result.reason, "");
+  assert.match(result.rest, /^Proposed for Proceed\.\n```senddraft\n/m);
+  assert.equal(extractFencedJson(result.rest, "senddraft").json?.[0]?.country, "Kingdom of Spain");
+});
+
+test("fused boundary never salvages an invalid Action body", () => {
+  const raw = ["Proposed for Proceed.", "```actions", '[{"title":"Tangier","text":',
+    '```"```senddraft', '[{"country":"Kingdom of Spain"}]', '```"'].join("\n");
+  const result = extractFencedJson(raw, "actions", { streaming: true });
+  assert.equal(result.json, null);
+  assert.match(result.reason, /invalid JSON/);
+  assert.equal(extractFencedJson(result.rest, "senddraft").json?.[0]?.country, "Kingdom of Spain");
+});
+
+test("a similarly fused but unknown fence cannot close an Action", () => {
+  const source = ["```actions", '[{"title":"Tangier"}]', '```"```arbitrary', "not a structured channel"].join("\n");
+  const result = extractFencedJson(source, "actions", { streaming: true });
+  assert.equal(result.json, null);
+  assert.equal(result.rest, "");
+});
+
 test("extracts a well-formed block and strips it from the prose", () => {
   const reply = `Here is the plan.\n\n${fence("actions", '[{"title":"Do a thing"}]')}\n\nThoughts?`;
   const { rest, json, truncated } = extractFencedJson(reply, "actions");
@@ -20,6 +62,28 @@ test("extracts a well-formed block and strips it from the prose", () => {
   assert.equal(truncated, false);
   assert.ok(!rest.includes("Do a thing"));
   assert.ok(rest.includes("Here is the plan."));
+});
+
+test("complete adjacent project arrays are one strict payload, not a partially salvaged batch", () => {
+  // A real 2029 campaign report contained "...}] [{\"op\":\"update\"...";
+  // Both independent JSON arrays must survive in source order, with no false
+  // malformed-entry receipt or demand to recover historical projects.
+  const body = '[{"op":"update","id":"energy","name":"Strategic Energy Autonomy","status":"stalled"}] '
+    + '[{"op":"update","id":"assets","name":"Asset Recovery project","progress":28}]';
+  assert.throws(() => JSON.parse(body), /non-whitespace|Unexpected token/);
+  const result = extractFencedJson(fence("projects", body), "projects", { salvageTruncated: true });
+  assert.deepEqual(result.json?.map((op) => op.id), ["energy", "assets"]);
+  assert.equal(result.reason, "");
+  assert.equal(result.dropped, 0);
+  assert.equal(result.truncated, false);
+});
+
+test("adjacent arrays inside string values do not become false top-level splits", () => {
+  const body = '[{"op":"create","name":"Telemetry ] [ reference"}] '
+    + '[{"op":"update","id":"energy","name":"Energy","progress":60}]';
+  const result = extractFencedJson(fence("projects", body), "projects", { salvageTruncated: true });
+  assert.deepEqual(result.json?.map((op) => op.name), ["Telemetry ] [ reference", "Energy"]);
+  assert.equal(result.dropped, 0);
 });
 
 test("a missing block is not an error", () => {
@@ -33,6 +97,63 @@ test("malformed JSON in a closed fence is dropped, and the fence is still stripp
   const { rest, json } = extractFencedJson(reply, "actions");
   assert.equal(json, null);
   assert.ok(!rest.includes("not json"));
+});
+
+// 2026-11-13: Boris's correction cited a literal ```actions token in prose,
+// before the real JSON fence. The old extractor started inside that sentence,
+// swallowed the real opening fence, and rejected otherwise valid proposals.
+test("inline example of actions syntax cannot steal a later real Action block", () => {
+  const body = '[{"title":"GNCCN Emergency Activation","text":"Coordinate the network","kind":"action"}]';
+  const reply = [
+    "I failed to provide the ` ```actions ` block earlier.",
+    "The planned queue no longer shows the old Action.",
+    "",
+    fence("actions", body),
+    "The mandate awaits approval.",
+  ].join("\n");
+  const result = extractFencedJson(reply, "actions", { streaming: true });
+  assert.deepEqual(result.json, [{ title: "GNCCN Emergency Activation", text: "Coordinate the network", kind: "action" }]);
+  assert.match(result.rest, /failed to provide/);
+  assert.match(result.rest, /mandate awaits approval/);
+  assert.equal(result.reason, "");
+});
+
+test("inline and blockquoted mentions of actions cannot become execution blocks", () => {
+  const reply = "I need a ```actions block.\n> ```actions\nUse an actual standalone code fence.";
+  for (const streaming of [false, true]) {
+    const result = extractFencedJson(reply, "actions", { streaming });
+    assert.equal(result.json, null);
+    assert.equal(result.rest, reply);
+  }
+});
+
+test("streaming malformed blocks report parse failure without warning on every re-render", () => {
+  const malformed = fence("actions", '{ "title": "missing array"');
+  const warnings = [];
+  const prior = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    for (let i = 0; i < 80; i += 1) {
+      const partial = extractFencedJson(malformed, "actions", { streaming: true });
+      assert.equal(partial.json, null);
+      assert.match(partial.reason, /invalid JSON/);
+    }
+    assert.deepEqual(warnings, [], "the live bubble must not log the same failure on every render");
+    const complete = extractFencedJson(malformed, "actions");
+    assert.equal(complete.json, null);
+    assert.match(complete.reason, /invalid JSON/);
+    assert.equal(warnings.length, 2, "final parse logs the failure and one excerpt only");
+  } finally {
+    console.warn = prior;
+  }
+});
+
+test("project mentions cannot swallow a later formal projects block", () => {
+  const reply = "There is no ```projects submission yet.\n"
+    + fence("projects", '[{"op":"create","name":"Technical review","summary":"Safety"}]');
+  const result = extractFencedJson(reply, "projects", { salvageTruncated: true });
+  assert.deepEqual(result.json, [{ op: "create", name: "Technical review", summary: "Safety" }]);
+  assert.match(result.rest, /no ```projects submission yet/);
 });
 
 // The bug this module exists for. A long board runs out of tokens partway
@@ -243,16 +364,9 @@ test("a fully valid batch is untouched by any of this", () => {
 // list misses is not a dropped op — it is a SILENT one: the block fails to parse,
 // this says "not a projects block", and the player gets no "Board not fully
 // updated" warning at all. cancelled/shelve/fail/failed/drop were all missing.
+// The engine accepts the board's own ops alone, in every language alike.
 test("looksLikeProjectOps knows every verb the engine accepts", () => {
-  const verbs = [
-    "create", "start", "launch", "open", "add",
-    "update", "progress", "edit",
-    "milestone",
-    "complete", "finish", "completed",
-    "cancel", "cancelled", "abandon", "shelve",
-    "fail", "failed",
-    "remove", "delete", "drop",
-  ];
+  const verbs = ["create", "update", "milestone", "complete", "cancel", "fail", "remove"];
   for (const verb of verbs) {
     assert.equal(
       looksLikeProjectOps(`[{"op":"${verb}","name":"Project Leviathan"}]`),
@@ -260,8 +374,12 @@ test("looksLikeProjectOps knows every verb the engine accepts", () => {
       `verb "${verb}" would have failed silently`,
     );
   }
-  // Still not fooled by a verb from a different op family, or by prose.
+  // Still not fooled by a verb from a different op family, or by prose; and an
+  // English synonym is no more a board op than a French one.
   assert.equal(looksLikeProjectOps('[{"op":"spawn","name":"1st Fleet"}]'), false);
+  for (const verb of ["launch", "lancer", "abandon", "abandonner"]) {
+    assert.equal(looksLikeProjectOps(`[{"op":"${verb}","name":"Project Leviathan"}]`), false, verb);
+  }
   assert.equal(looksLikeProjectOps('[{"op":"fail"}]'), false, "an op with nothing to target is not a board change");
 });
 
@@ -294,4 +412,17 @@ test("a closed block parses the same whether or not the reply is streaming", () 
   const complete = extractFencedJson(text, "projects", { salvageTruncated: true });
   assert.deepEqual(streaming, complete);
   assert.deepEqual(complete.json, [{ op: "create", name: "Dam" }]);
+});
+
+// A player's log, 2026-11-06: the suggested actions lost eighteen times to a list closed over an open object.
+test("a list closed while its last object is still open gets the brace it lacks, and nothing else", () => {
+  const body = '[\n  {"title":"A","kind":"action"},\n  {"title":"B","text":"x ] y {","kind":"action"]';
+  assert.deepEqual(extractFencedJson(fence("actions", body), "actions", { streaming: true }).json, [
+    { title: "A", kind: "action" },
+    { title: "B", text: "x ] y {", kind: "action" },
+  ]);
+  assert.equal(closeObjectsBeforeList('[{"a":1}]'), null, "valid JSON is left alone");
+  assert.equal(closeObjectsBeforeList('{"a":"]"}'), null, "a bracket inside a string is not one");
+  // Cut off rather than mis-closed: still nothing, as before (an incomplete fence is never an Action).
+  assert.equal(extractFencedJson(fence("actions", '[{"title":"A","kind":"action"},{"title":"B"'), "actions", { streaming: true }).json, null);
 });

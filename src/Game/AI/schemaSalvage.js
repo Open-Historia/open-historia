@@ -108,10 +108,15 @@ export const SCHEMA_SALVAGE_MAX_REMOVALS = 24;
 // Kyiv""), so a removal can be reported in the model's own terms.
 // `protectedPathPrefixes` marks state-bearing subtrees that salvage may inspect
 // but must never repair by deletion; the original validation error is retained.
+// `confineTo(segments)`, when given, is the ONLY thing salvage may remove: it
+// returns the path of the list item a fault sits in that may go whole (the Game
+// Master's: one operation of one event, answerImpactOps.js), or null, and a null
+// ends the salvage with the original error, as an unsalvageable answer does.
 export const salvageBySchema = (value, validate, {
     maxRemovals = SCHEMA_SALVAGE_MAX_REMOVALS,
     describe = null,
     protectedPathPrefixes = [],
+    confineTo = null,
 } = {}) => {
     const removed = [];
     let verdict = validate(value);
@@ -121,7 +126,15 @@ export const salvageBySchema = (value, validate, {
         if (!isRecord(value) && !Array.isArray(value)) break;
         const parsed = parseErrorPath(verdict.error);
         if (!parsed) break;
-        const removal = planRemoval(value, parsed.segments, parsed.rest);
+        let removal;
+        if (typeof confineTo === "function") {
+            const itemPath = confineTo(parsed.segments);
+            const list = Array.isArray(itemPath) ? valueAt(value, itemPath.slice(0, -1)) : null;
+            const itemIndex = Array.isArray(itemPath) ? itemPath.at(-1) : -1;
+            removal = Array.isArray(list) && itemIndex >= 0 && itemIndex < list.length ? { kind: "item", path: itemPath } : null;
+        } else {
+            removal = planRemoval(value, parsed.segments, parsed.rest);
+        }
         if (!removal) break;
         const removalPath = formatPath(removal.path);
         const protectedRemoval = protectedPathPrefixes.some((prefix) => {

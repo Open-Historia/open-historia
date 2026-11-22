@@ -595,7 +595,7 @@ const Units = () => {
           type="symbol"
           minzoom={3}
           layout={{
-            // Two words of the formation's name (see shortUnitLabel) instead of
+            // The formation's name as written (see shortUnitLabel) instead of
             // the strength percentage that used to sit here. Strength is still on
             // the counter — it drives the sort key below, and the popup gives the
             // number — but a name is what tells you which force this actually is.

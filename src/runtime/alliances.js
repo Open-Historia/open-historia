@@ -29,13 +29,18 @@
 //                          on a person's behalf. A call left unanswered for
 //                          CALL_STANDS_ROUNDS turns is a treaty broken.
 //
-// A TREATY BROKEN costs the breaker TREATY_BROKEN_REPUTATION of its standing
-// in the world (world.internationalReputation), and the bond is gone: it
-// leaves the agreement (which ends when fewer than two are left in it). A
-// member of an institution that will not fight keeps its seat and pays the
-// same.
+// A TREATY BROKEN: the bond is gone, the breaker leaves the agreement (which
+// ends when fewer than two are left in it), and what the agreement says a
+// breach costs, as the request that made it wrote it, is carried out
+// (Game/AI/warAndPeace.js withTreatyBroken, its onBreak effects); one with
+// none written costs nothing more. A member of an institution that will not
+// fight keeps its seat and loses TREATY_BROKEN_REPUTATION of its standing
+// (world.internationalReputation): an institution's charter has no effects
+// of its own written.
 //
 // Pure, and loads in plain Node.
+
+import { MAX_WAR_SIDE_MEMBERS, keepOpenRows } from "./warRecord.js";
 
 export const DEFENSIVE_AGREEMENT_TYPES = Object.freeze(["alliance", "mutual_defense"]);
 export const GUARANTEE_TYPE = "guarantee";
@@ -46,7 +51,7 @@ export const CALL_STANDS_ROUNDS = 2;
 // The most allies a war brings in on a side in one turn: the strongest first.
 export const ALLIES_CALLED_MOST = 6;
 // The most countries the war ledger keeps on a side (Game/AI/nativeWarLedger.js).
-export const WAR_SIDE_MOST = 12;
+export const WAR_SIDE_MOST = MAX_WAR_SIDE_MEMBERS;
 export const HONOUR_RELATION_LEAST = -30;
 export const HONOUR_WEARINESS_MOST = 70;
 export const CALLS_KEPT_MOST = 40;
@@ -104,7 +109,11 @@ export const isBoundToDefend = (world, ally, country) => defendersOf(world, coun
 
 // ---- calls to arms ------------------------------------------------------------------------
 
-// world.callsToArms: { id, warId, ally, defender, attackers: [names], via: { kind, id, title }, date, round, status, answeredRound? }
+// world.callsToArms: { id, warId, ally, defender, attackers: [names], via: { kind, id, title }, date, round, status, answeredRound?, messageId? }
+//   messageId   the message in which the defender asks the ally for help (Game/AI/gameplay.js), under which the
+//               ally answers it (GameUI/warAndPeace.jsx CallToArmsCard)
+//   askedRound  the turn that message was sent, where it was sent later than the call opened (an old save's call,
+//               or one whose message could not be sent at first): the call stands from then
 export const normalizeCallToArms = (raw) => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const id = clean(raw.id, 120);
@@ -125,6 +134,8 @@ export const normalizeCallToArms = (raw) => {
     round: Math.max(0, Math.round(figure(raw.round))),
     status,
     ...(status !== "open" && answered > 0 ? { answeredRound: answered } : {}),
+    ...(clean(raw.messageId, 160) ? { messageId: clean(raw.messageId, 160) } : {}),
+    ...(Math.round(figure(raw.askedRound)) > 0 ? { askedRound: Math.round(figure(raw.askedRound)) } : {}),
   };
 };
 
@@ -134,7 +145,8 @@ export const normalizeCallsToArms = (value) => {
     const call = normalizeCallToArms(raw);
     if (call) kept.set(call.id, call);
   }
-  return [...kept.values()].slice(-CALLS_KEPT_MOST);
+  // (A call nobody has answered is never cut: runtime/warRecord.js keepOpenRows.)
+  return keepOpenRows([...kept.values()], CALLS_KEPT_MOST, (call) => call.status === "open");
 };
 
 // The calls that wait for one country's answer ("" for anybody's).
@@ -170,7 +182,10 @@ export const callsForTurn = ({ world = {}, wars = [], began = [], calls = [], pl
     const [sideA, sideB] = sidesOf(war);
     // The war is over, or the country came into it some other way: nothing is owed.
     if (!war || !active(war) || [...sideA, ...sideB].some((name) => fold(name) === fold(call.ally))) return { ...call, status: "lapsed", answeredRound: now };
-    if (now - call.round < CALL_STANDS_ROUNDS) return call;
+    // A person's call no message has asked yet (Game/AI/gameplay.js sends it at the end of the turn) was never
+    // heard: silence is no answer to it. Once asked, it stands from the turn it was.
+    if (!call.messageId && played.has(fold(call.ally))) return call;
+    if (now - Math.max(call.round, call.askedRound ?? 0) < CALL_STANDS_ROUNDS) return call;
     // Silence is an answer.
     broken.push({ ally: call.ally, defender: call.defender, via: call.via, warId: call.warId });
     return { ...call, status: "refused", answeredRound: now };

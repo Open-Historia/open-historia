@@ -168,3 +168,12 @@ test("the tab is in the Stats pane, opens a country from a row, and asks no mode
   assert.ok(section.includes("Countries that have not been assessed are left out."));
   assert.equal(section.toLowerCase().includes("gradient"), false);
 });
+
+test("custom rankings omit unavailable figures and include recorded zeros", () => {
+  const values = [null, "", "  ", false, [], {}, undefined, 0, "0", 25];
+  const countries = values.map((_, i) => ({ key: `Realm${i}`, label: `Realm${i}` }));
+  const world = { countryStats: Object.fromEntries(countries.map((c, i) => [c.key, { customStats: { treasury: values[i] } }])) };
+  const result = buildRanking({ countries, world, metric: { key: "custom:treasury" } });
+  assert.deepEqual(result.rows.map((r) => r.value), [25, 0, 0]);
+  assert.equal(result.unranked, 7);
+});

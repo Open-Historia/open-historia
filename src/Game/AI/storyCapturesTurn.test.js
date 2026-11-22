@@ -17,11 +17,41 @@ import { frontRunSpan, planFrontMoments } from "./frontTurn.js";
 
 const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
 const frontTurn = readFileSync(new URL("./frontTurn.js", import.meta.url), "utf8");
+const storyMarch = readFileSync(new URL("./storyMarch.js", import.meta.url), "utf8");
 
 test("the skip is told it may have an army take a region, with enough of its troops near, and to bring them up first", () => {
   assert.match(gameplay, /\[Taking Ground\]\r?\nAn army may take a region in this period wherever what has led up to it makes that likely, or where history took it at this time/);
   assert.match(gameplay, /a regionControlOps control entry, basis occupation, the region by name\. Move the formation that took it there in the same event/);
   assert.match(gameplay, /A region is taken only where enough of the taker's troops stand near it, more for a larger region: where too few do, move them up first, in an earlier event, or the region stays where it was\./);
+  assert.match(gameplay, /Only that entry moves the map: a region an event says was taken, with no entry for it, stays with its holder\./);
+});
+
+// "dont do keywording its super unreliable" (the owner, 2026-11-06). The map
+// moved on English words three ways: a capture told with the taker's formation
+// moved there (narratedCapture.js findNarratedCaptures), a whole polity said to
+// be annexed (statedAnnexations), and the player's annexation order told as done
+// (orderedAnnexations.js narratesAnnexation), plus a strict attempt sent back
+// over capture or annexation words (CONTROL_CHANGE_LANGUAGE,
+// LEGAL_TRANSFER_LANGUAGE). An event written in any other language moved
+// nothing. Now only the operations an event carries move the map, whatever its
+// language, and the skip is told so.
+test("nothing reads an event's words to move the map: only its operations do, in every language", () => {
+  const validate = gameplay.slice(gameplay.indexOf("export const validateGeneratedWorldChanges"), gameplay.indexOf("// Provider transport validation is not enough for politicalActorOps"));
+  assert.ok(validate.length > 0);
+  for (const gone of [
+    "completeNarratedCaptures", "completeNarratedAnnexations", "findNarratedCaptures", "mayNarrateCapture", "statesCapture",
+    "statedAnnexations", "orderedAnnexations(", "hasAnnexOrders", "narratesAnnexation", "CONTROL_CHANGE_LANGUAGE",
+    "LEGAL_TRANSFER_LANGUAGE", "captureGuard",
+  ]) assert.ok(!gameplay.includes(gone), `${gone} is gone`);
+  assert.ok(!/from "\.\/(?:narratedCapture|orderedAnnexations)\.js"/.test(gameplay), "neither reader is imported");
+  for (const file of ["./narratedCapture.js", "./orderedAnnexations.js"]) {
+    assert.throws(() => readFileSync(new URL(file, import.meta.url)), /ENOENT/, `${file} is gone`);
+  }
+  // What the skip is told instead: what its impacts say is all that happens to the map.
+  const rules = gameplay.slice(gameplay.indexOf("const FOLDED_SKIP_CONSEQUENCES = ["), gameplay.indexOf("].join(\"\\n\");", gameplay.indexOf("const FOLDED_SKIP_CONSEQUENCES = [")));
+  assert.match(rules, /What an event's impacts say is ALL that happens to the map/);
+  assert.match(rules, /Aleppo falls\\" always carries the op that shows it, whoever took it\./);
+  assert.match(rules, /When that outcome moves land \(an annexation carried out, a region taken\), the same event carries the regionTransfers or regionControlOps that move it; an order that fails or is put off moves none\./);
 });
 
 test("a capture is a capture for the engine; a treaty's transfer is not", () => {
@@ -36,16 +66,16 @@ test("a capture is a capture for the engine; a treaty's transfer is not", () => 
 
 test("a capture the engine refused is not made in the world: its control operation comes off its event, and the receipt says why", () => {
   assert.match(frontTurn, /const failedCaptures = asArray\(result\.notes\)\.filter\(\(note\) => note\?\.kind === "capture-failed" && clean\(note\?\.ref\)\);/);
-  assert.match(frontTurn, /events: attachFrontFlips\(kept, result\.flips, \{ dayOf, aboutOf \}\)\.events,/);
+  assert.match(frontTurn, /const attached = attachFrontFlips\(kept, result\.flips, \{ dayOf, aboutOf, tellsOf: frontPlaceTold \}\);/);
   assert.match(frontTurn, /"capture-failed": \(notes\) => notes\.slice\(0, 4\)\.map\(\(note\) => `\$\{clean\(note\?\.taker\)\} could not take \$\{clean\(note\?\.region\) \|\| "a region"\}: too few of its troops near`\)/);
 });
 
 test("off any battlefield, as many of the taker's free land formations as the region's size asks march in, and too few take nothing", () => {
-  const body = gameplay.slice(gameplay.indexOf("const marchCapturersIn = async"), gameplay.indexOf("// A region's area in km², near enough"));
+  const body = storyMarch.slice(storyMarch.indexOf("export const marchStoryCapturers = "));
   assert.ok(body.length > 0);
   // Not a garrison, not covert, not one fighting on a battlefield, and within reach.
-  assert.match(gameplay, /const STORY_MARCHERS = new Set\(\["infantry", "armor", "artillery"\]\);/);
-  assert.match(gameplay, /const STORY_MARCH_KM = 800;/);
+  assert.match(storyMarch, /export const STORY_MARCHERS = new Set\(\["infantry", "armor", "artillery"\]\);/);
+  assert.match(storyMarch, /export const STORY_MARCH_KM = 800;/);
   assert.match(body, /!unit\.covert && !normalizeString\(unit\.committedTo\)/);
   // The region's size sets how many: at least the least, or the control operation comes off the event.
   assert.match(body, /const \{ least, most \} = takersFor\(geometryAreaKm2\(row\.geometry\)\);/);
@@ -54,6 +84,6 @@ test("off any battlefield, as many of the taker's free land formations as the re
   assert.match(body, /near\.slice\(0, Math\.max\(0, most - arriving - standing\)\)/);
   // A region on an open battlefield the taker fights on is the engine's.
   assert.match(body, /if \(!row \|\| !taker \|\| onFront\(row, taker\)\) continue;/);
-  // Run on the answer that is kept, after the narrated captures.
-  assert.match(gameplay, /await completeNarratedCaptures\(containers, world, \{ receipt, renderedRegions, lookupContext \}\);\r?\n  \}\r?\n[\s\S]{0,200}if \(!strict && !resolvedRegionIdsOnly && Array\.isArray\(candidate\?\.events\)\) \{\r?\n    await marchCapturersIn\(containers, world, \{ receipt, renderedRegions, lookupContext \}\);/);
+  // Run on the answer that is kept, after its units and structures are placed.
+  assert.match(gameplay, /if \(!resolvedRegionIdsOnly\) await resolvePlacements\(containers, world, \{ receipt, renderedRegions, lookupContext \}\);\r?\n[\s\S]{0,900}if \(!strict && !resolvedRegionIdsOnly && Array\.isArray\(candidate\?\.events\)\) \{\r?\n    await marchCapturersIn\(containers, world, \{ receipt, renderedRegions, lookupContext \}\);/);
 });

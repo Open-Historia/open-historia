@@ -45,7 +45,7 @@ test("packing keeps the runtime packages and moves the rest out of what electron
 });
 
 test("a package the app needs but does not declare stops the packing", () => {
-  assert.throws(() => packagedManifest({ dependencies: { express: "1" } }), /electron-updater/);
+  assert.throws(() => packagedManifest({ dependencies: { "@noble/hashes": "1", express: "1" } }), /electron-updater/);
 });
 
 test("nothing of a developer's, and no second copy of anything, is packed", () => {

@@ -28,7 +28,7 @@ const noticeStyle = {
   padding: "0.6rem 0.8rem",
   borderRadius: "12px",
   border: "1px solid rgba(96,165,250,0.32)",
-  backgroundColor: "rgba(16,21,24,0.96)",
+  backgroundColor: "var(--oh-ui-overlay-strong, rgba(16,21,24,0.96))",
   boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
   color: "#dbeafe",
   fontFamily: "sans-serif",

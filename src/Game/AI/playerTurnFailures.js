@@ -89,6 +89,7 @@ export const describePlayerTurnFailures = (failures, { retryError = "" } = {}) =
 
 // What the model is told, on either retry. The failed events by title and why,
 // and the orders by id and what they say, so each can be cited in actionIds.
+// i18n-ignore: the model's directive on a retry, never shown.
 export const buildPlayerEventRetryDirective = (failures, { originDate = "", targetDate = "", wholeSkip = false } = {}) => {
     const events = asArray(failures?.events);
     const orders = asArray(failures?.orders);

@@ -92,24 +92,25 @@ test("the Wars feature is listed, always on, with Fronts, Air units and Navies s
     ["battlefields", "toggle", undefined, undefined, true],
     ["air", "toggle", undefined, undefined, true],
     ["navies", "toggle", undefined, undefined, true],
-    ["pace", "number", 25, 300, 100],
+    ["railTransport", "toggle", undefined, undefined, true],
+    ["seaTransport", "toggle", undefined, undefined, true],
+    ["airTransport", "toggle", undefined, undefined, true],
   ]);
-  const all = { enabled: true, battlefields: true, air: true, navies: true, pace: 100 };
+  const all = { enabled: true, battlefields: true, air: true, navies: true, railTransport: true, seaTransport: true, airTransport: true };
   assert.deepEqual(featureDefaults().fronts, all);
   // A scenario saved before the feature existed has it on.
   assert.deepEqual(normalizeFeatureSettings({ espionage: false }).fronts, all);
   // One saved with fronts off, before the parts had switches, has its battlefields off and nothing else.
-  assert.deepEqual(normalizeFeatureSettings({ fronts: { enabled: false, pace: 1000 } }).fronts, { ...all, battlefields: false, pace: 300 });
-  assert.deepEqual(normalizeFeatureSettings({ fronts: { pace: 3 } }).fronts, { ...all, pace: 25 });
+  // A pace an older scenario saved (the setting is gone, 2026-11-04) is dropped.
+  assert.deepEqual(normalizeFeatureSettings({ fronts: { enabled: false, pace: 1000 } }).fronts, { ...all, battlefields: false });
+  assert.deepEqual(normalizeFeatureSettings({ fronts: { pace: 3 } }).fronts, all);
   assert.deepEqual(normalizeFeatureSettings({ fronts: { air: "off", navies: false } }).fronts, { ...all, air: false, navies: false });
 
   assert.equal(frontsOn(), true, "and a game that says nothing plays with it");
   assert.equal(frontsPace(), 0.4, "the built-in pace of a front: four tenths of a formation's on the move");
   try {
-    setActiveFeatures({ fronts: { pace: 250 } }, null);
-    assert.equal(frontsPace(), 1);
     setActiveFeatures({ fronts: { pace: 250 } }, { fronts: { pace: 25 } });
-    assert.equal(frontsPace(), 0.1, "a game's own setting over its scenario's");
+    assert.equal(frontsPace(), 0.4, "an old saved pace changes nothing: every game advances at the built-in pace");
     setActiveFeatures({ fronts: { enabled: false } }, null);
     assert.equal(frontsOn(), false);
     setActiveFeatures({ fronts: { enabled: false } }, { fronts: { enabled: true } });
@@ -327,7 +328,10 @@ test("every other place that applies events is one the engine has no part in", (
     // applySimulationResult (the engine runs before it; a round stopped by
     // Intervene, a held turn and a kept one all come through it again), the
     // Game Master's Apply (no time passes: what it changes on a battlefield the
-    // engine takes up at its next run) and the idle pulse (no time passes).
+    // engine takes up at its next run), the idle pulse (no time passes) and the
+    // The projects engine's completions now cross the strict, isolated
+    // projectTerritorySettlement boundary. The event writer is injected into
+    // that adapter, so gameplay has one fewer DIRECT invocation.
     "Game/AI/gameplay.js:3",
     // A peace made on terms (makePeace): the ground the two sides hold of each
     // other's is ceded or handed back. No time passes; the war it ends is
@@ -341,28 +345,46 @@ test("every other place that applies events is one the engine has no part in", (
     // The world as seen while a turn is revealed: the same replay as the reveal's.
     "runtime/gameState.js:1",
   ]);
+  // Project territory still reaches the same authoritative event writer,
+  // through a fail-closed adapter that runs before the turn can be persisted.
+  const projectAdapter = read("../../runtime/projectTerritorySettlement.js");
+  assert.match(gameplay, /await settleProjectTerritoryWorld\(/);
+  assert.match(projectAdapter, /const settled = applyWorldImpacts\(/);
   // The Game Master's Apply and the idle pulse pass no game time.
   const gmAt = gameplay.indexOf("export const applyGameMasterPreview = async");
   assert.match(gameplay.slice(gameplay.lastIndexOf("\n\n", gmAt), gmAt), /There is no AI call, no turn\s*\n\/\/ simulation, no date advance and no round increment\./);
   const gmApply = gameplay.slice(gameplay.indexOf("const impactMerge = applyEventImpactsToWorld({", gmAt));
   assert.equal(gmApply.slice(0, gmApply.indexOf("});")).includes("motion"), false, "its events are applied where they stand, with no days between them");
   assert.match(functionBody("applyIdlePulseUnitOps"), /\/\/ fromDate === toDate, so no unit travels/);
+  // The projects engine's completions pass the days of a turn the front engine
+  // has already run: it is called only from applySimulationResult, after
+  // applyTurnFronts, and its events are applied with no motion of their own.
+  assert.equal(gameplay.split("await runProjectsEngine(").length - 1, 1, "the projects engine runs in one place");
+  const apply = functionBody("applySimulationResult");
+  assert.ok(apply.indexOf("const turnFronts = await applyTurnFronts({") > 0 && apply.indexOf("const turnFronts = await applyTurnFronts({") < apply.indexOf("const projectsRun = await runProjectsEngine({"), "after the front engine, in the same apply");
+  assert.match(functionBody("runProjectsEngine"), /await settleProjectTerritoryWorld\(\{/);
+  assert.match(projectAdapter, /applyWorldImpacts\(\{\s*colors, events, world, motion: null,/);
   // A long skip's segments are joined before anything is applied: one apply, one run.
   assert.equal(gameplay.split("await applySimulationResult(").length - 1 + gameplay.split("=> applySimulationResult(").length - 1, 5, "the skip, a kept skip, a held board, Intervene and a Scene");
 });
 
 test("a time skip's prompt gains the block only with fronts on, after the rules it sets aside", () => {
   const live = functionBody("buildJumpLiveState");
-  assert.match(live, /const fronts = frontsLiveBlock\(world, game, variables\.frontsForecast \?\? null\);\s*\n\s*if \(fronts\) blocks\.push\(fronts\);/);
+  assert.match(live, /const fronts = frontsLiveBlock\(world, game, variables\.frontsForecast \?\? null, \{ orderLines: !rulesAbove \}\);\s*\n\s*if \(fronts\) blocks\.push\(fronts\);/);
   assert.ok(live.indexOf("blocks.push(FOLDED_SKIP_CONSEQUENCES)") < live.indexOf("frontsLiveBlock(world, game"), "after [Every Event Carries Its Consequences]");
-  assert.ok(live.indexOf("[Units and Structures on the Map]") < live.indexOf("frontsLiveBlock(world, game"));
+  assert.ok(live.indexOf("unitsOnTheMapBlock(") < live.indexOf("frontsLiveBlock(world, game"));
+  // Where the template states the standing rules, the order lines are among them, after the rules they set aside.
+  const rules = functionBody("buildJumpStaticRules");
+  assert.ok(rules.indexOf("FOLDED_SKIP_CONSEQUENCES") < rules.indexOf("FRONT_ORDER_LINES_BLOCK"));
+  assert.ok(rules.indexOf("unitsOnTheMapBlock(") < rules.indexOf("FRONT_ORDER_LINES_BLOCK"));
+  assert.ok(rules.indexOf("TAKING_GROUND_BLOCK") < rules.indexOf("FRONT_ORDER_LINES_BLOCK"));
   // (The land's block, then the sea's, navalPrompt.js, then the war room's air strikes as the period flew them,
   // runtime/fronts/airStrike.js: each "" with fronts off.)
-  assert.ok(read("frontApply.js").includes("export const frontsLiveBlock = (world, game, foreseen = null) => [landBlock(world, game, foreseen), seasLiveBlock(world, game, foreseen), airStrikesLiveBlock(foreseen)].filter(Boolean).join(\"\\n\\n\");"));
+  assert.ok(read("frontApply.js").includes("export const frontsLiveBlock = (world, game, foreseen = null, options = {}) => [landBlock(world, game, foreseen, options), seasLiveBlock(world, game, foreseen), airStrikesLiveBlock(foreseen)].filter(Boolean).join(\"\\n\\n\");"));
   assert.match(read("frontApply.js"), /export const airStrikesLiveBlock = \(foreseen = null\) => \(frontsOn\(\) && airOn\(\) \? airStrikesBlock\(foreseen\?\.airStrikes\) : ""\);/);
   // (The sea's also "" with navies off: the Wars feature.)
   assert.match(read("frontApply.js"), /export const seasLiveBlock = \(world, game, foreseen = null\) => \(frontsOn\(\) && naviesOn\(\)\s*\n\s*\? buildSeasBlock\(/);
-  assert.match(read("frontApply.js"), /const landBlock = \(world, game, foreseen = null\) => \(frontsOn\(\)\s*\n\s*\? buildFrontsBlock\(\{ battlefields: world\?\.battlefields, players: humanCountriesOf\(game\), period: foreseen, transports: world\?\.transports, difficulty: normalizeDifficulty\(game\?\.difficulty\), orderFunction: foreseen\?\.orderFunction === true \}\)\s*\n\s*: ""\);/);
+  assert.match(read("frontApply.js"), /const landBlock = \(world, game, foreseen = null, \{ orderLines = true \} = \{\}\) => \(frontsOn\(\)\s*\n\s*\? buildFrontsBlock\(\{ battlefields: world\?\.battlefields, players: humanCountriesOf\(game\), period: foreseen, transports: world\?\.transports, difficulty: normalizeDifficulty\(game\?\.difficulty\), orderFunction: foreseen\?\.orderFunction === true, orderLines, transportMedia: transportMediaOn\(\) \}\)\s*\n\s*: ""\);/);
   // The contract carries the field under the same switch.
   assert.match(gameplay, /return frontsOn\(\) \? withWarFigures\(withFrontOrders\(shown\)\) : shown;/);
   // A side of a battlefield is not "at war with nobody on the map"; with fronts off the set is the units' owners alone.

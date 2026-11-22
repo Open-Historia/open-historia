@@ -82,6 +82,9 @@ const booksOf = (battle) => {
   return battle.close;
 };
 
+// How far each cell is from the other side's taken ground, a side at a time, for a field as it stands (squeeze).
+const takenKept = new WeakMap();
+
 // Finds a side's squeezed and cornered ground, into books.squeezed[side].
 const squeeze = (battle, books, side) => {
   const { field, place } = battle;
@@ -94,7 +97,19 @@ const squeeze = (battle, books, side) => {
   books.was[side].set(books.squeezed[side]);
   books.squeezed[side].fill(0);
   distanceFrom(cols, rows, (cell) => holders[cell] === other && fed[other][cell] === 1 && books.was[other][cell] === 0, grip);
-  distanceFrom(cols, rows, (cell) => holders[cell] === other && battle.homes[cell] !== other, toTaken);
+  // (How far the other side's taken ground is changes only when ground changes hands, or whose home it is: worked out
+  // again then, and not every day of every copy of the battle a staff rehearses.)
+  // (Kept by the field itself, never in the books: a copy of the battle is a copy of its books.)
+  let kept = takenKept.get(field);
+  if (!kept || kept.turns !== field.turns || kept.homes !== battle.homes) {
+    kept = { turns: field.turns, homes: battle.homes, at: [null, null] };
+    takenKept.set(field, kept);
+  }
+  if (kept.at[side]) toTaken.set(kept.at[side]);
+  else {
+    distanceFrom(cols, rows, (cell) => holders[cell] === other && battle.homes[cell] !== other, toTaken);
+    kept.at[side] = Int32Array.from(toTaken);
+  }
   const fedMine = fed[side];
   // A cell's neighbours, always in the same order: left, right, up, down (-1 where there is none).
   const beside = [0, 0, 0, 0];

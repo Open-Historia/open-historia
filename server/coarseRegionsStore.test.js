@@ -54,7 +54,7 @@ test("an upload and an import leave a fresh coarse copy, and a hand-changed map 
     const served = read(store.resolveScenarioCoarseRegionsAsset("vinland").sourcePath);
 
     store.importScenarioBundle({
-      schema: "pax-historia-scenario-bundle/2",
+      schema: "old-scenario-bundle/2",
       scenario: { id: "markland", name: "Markland" },
       data: { world: { ownerSchema: 4 } },
       assets: { regionsGeojson: { mode: "embedded", data: collection } },

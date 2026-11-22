@@ -103,6 +103,26 @@ test("an unknown status that is not a posture either is dropped, not guessed at"
   assert.equal("posture" in unitOf(normalized), false);
 });
 
+// A posture is one of the schema's eight. Any other word is left out, in English as in French: once "offensive" read
+// as assaulting and "offensif" failed the month; now both are no posture, and neither fails the answer.
+test("a posture outside the schema's eight is left out, in any language, and the month stands", () => {
+  const move = (posture) => ({ op: "move", unitId: "Адмирал Кузнецов", at: "city: Sevastopol, country: Ukraine", posture });
+  const read = (posture) => {
+    const normalized = normalizeGameplayPayload("jumpForward", jumpWith([spawnedCarrier({ posture }), move(posture)]));
+    assert.equal(validateGameplayPayload("jumpForward", normalized).valid, true, posture);
+    return normalized.events[0].impacts.unitOps;
+  };
+  for (const posture of ["offensive", "offensif", "dug in", "retranché", "", "Assaulting!"]) {
+    const [spawned, moved] = read(posture);
+    assert.equal("posture" in spawned.unit, false, posture);
+    assert.equal("posture" in moved, false, posture);
+  }
+  assert.deepEqual(read("offensive"), read("offensif"));
+  const [spawned, moved] = read(" Blockade ");
+  assert.equal(spawned.unit.posture, "blockade", "the schema's own word, case and spaces aside");
+  assert.equal(moved.posture, "blockade");
+});
+
 test("a real status survives, only its case is tidied", () => {
   const normalized = normalizeGameplayPayload("jumpForward", jumpWith([spawnedCarrier({ status: "Engaged" })]));
   assert.equal(unitOf(normalized).status, "engaged");
@@ -113,21 +133,19 @@ test("the rest of the unit schema is as strict as before", () => {
   assert.equal(validateGameplayPayload("jumpForward", typo).valid, false, "a misspelled unit field must still be caught");
 });
 
-test("projects: the id the prompt shows as [id …] is accepted as projectId", () => {
-  // Verbatim shape from the field report, which held the turn.
-  const raw = { projectOps: [{ op: "update", id: "project-0-mtuaa589-l1rt3ud", name: "Саммит", eventIndex: 0, progress: 20, status: "active" }] };
+// The board is shown by name and an op finds its entry by name; an id written
+// from habit (a field report's verbatim shape held a turn over one) is left out.
+test("projects: an id or projectId written from habit is left out, and the op stands on its name", () => {
+  const raw = { projectOps: [{ op: "update", id: "project-0-mtuaa589-l1rt3ud", name: "Саммит", eventIndex: 0, lastUpdate: "x" }, { op: "setback", projectId: "p-2", name: "X", days: 10 }] };
   assert.equal(validateGameplayPayload("projects", raw).valid, false, "the raw payload is the one that failed");
-
   const normalized = normalizeGameplayPayload("projects", raw);
   assert.equal(validateGameplayPayload("projects", normalized).valid, true);
-  assert.equal(normalized.projectOps[0].projectId, "project-0-mtuaa589-l1rt3ud");
-  assert.equal("id" in normalized.projectOps[0], false);
+  assert.deepEqual(normalized.projectOps.map((op) => ["id" in op, "projectId" in op, op.name]), [[false, false, "Саммит"], [false, false, "X"]]);
 });
 
-test("projects: an explicit projectId wins over a stray id", () => {
-  const normalized = normalizeGameplayPayload("projects", { projectOps: [{ op: "update", id: "wrong", projectId: "right", name: "X" }] });
-  assert.equal(normalized.projectOps[0].projectId, "right");
-  assert.equal(validateGameplayPayload("projects", normalized).valid, true);
+test("a skip's event carries its board ops by name too, whatever ids it was written with", () => {
+  const normalized = normalizeGameplayPayload("jumpForward", { stopDate: "2026-02-01", summary: "s", events: [{ date: "2026-01-02", title: "t", description: "d", impacts: { projectOps: [{ op: "setback", projectId: "p-1", name: "Canal", days: 5 }] } }] });
+  assert.deepEqual(normalized.events[0].impacts.projectOps, [{ op: "setback", name: "Canal", days: 5 }]);
 });
 
 const pulse = (fields) => ({ chat: null, unitOps: [], sighting: null, ...fields });

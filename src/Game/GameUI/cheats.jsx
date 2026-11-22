@@ -1,5 +1,5 @@
 /*! Open Historia — cheats panel © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
@@ -46,8 +46,9 @@ import { applyGmPuppetChange, gmPuppetRows } from "./puppetStatesTool.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
 import { isObserver, isSandbox, withSandbox } from "../../runtime/sandbox.js";
 import { sharedGameOpen } from "./sandboxHere.js";
-import { applyGameMasterPreview, consolidateHistoryNow, previewGameMasterCommand } from "../AI/gameplayLazy.js";
-import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, planHistoryConsolidation } from "../AI/historyConsolidation.js";
+import { applyGameMasterPreview, previewGameMasterCommand, previewGameMasterRevision } from "../AI/gameplayLazy.js";
+import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, seedHistoryDocumentText } from "../AI/historyConsolidation.js";
+import { normalizeCanonFacts } from "../../runtime/historyTiers.js";
 import {
     POLITICAL_TRAIT_REGISTRY,
     canonicalPoliticalTraitKey,
@@ -70,12 +71,21 @@ import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { createSerialQueue } from "../../runtime/serialQueue.js";
 import { annexationImpacts, regionOwnerNow, regionsHeldBy } from "../../runtime/gmAnnex.js";
 import { polityNameInUse } from "../../runtime/gmPolityNames.js";
-import { changedEditorFields, countryStatPatchFromForm, editorStateChanged } from "./countryEditorStats.js";
+import { changedEditorFields, countryCustomStatEditFromForm, countryCustomStatFormFromSheet, countryStatPatchFromForm, editorStateChanged } from "./countryEditorStats.js";
+import { loadStatSheetDefinition } from "../../runtime/statsSheet.js";
+import { isIntelligenceRated } from "../../runtime/spycraft.js";
+import { economicCurrencySymbol, economicDisplayUnitLabel, fromDisplayCurrency, normalizeEconomicDisplayCurrency, toDisplayCurrency } from "../../runtime/economicDisplayCurrency.js";
+import {
+    COUNTRY_CAPABILITY_FIELDS,
+    applyCountryCapabilityPatchToWorld,
+    countryCapabilityFormFromWorld,
+    countryCapabilityPatchFromForm,
+} from "../../runtime/countryCapabilities.js";
 import { collectImpactOps, countImpactOps, otherImpactFamilies } from "./gmPreviewOps.js";
 // The feature types, with the glyph the map draws for each (mapFeatureKinds.js).
-import { GM_MAP_FEATURE_KINDS as MAP_FEATURE_KINDS } from "./mapFeatureKinds.js";
+import { GM_MAP_FEATURE_FAMILIES, GM_MAP_FEATURE_KINDS as MAP_FEATURE_KINDS, gmFeatureFamily } from "./mapFeatureKinds.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld, politicalEditorComposition } from "./countryEditorPolitical.js";
-import { IDEOLOGIES, PARTY_ROLE_LABELS } from "../../runtime/politics.js";
+import { PARTY_ROLE_LABELS } from "../../runtime/politics.js";
 import {
     REMINDERS_LIMIT,
     REMINDER_MAX_CHARS,
@@ -367,7 +377,14 @@ const PolitySelect = ({ polities, value, onChange, placeholder = "Pick a country
 const CheatsPanel = ({ open, onClose, onOpenForces, initialTool = null }) => {
     const [tool, setTool] = useState(null);
     const [busy, setBusy] = useState(false);
-    const [status, setStatus] = useState("");
+    // What the last action said, and whether it failed: setStatus(text, "error")
+    // carries the kind with the words, so their colour is never read back out of
+    // them (a line starting "Failed" was red, and the same failure in any other
+    // words, or in a translated message, would not have been).
+    const [statusLine, setStatusLine] = useState({ text: "", failed: false });
+    const setStatus = useCallback((text, kind = "ok") => setStatusLine({ text: String(text ?? ""), failed: kind === "error" }), []);
+    const status = statusLine.text;
+    const statusFailed = statusLine.failed;
     const [polities, setPolities] = useState([]);
     const [game, setGame] = useState(null);
     // Click-capture mode: while set, the panel hides behind a floating toast
@@ -388,13 +405,13 @@ const CheatsPanel = ({ open, onClose, onOpenForces, initialTool = null }) => {
             setPolities(nextPolities);
             setGame(nextGame);
         } catch (error) {
-            setStatus(`Failed to load game data: ${error.message}`);
+            setStatusLine({ text: `Failed to load game data: ${error.message}`, failed: true });
         }
     };
 
     useEffect(() => {
         if (open) {
-            setStatus("");
+            setStatusLine({ text: "", failed: false });
             if (initialTool) setTool(initialTool);
             void refresh();
         } else {
@@ -442,7 +459,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces, initialTool = null }) => {
             const message = await work();
             setStatus(message || doneMessage || "Done.");
         } catch (error) {
-            setStatus(`Failed: ${error.message}`);
+            setStatus(`Failed: ${error.message}`, "error");
         } finally {
             setBusy(false);
         }
@@ -581,6 +598,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces, initialTool = null }) => {
             header={header}
             busy={busy}
             status={status}
+            statusFailed={statusFailed}
             game={game}
             polities={polities}
             refresh={refresh}
@@ -593,7 +611,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces, initialTool = null }) => {
             />
         )}
         {status && !tool && (
-            <div style={{ color: "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>{status}</div>
+            <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>{status}</div>
         )}
         </div>
         </>
@@ -664,10 +682,12 @@ const debugPreStyle = {
     whiteSpace: "pre-wrap",
 };
 
-const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus }) => {
+const CountryEditorView = ({ meta, header, busy, status, statusFailed, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus }) => {
     const [target, setTarget] = useState("");
     const [loading, setLoading] = useState(false);
     const [form, setForm] = useState({});
+    const [customStatForm, setCustomStatForm] = useState({});
+    const [capabilityForm, setCapabilityForm] = useState({});
     const [politicsForm, setPoliticsForm] = useState(() => politicalActorToEditorState(null));
     const [politicsDebug, setPoliticsDebug] = useState(null);
     const [decisionContextText, setDecisionContextText] = useState("");
@@ -683,6 +703,8 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
     useEffect(() => {
         if (!target) {
             setForm({});
+            setCustomStatForm({});
+            setCapabilityForm({});
             setPoliticsForm(politicalActorToEditorState(null));
             setPoliticsDebug(null);
             setDecisionContextText("");
@@ -695,18 +717,30 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
 
         Promise.all([
             readWorldState({ force: true }),
+            readGameData({ force: true }),
             readJson(JSON_URLS.colors, { defaultValue: {}, force: true }).catch(() => ({})),
+            // A Stats-definition fetch failure must not prevent editing this
+            // country's identity or Political World. It must fail CLOSED for
+            // Stats mutations rather than assuming a legacy sheet.
+            loadStatSheetDefinition().then(
+                (definition) => ({ definition, error: "" }),
+                (error) => ({ definition: null, error: error?.message || "Could not load this scenario's Stats definition." }),
+            ),
         ])
-            .then(([world, colors]) => {
+            .then(([world, gameData, colors, statsRead]) => {
+                const statsDefinition = statsRead.definition;
                 if (cancelled) return;
                 const polity = world?.polityOverrides?.[target] ?? {};
                 const sheet = world?.countryStats?.[target] ?? null;
+                const liveIntelligence = isIntelligenceRated(world, target) ? Number(world.intelligence[target]) : null;
+                const displayCurrency = normalizeEconomicDisplayCurrency(gameData?.economicDisplayCurrency);
                 const rgb = colors?.[target];
                 const color = polity.color || (Array.isArray(rgb) ? rgbToHex(rgb) : "");
                 const population = Number(sheet?.population?.total);
                 const gdp = Number(sheet?.economy?.gdp);
                 const perCapita = Number(sheet?.economy?.gdpPerCapita);
 
+                const loadedCapabilities = countryCapabilityFormFromWorld(world, target);
                 const loadedPolitics = politicalEditorStateFromWorld(world, target);
                 const loadedForm = {
                     name: polity.name || nameOf.get(target) || target,
@@ -716,8 +750,9 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                     government: sheet?.government || "",
                     leader: sheet?.leader || "",
                     populationM: Number.isFinite(population) ? cleanEditorNumber(population / 1e6) : "",
-                    gdpB: Number.isFinite(gdp) ? cleanEditorNumber(gdp / 1e9) : "",
+                    gdpB: Number.isFinite(gdp) ? String(Number((toDisplayCurrency(gdp, displayCurrency) / 1e9).toPrecision(12))) : "",
                     gdpGrowth: sheet?.economy?.gdpGrowth ?? "",
+                    annualGrowthRate: sheet?.population?.annualGrowthRate ?? "",
                     inflation: sheet?.economy?.inflation ?? "",
                     unemployment: sheet?.economy?.unemployment ?? "",
                     publicDebt: sheet?.economy?.publicDebt ?? "",
@@ -739,17 +774,25 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                 setBaseline({
                     sheet,
                     componentCount: Array.isArray(sheet?.territorialComponents) ? sheet.territorialComponents.length : 0,
-                    perCapita: Number.isFinite(perCapita) ? perCapita : null,
+                    statsDefinition,
+                    statsError: statsRead.error,
+                    liveIntelligence,
+                    customStats: countryCustomStatFormFromSheet({ sheet, definition: statsDefinition, liveIntelligence }),
+                    capabilities: loadedCapabilities,
+                    perCapita: Number.isFinite(perCapita) ? toDisplayCurrency(perCapita, displayCurrency) : null,
+                    economicDisplayCurrency: displayCurrency,
                     form: loadedForm,
                     politics: loadedPolitics,
                 });
                 setPoliticsForm(loadedPolitics);
+                setCustomStatForm(countryCustomStatFormFromSheet({ sheet, definition: statsDefinition, liveIntelligence }));
+                setCapabilityForm(loadedCapabilities);
                 setPoliticsDebug(politicalDebugSnapshotFromWorld(world, target));
                 setDecisionContextText(buildPoliticalDecisionContext(world, target, { maxChars: 12000 })?.text || "");
                 setForm(loadedForm);
             })
             .catch((error) => {
-                if (!cancelled) setStatus(`Failed: ${error.message}`);
+                if (!cancelled) setStatus(`Failed: ${error.message}`, "error");
             })
             .finally(() => {
                 if (!cancelled) setLoading(false);
@@ -761,6 +804,8 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
     }, [target, reloadKey, nameOf, setStatus]);
 
     const change = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+    const changeCustomStat = (key, value) => setCustomStatForm((current) => ({ ...current, [key]: value }));
+    const changeCapability = (key, value) => setCapabilityForm((current) => ({ ...current, [key]: value }));
     const changePolitics = (key, value) => setPoliticsForm((current) => ({ ...current, [key]: value }));
     const changeTrait = (key, value) => setPoliticsForm((current) => {
         const next = {
@@ -816,7 +861,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         parties: [...(current.parties || []), {
             _editorKey: `custom-party-row:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`,
             id: `custom-party-${Date.now().toString(36)}`, name: "New political entity", shortName: "", nameNative: "", shortNameNative: "",
-            leader: "", ideology: "", ideologyFamily: "", subideology: "", role: "opposition", seats: "", founded: "", color: "", publicDescription: "",
+            leader: "", ideology: "", ideologyFamily: "", subideology: "", politicalPosition: "", role: "opposition", seats: "", founded: "", color: "", publicDescription: "",
             publicPrioritiesText: "", publicForeignPolicyText: "", supportPercent: "", influencePercent: "", influenceLabel: "", ruling: false, coalition: false,
         }],
     }));
@@ -866,7 +911,10 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         });
     };
 
-    const hasComponentBaseline = Boolean(baseline?.componentCount);
+    const hasComponentBaseline = baseline?.statsDefinition?.custom === false && Boolean(baseline?.componentCount);
+    const hasCustomStatDefinition = baseline?.statsDefinition?.custom === true;
+    const customHasIntelligence = hasCustomStatDefinition && (baseline.statsDefinition.sections || []).some((section) =>
+        (section.stats || []).some((stat) => stat.key === "intelligenceService"));
     const composition = useMemo(() => {
         try { return { ...politicalEditorComposition(politicsForm, { asRecorded: baseline?.politics || null }), error: "" }; }
         catch (error) { return { error: error?.message || "Invalid political landscape." }; }
@@ -880,6 +928,12 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         // Only what the player changed since the form loaded: a turn may have
         // moved the rest meanwhile, and writing the form back undid it.
         const changed = changedEditorFields(form, baseline?.form);
+        if (changed.has("gdpB")) {
+            const liveGame = await readGameData({ force: true });
+            if (normalizeEconomicDisplayCurrency(liveGame?.economicDisplayCurrency) !== baseline?.economicDisplayCurrency) {
+                throw new Error("GDP display currency changed while the Country Editor was open. Reload before editing GDP.");
+            }
+        }
         const politicsChanged = editorStateChanged(politicsForm, baseline?.politics);
         const requestedName = changed.has("name") ? String(form.name ?? "").trim() : "";
         const colorHex = changed.has("color") ? String(form.color ?? "").trim() : "";
@@ -920,8 +974,30 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         };
 
         let nextSheet = world.countryStats?.[target] ?? null;
-        const patch = hasComponentBaseline
-            ? countryStatPatchFromForm({ form, changed, politicalActor: nextPoliticalActor })
+        const changedCustom = changedEditorFields(customStatForm, baseline?.customStats);
+        if (hasCustomStatDefinition && changedCustom.has("intelligenceService")) {
+            const ratedNow = isIntelligenceRated(world, target);
+            if (ratedNow !== Number.isFinite(baseline?.liveIntelligence)
+                || (ratedNow && Number(world.intelligence[target]) !== baseline.liveIntelligence)) {
+                throw new Error("The live intelligence rating changed while this editor was open. Reset the form and try again.");
+            }
+        }
+        const customEdit = hasCustomStatDefinition
+            ? countryCustomStatEditFromForm({
+                form: customStatForm, loaded: baseline?.customStats,
+                definition: baseline.statsDefinition, liveIntelligence: baseline.liveIntelligence,
+            })
+            : { patch: null, intelligenceRating: null };
+        const capabilityPatch = countryCapabilityPatchFromForm({
+            world, country: target, form: capabilityForm, loaded: baseline?.capabilities,
+        });
+        const patch = hasCustomStatDefinition ? customEdit.patch : hasComponentBaseline
+            ? countryStatPatchFromForm({
+                form: changed.has("gdpB") && String(form.gdpB ?? "").trim() !== ""
+                    ? { ...form, gdpB: fromDisplayCurrency(Number(form.gdpB) * 1e9, baseline.economicDisplayCurrency) / 1e9 }
+                    : form,
+                changed, politicalActor: nextPoliticalActor,
+            })
             : null;
         if (patch) {
             nextSheet = applyCountryStatPatchToWorld(world, target, patch);
@@ -934,6 +1010,13 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
             }
         }
 
+        if (customEdit.intelligenceRating != null) {
+            world.intelligence = {
+                ...(world.intelligence || {}),
+                [target]: customEdit.intelligenceRating,
+            };
+        }
+        if (capabilityPatch) applyCountryCapabilityPatchToWorld(world, target, capabilityPatch);
         await writeWorldState(world);
 
         const rgb = hexToRgb(colorHex);
@@ -942,8 +1025,16 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
             await writeJson(JSON_URLS.colors, { ...colors, [target]: rgb }, { pretty: true });
         }
 
+        const customUpdates = Object.entries(customEdit.patch?.customStats || {});
+        const customNotes = customUpdates.slice(0, 6).map(([key, value]) => `${key}: ${value}`);
+        if (customUpdates.length > customNotes.length) customNotes.push(`and ${customUpdates.length - customNotes.length} more Stats edits`);
         const edits = [
             previousName && previousName !== nextName ? `renamed it from ${previousName}` : "",
+            ...customNotes,
+            customEdit.intelligenceRating != null ? `live intelligence: ${customEdit.intelligenceRating}` : "",
+            ...Object.entries(capabilityPatch?.military || {}).map(([key, value]) => `military ${key}: ${value}`),
+            ...["intelligence", "warWeariness", "warResources"].filter((key) => capabilityPatch?.[key] !== undefined)
+                .map((key) => `${key}: ${capabilityPatch[key]}`),
             ...["leader", "government", "capital"].map((key) => {
                 const after = String(nextSheet?.[key] ?? "").trim();
                 return after && after !== headlineBefore[key] ? `${key}: ${after}` : "";
@@ -956,7 +1047,8 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
             nextPoliticalActor?.government?.form,
             nextPoliticalActor?.government?.ideology,
         ].map((value) => String(value || "").trim()).filter(Boolean).join(" · ");
-        await noteGmChange(hasComponentBaseline ? "stats" : "polity",
+        const wroteStats = Boolean(patch || customEdit.intelligenceRating != null || capabilityPatch);
+        await noteGmChange(wroteStats || (!hasCustomStatDefinition && hasComponentBaseline) ? "stats" : "polity",
             `Edited ${nextName} in the country editor${edits.length ? `: ${edits.join("; ")}` : ""}${politicalSummary ? `${edits.length ? "; " : ": "}Political World ${politicalSummary}` : ""}.`);
 
         if (typeof window !== "undefined") {
@@ -967,9 +1059,15 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
 
         await refresh();
         setReloadKey((value) => value + 1);
-        return hasComponentBaseline
-            ? `${nextName} updated. These values are the current baseline; future simulation can change them naturally.`
-            : `${nextName} identity updated. Generate a Stats baseline before editing national statistics.`;
+        return capabilityPatch
+            ? `${nextName} live intelligence/military capabilities updated. Future simulation may change them naturally.`
+            : hasCustomStatDefinition
+            ? wroteStats
+                ? `${nextName} scenario-defined Stats updated. Any hidden population/economy backend not explicitly edited remains unchanged.`
+                : `${nextName} identity or Political World updated; no scenario-defined Stats were changed.`
+            : hasComponentBaseline
+                ? `${nextName} updated. These values are the current baseline; future simulation can change them naturally.`
+                : `${nextName} identity updated. Generate a Stats baseline before editing standard national statistics.`;
     });
 
     const previewPopulation = Number(form.populationM) * 1e6;
@@ -978,7 +1076,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         ? previewGdp / previewPopulation
         : baseline?.perCapita;
     const perCapitaText = Number.isFinite(previewPerCapita)
-        ? `€${Math.round(previewPerCapita).toLocaleString()}`
+        ? `${economicCurrencySymbol(baseline?.economicDisplayCurrency)}${Math.round(previewPerCapita).toLocaleString()}`
         : "—";
 
     const pairedField = (label, key, props = {}) => (
@@ -1063,7 +1161,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                             }
 
                             if (!match) {
-                                setStatus("Failed: that map area does not resolve to an editable country.");
+                                setStatus("Failed: that map area does not resolve to an editable country.", "error");
                                 endClickMode();
                                 return;
                             }
@@ -1237,15 +1335,8 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Native name</label><input style={inputStyle} value={party.nameNative ?? ""} onChange={(event) => changeParty(index, "nameNative", event.target.value)} /></div>
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Native abbreviation</label><input style={inputStyle} value={party.shortNameNative ?? ""} onChange={(event) => changeParty(index, "shortNameNative", event.target.value)} /></div>
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Leader</label><input style={inputStyle} value={party.leader ?? ""} onChange={(event) => changeParty(index, "leader", event.target.value)} /></div>
-                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Ideology label</label><input style={inputStyle} value={party.ideology ?? ""} onChange={(event) => changeParty(index, "ideology", event.target.value)} /></div>
-                                            <div>
-                                                <label style={{ ...labelStyle, marginTop: 0 }}>Ideology family</label>
-                                                <select style={inputStyle} value={party.ideologyFamily ?? ""} onChange={(event) => changeParty(index, "ideologyFamily", event.target.value)}>
-                                                    <option value="">Not specified</option>
-                                                    {IDEOLOGIES.map((ideology) => <option key={ideology.id} value={ideology.id}>{ideology.name}</option>)}
-                                                </select>
-                                            </div>
-                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Subideology</label><input style={inputStyle} value={party.subideology ?? ""} onChange={(event) => changeParty(index, "subideology", event.target.value)} /></div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Ideology</label><input style={inputStyle} value={party.ideology ?? ""} onChange={(event) => changeParty(index, "ideology", event.target.value)} /></div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Political position</label><input style={inputStyle} value={party.politicalPosition ?? ""} onChange={(event) => changeParty(index, "politicalPosition", event.target.value)} /></div>
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Seats held</label><input type="number" min="0" max="100000" step="1" style={inputStyle} value={party.seats ?? ""} onChange={(event) => changeParty(index, "seats", event.target.value)} /></div>
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Founded</label><input style={inputStyle} value={party.founded ?? ""} onChange={(event) => changeParty(index, "founded", event.target.value)} /></div>
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Party colour (hex)</label><input style={inputStyle} value={party.color ?? ""} onChange={(event) => changeParty(index, "color", event.target.value)} /></div>
@@ -1354,15 +1445,15 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.42rem", marginTop: "0.55rem" }}>
                                 <button type="button" style={buttonStyle} onClick={async () => {
                                     const ok = await copyToClipboard(JSON.stringify(politicsDebug?.actor ?? null, null, 2));
-                                    setStatus(ok ? "Copied full Political World JSON." : "Failed to copy Political World JSON.");
+                                    setStatus(ok ? "Copied full Political World JSON." : "Failed to copy Political World JSON.", ok ? "ok" : "error");
                                 }}>Copy full Political World JSON</button>
                                 <button type="button" style={buttonStyle} onClick={async () => {
                                     const ok = await copyToClipboard(decisionContextText || "");
-                                    setStatus(ok ? "Copied Political Decision Context capsule." : "Failed to copy decision capsule.");
+                                    setStatus(ok ? "Copied Political Decision Context capsule." : "Failed to copy decision capsule.", ok ? "ok" : "error");
                                 }}>Copy decision capsule</button>
                                 <button type="button" style={buttonStyle} onClick={async () => {
                                     const ok = await copyToClipboard(JSON.stringify(politicsDebug ?? null, null, 2));
-                                    setStatus(ok ? "Copied political numeric/debug snapshot." : "Failed to copy political debug snapshot.");
+                                    setStatus(ok ? "Copied political numeric/debug snapshot." : "Failed to copy political debug snapshot.", ok ? "ok" : "error");
                                 }}>Copy numeric/debug snapshot</button>
                             </div>
                             <div style={{ marginTop: "0.65rem" }}>
@@ -1395,7 +1486,89 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                         </details>
                     </div>
 
-                    {!hasComponentBaseline ? (
+                    <div style={{ ...editorFieldStyle, marginTop: "0.65rem" }} data-country-editor-capabilities="true">
+                        <div style={editorSectionLabelStyle}>Intelligence & military capabilities</div>
+                        <div style={{ color: "rgba(255,255,255,0.56)", fontSize: "0.65rem", lineHeight: 1.48, marginBottom: "0.55rem" }}>
+                            Edit the live values used by espionage and war simulation. Blank military ratings inherit their scenario defaults.
+                            Military Power is calculated from these ratings, population, and wartime conditions - not stored as an independent score.
+                            War weariness and resources can change again when time advances. These native capabilities are editable independently of the scenario Stats definition.
+                        </div>
+                        <div style={{ display: "grid", gap: "0.48rem", gridTemplateColumns: "repeat(auto-fit, minmax(min(9.5rem, 100%), 1fr))" }}>
+                            {COUNTRY_CAPABILITY_FIELDS.map((field) => {
+                                return (
+                                    <div key={field.key} style={{ minWidth: 0 }}>
+                                        <label style={{ ...labelStyle, fontSize: "0.64rem", marginTop: 0 }} htmlFor={`country-capability-${field.key}`}>
+                                            {field.label}
+                                        </label>
+                                        <input
+                                            id={`country-capability-${field.key}`}
+                                            aria-label={field.label}
+                                            type="number"
+                                            min={field.minimum}
+                                            max={field.maximum}
+                                            step={field.step}
+                                            placeholder={field.key === "intelligence" ? "Unrated (default 40)" : "Scenario/default"}
+                                            style={{ ...inputStyle, width: "100%" }}
+                                            value={field.key === "intelligence" && customHasIntelligence
+                                                ? (customStatForm.intelligenceService ?? "")
+                                                : (capabilityForm[field.key] ?? "")}
+                                            disabled={busy}
+                                            onChange={(event) => field.key === "intelligence" && customHasIntelligence
+                                                ? changeCustomStat("intelligenceService", event.target.value)
+                                                : changeCapability(field.key, event.target.value)}
+                                        />
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {hasCustomStatDefinition ? (
+                        <div style={{ ...editorFieldStyle, marginTop: "0.65rem" }} data-country-editor-custom-stats="true">
+                            <div style={editorSectionLabelStyle}>Scenario-defined national statistics</div>
+                            <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.65rem", lineHeight: 1.5, marginBottom: "0.55rem" }}>
+                                These values come from this scenario's canonical Stats definition. Only explicitly changed metrics are saved.
+                                A blank metric is unset, not zero. The hidden simulation population/economy backend is independent
+                                and is not silently rewritten when similarly named scenario metrics change.
+                            </div>
+                            {(baseline?.statsDefinition?.sections || []).map((section) => (
+                                <div key={section.key} style={{ marginTop: "0.75rem" }}>
+                                    <div style={{ ...editorSectionLabelStyle, color: "rgba(255,255,255,0.72)", marginBottom: "0.4rem" }}>
+                                        {section.icon || ""} {section.label}
+                                    </div>
+                                    <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(min(9.5rem, 100%), 1fr))" }}>
+                                        {section.stats.map((stat) => stat.key === "intelligenceService" ? null : (
+                                            <div key={stat.key} style={{ minWidth: 0 }}>
+                                                <label style={{ ...labelStyle, fontSize: "0.64rem", marginTop: 0 }} htmlFor={`country-stat-${stat.key}`}>
+                                                    {stat.label}
+                                                    {stat.key === "intelligenceService" && Number.isFinite(baseline?.liveIntelligence) ? " (live intelligence)" : ""}
+                                                </label>
+                                                <input
+                                                    id={`country-stat-${stat.key}`}
+                                                    aria-label={stat.label}
+                                                    type="number"
+                                                    min={Number.isFinite(stat.minimum) ? stat.minimum : undefined}
+                                                    max={Number.isFinite(stat.maximum) ? stat.maximum : undefined}
+                                                    step={stat.decimals > 0 ? 10 ** -stat.decimals : 1}
+                                                    style={{ ...inputStyle, width: "100%" }}
+                                                    value={customStatForm[stat.key] ?? ""}
+                                                    onChange={(event) => changeCustomStat(stat.key, event.target.value)}
+                                                />
+                                                <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.58rem", marginTop: "0.2rem", overflowWrap: "anywhere" }}>
+                                                    {stat.description || stat.key}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : baseline?.statsError ? (
+                        <div style={{ ...editorFieldStyle, marginTop: "0.65rem", color: "#fca5a5", fontSize: "0.7rem", lineHeight: 1.45 }}>
+                            Stats definition unavailable: {baseline.statsError} Identity and Political World editing remain available;
+                            national-stat edits are disabled until the scenario Stats definition can be loaded.
+                        </div>
+                    ) : !hasComponentBaseline ? (
                         <div style={{
                             background: "rgba(245,158,11,0.08)",
                             border: "1px solid rgba(245,158,11,0.24)",
@@ -1419,12 +1592,14 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                                 </div>
                                 <div style={{ display: "grid", gap: "0.48rem", gridTemplateColumns: "1fr 1fr" }}>
                                     {pairedField("Population (millions) · whole polity", "populationM", { type: "number", min: "0.001", step: "0.1" })}
-                                    {pairedField("GDP (€ billions) · whole polity", "gdpB", { type: "number", min: "0.001", step: "0.1" })}
+                                    {pairedField(`GDP (${economicCurrencySymbol(baseline?.economicDisplayCurrency)} billions) · whole polity`, "gdpB", { type: "number", min: "0", step: "any" })}
+                                    <div style={{ gridColumn: "1 / -1", color: "rgba(255,255,255,0.48)", fontSize: "0.64rem" }}>Input shown in {economicDisplayUnitLabel(baseline?.economicDisplayCurrency)}. Saved using canonical USD; domestic currency is separate.</div>
                                     <div style={{ minWidth: 0 }}>
                                         <label style={{ ...labelStyle, marginTop: 0 }}>GDP / capita · derived</label>
                                         <div style={{ ...inputStyle, color: "rgba(255,255,255,0.62)", cursor: "default" }}>{perCapitaText}</div>
                                     </div>
                                     {pairedField("GDP growth (%)", "gdpGrowth", { type: "number", step: "0.1" })}
+                                    {pairedField("Annual population change (%) · optional", "annualGrowthRate", { type: "number", min: "-20", max: "20", step: "0.01" })}
                                 </div>
                                 <div style={{
                                     background: "rgba(59,130,246,0.07)",
@@ -1535,7 +1710,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                 </>
             )}
             {status && (
-                <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
+                <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
                     {status}
                 </div>
             )}
@@ -1629,7 +1804,7 @@ const eventFilterButtonStyle = (active) => ({
 // given to every AI in the game until they are withdrawn — and beneath them, the
 // changes made by hand this round, which is exactly what the next time skip
 // will be told. Nothing here costs a request.
-const RemindersView = ({ meta, header, busy, status, game, runBusy }) => {
+const RemindersView = ({ meta, header, busy, status, statusFailed, game, runBusy }) => {
     const [world, setWorld] = useState(null);
     const [draft, setDraft] = useState("");
     const [editingId, setEditingId] = useState(null);
@@ -1689,7 +1864,7 @@ const RemindersView = ({ meta, header, busy, status, game, runBusy }) => {
     const cardStyle = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "0.5rem 0.6rem" };
     const noteStyle = { color: "rgba(255,255,255,0.48)", fontSize: "0.68rem", lineHeight: 1.45 };
     const statusLine = status && (
-        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.72rem", marginTop: "0.55rem" }}>
+        <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.72rem", marginTop: "0.55rem" }}>
             {status}
         </div>
     );
@@ -1790,7 +1965,7 @@ const RemindersView = ({ meta, header, busy, status, game, runBusy }) => {
 // It writes the offer and nothing else. The scene itself costs what it always
 // costs (one request to open, one a move, one to end), and the cooldown is left
 // alone, so skips go on offering their own.
-const InteractiveEventView = ({ meta, header, busy, status, game, runBusy, closePanel }) => {
+const InteractiveEventView = ({ meta, header, busy, status, statusFailed, game, runBusy, closePanel }) => {
     // The shared store, like the panels that play the scene: an offer written
     // here reaches the buttons below without a re-read.
     const world = useRuntimeState("world");
@@ -1837,7 +2012,7 @@ const InteractiveEventView = ({ meta, header, busy, status, game, runBusy, close
     const noteStyle = { color: "rgba(255,255,255,0.48)", fontSize: "0.68rem", lineHeight: 1.45 };
     const warnStyle = { background: "rgba(250,204,21,0.08)", border: "1px solid rgba(250,204,21,0.32)", borderRadius: 8, color: "#fde68a", fontSize: "0.68rem", lineHeight: 1.45, padding: "0.5rem 0.6rem" };
     const statusLine = status && (
-        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.72rem", marginTop: "0.55rem" }}>
+        <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.72rem", marginTop: "0.55rem" }}>
             {status}
         </div>
     );
@@ -1920,7 +2095,7 @@ const InteractiveEventView = ({ meta, header, busy, status, game, runBusy, close
     );
 };
 
-const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
+const EventEditorView = ({ meta, header, busy, status, statusFailed, game, runBusy }) => {
     const [events, setEvents] = useState(null);
     const [search, setSearch] = useState("");
     const [filter, setFilter] = useState("all");
@@ -2317,7 +2492,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
     );
 
     const statusLine = status && (
-        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.72rem", marginTop: "0.55rem" }}>
+        <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.72rem", marginTop: "0.55rem" }}>
             {status}
         </div>
     );
@@ -2688,6 +2863,11 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                                         quote: quote || null,
                                                         npcReaction: nextReaction(entry),
                                                         title,
+                                                        // The one-line digest later skips read
+                                                        // (runtime/gameState.js normalizeEventDigest)
+                                                        // was the old story's: a rewritten event
+                                                        // drops it, and is read by its own opening.
+                                                        ...(cleanEventBody(entry.description) !== description || cleanEventText(entry.title) !== title ? { digest: "" } : {}),
                                                     }),
                                                 });
                                                 const persistedEvent = persisted.find((candidate) => eventReactionIdentity(candidate) === eventReactionIdentity(event));
@@ -2737,7 +2917,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
 // countries'. Every change is the groupOps an AI event carries, applied through
 // the same seam, so a hand edit lands as the simulation's would; the next time
 // skip is told (runtime/gmChanges.js).
-const GroupsView = ({ meta, header, busy, status, game, runBusy, beginClickMode, setStatus }) => {
+const GroupsView = ({ meta, header, busy, status, statusFailed, game, runBusy, beginClickMode, setStatus }) => {
     const [world, setWorld] = useState(null);
     const [selected, setSelected] = useState(null);
     const [form, setForm] = useState({ name: "", description: "", color: GROUP_PALETTE[0] });
@@ -2873,13 +3053,13 @@ const GroupsView = ({ meta, header, busy, status, game, runBusy, beginClickMode,
                 });
                 setStatus(`${label}: ${had ? `no longer ${name}'s` : `now controlled by ${name}`}. Keep clicking, or press Done.`);
             } catch (error) {
-                setStatus(`Failed: ${error.message}`);
+                setStatus(`Failed: ${error.message}`, "error");
             }
         });
     };
 
     const statusLine = status && (
-        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
+        <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
         {status}
         </div>
     );
@@ -3011,7 +3191,7 @@ const GroupsView = ({ meta, header, busy, status, game, runBusy, beginClickMode,
 // arrangement, then hands the land over through the Annex Country transfer.
 const PUPPET_FORM_DEFAULTS = { overlord: "", puppet: "", kind: "satellite", secrecy: "open", loyalty: 50 };
 
-const PuppetStatesView = ({ meta, header, busy, status, game, polities, runBusy, setStatus }) => {
+const PuppetStatesView = ({ meta, header, busy, status, statusFailed, game, polities, runBusy, setStatus }) => {
     const [world, setWorld] = useState(null);
     // null: the list; "": a new arrangement; otherwise the row being edited.
     const [editing, setEditing] = useState(null);
@@ -3118,7 +3298,7 @@ const PuppetStatesView = ({ meta, header, busy, status, game, polities, runBusy,
     });
 
     const statusLine = status && (
-        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
+        <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
         {status}
         </div>
     );
@@ -3256,11 +3436,13 @@ const PuppetStatesView = ({ meta, header, busy, status, game, polities, runBusy,
     );
 };
 
-const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus, navigateTool, closePanel }) => {
+const ToolView = ({ tool, header, busy, status, statusFailed, game, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus, navigateTool, closePanel }) => {
     const meta = TOOLS.find((entry) => entry.id === tool);
     const [text, setText] = useState("");
-    const [gmMode, setGmMode] = useState("world-intervention");
+    const [gmMode, setGmMode] = useState("auto");
     const [gmPreview, setGmPreview] = useState(null);
+    const [gmEditOpen, setGmEditOpen] = useState(false);
+    const [gmEditText, setGmEditText] = useState("");
     const [gmApplyResult, setGmApplyResult] = useState(null);
     const [gmExpandedSections, setGmExpandedSections] = useState({});
     const [target, setTarget] = useState("");
@@ -3301,12 +3483,19 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const bundle = { world, events, chats, actions, game };
         const data = {
             document: world?.historyDocument ?? null,
+            // The document as the panel shows it (in tiers its own text is only
+            // what was added since the last fold), and the canon beside it.
+            seeded: world?.historyDocument ? seedHistoryDocumentText(world) : "",
+            canon: normalizeCanonFacts(world?.canonFacts),
             passes: Array.isArray(world?.consolidatedHistory) ? world.consolidatedHistory : [],
-            status: { ...describeHistoryConsolidation(bundle), canFoldNow: planHistoryConsolidation(bundle, { force: true }).due },
+            status: describeHistoryConsolidation(bundle),
             totalEvents: Array.isArray(events) ? events.length : 0,
         };
         setItems(data);
-        setFields({ document: data.document?.text ?? "" });
+        // In tiers (runtime/historyTiers.js), the eras and years as one text:
+        // saved by hand, it is one document again, and the next fold makes it
+        // the first era.
+        setFields({ document: data.seeded });
         return data;
     };
 
@@ -3379,6 +3568,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         setItems(null);
         setEditingId(null);
         setGmPreview(null);
+        setGmEditOpen(false);
+        setGmEditText("");
         setGmApplyResult(null);
         setGmExpandedSections({});
         setSearch("");
@@ -3401,13 +3592,13 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             loadMapFeatureData().catch(() => setItems({ customCities: false, markers: [], cities: [] }));
         }
         if (tool === "history-document") {
-            loadHistoryDocument().catch((error) => setItems({ document: null, passes: [], status: { text: `Could not read the campaign: ${error.message}`, canFoldNow: false }, totalEvents: 0 }));
+            loadHistoryDocument().catch((error) => setItems({ document: null, passes: [], status: { text: `Could not read the campaign: ${error.message}` }, totalEvents: 0 }));
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tool]);
 
     const statusLine = status && (
-        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
+        <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
         {status}
         </div>
     );
@@ -3435,6 +3626,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 header={header}
                 busy={busy}
                 status={status}
+                statusFailed={statusFailed}
                 game={game}
                 runBusy={runBusy}
                 beginClickMode={beginClickMode}
@@ -3450,6 +3642,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 header={header}
                 busy={busy}
                 status={status}
+                statusFailed={statusFailed}
                 game={game}
                 polities={polities}
                 runBusy={runBusy}
@@ -3465,6 +3658,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 header={header}
                 busy={busy}
                 status={status}
+                statusFailed={statusFailed}
                 game={game}
                 runBusy={runBusy}
             />
@@ -3478,6 +3672,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 header={header}
                 busy={busy}
                 status={status}
+                statusFailed={statusFailed}
                 game={game}
                 runBusy={runBusy}
             />
@@ -3491,6 +3686,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 header={header}
                 busy={busy}
                 status={status}
+                statusFailed={statusFailed}
                 game={game}
                 runBusy={runBusy}
                 closePanel={closePanel}
@@ -3505,6 +3701,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 header={header}
                 busy={busy}
                 status={status}
+                statusFailed={statusFailed}
                 polities={polities}
                 refresh={refresh}
                 runBusy={runBusy}
@@ -3612,6 +3809,11 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
 
         const modeOptions = [
             {
+                id: "auto",
+                title: "Auto - Recommended",
+                description: "Describe the change freely. GM selects one validated mode before preview.",
+            },
+            {
                 id: "direct",
                 title: "Direct / OOC correction",
                 description: "Exact canonical/admin edits with the smallest possible scope.",
@@ -3664,7 +3866,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <label style={labelStyle}>Mode</label>
                 {/* One per row on a phone: a third of the panel squeezed each
                     mode's description into a column a word or two wide. */}
-                <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(3, minmax(0, 1fr))", marginBottom: "0.7rem" }}>
+                <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(2, minmax(0, 1fr))", marginBottom: "0.7rem" }}>
                     {modeOptions.map((option) => {
                         const active = gmMode === option.id;
                         return (
@@ -3672,7 +3874,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                 key={option.id}
                                 type="button"
                                 disabled={busy}
-                                onClick={() => { setGmMode(option.id); setGmPreview(null); setGmApplyResult(null); setGmExpandedSections({}); }}
+                                onClick={() => { setGmMode(option.id); setGmPreview(null); setGmEditOpen(false); setGmEditText(""); setGmApplyResult(null); setGmExpandedSections({}); }}
                                 style={{
                                     ...buttonStyle,
                                     alignItems: "flex-start",
@@ -3696,9 +3898,11 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <label style={labelStyle}>GM request</label>
                 <textarea
                     value={text}
-                    onChange={(event) => { setText(event.target.value); setGmPreview(null); setGmApplyResult(null); setGmExpandedSections({}); }}
-                    placeholder={gmMode === "direct"
-                        ? 'Example: "Germany should have a population of 72 million and GDP of €500 billion. Do not add a timeline event."'
+                    onChange={(event) => { setText(event.target.value); setGmPreview(null); setGmEditOpen(false); setGmEditText(""); setGmApplyResult(null); setGmExpandedSections({}); }}
+                    placeholder={gmMode === "auto"
+                        ? 'Example: "A major Berlin bank collapses, triggering a prolonged financial panic. Let the game reflect the consequences over time."'
+                        : gmMode === "direct"
+                        ? 'Example: "Germany should have a population of 72 million and GDP of $500 billion. Do not add a timeline event."'
                         : gmMode === "exact-event"
                             ? 'Example: "On 4 March 1927 Britain and Germany sign a naval consultation accord. Make it major and notable, create the agreement, and set relations to +45."'
                             : 'Example: "Russia enters a constitutional crisis; Finland gains broad autonomy, Polish unrest spreads, Nicholas II replaces the government, and Russia asks Germany for consultations."'}
@@ -3712,6 +3916,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     onClick={() => runBusy(async () => {
                         const result = await previewGameMasterCommand(text.trim(), { mode: gmMode });
                         setGmPreview(result);
+                        setGmEditOpen(false);
+                        setGmEditText("");
                         setGmApplyResult(null);
                         setGmExpandedSections({});
                         return result?.summary
@@ -3720,7 +3926,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     })}
                     style={{ ...primaryButtonStyle, marginTop: "0.6rem", opacity: busy || !text.trim() ? 0.6 : 1, width: "100%" }}
                 >
-                    {busy ? "Planning canonical transaction…" : gmPreview ? "Regenerate Preview" : "Generate Preview"}
+                    {busy ? "Planning canonical transaction…" : gmPreview ? "Generate New Preview" : "Generate Preview"}
                 </button>
                 <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.69rem", lineHeight: 1.4, marginTop: "0.45rem" }}>
                     AI interpretation is constrained by the live native GM schema. Wars, relations, agreements and subordinations are structured objects now — no encoded string mini-language and no turn simulation path.
@@ -3741,8 +3947,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     {gmPreview.date || "Current date"} · {gmPreview.mode} · source {gmPreview?.generation?.source || "unknown"}
                                 </div>
                             </div>
-                            <span style={{ border: "1px solid rgba(74,222,128,0.25)", borderRadius: 999, color: "#86efac", fontSize: "0.62rem", padding: "0.2rem 0.42rem" }}>
-                                {gmApplied ? "APPLIED" : "VALIDATED"}
+                            <span style={{ border: `1px solid ${gmNotes.length ? "rgba(251,191,36,0.4)" : "rgba(74,222,128,0.25)"}`, borderRadius: 999, color: gmNotes.length ? "#fbbf24" : "#86efac", fontSize: "0.62rem", padding: "0.2rem 0.42rem" }}>
+                                {gmApplied ? (gmNotes.length ? "APPLIED · PARTIAL" : "APPLIED") : (gmNotes.length ? "VALIDATED · PARTIAL" : "VALIDATED")}
                             </span>
                         </div>
 
@@ -3750,6 +3956,67 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         <div data-no-translate={gmPreview.summary ? "" : undefined} style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.75rem", lineHeight: 1.45, marginTop: "0.55rem" }}>
                             {gmPreview.summary || "No summary returned."}
                         </div>
+                        {gmPreview.requestedMode === "auto" && (
+                            <div style={{ border: "1px solid rgba(147,197,253,0.2)", borderRadius: 8, color: "rgba(219,234,254,0.88)", fontSize: "0.68rem", lineHeight: 1.4, marginTop: "0.5rem", padding: "0.48rem 0.55rem" }}>
+                                <strong>Auto mode selected:</strong> {modeOptions.find((option) => option.id === gmPreview.mode)?.title || gmPreview.mode}.
+                                <span data-no-translate={gmPreview.modeReason ? "" : undefined}> {gmPreview.modeReason || "The selected native GM mode governs all proposed operations."}</span>
+                            </div>
+                        )}
+
+                        {!gmApplied && (
+                            <div style={{ marginTop: "0.65rem" }}>
+                                <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", justifyContent: "space-between" }}>
+                                    <button
+                                        type="button"
+                                        className="oh-tap-row"
+                                        disabled={busy}
+                                        onClick={() => { setGmEditOpen((open) => !open); setGmEditText(""); }}
+                                        style={{ ...buttonStyle, fontSize: "0.68rem", padding: "0.38rem 0.65rem" }}
+                                    >
+                                        {gmEditOpen ? "Cancel Edit" : "Edit Preview"}
+                                    </button>
+                                    {gmPreview.revisionCount > 0 && (
+                                        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.64rem" }}>
+                                            {`Revision ${gmPreview.revisionCount}`}
+                                        </span>
+                                    )}
+                                </div>
+                                {gmEditOpen && (
+                                    <div style={{ background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, marginTop: "0.5rem", padding: "0.55rem" }}>
+                                        <label style={labelStyle} htmlFor="gm-preview-revision">What should change?</label>
+                                        <textarea
+                                            id="gm-preview-revision"
+                                            aria-label="GM preview revision instructions"
+                                            value={gmEditText}
+                                            onChange={(event) => setGmEditText(event.target.value)}
+                                            placeholder='Example: Change only the REPLACE-LEADER office to headOfState. Preserve the coalition, strategy and event.'
+                                            rows={3}
+                                            style={{ ...inputStyle, marginTop: "0.35rem", resize: "vertical" }}
+                                        />
+                                        <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.63rem", lineHeight: 1.35, marginTop: "0.35rem" }}>
+                                            Unmentioned operations stay in the preview. Nothing is applied until you approve the full revised transaction.
+                                        </div>
+                                        <button
+                                            type="button"
+                                            className="oh-tap-row"
+                                            disabled={busy || !gmEditText.trim()}
+                                            onClick={() => runBusy(async () => {
+                                                const result = await previewGameMasterRevision(gmPreview, gmEditText.trim());
+                                                setGmPreview(result);
+                                                setGmEditOpen(false);
+                                                setGmEditText("");
+                                                setGmApplyResult(null);
+                                                setGmExpandedSections({});
+                                                return result?.summary ? `Edited preview ready - ${result.summary}` : "Edited preview ready. Nothing applied.";
+                                            })}
+                                            style={{ ...primaryButtonStyle, marginTop: "0.55rem", opacity: busy || !gmEditText.trim() ? 0.55 : 1, width: "100%" }}
+                                        >
+                                            {busy ? "Editing Preview…" : "Generate Edited Preview"}
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
 
                         {gmNotes.length > 0 && (
                             <div style={{ border: "1px solid rgba(255,255,255,0.14)", borderRadius: 8, marginTop: "0.55rem", padding: "0.45rem 0.55rem" }}>
@@ -4133,6 +4400,12 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             disabled={busy || gmApplied}
                             title={gmApplied ? "This exact transaction has already been applied." : "Apply exactly the validated preview above. No second AI call."}
                             onClick={() => runBusy(async () => {
+                                // Native validation of the retained operations is not
+                                // proof that every requested change survived. Require
+                                // explicit acceptance of any omissions before Apply.
+                                if (gmNotes.length > 0 && !window.confirm("Some requested operations were left out of this preview. Apply the partial transaction anyway?")) {
+                                    return "Partial transaction not applied.";
+                                }
                                 const result = await applyGameMasterPreview(gmPreview);
                                 setGmApplyResult(result);
                                 // world.json writes already emit the canonical update consumed by
@@ -4181,7 +4454,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const data = items;
         const doc = data?.document ?? null;
         const passes = data?.passes ?? [];
-        const savedText = doc?.text ?? "";
+        const savedText = data?.seeded ?? doc?.text ?? "";
+        const canon = data?.canon ?? [];
         const draft = typeof fields.document === "string" ? fields.document : savedText;
         const dirty = draft !== savedText;
         const draftWords = countWords(draft);
@@ -4192,6 +4466,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             const world = await readWorldState({ force: true });
             const current = world?.historyDocument ?? null;
             const text = draft.trim();
+            if (current && text === seedHistoryDocumentText(world).trim()) {
+                return "The history document is unchanged.";
+            }
             const next = text
                 ? {
                     text,
@@ -4204,7 +4481,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 }
                 : null;
             await writeWorldState({ ...world, historyDocument: next });
-            if ((current?.text ?? "").trim() !== text) {
+            if ((current ? seedHistoryDocumentText(world) : "").trim() !== text) {
                 await noteGmChange("history", next
                     ? "Rewrote the history document by hand; it is the account of the past to go by."
                     : "Cleared the history document by hand.");
@@ -4237,22 +4514,6 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <div style={{ ...editorFieldStyle, color: "rgba(255,255,255,0.72)", fontSize: "0.74rem", lineHeight: 1.45, marginBottom: "0.5rem" }}>
                 <div>{data.totalEvents} events in the timeline. {data.status.text}</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.45rem" }}>
-                <button
-                type="button"
-                className="oh-tap-row"
-                disabled={busy || !data.status.canFoldNow}
-                title={data.status.canFoldNow ? "Runs the AI consolidator on the older events now" : "Only the retained tail is waiting; there is nothing older to fold"}
-                style={{ ...primaryButtonStyle, opacity: busy || !data.status.canFoldNow ? 0.55 : 1, padding: "0.3rem 0.6rem" }}
-                onClick={() => runBusy(async () => {
-                    const result = await consolidateHistoryNow();
-                    await loadHistoryDocument();
-                    return result.consolidated
-                        ? `Folded ${result.events} event${result.events === 1 ? "" : "s"} and ${result.chats} chat${result.chats === 1 ? "" : "s"}; the document is now revision ${result.documentRevision}, ${result.documentWords} words. The newest ${result.retained} events stay in full.`
-                        : "Nothing was folded: only the retained tail is waiting, or the consolidator came back empty.";
-                })}
-                >
-                Fold the older events now
-                </button>
                 {confirmingReset ? (
                     <>
                     <button type="button" className="oh-tap-row" disabled={busy} style={{ ...primaryButtonStyle, padding: "0.3rem 0.6rem" }} onClick={() => runBusy(resetCompression)}>Confirm reset</button>
@@ -4296,6 +4557,18 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <button type="button" className="oh-tap-row" disabled={busy || !dirty} style={{ ...buttonStyle, opacity: busy || !dirty ? 0.55 : 1, padding: "0.3rem 0.6rem" }} onClick={() => setFields({ document: savedText })}>Revert</button>
                 </div>
                 </>
+            )}
+            {canon.length > 0 && (
+                <details style={{ marginTop: "0.6rem" }}>
+                <summary style={{ cursor: "pointer", color: "rgba(255,255,255,0.6)", fontSize: "0.74rem", ...(touch ? TOUCH_SUMMARY : null) }}>{canon.length} standing fact{canon.length === 1 ? "" : "s"} the AI is always shown</summary>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginTop: "0.4rem", maxHeight: "14rem", overflowY: "auto" }}>
+                {canon.map((fact, index) => (
+                    <div key={`${fact.date}-${index}`} style={{ color: "rgba(255,255,255,0.78)", fontSize: "0.74rem", lineHeight: 1.45 }}>
+                    <span style={{ color: "rgba(255,255,255,0.45)" }}>{fact.date} · {fact.kind} · </span>{fact.text}
+                    </div>
+                ))}
+                </div>
+                </details>
             )}
             {passes.length > 0 && (
                 <details style={{ marginTop: "0.6rem" }}>
@@ -4672,7 +4945,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                 if (!source || source === owner) return;
                                 const count = await transferWholeCountry(source, owner, game);
                                 if (count === 0) {
-                                    setStatus(`Failed: no regions of ${nameOf(source)} were found on the map, so nothing was annexed.`);
+                                    setStatus(`Failed: no regions of ${nameOf(source)} were found on the map, so nothing was annexed.`, "error");
                                     return;
                                 }
                                 await noteGmChange("territory", `Annexed the whole of ${nameOf(source)} into ${nameOf(owner)} by hand (${count} regions).`);
@@ -4693,7 +4966,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                 setStatus(`${label} → ${nameOf(owner)}. Keep clicking, or press Done.`);
                             }
                         } catch (error) {
-                            setStatus(`Failed: ${error.message}`);
+                            setStatus(`Failed: ${error.message}`, "error");
                         }
                     },
                 );
@@ -4932,7 +5205,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             setStatus("");
                             await readRegionState({ rawProps: props, fallback: {} });
                         } catch (error) {
-                            setStatus(`Failed: ${error.message}`);
+                            setStatus(`Failed: ${error.message}`, "error");
                         } finally {
                             endClickMode();
                         }
@@ -5271,11 +5544,19 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             .filter(({ feature }) => !q || [feature?.properties?.city, feature?.properties?.name].some((value) => String(value ?? "").toLowerCase().includes(q)))
             .slice(0, 80);
 
+        // How the map draws it: its type's family, or the one picked for a type
+        // of the player's own (mapFeatureKinds.js), never a family left over
+        // from before its type changed.
+        const formFamily = (marker) => gmFeatureFamily(
+            fields.kind ?? (MAP_FEATURE_KINDS.some((entry) => entry.id === marker.kind) ? marker.kind : "other"),
+            fields.family ?? marker.family,
+        ) || undefined;
         const markerFromForm = (marker, coords = null) => ({
             ...marker,
             id: marker.id,
             name: String(fields.name ?? marker.name ?? "").trim(),
             kind: (fields.kind === "other" ? String(fields.customKind ?? "").trim() : String(fields.kind ?? marker.kind ?? "landmark").trim()) || "landmark",
+            family: formFamily(marker),
             ownerCode: String(fields.ownerCode ?? marker.ownerCode ?? "").trim(),
             lng: Number(coords?.lng ?? fields.lng ?? marker.lng),
             lat: Number(coords?.lat ?? fields.lat ?? marker.lat),
@@ -5317,6 +5598,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 lat: nextMarker.lat,
                 note: nextMarker.note,
                 foundedAt: nextMarker.foundedAt,
+                // Said every time, so a type changed to one with no family of its own is a landmark again.
+                family: nextMarker.family || "landmark",
             });
             const refreshed = await applyAdminMarkerOps(markerOps);
             return (refreshed?.markers ?? []).find((entry) => entry.id === marker.id) || nextMarker;
@@ -5449,6 +5732,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                                 name: marker.name || "",
                                                 kind: knownKind,
                                                 customKind: knownKind === "other" ? marker.kind || "" : "",
+                                                family: knownKind === "other" ? marker.family || "" : "",
                                                 ownerCode: marker.ownerCode || "",
                                                 status: marker.status || "active",
                                                 note: marker.note || "",
@@ -5499,6 +5783,16 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     {fields.kind === "other" && (
                                         <input style={{ ...inputStyle, marginTop: "0.38rem" }} value={fields.customKind ?? ""} onChange={(event) => setFields({ ...fields, customKind: event.target.value })} placeholder="Custom type, e.g. observatory" />
                                     )}
+                                    {fields.kind === "other" && (
+                                        <>
+                                        <label style={labelStyle}>Drawn as</label>
+                                        <select value={fields.family || "landmark"} onChange={(event) => setFields({ ...fields, family: event.target.value })} style={inputStyle}>
+                                            {GM_MAP_FEATURE_FAMILIES.map((family) => (
+                                                <option key={family.id} value={family.id}>{family.icon} {family.label}</option>
+                                            ))}
+                                        </select>
+                                        </>
+                                    )}
 
                                     <label style={labelStyle}>Associated country (optional)</label>
                                     <PolitySelect polities={polities} value={fields.ownerCode ?? ""} onChange={(value) => setFields({ ...fields, ownerCode: value })} placeholder="Neutral / no associated country" />
@@ -5538,7 +5832,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                                         setStatus(`${marker.name} moved authoritatively.`);
                                                     } catch (error) {
                                                         endClickMode();
-                                                        setStatus(`Failed: ${error.message}`);
+                                                        setStatus(`Failed: ${error.message}`, "error");
                                                     }
                                                 });
                                             }}
@@ -5686,7 +5980,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                                         setStatus(`${saved.name} moved on the scenario city layer.`);
                                                     } catch (error) {
                                                         endClickMode();
-                                                        setStatus(`Failed: ${error.message}`);
+                                                        setStatus(`Failed: ${error.message}`, "error");
                                                     }
                                                 });
                                             }}
@@ -5728,6 +6022,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const type = fields.addType || "landmark";
         const isCity = type === "city";
         const customKind = type === "other" ? String(fields.customKind ?? "").trim() : type;
+        // How the map draws it (mapFeatureKinds.js gmFeatureFamily).
+        const family = isCity ? "" : gmFeatureFamily(type, fields.family);
         const choiceStyle = (active) => ({
             ...buttonStyle,
             background: active ? "rgba(0,0,0,0.48)" : "rgba(255,255,255,0.05)",
@@ -5742,11 +6038,11 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const beginPlacement = () => {
             const name = String(fields.name ?? "").trim();
             if (!name) {
-                setStatus("Failed: Give the feature a name first.");
+                setStatus("Failed: Give the feature a name first.", "error");
                 return;
             }
             if (type === "other" && !customKind) {
-                setStatus("Failed: Give the custom feature type a name.");
+                setStatus("Failed: Give the custom feature type a name.", "error");
                 return;
             }
             const tier = Math.max(1, Math.min(4, Number(fields.tier) || 2));
@@ -5792,6 +6088,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         marker: {
                             name,
                             kind: isCity ? "city" : customKind,
+                            ...(family ? { family } : {}),
                             ownerCode,
                             status: markerStatus,
                             lng,
@@ -5805,7 +6102,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     setStatus(`${name} added as a persistent world feature.`);
                 } catch (error) {
                     endClickMode();
-                    setStatus(`Failed: ${error.message}`);
+                    setStatus(`Failed: ${error.message}`, "error");
                 }
             });
         };
@@ -5838,6 +6135,16 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 </div>
                 {type === "other" && (
                     <input style={{ ...inputStyle, marginTop: "0.38rem" }} value={fields.customKind ?? ""} onChange={(event) => setFields({ ...fields, customKind: event.target.value })} placeholder="Custom type, e.g. observatory" />
+                )}
+                {type === "other" && (
+                    <>
+                    <label style={labelStyle}>Drawn as</label>
+                    <select value={fields.family || "landmark"} onChange={(event) => setFields({ ...fields, family: event.target.value })} style={inputStyle}>
+                        {GM_MAP_FEATURE_FAMILIES.map((entry) => (
+                            <option key={entry.id} value={entry.id}>{entry.icon} {entry.label}</option>
+                        ))}
+                    </select>
+                    </>
                 )}
 
                 <label style={labelStyle}>Name</label>

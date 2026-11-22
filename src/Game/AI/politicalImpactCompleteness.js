@@ -1,16 +1,18 @@
-import { getPoliticalProfile } from "../../runtime/politicalActors.js";
+import { getPoliticalProfile, isParliamentarySystem } from "../../runtime/politicalActors.js";
 import { applyPoliticalActorOperation } from "../../runtime/politicalActorOps.js";
+import { scriptedImpactsOf } from "./scriptedEventImpacts.js";
+
+// Whether a timeline event that changes a polity's government, leader, parties,
+// coalition or system carries the Political World ops that make the change.
+// What an event changes is read from structure only: the answer's
+// politicalClaims ledger, the event's own politicalActorOps, and a scripted
+// beat's authored impacts. The event's words are never read. They were, by
+// English regexes for elections, cabinets, coups and renames, which misfired on
+// ordinary English ("a new rail link inaugurated") and never fired in any other
+// language, so the same world played differently by language.
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => (Array.isArray(value) ? value : []);
-const textOf = (event) => {
-  const title = clean(event?.title);
-  const description = clean(event?.description);
-  return [title, description].filter(Boolean).join(". ");
-};
-const opNames = (event) => new Set(list(event?.impacts?.politicalActorOps)
-  .map((entry) => clean(entry?.op).toLowerCase())
-  .filter(Boolean));
 
 const politicalOps = (event) => list(event?.impacts?.politicalActorOps)
   .filter((entry) => entry && typeof entry === "object");
@@ -79,15 +81,12 @@ const governmentHasGoverningForce = (actor) => {
   );
 };
 
-const actorHasParliamentaryPartySystem = (actor) => {
-  if (!actor || !list(actor.parties).length) return false;
-  const systemText = [
-    actor?.politicalSystem?.type,
-    actor?.politicalSystem?.publicLabel,
-    actor?.government?.form,
-  ].map(clean).join(" ").toLowerCase();
-  return /\bparliament/.test(systemText);
-};
+// A party system whose government answers to a parliament: parties, and a
+// parliamentary system type (politicalActors.js isParliamentarySystem, an enum).
+// It was the word "parliament" in the type, the label or government.form.
+const actorHasParliamentaryPartySystem = (actor) => Boolean(
+  actor && list(actor.parties).length && isParliamentarySystem(actor.politicalSystem),
+);
 
 const operationEstablishesGoverningForce = (entry) => {
   const op = clean(entry?.op).toLowerCase();
@@ -133,6 +132,7 @@ export const POLITICAL_CLAIM_EFFECTS = Object.freeze([
 
 const POLITICAL_CLAIM_EFFECT_SET = new Set(POLITICAL_CLAIM_EFFECTS);
 const POLITICAL_CLAIM_ROWS = Symbol("openhistoria.politicalClaimRows");
+const SCRIPTED_CLAIM_ROWS = Symbol("openhistoria.scriptedPoliticalClaimRows");
 const hasOwn = (value, key) => Boolean(value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, key));
 
 const canonicalClaimPolityKey = (event, polityKey) => {
@@ -156,24 +156,27 @@ const canonicalClaimPolityKey = (event, polityKey) => {
 // nested semantic schema on every event. Event numbers are bound to the actual
 // event objects BEFORE chronological sorting; the Map therefore remains correct
 // after sorting without persisting claim metadata into timeline events.
+//
+// mode "structured": the answer gave a ledger (an empty one is a ledger saying
+// no event completes a change). mode "unclaimed": it gave none, or one too
+// mangled to read; its events are then held to what their own ops and a
+// scripted beat's impacts say they change, as every event is.
 const readPoliticalClaimContext = (candidate) => {
   const byEvent = new Map();
   if (!hasOwn(candidate, "politicalClaims")) {
-    return { mode: "legacy", byEvent, legacyEvents: new Set(), error: "", discarded: false };
+    return { mode: "unclaimed", byEvent, error: "", discarded: false };
   }
 
   const events = list(candidate?.events);
   const raw = String(candidate?.politicalClaims ?? "");
-  if (!raw.trim()) return { mode: "structured", byEvent, legacyEvents: new Set(), error: "", discarded: false };
+  if (!raw.trim()) return { mode: "structured", byEvent, error: "", discarded: false };
 
   // Transient claim metadata must never cost a successful time skip another AI
-  // request. If the provider mangles this compact ledger, discard it and use the
-  // pre-existing legacy completeness path for this answer. Canonical operations
-  // are still validated independently below.
+  // request. If the provider mangles this compact ledger, discard it: the
+  // answer's canonical operations are still validated on their own below.
   const fail = (message) => ({
-    mode: "legacy",
+    mode: "unclaimed",
     byEvent: new Map(),
-    legacyEvents: new Set(),
     error: "",
     discarded: true,
     discardedReason: `politicalClaims ${message}`,
@@ -227,13 +230,13 @@ const readPoliticalClaimContext = (candidate) => {
   // same logical event without introducing a persistent field.
   for (const [event, rows] of byEvent.entries()) event[POLITICAL_CLAIM_ROWS] = rows;
 
-  return { mode: "structured", byEvent, legacyEvents: new Set(), error: "", discarded: false };
+  return { mode: "structured", byEvent, error: "", discarded: false };
 };
 
 // The context each candidate was last prepared with. A check that is handed
 // only the candidate (politicalImpactCompletenessIssues on salvage) reads the
-// same binding, legacy events included, instead of numbering the events again
-// after they were sorted. Weak: an entry goes with its candidate.
+// same binding instead of numbering the events again after they were sorted.
+// Weak: an entry goes with its candidate.
 const PREPARED_CLAIM_CONTEXTS = new WeakMap();
 
 export const preparePoliticalClaimContext = (candidate) => {
@@ -245,150 +248,20 @@ export const preparePoliticalClaimContext = (candidate) => {
 export const clearPoliticalClaimBindings = (candidate) => {
   if (candidate && typeof candidate === "object") PREPARED_CLAIM_CONTEXTS.delete(candidate);
   for (const event of list(candidate?.events)) {
-    if (event && typeof event === "object") delete event[POLITICAL_CLAIM_ROWS];
+    if (event && typeof event === "object") {
+      delete event[POLITICAL_CLAIM_ROWS];
+      delete event[SCRIPTED_CLAIM_ROWS];
+    }
   }
 };
 
 const declaredPoliticalClaimRows = (claimContext, event) => (
-  claimContext?.byEvent?.get?.(event)
-  || (event && typeof event === "object" ? event[POLITICAL_CLAIM_ROWS] : null)
-  || []
+  claimContext?.mode === "structured"
+    ? claimContext?.byEvent?.get?.(event)
+      || (event && typeof event === "object" ? event[POLITICAL_CLAIM_ROWS] : null)
+      || []
+    : []
 );
-
-const ELECTION_EVENT_RE = /\b(?:general|parliamentary|presidential|legislative|national|constituent)?\s*elections?\b/i;
-// An election counts as held only when the verb or the result is about the
-// election itself, in the same clause: "holds parliamentary elections",
-// "elections held in Poland", "election results", "the election gave the
-// Liberals a majority". A promise to hold one, elections "to be held", a poll,
-// an election law passed by a majority, or police who "hold protesters after
-// an election rally" do not.
-const ELECTION_WORD = "(?:(?:general|parliamentary|presidential|legislative|national|constituent|snap|early|local|regional)\\s+)?elections?";
-const NOT_THE_VOTE = "(?!\\s+(?:law|laws|reform|code|commission|date|campaign|monitors?|observers?|fraud|rules?|bill|rally|rallies|debates?|posters?|manifesto))";
-const NOT_A_PROMISE = "(?<!\\b(?:to|will|would|shall|must|should|may|might|could)\\s)";
-// Up to three words between holding and the election ("holds first free
-// federal elections"), never across a preposition or a clause: police "hold
-// protesters after an election" hold no election.
-const ELECTION_GAP = "(?:\\s+(?!(?:after|before|ahead|during|following|over|at|in|on|near|outside|against|amid|about|for|of|to|with|by|who|which|that|as|and|or)\\b)[\\w'-]+){0,3}?";
-const ELECTION_COMPLETION_RE = new RegExp([
-  `${NOT_A_PROMISE}\\b(?:holds?|held|conducts?|conducted|convenes?|convened)${ELECTION_GAP}\\s+${ELECTION_WORD}\\b${NOT_THE_VOTE}`,
-  `${NOT_A_PROMISE}\\b(?:wins?|won)\\b[^.;!?]{0,50}\\b${ELECTION_WORD}\\b${NOT_THE_VOTE}`,
-  `\\b${ELECTION_WORD}\\b${NOT_THE_VOTE}[^.;!?]{0,60}\\b(?:(?:(?:is|are|was|were)\\s+)?(?<!\\bbe\\s)held|results?|returns?|returned|won\\s+by|produces?|produced|delivers?|delivered|gives?|gave|hands?|handed|elects?|elected|seats?|majority|plurality|victory|landslide)\\b`,
-].join("|"), "i");
-const ELECTION_RESULT_RE = /\b(?:results?|returns?|returned|final tall(?:y|ies)|count(?:ed|ing)?|wins?|won|victory|majority|plurality|seat(?:s)?|governing coalition|coalition government|forms? (?:the )?government|elected (?:president|prime minister|premier|chancellor))\b/i;
-// Political World is polity-level canon. Explicitly subnational/local elections
-// may be important history, but a governor/mayor/provincial result does not by
-// itself rewrite the national government or party landscape. National scope
-// wins if the same event explicitly contains both levels.
-const SUBNATIONAL_ELECTION_RE = /\b(?:regional|gubernatorial|governor(?:ship)?|provincial|municipal|local|mayoral|county|district|prefectural|state[- ]level)\b/i;
-const NATIONAL_ELECTION_SCOPE_RE = /\b(?:general elections?|parliamentary elections?|presidential elections?|legislative elections?|federal elections?|constituent assembly elections?|national assembly elections?|elected (?:president|prime minister|premier|chancellor))\b/i;
-const electionNeedsPolityMutation = (text) => (
-  ELECTION_EVENT_RE.test(text)
-  && ELECTION_COMPLETION_RE.test(text)
-  && (!SUBNATIONAL_ELECTION_RE.test(text) || NATIONAL_ELECTION_SCOPE_RE.test(text))
-);
-
-const CONSTITUTIONAL_TERM = String.raw`(?:constitution|constitutional charter|constitutional framework|fundamental law|new republic|new monarchy|parliamentary republic|presidential republic|constitutional monarchy)`;
-const CONSTITUTIONAL_COMPLETION = String.raw`(?:adopts?|adopted|ratifies?|ratified|enacts?|enacted|promulgates?|promulgated|establishes?|established|proclaims?|proclaimed|enters? into force|takes? effect)`;
-const CONSTITUTIONAL_COMPLETION_CLAIM_RE = new RegExp(
-  String.raw`(?:\b${CONSTITUTIONAL_TERM}\b[^.!?;]{0,100}\b${CONSTITUTIONAL_COMPLETION}\b|\b${CONSTITUTIONAL_COMPLETION}\b[^.!?;]{0,100}\b${CONSTITUTIONAL_TERM}\b)`,
-  "i",
-);
-// The offices whose holder is a Political Actor's leadership. A former or
-// late holder is a private person: "Former President Carter Dies" changes no
-// government.
-const OFFICE = "(?:president|prime\\s+minister|chancellor|premier|head\\s+of\\s+state|head\\s+of\\s+government|monarch|king|queen|emperor|empress|tsar|czar|kaiser)";
-const SITTING_OFFICE = `(?<!\\bformer\\s)(?<!\\bex-)(?<!\\blate\\s)\\b${OFFICE}\\b`;
-// A word of a name, in any script: "Evika Siliņa" is a name like "Jaan Poska".
-// Where a name may stand, a word ends where its letters do, so "Inès" is not
-// the preposition "in".
-const NAME_WORD = "[\\p{L}\\p{M}\\p{N}_.'-]+";
-const WORD_END = "(?![\\p{L}\\p{M}\\p{N}_])";
-// Up to three words between an office and its verb, for a name ("Prime
-// Minister Jaan Poska resigns"), never across a clause ("who", "after").
-const NAME_GAP = `(?:\\s+(?!(?:who|whom|whose|which|that|after|before|as|and|or|of|with|to|for|in|on|at|over|by)${WORD_END})${NAME_WORD}){0,3}?`;
-// The appointee's name alone: no article, no "new" (a new ambassador is not a
-// name), no sentence break. The title and description are read as one text.
-const APPOINTEE_GAP = `(?:\\s+(?!(?:who|whom|whose|which|that|after|before|as|and|or|of|with|to|for|in|on|at|over|by|the|a|an|new|next)${WORD_END})[\\p{L}\\p{M}\\p{N}_'-]+){1,3}?`;
-// The government itself: not a programme, a body or a post of it ("new
-// government programme", "cabinet committee", "government official"), and not
-// its mandate or its review of something ("under the new cabinet mandate",
-// "the new cabinet reviews..."): those form, install and swear in nothing.
-const NOT_THE_GOVERNMENT_ITSELF = "(?!\\s+(?:program|programme|policy|policies|initiative|plan|scheme|regulations?|rules?|measures?|building|offices?|headquarters|spending|budget|bonds?|report|data|figures|statistics|website|portal|agency|department|ministry|subsid\\w*|contract|funding|grants?|committee|secretariat|meeting|agenda|post|position|minister|member|official(?!ly)|review|mandate|working\\s+group|task\\s+force))";
-const GOVERNMENT_BODY = `(?:government|cabinet|administration)\\b${NOT_THE_GOVERNMENT_ITSELF}`;
-// A government is formed, installed or takes office. Taking office,
-// swearing-in and inauguration need a government or an office holder: a rail
-// link or an ambassador can be inaugurated or sworn in too.
-const GOVERNMENT_RE = new RegExp([
-  `\\bnew\\s+(?:government|cabinet)\\b${NOT_THE_GOVERNMENT_ITSELF}`,
-  "\\b(?:provisional\\s+|interim\\s+|transitional\\s+|national\\s+|coalition\\s+)?(?:government|cabinet|administration)\\s+(?:is\\s+|was\\s+)?(?:formed|established|installed|proclaimed|sworn\\s+in)\\b",
-  `\\b(?:forms?|formed|establishes?|established|installs?|installed)\\s+(?:a\\s+|the\\s+|its\\s+)?(?:(?:new|first|permanent|constitutional|elected|coalition|majority|minority|provisional|interim|transitional)\\s+)*${GOVERNMENT_BODY}`,
-  `(?:${SITTING_OFFICE}|\\b${GOVERNMENT_BODY})${NAME_GAP}\\s+(?:takes?|took|assumes?|assumed)\\s+office\\b`,
-  `(?:${SITTING_OFFICE}|\\b${GOVERNMENT_BODY})${NAME_GAP}\\s+(?:(?:is|was)\\s+)?(?:sworn\\s+in|inaugurated)\\b`,
-  `\\b(?:sworn\\s+in|inaugurated)\\s+as\\s+(?:the\\s+)?(?:new\\s+)?${OFFICE}\\b`,
-].join("|"), "iu");
-const COALITION_RE = /\b(?:coalition|governing alliance|cabinet agreement)\b/i;
-// A military coalition is not a government: "coalition forces enter Baghdad".
-const MILITARY_COALITION_RE = /\b(?:coalition\s+(?:forces|troops|aircraft|air\s*strikes?|airstrikes?|warplanes|jets|navies|naval|ships|soldiers|operations?|military|partners\s+in\s+the\s+war)|(?:military|international|multinational|allied|western|arab|global|anti-[\w-]+|[\w-]+-led)\s+coalition)\b/gi;
-// A coalition changes when the verb is about the coalition itself.
-const COALITION_CHANGE_RE = /\bcoalition\b[^.;!?]{0,60}\b(?:is\s+formed|formed|forms|collapses?|collapsed|breaks?\s+up|broke\s+up|falls?\s+apart|fell\s+apart|splits?)\b|\b(?:forms?|formed|joins?|joined|enters?|entered|leaves?|left|quits?|exits?|exited|withdraws?\s+from|withdrew\s+from|abandons?|abandoned)\s+(?:a\s+|the\s+|its\s+)?(?:[\w-]+\s+){0,3}?coalition\b/i;
-const COALITION_FORMATION_RE = /(?:\b(?:forms?|formed|establishes?|established)\s+(?:a |the )?(?:new )?(?:governing )?coalition\b|\b(?:coalition|governing alliance)\s+(?:is\s+)?(?:formed|established)\b|\b(?:successfully\s+)?concludes?\s+coalition negotiations?\b|\bcoalition negotiations?\s+(?:successfully\s+)?conclude(?:s|d)?\b|\breaches?\s+(?:a\s+)?coalition agreement\b|\bcoalition agreement\s+(?:is\s+)?(?:reached|concluded|signed)\b|\bcoalition government\s+(?:is\s+)?(?:formed|established)\b)/i;
-const NONPARTY_GOVERNMENT_RE = /\b(?:provisional|interim|transitional|caretaker|technocratic|non[- ]partisan|partyless|military junta|royal cabinet|royal government|independent cabinet|emergency administration)\b/i;
-const PARTY_CREATION_RE = /(?:\b(?:founds?|founded|forms?|formed|creates?|created|launches?|launched|establishes?|established|organizes?|organized|reorganizes?|reorganized|reconstitutes?|reconstituted)\s+(?:a |the )?(?:new )?(?:political )?(?:party|movement|bloc)\b|\b(?:party|movement|bloc)\s+(?:is\s+)?(?:founded|formed|created|launched|established|reorganized|reconstituted)\b|\b(?:party )?(?:split|merger|merge|merged|breakaway|secession from|renames?|renamed)\b)/i;
-// The office itself changes hands, in one phrase: the holder resigns, dies or
-// is ousted; someone is elected, named or sworn in AS the office; a new holder.
-// "President Names New Ambassador" names no president.
-const LEADERSHIP_CHANGE_RE = new RegExp([
-  `${SITTING_OFFICE}${NAME_GAP}\\s+(?:resigns?|resigned|steps?\\s+down|stepped\\s+down|dies|died|abdicates?|abdicated|(?:is|was|has\\s+been)\\s+(?:ousted|deposed|removed|replaced|succeeded|assassinated|killed|overthrown)|takes?\\s+office|took\\s+office|assumes?\\s+office|(?:(?:is|was)\\s+)?sworn\\s+in)\\b`,
-  `\\b(?:elects?|elected|appoints?|appointed|names?|named|installs?|installed|confirms?|confirmed|becomes?|became|proclaimed|crowned|sworn\\s+in)\\s+(?:(?:a|the|its|their|as)\\s+)*(?:new\\s+|next\\s+|interim\\s+|acting\\s+)?${OFFICE}\\b`,
-  // "Sejm elects Andrzej Duda as president", "names Smith prime minister":
-  // a name between the verb and the office, but not a candidacy.
-  `\\b(?:elects?|elected|appoints?|appointed|names?|named|installs?|installed)${APPOINTEE_GAP}\\s+(?:as\\s+)?(?:the\\s+)?(?:new\\s+|next\\s+|interim\\s+|acting\\s+)?${OFFICE}\\b(?!\\s+(?:candidate|nominee|hopeful|contender|race|campaign))`,
-  `\\b(?:replaces?|replaced|succeeds?|succeeded)\\s+[\\p{L}\\p{M}\\p{N}_\\s.'-]{1,40}?\\s+as\\s+(?:the\\s+)?${OFFICE}\\b`,
-  `\\bnew\\s+${OFFICE}\\b`,
-  `${SITTING_OFFICE}\\s+(?:(?:is|was|has\\s+been)\\s+)?(?:elected|ousted|deposed|overthrown)\\b`,
-  `${SITTING_OFFICE}\\s+(?:is|was|has\\s+been)\\s+(?:named|appointed|installed)\\b`,
-].join("|"), "iu");
-// A regime changes: a coup, an overthrow, power seized, a monarchy restored
-// or abolished. A "digital revolution" or the "restoration" of a cathedral is
-// not one, and neither is a coup that failed.
-const REGIME_CHANGE_RE = new RegExp([
-  "\\bcoup(?:\\s+d['’]\\s*[ée]tat)?\\b(?!\\s+(?:attempts?|plots?|plotters|rumou?rs?|fears?|threats?|allegations?))",
-  "\\bregime\\s+change\\b",
-  "\\boverthrows?\\b|\\boverthrew\\b|\\boverthrown\\b",
-  "\\bseiz(?:es?|ed|ing)\\s+power\\b",
-  "\\brevolution(?:aries|ary\\s+forces)?\\s+(?:topples?|toppled|overthrows?|overthrew|ousts?|ousted|seizes?|seized|triumphs?|triumphed)\\b",
-  "\\b(?:topples?|toppled|ousts?|ousted)\\s+(?:the\\s+)?(?:government|regime|monarchy|dictatorship|junta)\\b",
-  "\\brestor(?:es|ed|ation\\s+of)\\s+(?:the\\s+)?monarchy\\b|\\brestored\\s+monarchy\\b|\\bmonarchy\\s+(?:is\\s+|was\\s+)?restored\\b",
-  "\\babolish(?:es|ed)?\\s+(?:the\\s+)?monarchy\\b",
-  "\\bdissolves?\\s+parliament\\b",
-  "\\bjunta\\s+(?:takes|took|seizes|seized|assumes|assumed)\\s+(?:power|control)\\b",
-].join("|"), "i");
-const FAILED_COUP_RE = /\b(?:fail(?:s|ed)?|foil(?:s|ed)?|thwart(?:s|ed)?|suppress(?:es|ed)?|crush(?:es|ed)?|defeat(?:s|ed)?|botched|abortive|attempted|alleged)\s+(?:(?:a|an|the)\s+)?(?:military\s+)?coup\b|\bcoup\b[^.;!?]{0,40}\b(?:fails?|failed|is\s+foiled|was\s+foiled|is\s+thwarted|was\s+thwarted|collapses?|collapsed)\b/gi;
-
-const POLITY_RENAME_CLAIM_RE = /(?:\b(?:formally|officially|legally|constitutionally)?\s*(?:adopts?|adopted|assumes?|assumed)\s+(?:the\s+)?(?:new\s+)?name\b|\b(?:renames?|renamed)\s+(?:itself|the country|the nation|the state)\b|\b(?:changes?|changed)\s+(?:its|the country'?s|the nation'?s|the state'?s)\s+name\b|\b(?:is|was)\s+renamed\s+(?:as|to)\b)/i;
-const POLITY_RENAME_CONTEXT_RE = /\b(?:country|nation|state|states|republic|kingdom|empire|federation|federal government|central government|constitutional identity|national identity|sovereign identity)\b/i;
-const NON_POLITY_RENAME_SUBJECT_RE = /\b(?:bank|party|movement|company|corporation|ministry|agency|committee|commission|university|school|newspaper|broadcaster|railway|airline|trade union|labou?r union|sports? club|team)\b/i;
-const EXPLICIT_POLITY_RENAME_SUBJECT_RE = /\b(?:country|nation|state|republic|kingdom|empire|federation)\b[^.!?;]{0,100}\b(?:adopts?|adopted|assumes?|assumed|renames?|renamed|changes?|changed)\b[^.!?;]{0,60}\bname\b/i;
-const eventClaimsPolityRename = (event) => {
-  const text = textOf(event);
-  const title = clean(event?.title);
-  // Keep this narrower than an ordinary "renamed X" detector. Brands, parties,
-  // institutions and officeholders change names too; only explicit polity
-  // identity context may force the canonical country-key mutation. A title whose
-  // subject is plainly an institution is excluded unless it explicitly says the
-  // country/state itself is the thing changing name.
-  if (!POLITY_RENAME_CLAIM_RE.test(text) || !POLITY_RENAME_CONTEXT_RE.test(text)) return false;
-  if (NON_POLITY_RENAME_SUBJECT_RE.test(title) && !EXPLICIT_POLITY_RENAME_SUBJECT_RE.test(title)) return false;
-  return true;
-};
-const eventCarriesPolityRename = (event) => polityChanges(event).some((change) => {
-  const operation = clean(change?.operation).toLowerCase();
-  const from = clean(change?.code);
-  const to = clean(change?.name);
-  if (operation === "rename") return Boolean(from && to && from.toLocaleLowerCase() !== to.toLocaleLowerCase());
-  return ["update", "restore"].includes(operation)
-    && Boolean(from && to && from.toLocaleLowerCase() !== to.toLocaleLowerCase());
-});
 
 const anyOp = (ops, names) => names.some((name) => ops.has(name));
 
@@ -403,27 +276,26 @@ const partyLandscapeOpNames = [
   "create-power-bloc", "update-power-bloc", "set-power-bloc-influence",
 ];
 
+// A government formed with no party in it (a caretaker, technocratic or
+// provisional cabinet) says so in its own op: set-government with
+// rulingPartyIds: [] (politicalActorOps.js notes). It was read from the words of
+// the patch's form ("caretaker", "technocratic", "interim"), in English only.
 const operationEstablishesNonpartyGovernment = (entry) => {
   if (clean(entry?.op).toLowerCase() !== "set-government") return false;
   const patch = parsedArgs(entry)?.patch;
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) return false;
-  const canonicalGovernmentText = [patch.form, patch.ideology, patch.coalitionName]
-    .map(clean)
-    .filter(Boolean)
-    .join(" ");
-  return NONPARTY_GOVERNMENT_RE.test(canonicalGovernmentText);
+  return Array.isArray(patch.rulingPartyIds) && patch.rulingPartyIds.length === 0;
 };
 
 const eventEstablishesNonpartyGovernment = (event, polityKey) => (
   politicalOpsForPolity(event, polityKey).some(operationEstablishesNonpartyGovernment)
 );
 
-// Canonical operations are already authoritative state mutations. In structured
-// mode, derive their broad effect families so an omitted claim cannot make an
-// actual mutation bypass the domain invariants that used to be activated from
-// prose. This is deliberately one-way: operations can prove that state changed;
-// they cannot prove that prose-only history changed when both claims and ops are
-// missing. The explicit claim ledger exists for that second case.
+// Canonical operations are already authoritative state mutations: their broad
+// effect families are derived so an omitted claim cannot make an actual mutation
+// bypass the domain invariants. This is deliberately one-way: operations can
+// prove that state changed; they cannot prove that history changed when both
+// claims and ops are missing. The explicit claim ledger exists for that case.
 const operationDerivedClaimRows = (event) => opPolityKeys(event).map((polityKey) => {
   const ops = opNamesForPolity(event, polityKey);
   const effects = new Set();
@@ -449,18 +321,30 @@ const mergeClaimRows = (...rowGroups) => {
   return merged;
 };
 
-// The structured rows that actually drive completeness for one event. Exported
-// for the bounded Political World repair pass so it uses the validator's exact
-// semantic scope instead of reparsing error prose or inventing a second effect
-// classifier. Legacy/CSE events intentionally return no rows here.
-export const politicalCompletenessRowsForEvent = (claimContext, event) => {
-  const structured = claimContext?.mode === "structured" && !claimContext?.legacyEvents?.has?.(event);
-  if (!structured) return [];
-  return mergeClaimRows(
-    declaredPoliticalClaimRows(claimContext, event),
-    operationDerivedClaimRows(event),
-  );
-};
+// What a set of impacts in the shape a scripted beat's author writes them
+// (server/scriptedImpacts.js "leader" rows: a polityChanges update) says of a
+// polity's politics: a new leader is a change of leadership, a new government a
+// change of government.
+const authoredPoliticalRows = (impacts) => mergeClaimRows(list(impacts?.polityChanges)
+  .filter((change) => change && typeof change === "object" && clean(change.operation).toLowerCase() === "update")
+  .map((change) => ({
+    polityKey: clean(change.code),
+    effects: [
+      ...(clean(change?.stats?.leader) ? ["leadership"] : []),
+      ...(clean(change?.stats?.government) ? ["government"] : []),
+    ],
+  })));
+
+// The rows that actually drive completeness for one event: the answer's claims
+// for it (when it gave a ledger), the families its own ops belong to, and the
+// changes a scripted beat's authored impacts make through it. Exported for the
+// bounded Political World repair pass, so it uses the validator's exact scope
+// instead of reparsing error prose or inventing a second effect classifier.
+export const politicalCompletenessRowsForEvent = (claimContext, event) => mergeClaimRows(
+  declaredPoliticalClaimRows(claimContext, event),
+  operationDerivedClaimRows(event),
+  event && typeof event === "object" ? event[SCRIPTED_CLAIM_ROWS] : null,
+);
 
 const structuredPoliticalImpactCompletenessIssue = (event, { world = null, claimRows = [] } = {}) => {
   for (const claim of list(claimRows)) {
@@ -539,28 +423,20 @@ const structuredPoliticalImpactCompletenessIssue = (event, { world = null, claim
         };
       }
 
+      // (Whether a government formed with new parties minted duplicates of the
+      // record's was judged by English words saying no party was founded; a
+      // create-party op is itself the claim that one was, so the check could
+      // only ever read prose. Reusing the record's party ids is the prompt's
+      // rule, politicalActorOps.js POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE.)
       if (world && !eventEstablishesNonpartyGovernment(event, polityKey)) {
         const actor = getPoliticalProfile(world, polityKey);
-        const createPartyEntries = polityEntries.filter((entry) => clean(entry?.op).toLowerCase() === "create-party");
-        if (list(actor?.parties).length >= 2 && createPartyEntries.length && !effects.has("parties")) {
-          const existing = list(actor.parties)
-            .slice(0, 12)
-            .map((party) => `${clean(party?.id) || "(no-id)"}${clean(party?.name) ? ` (${clean(party.name)})` : ""}`)
-            .join(", ");
-          return {
-            kind: "government-party-reuse",
-            expected: ["reuse existing canonical party ids"],
-            message: `Political claim for event "${clean(event.title) || "untitled"}" forms a government for ${polityKey}, which already has a canonical party landscape, but the proposed operations create replacement parties without a parties claim for a real founding/split/merger/reorganization. Reuse the existing party ids in form-coalition instead of minting duplicates. Existing canonical parties: ${existing || "none listed"}.`,
-          };
-        }
-
         if (actorHasParliamentaryPartySystem(actor)
           && !governmentHasGoverningForce(actor)
           && !eventEstablishesGoverningForce(event, polityKey)) {
           return {
             kind: "government-governing-force",
             expected: ["form-coalition or another canonical governing-party membership write"],
-            message: `Political claim for event "${clean(event.title) || "untitled"}" forms a durable government for parliamentary party system ${polityKey}, but canonical government membership is empty before and after the proposed operations. Use form-coalition to establish rulingPartyIds/coalitionPartyIds, or encode a legitimate non-party/caretaker/technocratic cabinet in the canonical set-government patch.`,
+            message: `Political claim for event "${clean(event.title) || "untitled"}" forms a durable government for parliamentary party system ${polityKey}, but canonical government membership is empty before and after the proposed operations. Use form-coalition to establish rulingPartyIds/coalitionPartyIds (it also represents a single-party or minority government); set-government plus replace-leader alone is not a governing force. A legitimate non-party, caretaker or technocratic cabinet gives set-government rulingPartyIds: [] in its patch.`,
           };
         }
       }
@@ -599,236 +475,40 @@ const structuredPoliticalImpactCompletenessIssue = (event, { world = null, claim
   return null;
 };
 
-export const politicalImpactCompletenessIssue = (event, { world = null, structuredClaims = false, claimRows = [] } = {}) => {
+// One event's issue against the rows that drive it (politicalCompletenessRowsForEvent).
+export const politicalImpactCompletenessIssue = (event, { world = null, claimRows = [] } = {}) => {
   if (!event || typeof event !== "object") return null;
-  if (structuredClaims) return structuredPoliticalImpactCompletenessIssue(event, { world, claimRows });
-  const text = textOf(event);
-  if (!text) return null;
-  const ops = opNames(event);
-
-  // Elections are allowed to be scheduled/campaigned for without changing canon.
-  // Once an event says the election is actually held/convened/results are returned,
-  // it must move at least one durable political field or explicitly stop short of
-  // narrating a completed structural outcome.
-  if (electionNeedsPolityMutation(text)) {
-    const expected = [
-      "set-party-support", "set-party-influence", "set-government", "form-coalition",
-      "leave-coalition", "replace-leader", "set-political-system",
-    ];
-    if (!anyOp(ops, expected)) {
-      return {
-        kind: "election",
-        expected,
-        message: `Political event "${clean(event.title) || "untitled"}" says an election was held/convened or produced a result but carries no election/government politicalActorOps. Add the matching party support/influence, government/coalition, leader or political-system operations for the affected polity, or rewrite the event as merely scheduled/campaigning with no completed structural result.`,
-      };
-    }
-
-    // A result-bearing foundational election is the moment an emergent polity
-    // stops being a PWv2 shell. Requiring merely *some* operation still permits
-    // a timeline that says a new parliament was elected while the canonical
-    // actor remains unspecified with zero parties and no strategic organism.
-    // Mature actors are not forced to rewrite stable strategy/traits each cycle;
-    // this stricter bundle applies only while the affected actor is sparse.
-    if (ELECTION_RESULT_RE.test(text)) {
-      const hasLandscape = anyOp(ops, [
-        "create-party", "update-party", "set-party-support", "set-party-influence",
-        "create-power-bloc", "update-power-bloc", "set-power-bloc-influence",
-      ]);
-      const hasGovernmentOutcome = anyOp(ops, [
-        "set-government", "form-coalition", "leave-coalition", "replace-leader", "set-party-leader",
-      ]);
-      if (!hasLandscape || !hasGovernmentOutcome) {
-        return {
-          kind: "election-result",
-          expected: ["party/power landscape", "government/coalition/leadership outcome"],
-          message: `Political event "${clean(event.title) || "untitled"}" reports an election result but does not canonically establish both the resulting political landscape and who governs. Add party/power support or influence operations AND the matching government/coalition/leadership operations, or rewrite the event so final results are not yet known.`,
-        };
-      }
-
-      for (const polityKey of opPolityKeys(event)) {
-        const actor = world ? getPoliticalProfile(world, polityKey) : null;
-        if (!world || !isSparsePoliticalActor(actor)) continue;
-        const existingGaps = politicalActorMaturityGaps(actor);
-        const polityEntries = politicalOpsForPolity(event, polityKey);
-        const polityOpNames = new Set(polityEntries.map((entry) => clean(entry?.op).toLowerCase()).filter(Boolean));
-        const polityHasGovernmentOutcome = anyOp(polityOpNames, [
-          "set-government", "form-coalition", "leave-coalition", "replace-leader", "set-party-leader",
-        ]);
-        const missing = [];
-        if (existingGaps.includes("political system") && !polityOpNames.has("set-political-system")) missing.push("set-political-system");
-        if (existingGaps.includes("government") && !polityHasGovernmentOutcome) missing.push("government/coalition/leadership outcome");
-        if (existingGaps.includes("representation entities")) {
-          const entityCreationCount = polityEntries.filter((entry) => ["create-party", "create-power-bloc"].includes(clean(entry?.op).toLowerCase())).length;
-          if (entityCreationCount < 2) missing.push("at least two represented political entities for the new landscape");
-          if (!anyOp(polityOpNames, ["set-party-support", "set-party-influence", "set-power-bloc-influence"])) missing.push("quantitative support/influence");
-        }
-        if (existingGaps.includes("strategy")) {
-          const strategyOps = polityEntries.filter((entry) => clean(entry?.op).toLowerCase() === "set-strategy");
-          const completeStrategy = strategyOps.some((entry) => {
-            const patch = parsedArgs(entry)?.patch;
-            return nonEmptyArray(patch?.goals) && nonEmptyArray(patch?.fears) && nonEmptyArray(patch?.ambitions);
-          });
-          if (!completeStrategy) missing.push("set-strategy with goals, fears and ambitions");
-        }
-        if (existingGaps.includes("traits")) {
-          const traitOps = polityEntries.filter((entry) => clean(entry?.op).toLowerCase() === "set-traits");
-          const establishedTraits = traitOps.reduce((count, entry) => {
-            const traits = parsedArgs(entry)?.traits;
-            return count + (meaningfulObject(traits) ? Object.keys(traits).length : 0);
-          }, 0);
-          if (establishedTraits < 2) missing.push("set-traits with at least two justified canonical dimensions");
-        }
-        if (missing.length) {
-          return {
-            kind: "emergent-political-hydration",
-            expected: missing,
-            message: `Foundational election result "${clean(event.title) || "untitled"}" concerns sparse/emergent Political Actor ${polityKey}. Do not leave it structurally second-class after the result. Its current missing families are ${existingGaps.join(", ")}; this event still needs ${missing.join(", ")}. Populate only facts this result and surrounding campaign canon actually establish; if the result is not yet known, rewrite the event as polling/counting rather than a completed result.`,
-          };
-        }
-      }
-    }
-  }
-
-  if (CONSTITUTIONAL_COMPLETION_CLAIM_RE.test(text)) {
-    const expected = ["set-political-system", "set-government"];
-    if (!anyOp(ops, expected)) {
-      return {
-        kind: "constitutional",
-        expected,
-        message: `Political event "${clean(event.title) || "untitled"}" establishes or ratifies a constitutional/regime framework but carries no set-political-system or set-government politicalActorOps. The canonical Political Actor must change with the timeline event.`,
-      };
-    }
-  }
-
-  if (GOVERNMENT_RE.test(text)) {
-    const expected = ["set-government", "form-coalition", "leave-coalition", "replace-leader"];
-    if (!anyOp(ops, expected)) {
-      return {
-        kind: "government",
-        expected,
-        message: `Political event "${clean(event.title) || "untitled"}" forms or installs a government/cabinet but carries no government, coalition or leader politicalActorOps.`,
-      };
-    }
-
-    // A parliamentary party system cannot acquire its first durable government
-    // while canonical governing membership remains empty. Head-of-government and
-    // administration metadata answer who leads/how it is styled, not which party
-    // or parties actually govern. Temporary/non-party cabinets are legitimate
-    // exceptions and must be described as such rather than silently inferred.
-    if (world && !NONPARTY_GOVERNMENT_RE.test(text)) {
-      const polityKeys = opPolityKeys(event);
-      if (polityKeys.length === 1) {
-        const polityKey = polityKeys[0];
-        const actor = getPoliticalProfile(world, polityKey);
-        const polityEntries = politicalOpsForPolity(event, polityKey);
-        const createPartyEntries = polityEntries.filter((entry) => clean(entry?.op).toLowerCase() === "create-party");
-
-        // Government formation should consume the election landscape that already
-        // exists. Without this guard the model can satisfy the governing-force
-        // requirement by minting near-duplicate liberal/conservative parties and
-        // then governing through those synthetic replacements. A government event
-        // may still create a party when the event itself explicitly establishes a
-        // real party founding, split, merger or reorganization.
-        if (list(actor?.parties).length >= 2 && createPartyEntries.length && !PARTY_CREATION_RE.test(text)) {
-          const existing = list(actor.parties)
-            .slice(0, 12)
-            .map((party) => `${clean(party?.id) || "(no-id)"}${clean(party?.name) ? ` (${clean(party.name)})` : ""}`)
-            .join(", ");
-          return {
-            kind: "government-party-reuse",
-            expected: ["reuse existing canonical party ids"],
-            message: `Political event "${clean(event.title) || "untitled"}" forms a government for ${polityKey}, which already has a canonical party landscape, but the proposed operations create replacement parties even though the event does not establish a party founding/split/merger/reorganization. Reuse the existing party ids in form-coalition instead of minting duplicates. Existing canonical parties: ${existing || "none listed"}.`,
-          };
-        }
-
-        if (actorHasParliamentaryPartySystem(actor)
-          && !governmentHasGoverningForce(actor)
-          && !eventEstablishesGoverningForce(event, polityKey)) {
-          return {
-            kind: "government-governing-force",
-            expected: ["form-coalition or another canonical governing-party membership write"],
-            message: `Political event "${clean(event.title) || "untitled"}" forms a durable government for parliamentary party system ${polityKey}, but canonical government membership is empty before and after the proposed operations. Use form-coalition to establish rulingPartyIds/coalitionPartyIds (it also represents a single-party or minority government), or explicitly describe a legitimate non-party/caretaker/technocratic cabinet instead. set-government plus replace-leader alone is not a governing force.`,
-          };
-        }
-      }
-    }
-  }
-
-  // If the prose says coalition formation actually completed, require a canonical
-  // governing-membership write. A plain set-government patch may describe form or
-  // ideology, but it must not satisfy a claim that coalition negotiations concluded.
-  const coalitionText = text.replace(MILITARY_COALITION_RE, " ");
-  if (COALITION_RE.test(coalitionText) && COALITION_FORMATION_RE.test(coalitionText) && !eventEstablishesGoverningForce(event)) {
-    return {
-      kind: "coalition-formation",
-      expected: ["form-coalition"],
-      message: `Political event "${clean(event.title) || "untitled"}" says a governing coalition was formed or coalition negotiations concluded, but no canonical governing-party membership is written. Add form-coalition with the ruling/coalition party ids, or rewrite the prose so coalition formation has not yet occurred.`,
-    };
-  }
-
-  if (COALITION_RE.test(coalitionText) && COALITION_CHANGE_RE.test(coalitionText)) {
-    const expected = ["form-coalition", "leave-coalition", "set-government"];
-    if (!anyOp(ops, expected)) {
-      return {
-        kind: "coalition",
-        expected,
-        message: `Political event "${clean(event.title) || "untitled"}" explicitly changes membership or continuity of a governing coalition but carries no form-coalition, leave-coalition or set-government politicalActorOps.`,
-      };
-    }
-  }
-
-  if (LEADERSHIP_CHANGE_RE.test(text)) {
-    const expected = ["replace-leader", "set-government", "set-party-leader"];
-    if (!anyOp(ops, expected)) {
-      return {
-        kind: "leadership",
-        expected,
-        message: `Political event "${clean(event.title) || "untitled"}" changes a head of state/government or party leader but carries no matching replace-leader, set-government or set-party-leader politicalActorOps.`,
-      };
-    }
-  }
-
-  if (REGIME_CHANGE_RE.test(text.replace(FAILED_COUP_RE, " "))) {
-    const expected = ["set-political-system", "set-government", "replace-leader"];
-    if (!anyOp(ops, expected)) {
-      return {
-        kind: "regime",
-        expected,
-        message: `Political event "${clean(event.title) || "untitled"}" narrates a coup/revolution/regime transfer but carries no set-political-system, set-government or replace-leader politicalActorOps.`,
-      };
-    }
-  }
-
-  return null;
+  return structuredPoliticalImpactCompletenessIssue(event, { world, claimRows });
 };
 
-export const polityImpactCompletenessIssue = (event) => {
-  if (!event || typeof event !== "object" || !eventClaimsPolityRename(event)) return null;
-  if (eventCarriesPolityRename(event)) return null;
-  return {
-    kind: "polity-rename",
-    expected: ["polityChanges rename"],
-    message: `World event "${clean(event.title) || "untitled"}" formally renames a country/state in prose but carries no matching polityChanges rename/update. Add a canonical polity rename with code = the current identity and name = the new identity, or rewrite the event so the rename has not yet taken effect.`,
-  };
+// --- Scripted beats ---------------------------------------------------------
+//
+// A scenario author's beat changes a polity's politics when its authored
+// impacts say so (server/scriptedImpacts.js "leader" rows: a new leader or a new
+// government). Those beats are named to the model with what they establish, and
+// the event that tells each must carry the matching Political World ops. A beat
+// was read for English words ("resigns", "assassinated", "sworn in") instead,
+// and one written in another language asked for nothing.
+
+// The beats whose authored impacts change a polity's politics, each with the
+// rows its impacts claim.
+export const scriptedPoliticalImpactRequirements = (beats) => list(beats)
+  .map((beat) => ({ beat, rows: authoredPoliticalRows(scriptedImpactsOf(beat)) }))
+  .filter((requirement) => requirement.rows.length);
+
+const EFFECT_OPS = Object.freeze({
+  leadership: "replace-leader",
+  government: "set-government",
+});
+
+const describeAuthoredChange = (beat, row) => {
+  const impacts = scriptedImpactsOf(beat);
+  const change = list(impacts?.polityChanges).find((entry) => clean(entry?.operation).toLowerCase() === "update" && clean(entry?.code) === row.polityKey);
+  const parts = [];
+  if (row.effects.includes("leadership")) parts.push(`a new leader (${clean(change?.stats?.leader)})`);
+  if (row.effects.includes("government")) parts.push(`a new government (${clean(change?.stats?.government)})`);
+  return `the author gives ${row.polityKey} ${parts.join(" and ")}: write the matching ${row.effects.map((effect) => EFFECT_OPS[effect]).filter(Boolean).join(" and ")} politicalActorOps for ${row.polityKey} on that event`;
 };
-
-export const validatePolityImpactCompleteness = (candidate) => {
-  for (const event of list(candidate?.events)) {
-    const issue = polityImpactCompletenessIssue(event);
-    if (issue) return issue.message;
-  }
-  return "";
-};
-
-
-export const scriptedPoliticalImpactRequirements = (beats, { world = null } = {}) => list(beats)
-  .map((beat) => {
-    const title = clean(beat?.title) || clean(beat?.text).slice(0, 140) || "untitled scripted event";
-    const event = { title, description: clean(beat?.text), impacts: { politicalActorOps: [] } };
-    const issue = politicalImpactCompletenessIssue(event, { world });
-    return issue ? { beat, issue } : null;
-  })
-  .filter(Boolean);
 
 const officeholderName = (value) => {
   if (typeof value === "string") return clean(value);
@@ -836,56 +516,20 @@ const officeholderName = (value) => {
   return clean(value.name || value.id);
 };
 
-const beatPoliticalText = (beat) => `${clean(beat?.title)} ${clean(beat?.text)}`.trim().toLocaleLowerCase();
-
-const actorReferenceTokens = (polityKey, actor) => {
-  const government = actor?.government && typeof actor.government === "object" ? actor.government : {};
-  const weighted = [
-    [polityKey, 100],
-    [clean(polityKey).replace(/^the\s+/i, ""), 95],
-    [actor?.name, 90],
-    [officeholderName(actor?.leader), 85],
-    [officeholderName(government.headOfState), 85],
-    [officeholderName(government.headOfGovernment), 85],
-    ...list(actor?.parties).flatMap((party) => [
-      [officeholderName(party?.leader), 75],
-      [party?.name, 45],
-      [party?.shortName, 35],
-    ]),
-    ...list(actor?.powerBlocs).flatMap((bloc) => [[bloc?.name, 30], [bloc?.shortName, 25]]),
-  ];
-  return weighted
-    .map(([token, weight]) => [clean(token), weight])
-    .filter(([token]) => token.length >= 3);
-};
-
-const relevantScriptedPoliticalActors = (requirements, world) => {
-  const byPolity = world?.politicalActors?.byPolity && typeof world.politicalActors.byPolity === "object"
-    ? world.politicalActors.byPolity
-    : {};
-  const texts = list(requirements).map(({ beat }) => beatPoliticalText(beat)).filter(Boolean);
-  if (!texts.length) return [];
-  return Object.entries(byPolity)
-    .map(([polityKey, actor]) => {
-      const score = actorReferenceTokens(polityKey, actor).reduce((best, [token, weight]) => (
-        texts.some((text) => text.includes(token.toLocaleLowerCase())) ? Math.max(best, weight) : best
-      ), 0);
-      return { polityKey, actor, score };
-    })
-    .filter((row) => row.score > 0)
-    .sort((left, right) => right.score - left.score || left.polityKey.localeCompare(right.polityKey))
-    .slice(0, 6)
-    .map(({ polityKey, actor }) => [polityKey, actor]);
-};
-
+// The current Political World of each polity the beats' impacts name, found by
+// that exact polity key.
 const scriptedPoliticalActorContext = (requirements, world) => {
-  const selected = relevantScriptedPoliticalActors(requirements, world);
+  const polities = [...new Set(list(requirements).flatMap(({ rows }) => list(rows).map((row) => row.polityKey)))];
+  const selected = polities
+    .map((polityKey) => [polityKey, world ? getPoliticalProfile(world, polityKey) : null])
+    .filter(([, actor]) => actor)
+    .slice(0, 6);
   if (!selected.length) {
-    return "No exact Political Actor was matched from the scripted-beat text. Use the live canonical context/lookups; do not guess stable party/bloc ids or historical officeholders.";
+    return "No Political Actor is recorded yet for these polities. Use the live canonical context/lookups; do not guess stable party/bloc ids or historical officeholders.";
   }
 
   const lines = [
-    "Current canonical Political World references matched to these scripted beats:",
+    "Current canonical Political World of the polities these scripted beats change:",
     "These are the state to simulate FROM. A scripted shock does not freeze the historical downstream settlement. Reuse exact ids and current officeholders where referenced.",
   ];
   for (const [polityKey, actor] of selected) {
@@ -918,93 +562,39 @@ export const buildScriptedPoliticalImpactInstruction = (requirements, { world = 
     + "The scenario-authored beat fixes the shock/outcome explicitly written by the author. Political World still owns the resulting government, leader, party, coalition and political-system state. "
     + "SIMULATE the immediate political consequences from the CURRENT campaign canon and return the matching politicalActorOps on THAT event. This includes constitutional succession, acting leadership, government/coalition consequences or other structural follow-through when the beat logically establishes them. "
     + "Do not hardcode the real-history successor or settlement when campaign canon has diverged, and do not rewrite the beat to avoid its authored structural change.\n"
-    + rows.map(({ beat, issue }) => `- ${clean(beat?.date) || "(due date)"} — ${clean(beat?.title) || clean(beat?.text) || "scripted event"}: ${issue.message}`).join("\n")
+    + rows.map(({ beat, rows: claims }) => `- ${clean(beat?.date) || "(due date)"} — ${clean(beat?.title) || clean(beat?.text) || "scripted event"}: ${claims.map((row) => describeAuthoredChange(beat, row)).join("; ")}.`).join("\n")
     + `\n${scriptedPoliticalActorContext(rows, world)}`
     + "\nUse the normal politicalActorOps contract and exact native argsJson shapes. If the current canon supports a successor or settlement, encode it rather than merely narrating it. If canon genuinely leaves the consequence unresolved, represent only what is established; never invent a silent state change. A completed structural claim without valid matching operations must remain invalid for the normal corrective path.";
+};
+
+// Binds to each event that tells a fired beat (scriptedEventImpacts.js
+// scriptedEventsCarryingImpacts) the claims its authored impacts make: the
+// beats' authored changes the event's impacts carry. Bound as a transient symbol,
+// like the answer's own claims, so it rides the shallow copies the engine makes
+// and never reaches a save.
+export const bindScriptedPoliticalClaims = (events, requirements) => {
+  const authored = mergeClaimRows(...list(requirements).map((requirement) => requirement?.rows));
+  if (!authored.length) return 0;
+  let bound = 0;
+  for (const event of list(events)) {
+    if (!event || typeof event !== "object") continue;
+    const rows = authoredPoliticalRows(event.impacts)
+      .map((row) => {
+        const claim = authored.find((entry) => entry.polityKey === row.polityKey);
+        return claim ? { polityKey: row.polityKey, effects: row.effects.filter((effect) => claim.effects.includes(effect)) } : null;
+      })
+      .filter((row) => row && row.effects.length);
+    if (!rows.length) continue;
+    event[SCRIPTED_CLAIM_ROWS] = rows;
+    bound += 1;
+  }
+  return bound;
 };
 
 const cloneWorld = (world) => {
   if (!world || typeof world !== "object") return null;
   if (typeof structuredClone === "function") return structuredClone(world);
   return JSON.parse(JSON.stringify(world));
-};
-
-const officeholderText = (value) => {
-  if (typeof value === "string") return clean(value);
-  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
-  return clean(value.name || value.id);
-};
-
-const sameOfficeholderText = (left, right) => {
-  const a = officeholderText(left).toLocaleLowerCase();
-  const b = officeholderText(right).toLocaleLowerCase();
-  return Boolean(a && b && a === b);
-};
-
-const HEAD_OF_GOVERNMENT_DEPARTURE_AFTER_NAME_RE = /^[^.!?;]{0,80}\b(?:resigns?|resigned|steps? down|stepped down|dies?|died|is (?:assassinated|killed|murdered|ousted|deposed)|was (?:assassinated|killed|murdered|ousted|deposed)|abdicates?|abdicated|announces?(?: (?:his|her|their))? resignation|submits?(?: (?:his|her|their))? resignation)\b/i;
-const SUCCESSOR_INSTALLATION_RE = /\b(?:appoints?|appointed|names?|named|sworn in|takes? office|took office|assumes? office|assumed office|succeeds?|succeeded|replaces?|replaced|installed|inaugurated)\b/i;
-
-const explicitlyDepartsAfterName = (text, name) => {
-  const haystack = clean(text).toLocaleLowerCase();
-  const needle = clean(name).toLocaleLowerCase();
-  if (!haystack || !needle) return false;
-  let offset = haystack.indexOf(needle);
-  while (offset >= 0) {
-    const after = haystack.slice(offset + needle.length, offset + needle.length + 120);
-    if (HEAD_OF_GOVERNMENT_DEPARTURE_AFTER_NAME_RE.test(after)) return true;
-    offset = haystack.indexOf(needle, offset + needle.length);
-  }
-  return false;
-};
-
-// Final native backstop for the narrow case where the prose establishes ONLY
-// that the current head of government has left office. We can canonically record
-// a vacancy without inventing a successor. If the event claims any succession or
-// appointment, ambiguity wins and the normal completeness error remains fail-closed.
-const repairUnambiguousHeadOfGovernmentDeparture = (event, world) => {
-  if (!event || typeof event !== "object" || !world) return false;
-  const text = textOf(event);
-  if (!text || SUCCESSOR_INSTALLATION_RE.test(text)) return false;
-  const existing = opNames(event);
-  if (anyOp(existing, ["replace-leader", "set-government", "set-party-leader"])) return false;
-
-  const byPolity = world?.politicalActors?.byPolity;
-  if (!byPolity || typeof byPolity !== "object" || Array.isArray(byPolity)) return false;
-  const matches = Object.entries(byPolity).filter(([, actor]) => {
-    const headOfGovernment = actor?.government?.headOfGovernment;
-    const name = officeholderText(headOfGovernment);
-    if (!name || !explicitlyDepartsAfterName(text, name)) return false;
-    // set-government can clear the formal HoG office, but it cannot clear the
-    // actor-level leader field. Do not synthesize a half-transition for legacy
-    // actors where that field is the same person; those cases stay fail-closed.
-    return !sameOfficeholderText(actor?.leader, headOfGovernment);
-  });
-  if (matches.length !== 1) return false;
-
-  const [polityKey] = matches[0];
-  const packed = {
-    op: "set-government",
-    polityKey,
-    argsJson: JSON.stringify({ patch: { headOfGovernment: "" } }),
-  };
-  // Validate the exact native mutation on a disposable world before attaching it.
-  // The normal apply path will execute the same operation after the turn is accepted.
-  const probe = cloneWorld(world);
-  const outcome = applyPoliticalActorOperation(probe, {
-    ...parsedArgs(packed),
-    op: packed.op,
-    polityKey: packed.polityKey,
-  });
-  if (!outcome?.applied) return false;
-
-  const impacts = event.impacts && typeof event.impacts === "object" && !Array.isArray(event.impacts)
-    ? event.impacts
-    : {};
-  event.impacts = {
-    ...impacts,
-    politicalActorOps: [...list(impacts.politicalActorOps), packed],
-  };
-  return true;
 };
 
 const worldAfterPoliticalOps = (world, event) => {
@@ -1028,12 +618,11 @@ const worldAfterPoliticalOps = (world, event) => {
 };
 
 // One walk over a candidate's events, in order, behind every entry point
-// below: the claim ledger read once, the native vacancy repair before each
-// check, and the scratch world carried forward from event to event. A caller
-// that bound the candidate's claims itself hands that context in. Without one,
-// the context the candidate was last prepared with is used (its event numbers
-// stop meaning anything once the events are sorted), and only a candidate
-// never prepared is read here.
+// below: the claim ledger read once, and the scratch world carried forward from
+// event to event. A caller that bound the candidate's claims itself hands that
+// context in. Without one, the context the candidate was last prepared with is
+// used (its event numbers stop meaning anything once the events are sorted),
+// and only a candidate never prepared is read here.
 const politicalImpactCompletenessFailures = (candidate, { world = null, claimContext = null } = {}, { firstOnly = false } = {}) => {
   const claims = claimContext || PREPARED_CLAIM_CONTEXTS.get(candidate) || preparePoliticalClaimContext(candidate);
   if (claims?.error) {
@@ -1044,30 +633,14 @@ const politicalImpactCompletenessFailures = (candidate, { world = null, claimCon
       issue: { kind: "claim-ledger", expected: [], message: claims.error },
     }];
   }
-  const structuredClaims = claims?.mode === "structured";
 
   const failures = [];
   let validationWorld = cloneWorld(world);
   const events = list(candidate?.events);
   for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
     const event = events[eventIndex];
-    const eventUsesStructuredClaims = structuredClaims && !claims?.legacyEvents?.has?.(event);
-    const claimRows = eventUsesStructuredClaims
-      ? politicalCompletenessRowsForEvent(claims, event)
-      : [];
-    const claimsLeadershipChange = claimRows.some((row) => list(row?.effects).includes("leadership"));
-    // The vacancy repair may read prose to identify WHICH known officeholder left,
-    // but structured mode decides WHETHER a leadership transition exists. CSE
-    // structural beats are explicitly marked legacy so authored prose still
-    // protects deterministic fallback until CSE gains its own structured metadata.
-    if (!eventUsesStructuredClaims || claimsLeadershipChange) {
-      repairUnambiguousHeadOfGovernmentDeparture(event, validationWorld);
-    }
-    const issue = politicalImpactCompletenessIssue(event, {
-      world: validationWorld,
-      structuredClaims: eventUsesStructuredClaims,
-      claimRows,
-    });
+    const claimRows = politicalCompletenessRowsForEvent(claims, event);
+    const issue = politicalImpactCompletenessIssue(event, { world: validationWorld, claimRows });
     if (issue) {
       failures.push({ event, eventIndex, claimRows, issue });
       if (firstOnly) break;

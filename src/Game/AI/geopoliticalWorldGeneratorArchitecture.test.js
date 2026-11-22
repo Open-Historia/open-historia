@@ -44,7 +44,11 @@ test("geopolitical generation is exact-date universal and closes membership iden
   assert.match(generator, /SUCCESSOR \/ PREDECESSOR RULE/);
   assert.match(generator, /predecessors\[\]/);
   assert.match(generator, /membershipContinuity/);
-  assert.match(generator, /rejected membership-shaped institution identity/);
+  // One institution, one identity: the catalog prompt's rule. No institution is
+  // dropped for the English word "member" in its name.
+  assert.match(generator, /Do NOT encode a membership or geographic\/member subgroup in an institution id/);
+  assert.doesNotMatch(generator, /rejected membership-shaped institution identity/);
+  assert.doesNotMatch(generator, /\(membership\|memberships\|member-state/);
   assert.match(generator, /politicalSystem\?\.regimeCharacter/);
   assert.match(generator, /blockingErrors/);
 });

@@ -15,23 +15,34 @@
 // until then this page waits.
 
 import { getLibraryState, refreshLibraryCatalog } from "../../runtime/library.js";
-import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
+import { setPolityFlag } from "../../runtime/polityFlags.js";
+import { eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
 import {
   mutateActionsState,
+  mutateAdvisorState,
   mutateCanonicalTurnState,
   mutateChatsState,
   mutateGameData,
+  mutateInterceptsState,
+  mutateSharedSessionState,
   mutateWorldState,
+  readAdvisorMessages,
   readChatsState,
   readGameStateBundle,
+  readWorldState,
 } from "../../runtime/gameState.js";
-import { projectChatThread } from "../../runtime/chatThreads.js";
+import { filterToRenderedRegions } from "../../Game/AI/promptContext.js";
+import { regionOwnerNow } from "../../runtime/gmAnnex.js";
+import { landingEvents, tellLandings } from "./landings.js";
+import { ENGLISH_WORDS, worldWordsOf } from "./worldWords.js";
 import { setHostingSharedGame } from "../../runtime/humanPolities.js";
-import { discardHeldTurns } from "../../Game/AI/simulationStatus.js";
+import { beginSimulation, discardHeldTurns, endSimulation } from "../../Game/AI/simulationStatus.js";
 import { getDebugLogEntries, logDebugEvent, setDebugLogPersistence, subscribeToDebugLog } from "../../runtime/debugLog.js";
 import { GENERATION_COMPLETE_EVENT } from "../../Game/AI/telemetry.js";
-import { generateCountryStatSheet, readCountryForPlayer, runChatActionBatch, simulateTimelineJump, warRoomChart } from "../../Game/AI/gameplay.js";
-import { lendBoards, returnBoards } from "./seatBoards.js";
+import { applyGameMasterPreview, assessPoliticalLandscape, checkDemandReply, declineInteractiveOffer, ensureMilitaryFigures, hasCompiledParties, hasCountryStatSheet, maybeGeneratePregameHistory, maybeOpenScenarioFronts, previewGameMasterCommand, readCountryForPlayer, runChatActionBatch, setAsideActiveInteractive, simulateTimelineJump, takeCountryStatSheet, takeMilitaryRatings, takePoliticalLandscape, warRoomChart } from "../../Game/AI/gameplay.js";
+import { finishGameStart } from "./gameStart.js";
+import { installRoundCarrier } from "../../Game/AI/roundCarrier.js";
 import { createLoopbackEngineSide } from "../transport/loopback.js";
 import { createHostSession } from "../session/host.js";
 import { probeNetwork } from "../transport/peer.js";
@@ -42,6 +53,7 @@ import { relayChannelFactory, usesCustomRelays } from "../signaling/relays.js";
 import { describeClock, offsetClock, readSignalingClock } from "../client/clock.js";
 import { createGameHost } from "./gameHost.js";
 import { createInstitutionDesk } from "./institutions.js";
+import { threadAfterTurn, turnWritesThread } from "./tableTurn.js";
 import { commitInstitutionLifecycleCommand, ensureInstitutionLifecycleNegotiationChat } from "../../runtime/institutionLifecycle.js";
 import { ensureInstitutionalChannel } from "../../runtime/institutionalChannels.js";
 import {
@@ -52,10 +64,27 @@ import {
 } from "../../runtime/institutionalGovernance.js";
 import { commitWithVotingRuleBackfill } from "../../Game/AI/institutionGovernanceRetry.js";
 import { normalizeSettings } from "./settings.js";
+import { setWorldLanguage, writingLanguageCode } from "../../runtime/i18n.js";
+import { getActiveFeatures, sharedGameFeaturesOf } from "../../runtime/gameFeatures.js";
+import { credentialFromAddress, installWriteCredential } from "../../runtime/writeCredential.js";
+import { sessionFromRecord } from "./sessionRecord.js";
+import { roundRulesOf } from "./hostRules.js";
+import { STAND_IN_NOT_SHARED, standInOf } from "../../runtime/standInGames.js";
+import { getResolvedFallbackList, sharedRoundRefusal } from "../../Game/AI/providerConfig.js";
+import { backgroundAiAllowance, requestSettings } from "../../Game/AI/requestBudget.js";
+import { setHostReadsFigures, setReadingsOrder } from "../../runtime/sharedReadings.js";
+import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 
 const SCREEN = "host-screen";
+// Why a game is not shared when its map's checksum cannot be read (openGame).
+const MAP_UNCHECKED = "This game's map could not be read to check it against your guests' copies, so it is not shared: they could see another world. Check that its scenario is still in your library, then share it again.";
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => (Array.isArray(value) ? value : []);
+
+// The one writer of the game it hosts (server/oneWriter.js): every write this
+// window makes, and its workers ask it to make, carries the credential the app
+// gave it in its address. Before anything else here can write.
+installWriteCredential(credentialFromAddress());
 
 // This window shares the app's storage with the host's own screen. Its log is
 // sent there (see boot) and never stored from here, or the two windows would
@@ -91,11 +120,14 @@ const captureConsole = () => {
 // writers (gameState.js mutate*), so a request never races a turn.
 const store = {
   read: async () => {
-    const [bundle, intercepts, colors, flags] = await Promise.all([
+    const [bundle, intercepts, colors, flags, advisor] = await Promise.all([
       readGameStateBundle({ force: true }),
       readJson(JSON_URLS.intercepts, { defaultValue: {}, force: true }),
       readJson(JSON_URLS.colors, { defaultValue: {}, force: true }),
       readJson(JSON_URLS.flags, { defaultValue: {}, force: true }),
+      // Every seat's advisor conversation (runtime/seatAdvisors.js); null when
+      // it could not be read, which no view shows as an empty one.
+      readAdvisorMessages({ force: true }).catch(() => null),
     ]);
     return {
       world: bundle.world,
@@ -106,26 +138,54 @@ const store = {
       intercepts,
       colors,
       flags,
+      advisor,
     };
   },
   updateActions: (fn) => mutateActionsState(fn),
   updateChats: (fn) => mutateChatsState(fn),
   updateWorld: (fn) => mutateWorldState(fn),
   updateGame: (fn) => mutateGameData(fn),
+  // The agents' traffic, one table per spymaster (runtime/spycraft.js).
+  updateIntercepts: (fn) => mutateInterceptsState(fn),
+  // Every seat's advisor conversation, the host's own the file itself
+  // (runtime/seatAdvisors.js): this window is its one writer while the game
+  // is shared, as of the rest (server/oneWriter.js).
+  updateAdvisor: (fn) => mutateAdvisorState(fn),
   // The world and the order queue changed together or not at all (a formation
-  // and the order that tells the skip of it): one commit, as a turn's own is.
-  // `fn({ world, actions, game })` returns the documents it changed, or null.
-  updateForces: (fn) => mutateCanonicalTurnState(({ world, actions, game }) => fn({ world, actions, game }) || null),
+  // and the order that tells the skip of it; a peace and the event that tells
+  // it, host/landings.js): one commit, as a turn's own is.
+  // `fn({ world, actions, game, events })` returns the documents it changed, or null.
+  updateForces: (fn) => mutateCanonicalTurnState(({ world, actions, game, events }) => fn({ world, actions, game, events }) || null),
+  // And the threads with them: what a seat's person left waiting while nobody
+  // shares the game, held and given back in one commit (host/heldSeats.js).
+  updateGameDocs: (fn) => mutateCanonicalTurnState(({ world, actions, game, events, chats }) => fn({ world, actions, game, events, chats }) || null),
+  // The shared game's session, kept with the campaign (host/sessionRecord.js).
+  // Only this window writes it, in the host's one order, through the game's
+  // own write queue.
+  readShared: () => readJson(JSON_URLS.shared, { defaultValue: {}, force: true }),
+  writeShared: (record) => mutateSharedSessionState(() => record),
 };
 
-// The polities a player may take: every one that holds land on the map.
-const choosableCountries = (world, game) => {
+// The game's countries: the game's own, every polity that holds land on the
+// map, and every one whose record says it is active. All of them: a seat whose
+// country is not here is gone (host/foundings.js seatSuccessions), so a list
+// cut short would take countries from their players. The lobby sends the first
+// 600 (host/gameHost.js).
+const gameCountries = (world, game) => {
   const owners = new Set([clean(game?.country)]);
   for (const owner of Object.values(world?.regionOwnershipOverrides ?? {})) if (clean(owner)) owners.add(clean(owner));
   for (const [key, entry] of Object.entries(world?.polityOverrides ?? {})) {
     if (clean(entry?.status || "active").toLowerCase() === "active") owners.add(clean(entry?.name || entry?.code || key));
   }
-  return [...owners].filter(Boolean).sort((a, b) => a.localeCompare(b)).slice(0, 600);
+  return [...owners].filter(Boolean).sort((a, b) => a.localeCompare(b));
+};
+// A polity of this game, as the game names it, by the name a player's screen
+// gave; throws when it is none.
+const countryOfGame = async (country) => {
+  const now = await store.read();
+  const name = gameCountries(now.world, now.game).find((known) => clean(known).toLocaleLowerCase() === clean(country).toLocaleLowerCase());
+  if (!name) throw new Error("That is not a country of this game.");
+  return name;
 };
 
 // One invite token per campaign, kept until the host rotates it, so a host that
@@ -153,36 +213,114 @@ const rotateInvite = (campaign, identity) => {
   return invite;
 };
 
-// The AI governments of a thread answer a person's message, as the chat panel's
-// own turn does, with that person as the player; the thread is then saved the
-// way the panel saves it.
+// Every change the engine makes to the shared game is an entry in the host's
+// one queue (host/worldQueue.js), the round's skip among them. Set while a game
+// is shared; written at once otherwise. `write({ fence })`: every write it makes
+// carries the entry's fence (gameState.js mutate* `fence`), which `fenced: true`
+// says, so the queue can let it go at its bound and go on (gameHost.js write);
+// `fence` is null when it is written at once.
+let writeInOrder = (label, write) => write({ fence: null });
+
+// What the host's game writes into the world itself (a peace or a treaty
+// between players, host/landings.js), in the world's language
+// (host/worldWords.js): read when the game is shared.
+let worldWords = ENGLISH_WORDS;
+// The pack the game ships for the world's language (public/lang/<code>.json),
+// as this window's own translator reads one; English when there is none.
+const loadWorldWords = async (code) => {
+  const language = clean(code);
+  if (!language || language === "en") return ENGLISH_WORDS;
+  const base = String(import.meta.env?.BASE_URL || "/");
+  const pack = await fetch(`${base.replace(/\/?$/, "/")}lang/${encodeURIComponent(language)}.json`, { cache: "no-cache" })
+    .then((response) => (response.ok ? response.json() : null))
+    .catch(() => null);
+  if (!pack) logDebugEvent("shared game", `no language pack for the world's language (${language}): what the host writes into the world is in English`, undefined, { problem: true });
+  return worldWordsOf(pack, language);
+};
+
+// What the governments at a table decided, written, and a peace it made (a
+// leader took a seat's terms of peace: gameplay.js answerPeaceInChat) told as
+// one two players make between rounds is (host/landings.js): an event on the
+// timeline with the borders it moved. `landed` gathers the events, for the
+// host to tell every player. Read only when the decisions are written: the
+// world before them, and after. `entry`: the host's queue entry it is written
+// in (gameHost.js write), told of the landings so the seats follow them there;
+// its fence goes with every write (runChatActionBatch's `write({ fence })`).
+const decidedAndTold = async (write, landed, entry = null) => {
+  const fence = entry?.fence ?? null;
+  const before = await readWorldState({ force: true });
+  const out = await write({ fence });
+  const after = await readWorldState({ force: true });
+  if (!landingEvents(before, after).length) return out;
+  const regions = await loadRegionCatalog().then((catalog) => filterToRenderedRegions(catalog, after)).catch(() => []);
+  const baked = new Map(list(regions).map((region) => [clean(region?.id), region]));
+  const fresh = [];
+  await mutateCanonicalTurnState(({ world, events, game }) => {
+    const told = tellLandings({ before, after: world, events, game, ownerOf: (id) => (baked.has(id) ? regionOwnerNow(baked.get(id), {}) : ""), words: worldWords });
+    if (!told) return null;
+    fresh.push(...told.landed);
+    return { world: told.world, events: told.events };
+  }, { fence });
+  landed.push(...fresh);
+  entry?.told?.(fresh);
+  return out;
+};
+
 // One turn of a table for a seat: the AI governments at it answer (or a
 // Council or a hearing does its business, with the flags the chat panel's own
-// turn passes), and the thread is saved the way the panel saves it.
+// turn passes). The model is asked outside the queue; what the governments
+// decided and what they said are written in it, the said added to the thread
+// as it stands then (host/tableTurn.js). `landed`: a peace it made, told.
 const tableTurn = async ({ chat, seat, ...flags }) => {
   const chatId = clean(chat?.id);
-  const outcome = await runChatActionBatch({ chat, playerCountry: seat, useCanonicalState: true, ...flags });
-  if (!outcome || outcome.committed || !Array.isArray(outcome.events)) return outcome;
-  const projected = projectChatThread(outcome.events);
-  await mutateChatsState((current) => list(current).map((entry) => (clean(entry?.id) === clean(chatId)
-    ? {
-      ...entry,
-      events: outcome.events,
-      countries: projected.countries ?? entry.countries,
-      title: projected.title || entry.title,
-      polls: projected.polls ?? entry.polls,
-      demands: projected.demands ?? entry.demands,
-    }
-    : entry)));
+  const landed = [];
+  const outcome = await runChatActionBatch({
+    chat,
+    playerCountry: seat,
+    useCanonicalState: true,
+    commit: (write) => writeInOrder("table-decided", (entry) => decidedAndTold(write, landed, entry), { fenced: true }),
+    ...flags,
+  });
+  if (landed.length && outcome && typeof outcome === "object") outcome.landed = landed;
+  if (!turnWritesThread(outcome)) return outcome;
+  await writeInOrder("table-said", ({ fence }) => mutateChatsState((current) => list(current).map((entry) => (clean(entry?.id) === clean(chatId)
+    ? threadAfterTurn(entry, outcome)
+    : entry)), { fence }), { fenced: true });
   return outcome;
 };
 
+// The AI governments at a table answer the line a seat has just written
+// (settings.replies "host"). `unreachable`: the model could not be reached, so
+// nobody answered, which the host tells the writer (host/gameHost.js).
 const replyTo = async ({ chatId, seat }) => {
   const chats = await readChatsState({ force: true });
   const chat = list(chats).find((entry) => clean(entry?.id) === clean(chatId));
-  if (!chat) return;
+  if (!chat) return null;
   const lastLine = [...list(chat.messages)].reverse().find((message) => clean(message?.speaker || message?.code) === clean(seat));
-  await tableTurn({ chat, seat, playerMessage: clean(lastLine?.text) });
+  const outcome = await tableTurn({ chat, seat, playerMessage: clean(lastLine?.text) });
+  await checkDemandsAfter({ chatId, seat, lastLine });
+  return { unreachable: outcome?.generation?.source === "fallback", landed: list(outcome?.landed) };
+};
+
+// What the reply did about a demand, in the one-on-one thread between a seat
+// and its own Overlord or Puppet: the game's own check (gameplay.js
+// checkDemandReply, one small request, and none in any other thread), as single
+// player runs it after each such reply, for that seat. Its events join the
+// thread's log in the host's order.
+const checkDemandsAfter = async ({ chatId, seat, lastLine }) => {
+  const chat = list(await readChatsState({ force: true })).find((entry) => clean(entry?.id) === clean(chatId));
+  // The answer: the first line after the seat's own that is not the seat's and is no error.
+  const lines = list(chat?.messages);
+  const from = lines.findIndex((message) => clean(message?.id) && clean(message?.id) === clean(lastLine?.id));
+  const reply = lines.slice(from + 1).find((message) => clean(message?.speaker || message?.code) && clean(message?.speaker || message?.code) !== clean(seat) && !["error", "user"].includes(clean(message?.role)));
+  if (!chat || from < 0 || !reply) return;
+  const events = await checkDemandReply({ chat, speaker: clean(reply.speaker || reply.code), reply: clean(reply.text), answering: clean(lastLine.text), messageId: clean(reply.id), time: clean(reply.time), player: seat }).catch(() => []);
+  if (!events.length) return;
+  await writeInOrder("demand-checked", ({ fence }) => mutateChatsState((current) => list(current).map((entry) => {
+    if (clean(entry?.id) !== clean(chatId)) return entry;
+    const log = [...(list(entry.events).length ? list(entry.events) : eventsFromLegacyChat(entry)), ...events];
+    return { ...entry, events: log, demands: projectChatThread(log).demands };
+  }), { fence }), { fenced: true });
 };
 
 const boot = async () => {
@@ -203,6 +341,25 @@ const boot = async () => {
   let network = "";
   let hostStatus = null;
   let failure = "";
+  // Why the last Start did not start the game, said until Start is pressed again.
+  let startRefused = "";
+  // Finishing the game's start before anyone joins (host/gameStart.js): its
+  // backstory may be a request to the host's AI, which takes a while.
+  let preparing = false;
+  // The fronts a scenario begins with, tried again before each round when they
+  // could not be built yet; asks nothing.
+  const openPendingFronts = () => finishGameStart({
+    fronts: () => maybeOpenScenarioFronts(),
+    read: () => store.read(),
+    log: (text, detail) => logDebugEvent("shared game", `${text}: ${detail}`, undefined, { problem: true }),
+  });
+  // Stops reading the host's AI settings for the lobby (openGame).
+  let forgetRules = () => {};
+  // The Game Master at work on the host's command (control "gm"), for the
+  // host's screen to say so.
+  let gameMasterBusy = false;
+  // A change the host's queue has run long on, or given up waiting for.
+  let hostBusy = null;
 
   const loopback = createLoopbackEngineSide({
     onHello: ({ device, name }) => {
@@ -219,6 +376,20 @@ const boot = async () => {
       });
     },
   });
+
+  // This window going (the app closed, the window closed by the app before it
+  // quits: electron/main.cjs) tells every guest the game is closed before
+  // their connection drops, as Stop does (session/host.js stop sends each a
+  // goodbye). Without it a guest was left reconnecting to a host that was
+  // gone (2026-11-18). The app asks it of the window first (farewell), since
+  // a window destroyed outright never sees pagehide.
+  const farewell = () => {
+    if (!session) return;
+    logDebugEvent("shared game", "this window is closing: every player is told the game is closed");
+    session.stop();
+  };
+  window.__ohSharedGameFarewell = farewell;
+  window.addEventListener("pagehide", farewell);
 
   // Every AI call of a shared game is made in this window. The host's own
   // screen is told as each one finishes, and is sent what this window logs: its
@@ -244,6 +415,7 @@ const boot = async () => {
       campaign,
       relays: relays ?? null,
       error: failure || null,
+      preparing,
       lobby: hostStatus?.lobby ?? null,
       round: hostStatus?.round ? round : null,
       players,
@@ -253,6 +425,11 @@ const boot = async () => {
       unreachable: people.unreachable,
       clockRefused: people.clockRefused === true,
       network,
+      gameMasterBusy,
+      // What the host's queue has been applying for a long while (gameHost.js onBusy).
+      busy: hostBusy,
+      // Start pressed, waiting for its entry (gameHost.js control.start).
+      starting: gameHost?.status().starting === true,
     });
   };
 
@@ -271,12 +448,51 @@ const boot = async () => {
   const openGame = async ({ settings: input, name } = {}) => {
     const checked = normalizeSettings(input ?? {});
     if (!checked.ok) throw new Error(checked.error);
-    const settings = checked.settings;
     const docs = await store.read();
+    // A stand-in shows a shared game this device joined: it is no game to share
+    // (runtime/standInGames.js), whatever it is called.
+    if (standInOf(docs.game)) throw new Error(STAND_IN_NOT_SHARED);
+    // Every round is asked of this computer's AI, which an Agent Connection
+    // never answers there (#1042): a list that cannot answer a round is refused
+    // now, not after everyone has joined a lobby whose every round fails.
+    const noAi = sharedRoundRefusal(getResolvedFallbackList());
+    if (noAi) throw new Error(noAi);
+    // The world's language, a rule of the game (host/settings.js `language`):
+    // the one the host plays in unless the host chose another, named in the
+    // lobby so every screen writes in it, this window's requests first.
+    const settings = { ...checked.settings, language: checked.settings.language || writingLanguageCode(docs.world?.language || docs.game?.language) };
+    setWorldLanguage(settings.language);
+    worldWords = await loadWorldWords(settings.language);
     // The host's own country; it changes if the host's people found one of
     // their own (host/foundings.js).
     let host = clean(docs.game?.country);
     if (!host) throw new Error("Open a game with a country before sharing it.");
+    // A shared game plays no interactive scene (the owner, 2026-11-15: left out
+    // of shared games until designed for several players). One the host left in
+    // progress would stop every round ("An interactive event is in
+    // progress"), and nobody's screen could end it: it is set aside, ending with
+    // nothing written, and an offer still waiting is let pass.
+    if (docs.world?.activeInteractive) await setAsideActiveInteractive();
+    if (docs.world?.interactiveOffer) await declineInteractiveOffer();
+    // The game's start, finished here before anyone joins (host/gameStart.js):
+    // its backstory and the fronts its scenario begins with, the calls single
+    // player makes when its player first enters the game, which no page of a
+    // shared game may make. In the world's language, set above. Nothing to do
+    // for a game already under way. The readings the game makes by itself
+    // follow who answers from here, its fronts' too (runtime/sharedReadings.js).
+    setHostReadsFigures(settings.replies !== "own");
+    preparing = true;
+    report();
+    const startProblems = await finishGameStart({
+      backstory: () => maybeGeneratePregameHistory(),
+      fronts: () => maybeOpenScenarioFronts(),
+      read: () => store.read(),
+      log: (text, detail) => logDebugEvent("shared game", `${text}: ${detail}`, undefined, { problem: true }),
+    }).finally(() => {
+      preparing = false;
+    });
+    // The game as its start left it.
+    const started = await store.read();
     // The game and its scenario, as the library knows them: a player must open
     // the same scenario to see the same map.
     const library = getLibraryState();
@@ -285,60 +501,155 @@ const boot = async () => {
     campaign = clean(library.activeGameId) || clean(host);
     const invite = loadInvite(campaign, identity);
     token = invite.token;
+    // The session this game saved when it was last shared, taken up again: its
+    // seats are their devices' (host/sessionRecord.js). A record that does not
+    // read, or is another campaign's or another host's, is not used.
+    const fingerprint = await fetch(`/api/scenarios/${encodeURIComponent(clean(entry?.scenarioId))}/fingerprint`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((answer) => (/^[0-9a-f]{64}$/.test(String(answer?.fingerprint || "")) ? String(answer.fingerprint) : ""))
+      .catch(() => "");
+    // A map that cannot be checked is not shared: a host with no checksum
+    // hosted all the same, and each guest drew whatever its library held under
+    // the scenario's id or name (the review of 2026-11-18, wars 10).
+    if (!fingerprint) {
+      logDebugEvent("shared game", "this game's map has no checksum: it is not shared, as no guest's copy could be checked against it", undefined, { problem: true });
+      throw new Error(MAP_UNCHECKED);
+    }
+    // What decides each round on this computer beyond the lobby's settings
+    // (host/hostRules.js), stated in the lobby: the game's difficulty and this
+    // device's AI settings, read again whenever the host changes one in its own
+    // window, which shares this one's storage.
+    const readRules = () => roundRulesOf({
+      difficulty: docs.game?.difficulty,
+      daysPerRound: settings.daysPerRound,
+      noRequestLimit: requestSettings.noRequestLimit(),
+      lookups: getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
+      segmented: getMapSetting(MAP_SETTING_KEYS.chunkLongJumps),
+      limitGeneration: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration),
+    });
+    const saved = await store.readShared().catch(() => null);
+    const restored = sessionFromRecord(saved, { campaign, hostDevice: identity.id });
+    if (restored) logDebugEvent("shared game", `taking up the session saved with this game: round ${restored.round}, ${restored.seats.length} seat(s)`);
     gameHost = createGameHost({
       transport: {
         send: (playerId, message) => (playerId === SCREEN ? loopback.send(message) : session?.send(playerId, message)),
       },
       settings,
       hostSeat: { device: identity.id, name: clean(name) || "Host", country: host },
-      scenario: { id: clean(entry?.scenarioId).slice(0, 120), name: clean(scenario?.name || entry?.name || "Open Historia").slice(0, 120), hash: "" },
-      countries: choosableCountries(docs.world, docs.game),
+      // Its map by checksum (server/scenarioFingerprint.js): each guest's copy
+      // must be this map, or it draws another world.
+      scenario: { id: clean(entry?.scenarioId).slice(0, 120), name: clean(scenario?.name || entry?.name || "Open Historia").slice(0, 120), hash: fingerprint },
+      features: sharedGameFeaturesOf(getActiveFeatures()),
+      rules: readRules(),
+      countries: gameCountries(started.world, started.game),
+      countriesOf: (now) => gameCountries(now.world, now.game),
+      campaign,
+      restored,
+      campaignRound: Number(started.game?.round) || 0,
       store,
-      resolveRound: async ({ daysPerRound, humanCountries }) => {
-        // Every other player's own open projects stand on the game's board for
-        // the skip, so the world moves them forward as it moves the host's,
-        // and go home afterwards as it left them (host/seatBoards.js).
-        const people = { host, humans: list(humanCountries) };
-        let hostHad = new Set();
-        await mutateWorldState((world) => {
-          hostHad = new Set(list(world?.projects).map((row) => clean(row?.id)).filter(Boolean));
-          const lent = lendBoards(world, people);
-          // What a player's own board holds is not the host's, even if an
-          // earlier skip left it out here.
-          for (const board of Object.values(lent?.seatBoards ?? {})) for (const row of list(board)) hostHad.delete(clean(row?.id));
-          return lent === world ? null : lent;
-        });
+      resolveRound: async ({ daysPerRound, signal, onProgress, carry = null, payer = null }) => {
+        // Fronts the game began with that could not be built when it opened.
+        await openPendingFronts();
+        // The game's own lock, taken at once: the round is an entry of the
+        // host's queue, and the queue is the lock (gameplay.js statsWrite).
+        // Nothing else writes beside it, and a lock held outside the queue
+        // (the Game Master thinking, a turn held for a Retry nobody can press
+        // here) is never waited for with every player's request behind it.
+        beginSimulation();
         try {
-          await simulateTimelineJump({ days: daysPerRound });
-        } catch (error) {
-          // A skip that failed part-way may have held its turn for a Retry (a
-          // segment that did not come back, the Projects board). Nobody can
-          // press it here: the turn is let go, so the game is not left busy,
-          // and the round goes back to planning with its orders (host/round.js).
-          discardHeldTurns();
-          throw error;
+          // Every other player's own open projects are moved by the skip as the
+          // host's are: lent to the game's board in the skip's own copy of the
+          // world, and home in its one commit (runtime/seatBoards.js). Nothing
+          // is written for it here, so an engine closed during the round leaves
+          // no player's work on the host's board.
+          // A round another player's device pays (settings.payment "cycle"):
+          // its skip's requests go, as built, to that device and its answer
+          // comes back to be applied here as ever (Game/AI/roundCarrier.js);
+          // and the skip spends by that device's own settings, as it stated
+          // them (`payer.rules`), not this computer's.
+          const uncarry = carry ? installRoundCarrier(carry, { rules: payer?.rules ?? null, who: payer?.device ?? "" }) : () => {};
+          try {
+            // Never a canned turn in a shared game: a skip the AI could not
+            // write fails, and the round says why (host/round.js).
+            // Each step it is on, for every screen's round bar (gameHost.js onProgress).
+            await simulateTimelineJump({ days: daysPerRound, signal, cannedTurn: false, onProgress });
+          } catch (error) {
+            // A skip that failed part-way may have held its turn for a Retry (a
+            // segment that did not come back, the Projects board). Nobody can
+            // press it here: the turn is let go, so the game is not left busy,
+            // and the round goes back to planning with its orders (host/round.js).
+            discardHeldTurns();
+            throw error;
+          } finally {
+            uncarry();
+          }
         } finally {
-          await mutateWorldState((world) => {
-            const home = returnBoards(world, { ...people, hostHad });
-            return home === world ? null : home;
-          });
+          endSimulation();
         }
       },
       // A country's stat sheet for a player whose Stats pane has none: only
-      // for a polity of this game, and the game's own reading writes it.
-      readCountry: async ({ country, fresh }) => {
-        const now = await store.read();
-        const name = choosableCountries(now.world, now.game).find((known) => clean(known).toLocaleLowerCase() === clean(country).toLocaleLowerCase());
-        if (!name) throw new Error("That is not a country of this game.");
-        if (fresh) await generateCountryStatSheet({ code: name, name, forceReassess: true });
-        else await readCountryForPlayer(name);
+      // for a polity of this game, and the game's own reading writes it on the
+      // host's AI key. One there already stands (nothing is read again in a
+      // shared game).
+      readCountry: async ({ country }) => {
+        await readCountryForPlayer(await countryOfGame(country));
       },
+      hasSheet: async (country) => hasCountryStatSheet(await countryOfGame(country)),
+      // The sheet a player's own device wrote, on its own AI key.
+      // (In the request's own entry of the host's queue: the queue is the lock,
+      // and every write goes through the entry's fence.)
+      takeSheet: async ({ country, sheet, continuity, rating, fence }) => takeCountryStatSheet({ name: await countryOfGame(country), sheet, continuity, rating, inEntry: true, fence }),
+      // Countries' military figures a player's Stats pane wants, rated on the
+      // host's AI: each request's figures written in the host's one order, so
+      // every view follows as they come. And those a player's own device
+      // rated, taken inside the request's own entry.
+      // A rating is background work on this device's AI, under its day's cap
+      // (requestBudget.js backgroundAllowance): one it declines is said, with
+      // why, to the player who asked (host/gameHost.js "ratings").
+      rateMilitary: async ({ countries }) => {
+        const declined = () => (backgroundAiAllowance().allowed ? null : { refused: "The host's AI has made all the background readings it makes in a day: the rest of these figures wait until tomorrow." });
+        if (declined()) return declined();
+        await ensureMilitaryFigures(countries, {
+          reason: "a player's Stats pane",
+          commit: (read) => writeInOrder("ratings", ({ fence }) => takeMilitaryRatings(read, { inEntry: true, fence }), { fenced: true }),
+        });
+        return declined();
+      },
+      takeRatings: (ratings, { fence = null } = {}) => takeMilitaryRatings(ratings, { inEntry: true, fence }),
       // The map as this game's own engine reads it, for the war room's lines and fleets.
       readChart: () => warRoomChart(),
+      // Its cities, for a city struck from the air: the host's own, never a page's.
+      readCities: () => readJson(JSON_URLS.citiesGeojson, { defaultValue: null }),
+      // A country's parties filled in on the host's AI, when they are not.
+      compileParties: async ({ country }) => {
+        if (!(await hasCompiledParties(country))) await assessPoliticalLandscape(country);
+      },
+      hasParties: (country) => hasCompiledParties(country),
+      takeParties: ({ country, landscape, fence }) => takePoliticalLandscape({ name: country, landscape, fence }),
+      // A country's flag, as the game sets one (in the request's entry, through its fence).
+      setFlag: async ({ country, image, fence }) => {
+        const docs = await store.read();
+        await setPolityFlag({ polity: country, world: docs.world, dataUrl: image, fence });
+      },
       replyTo,
-      // A player's institution business, run here for their country.
+      worldWords,
+      // The Game Master's command (host/gameMaster.js), as the Cheats panel's
+      // console runs one: its preview asked of the host's AI outside the
+      // host's queue, then applied as one entry of it (`write`), its
+      // fingerprint checked against the world as it stands then. The host
+      // reads what it changed in the notice every player is sent.
+      gameMaster: async ({ command, write }) => {
+        const preview = await previewGameMasterCommand(command);
+        return write(({ fence }) => applyGameMasterPreview(preview, { fence }));
+      },
+      // A player's institution business, run here for their country. Each
+      // thing it writes is an entry in the queue, for the seat as it is when
+      // the entry runs (host/institutions.js); a Council's or a hearing's
+      // turn asks the AI outside it (tableTurn).
+      // Each call is handed the entry's `fence`, which its one commit carries.
       institution: createInstitutionDesk({
         host: () => host,
+        write: (label, fn, options) => writeInOrder(label, fn, options),
         game: {
           lifecycle: (args) => commitInstitutionLifecycleCommand(args),
           negotiation: (args) => ensureInstitutionLifecycleNegotiationChat(args),
@@ -346,17 +657,36 @@ const boot = async () => {
           proposal: (args) => commitInstitutionalPlayerProposal(args),
           voteRequest: (args) => commitWithVotingRuleBackfill(
             () => commitInstitutionalPlayerVoteRequest(args),
-            { institutionId: args.institutionId, proposalId: args.proposalId },
+            { institutionId: args.institutionId, proposalId: args.proposalId, fence: args.fence },
           ),
           governance: (args) => commitInstitutionGovernanceCommand(args),
           message: (args) => commitInstitutionalPlayerMessage(args),
           chatTurn: (args) => tableTurn(args),
           readChats: () => readChatsState({ force: true }),
-          updateChats: (fn) => mutateChatsState(fn),
+          updateChats: (fn, { fence = null } = {}) => mutateChatsState(fn, { fence }),
         },
       }),
       onStatus: (status) => {
         hostStatus = status;
+        // The readings the game makes by itself follow who answers (runtime/sharedReadings.js).
+        setHostReadsFigures(status?.lobby?.settings?.replies !== "own");
+        report();
+      },
+      // A change the queue has applied for long, in the host's diagnostics log
+      // and on the host's screen; null once the queue moves again.
+      // Logged as a problem once for each change that runs long, and once when
+      // one runs past its bound; the screen follows every report.
+      onBusy: (busy) => {
+        const said = hostBusy;
+        hostBusy = busy;
+        if (busy && (!said || said.label !== busy.label)) {
+          logDebugEvent("shared game", `a change of the game (${busy.label}) has been applied for ${busy.seconds} s; ${busy.waiting} wait behind it`, undefined, { problem: true });
+        }
+        if (busy?.overdue && !said?.overdue) {
+          logDebugEvent("shared game", busy.passed
+            ? `a change of the game (${busy.label}) ran past its bound after ${busy.seconds} s and was stopped: nothing more of it is applied, and the ${busy.waiting} behind it go on`
+            : `a change of the game (${busy.label}) ran past its bound after ${busy.seconds} s and was failed; the ${busy.waiting} behind it wait until it has ended`, undefined, { problem: true });
+        }
         report();
       },
       // The host's people founded a country: the engine plays it as the host's.
@@ -379,6 +709,15 @@ const boot = async () => {
       now: offsetClock(clock.offsetMs),
       room: { name: settings.name, seats: settings.seats, version: SHARED_GAME_VERSION },
       appMessages: PLAYER_REQUESTS,
+      // A device the host banned from this game, saved with it, is turned away
+      // before it connects.
+      isBanned: (device) => gameHost?.isBanned(device) ?? false,
+      // Who may come in is the game's to say: a player whose device holds a
+      // seat always may (host/seats.js hasRoom).
+      roomFor: (device) => gameHost?.roomFor(device) ?? false,
+      openSeats: () => gameHost?.openSeats() ?? 0,
+      // A player of the game is let through however many others ask to join.
+      knows: (device) => gameHost?.isMember(device) ?? false,
       // A connection closing after "stop" still reports its leaving.
       onJoin: (player) => gameHost?.join(player),
       onLeave: (player) => gameHost?.leave(player),
@@ -400,9 +739,19 @@ const boot = async () => {
     // From here this window is the game's host: the engine reads who people
     // play from the game (runtime/humanPolities.js), and nowhere else does.
     setHostingSharedGame(true, { host });
+    // And every change it makes is applied in the host's one order: the
+    // readings the game makes by itself too, each write one entry, which is
+    // the write itself and ends with it (runtime/sharedReadings.js).
+    const hosting = gameHost;
+    writeInOrder = (label, write, options) => hosting.write(label, write, options);
+    setReadingsOrder((label, write, options) => hosting.write(`reading:${label}`, write, options));
+    const rulesChanged = () => hosting.control.setRules(readRules());
+    window.addEventListener("storage", rulesChanged);
+    forgetRules = () => window.removeEventListener("storage", rulesChanged);
     gameHost.start();
     session.start();
-    failure = "";
+    // What of the game's start could not be done, said to the host.
+    failure = startProblems.join(" ");
     report();
     void probeNetwork().then((kind) => {
       network = kind;
@@ -415,16 +764,54 @@ const boot = async () => {
     if (action === "open") return open(args ?? {});
     if (!gameHost) return undefined;
     switch (action) {
-      case "start": return gameHost.control.start();
+      // Under way until its entry has run (gameHost.js control.start), which the
+      // host's screen shows; one that fails is said (`failure`) and can be pressed again.
+      case "start": {
+        if (failure && failure === startRefused) failure = "";
+        const going = gameHost.control.start();
+        report();
+        try {
+          return await going;
+        } catch (error) {
+          startRefused = String(error?.message || error);
+          throw error;
+        } finally {
+          report();
+        }
+      }
       case "pause": return gameHost.control.pause();
       case "resume": return gameHost.control.resume();
       case "resolveNow": return gameHost.control.resolveNow();
+      // Who answers for the AI's governments from here on (host/settings.js `replies`).
+      case "replies": return gameHost.control.setReplies(clean(args?.mode));
+      // And how many answers of the host's AI each player has a round with their own (`hostAnswers`).
+      case "hostAnswers": return gameHost.control.setHostAnswers(Number(args?.count));
+      // The host pays the round being planned itself, and runs it (settings.payment "cycle").
+      case "payRound": return gameHost.control.payRound();
+      // The Game Master's command (host/gameMaster.js): one at a time.
+      case "gm": {
+        if (gameMasterBusy) return undefined;
+        gameMasterBusy = true;
+        report();
+        try {
+          return await gameHost.control.gameMaster(String(args?.command ?? ""));
+        } finally {
+          gameMasterBusy = false;
+          report();
+        }
+      }
       case "kick": {
-        const device = gameHost.control.kick(clean(args?.country));
+        // The country is taken back; with `ban` its player's device is kept
+        // out of this game for good (saved with it), and sent away now.
+        const ban = args?.ban === true;
+        const device = gameHost.control.kick(clean(args?.country), { ban });
         const player = session?.players().find((entry) => entry.device === device);
-        if (player && args?.ban) session.kick(player.id, { ban: true });
+        if (player && ban) session.kick(player.id, { ban: true });
         return undefined;
       }
+      // A player's change of country, allowed or refused (the owner's decision 12).
+      case "seat": return gameHost.control.seat({ op: clean(args?.op), from: clean(args?.from) });
+      case "cancelRound": return gameHost?.control.cancelRound();
       case "rotate": {
         const next = rotateInvite(campaign, identity);
         token = next.token;
@@ -437,10 +824,15 @@ const boot = async () => {
         // window goes.
         const stopping = gameHost;
         gameHost = null;
+        forgetRules();
         session?.stop();
         session = null;
         await stopping.stop();
+        writeInOrder = (label, write) => write({ fence: null });
+        setReadingsOrder(null);
         setHostingSharedGame(false);
+        setWorldLanguage("");
+        setHostReadsFigures(true);
         report();
         loopback.close();
         await fetch("/api/multiplayer/engine/close", { method: "POST" }).catch(() => {});

@@ -20,6 +20,8 @@ import { setBootTranslations } from "./bootTexts.js";
 import { loadShippedPack } from "./settingsStore.js";
 import { kvGet } from "./idb.js";
 import { DEFAULT_LANGUAGE, getStoredLanguage, hasShippedPack } from "../i18n.js";
+import { appMoveInfo, listenForMovedSaves, takeMoveNotice, takeMovedSaves } from "../native/appMove.js";
+import { showArrivalNotice, showHandoverCard } from "../native/appMoveCard.js";
 
 // Everything the player owns lives in this origin's storage: the games and
 // scenarios in IndexedDB, and — on the website — the map archives in the
@@ -81,6 +83,18 @@ export const installWebBackend = async () => {
   // so the library below already has them (saveMove.js). Never in the app.
   if (!isNativeApp()) await bringHttpSavesAcross({ db: idb });
 
+  // In the app, the games its earlier id handed over (native/appMove.js) are
+  // merged first, and the page starts again once to read the settings that
+  // came with them. The handover build shows its card once the game is up.
+  const moveInfo = isNativeApp() ? await appMoveInfo() : null;
+  if (moveInfo && !moveInfo.moveTo) {
+    if (await takeMovedSaves({ db: idb, info: moveInfo })) {
+      window.location.reload();
+      await new Promise(() => {});
+    }
+    listenForMovedSaves();
+  }
+
   // Seed the default scenario before any /api call, then intercept.
   try {
     await ensureSeeded();
@@ -107,6 +121,12 @@ export const installWebBackend = async () => {
       // The game mounts behind the boot screen, which still holds its minimum,
       // so a fast phone does not flash it.
       boot.settle();
+      if (moveInfo) {
+        bootLanguage.then(() => {
+          if (moveInfo.moveTo) showHandoverCard({ db: idb, track: import.meta.env.VITE_APP_TRACK || "stable" });
+          else showArrivalNotice(takeMoveNotice());
+        });
+      }
     } else if (shouldShowDemoNotice()) {
       await bootLanguage;
       showDemoNotice();

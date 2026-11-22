@@ -8,7 +8,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { hostLines, joinFailure, joinStage, scenarioMissing } from "./joinProgress.js";
+import { hostLines, joinFailure, joinStage, peopleOf, scenarioMissing } from "./joinProgress.js";
 import { DENY_REASONS, REJECT_REASONS } from "../session/messages.js";
 
 test("each step of joining has its own line, and looking for the host has none", () => {
@@ -65,11 +65,18 @@ test("the host is told who is choosing, who is connecting and who could not", ()
   assert.deepEqual(hostLines(null), []);
   assert.deepEqual(hostLines({ choosing: [], joining: [], unreachable: [], network: "open" }), []);
   const lines = hostLines({ choosing: ["Ana"], joining: ["Ben", "Cleo"], unreachable: ["Cleo", "Dan"], network: "open" });
-  assert.equal(lines.length, 3);
-  assert.match(lines[0].text, /choosing a country: Ana$/);
-  assert.match(lines[1].text, /Connecting now: Ben, Cleo \(trying again\)$/);
-  assert.match(lines[2].text, /^Could not connect: Dan\./);
-  assert.deepEqual(lines.map((line) => line.problem), [false, false, true]);
+  assert.equal(lines.length, 4);
+  // Each a whole sentence, the names apart from it: nothing English is glued
+  // onto a name ("Cleo (trying again)"), and no name is in the words to translate.
+  assert.deepEqual(lines.map((line) => [line.text, peopleOf(line)]), [
+    ["In the lobby, choosing a country:", "Ana"],
+    ["Connecting now:", "Ben"],
+    ["Trying again to connect:", "Cleo"],
+    ["These players found this lobby, but no connection between their computer and this one could be opened:", "Dan"],
+  ]);
+  assert.deepEqual(lines.map((line) => line.problem), [false, false, false, true]);
+  // The network's own warnings name nobody.
+  assert.equal(hostLines({ network: "symmetric" }).at(-1).people, undefined);
 });
 
 test("the host is warned when its own network is the kind nobody can connect to", () => {
@@ -88,8 +95,8 @@ test("the host is warned when its own network is the kind nobody can connect to"
 test("a long list of names is cut, and a missing scenario is named", () => {
   const many = Array.from({ length: 20 }, (_, index) => `Player ${index + 1}`);
   const [line] = hostLines({ joining: many });
-  assert.match(line.text, /Player 12…$/);
-  assert.doesNotMatch(line.text, /Player 13/);
+  assert.match(peopleOf(line), /Player 12…$/);
+  assert.doesNotMatch(peopleOf(line), /Player 13/);
   assert.match(scenarioMissing("The Fire Rises"), /"The Fire Rises"/);
   assert.match(scenarioMissing(""), /a scenario/);
 });

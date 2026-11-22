@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildMessageDrafts, extractBlockquotes, sentLetterDate, splitAtBlockquotes, toPlainText } from "./advisorDrafts.js";
+import { buildMessageDrafts, draftIdOf, extractBlockquotes, sentLetterDate, splitAtBlockquotes, toPlainText } from "./advisorDrafts.js";
 
 // The diplomacy composer shows the player's own message verbatim, so markup
 // handed over with the letter arrives as literal asterisks.
@@ -162,28 +162,31 @@ test("typed institution Council and lifecycle drafts preserve exact thread ident
 
 // The advisor drafted Winterfell's acceptance of the Tyrell barley offer again a
 // week after it had gone, and the player sent the same letter twice. A draft
-// that matches a letter already sent to that recipient says so on its button.
+// the player has sent says so on its button: the composer stamps the draft's
+// id on the message it sends from it (`fromDraft`), edited or not, in any
+// language. A letter's words are never compared with another's.
+const accepted = "My lord Tyrell, Winterfell accepts House Tyrell's offer of three hundred sacks of barley on the terms your letter set.";
 const tyrellChat = {
   id: "chat-tyrell",
   countries: [{ code: "House Tyrell", name: "House Tyrell" }],
   messages: [
-    { role: "user", time: "0298-10-06", text: "My lord Tyrell, Winterfell accepts House Tyrell's offer of three hundred sacks of barley on the terms your letter set: silver paid in full at our granary, the sacks held for our cog." },
-    { role: "leader", time: "0298-10-06", text: "Lord Stark, Highgarden will sell three hundred sacks of barley on the terms we gave." },
+    { role: "user", time: "0298-10-06", text: `${accepted} (edited before it went)`, fromDraft: draftIdOf("advisor-reply-1", 0) },
+    { role: "leader", time: "0298-10-06", text: "Lord Stark, Highgarden will sell three hundred sacks of barley on the terms we gave.", fromDraft: draftIdOf("advisor-reply-1", 1) },
+    // Sent from a draft in Chinese: one "word" to the old overlap, and found all the same.
+    { role: "user", time: "0298-10-09", text: "临冬城接受提利尔家族的大麦报价。", fromDraft: draftIdOf("advisor-reply-2", 0) },
   ],
 };
 
-test("a draft matching a letter already sent to that recipient reports when it went", () => {
-  const draft = { targetType: "private", country: "House Tyrell", text: "My lord Tyrell, Winterfell accepts House Tyrell's offer of three hundred sacks of barley on the terms your letter set: silver paid in full at our granary, the sacks held for our cog." };
-  assert.equal(sentLetterDate(draft, [tyrellChat]), "0298-10-06");
+test("a draft the player sent reports when it went, edited or not, in any language", () => {
+  assert.equal(sentLetterDate({ id: draftIdOf("advisor-reply-1", 0), targetType: "private", country: "House Tyrell", text: accepted }, [tyrellChat]), "0298-10-06");
+  assert.equal(sentLetterDate({ id: draftIdOf("advisor-reply-2", 0), targetType: "private", country: "House Tyrell", text: "临冬城接受提利尔家族的大麦报价。" }, [tyrellChat]), "0298-10-09");
 });
 
-test("a new letter to the same recipient, another recipient's chat, or the leader's own words do not count", () => {
-  const newer = { targetType: "private", country: "House Tyrell", text: "My lord Tyrell, Winterfell names 20 October as the day we ask for the three hundred sacks of barley to be ready at your granary." };
-  assert.equal(sentLetterDate(newer, [tyrellChat]), "");
-  const elsewhere = { targetType: "private", country: "House Bolton", text: tyrellChat.messages[0].text };
-  assert.equal(sentLetterDate(elsewhere, [tyrellChat]), "");
-  const echo = { targetType: "private", country: "House Tyrell", text: tyrellChat.messages[1].text };
-  assert.equal(sentLetterDate(echo, [tyrellChat]), "");
-  assert.equal(sentLetterDate({ targetType: "institution-council", institutionId: "iron-throne", text: "x" }, [tyrellChat]), "");
-  assert.equal(sentLetterDate(newer, undefined), "");
+test("another draft, even word for word the same, a leader's line, or a draft with no id is not sent", () => {
+  assert.equal(sentLetterDate({ id: draftIdOf("advisor-reply-3", 0), targetType: "private", country: "House Tyrell", text: `${accepted} (edited before it went)` }, [tyrellChat]), "");
+  assert.equal(sentLetterDate({ id: draftIdOf("advisor-reply-1", 1), targetType: "private", country: "House Tyrell", text: "x" }, [tyrellChat]), "", "the leader's line is not the player's letter");
+  assert.equal(sentLetterDate({ targetType: "private", country: "House Tyrell", text: accepted }, [tyrellChat]), "");
+  assert.equal(sentLetterDate({ id: draftIdOf("advisor-reply-1", 0), targetType: "institution-council", institutionId: "iron-throne", text: "x" }, [tyrellChat]), "");
+  assert.equal(sentLetterDate({ id: draftIdOf("advisor-reply-1", 0), targetType: "private" }, undefined), "");
+  assert.equal(draftIdOf("", 0), "", "a reply saved with no id gives its drafts none");
 });

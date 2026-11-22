@@ -101,11 +101,11 @@ test("a page from an origin not on the list cannot connect; nor can a client wit
   const server = await startServer();
   t.after(() => server.close());
   await assert.rejects(connect(server, { origin: "https://evil.example" }), { status: 403 });
-  await assert.rejects(connect(server, { origin: "https://app.paxhistoria" }), { status: 403 });
+  await assert.rejects(connect(server, { origin: "https://app.openhistoria" }), { status: 403 });
   await assert.rejects(connect(server, { origin: null }), { status: 403 });
   await assert.rejects(connect(server, { origin: "null" }), { status: 403 });
   // On the list: exact, and any port of localhost.
-  await (await connect(server, { origin: "http://app.paxhistoria" })).close();
+  await (await connect(server, { origin: "http://app.openhistoria" })).close();
   await (await connect(server, { origin: "http://localhost:5173" })).close();
   // Anything but /ws is not a socket.
   await assert.rejects(connect(server, { path: "/api/rooms" }), { status: 404 });

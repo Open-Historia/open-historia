@@ -275,8 +275,8 @@ export const isAllowedHostHeader = (hostHeader, allowedNames = new Set()) => {
 // Reflect a known origin instead — the app's own origin, plus the handful of
 // origins a Capacitor shell can run under.
 const APP_SHELL_ORIGINS = new Set([
-  "http://app.paxhistoria",
-  "https://app.paxhistoria",
+  "http://app.openhistoria",
+  "https://app.openhistoria",
   "capacitor://localhost",
   "ionic://localhost",
   "http://localhost",

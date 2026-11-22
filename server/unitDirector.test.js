@@ -9,7 +9,10 @@ import {
 
 // The director only decides intent for existing formations; the unit engine
 // moves them. These tests pin the deterministic gate between the two: what a
-// proposed operation must satisfy before it may ride on an event.
+// proposed operation must satisfy before it may ride on an event. The gate reads
+// what an event carries (its Military tag, its war, its combatants, its unit
+// operations, a player's order it carries out) and the operation's own shape,
+// never the event's words (the owner, 2026-11-13: no keywording anywhere).
 
 const units = [
   { id: "u1", name: "1st Army", type: "infantry", ownerCode: "Ruritania", strength: 100, lng: 10, lat: 50 },
@@ -22,6 +25,7 @@ const events = [
     date: "1930-05-01",
     title: "Parliament passes the budget",
     description: "The finance bill clears both chambers after a short debate.",
+    tags: ["Politics"],
     impacts: { unitOps: [] },
   },
   {
@@ -29,6 +33,7 @@ const events = [
     date: "1930-05-04",
     title: "Ruritanian 1st Army advances toward the frontier",
     description: "The army redeploys forward and establishes positions facing Borduria.",
+    tags: ["Military"],
     impacts: { unitOps: [] },
   },
   {
@@ -36,6 +41,8 @@ const events = [
     date: "1930-05-09",
     title: "Border clash at the Zenda crossing",
     description: "Ruritanian and Bordurian forces exchange fire for two days; the 1st Army takes heavy casualties before both sides pull back.",
+    tags: ["Military"],
+    combatants: ["Ruritania", "Borduria"],
     impacts: { unitOps: [] },
   },
   {
@@ -43,6 +50,7 @@ const events = [
     date: "1930-05-12",
     title: "Ruritania raises a new army corps",
     description: "The government mobilizes its reserves and a new corps forms at Strelsau.",
+    tags: ["Military", "Politics"],
     impacts: { unitOps: [] },
   },
 ];
@@ -62,22 +70,22 @@ const run = async (eventOrders, options = {}) => {
   return { directed, seen };
 };
 
-test("only operational military events are offered to the director", async () => {
+test("only the events that carry something military are offered to the director", async () => {
   const { seen } = await run([]);
   assert.deepEqual(seen.candidates.map((candidate) => candidate.eventIndex), [1, 2, 3]);
   assert.deepEqual(seen.units.map((unit) => unit.id), ["u1", "u2"]);
 
-  assert.equal(eventNeedsNativeUnitDirector({
-    title: "Allied Commands Reinforce Missile-Defense Readiness",
-    description: "Commands improve surveillance and radar data-sharing while maintaining heightened readiness.",
-  }), false);
-  assert.equal(eventNeedsNativeUnitDirector({
-    title: "Army Redeploys Two Brigades to the Border",
-    description: "Two brigades redeploy toward the frontier and establish forward positions.",
-  }), true);
+  // Its words decide nothing, in English or in French.
+  for (const [title, description] of [
+    ["Army Redeploys Two Brigades to the Border", "Two brigades redeploy toward the frontier and establish forward positions."],
+    ["L'armée redéploie deux brigades vers la frontière", "Deux brigades se redéploient vers la frontière."],
+  ]) {
+    assert.equal(eventNeedsNativeUnitDirector({ title, description }), false, title);
+    assert.equal(eventNeedsNativeUnitDirector({ title, description, tags: ["Military"] }), true, title);
+  }
 });
 
-test("valid unit objectives, narrated casualties and new formations are attached; invalid identities and unsupported ops are dropped", async () => {
+test("valid unit objectives, the director's strength changes and removals, and new formations are attached; invalid identities and unsupported ops are dropped", async () => {
   const { directed } = await run([
     { eventIndex: 0, unitOps: [{ op: "move", unitId: "u1", toLng: 10.2, toLat: 50.1 }] },
     {
@@ -114,11 +122,11 @@ test("valid unit objectives, narrated casualties and new formations are attached
   assert.equal(advance[1].unitId, "u2", "distance alone no longer deletes a director objective");
 
   const clash = directed[2].impacts.unitOps;
-  assert.deepEqual(clash.map((op) => op.op), ["strength"], "narrated casualties pass; attack is not an op on this build; a pull-back is not destruction");
+  assert.deepEqual(clash.map((op) => op.op), ["strength", "remove"], "the director's strength change and removal are what it says the event did; attack is not an op on this build");
   assert.equal(clash[0].strength, 70);
 
   const spawns = directed[3].impacts.unitOps;
-  assert.equal(spawns.length, 2, "an explicit new formation cue admits the spawns");
+  assert.equal(spawns.length, 2, "a spawn on an event the director reads is the new formation it says it is");
   assert.equal(spawns[0].unit.name, "2nd Corps");
 });
 
@@ -148,7 +156,7 @@ test("existing simulator operations are kept and never duplicated, and a silent 
   assert.deepEqual(noAnalyzer, events);
 });
 
-test("Punic relocation prose reaches the actual director candidate set without turning ordinary politics into unit work", () => {
+test("Punic relocations reach the actual director candidate set by their tag, without turning ordinary politics into unit work", () => {
   const input = buildUnitDirectorInput({
     world: {
       units: [{
@@ -166,18 +174,21 @@ test("Punic relocation prose reaches the actual director candidate set without t
         date: "-0217-05-02",
         title: "Hannibal Barca Crosses the Apennines into Etruria",
         description: "Carthaginian commander Hannibal Barca leads his veteran army across the Apennine passes into Etruria.",
+        tags: ["Military"],
         impacts: { unitOps: [] },
       },
       {
         date: "-0217-09-01",
-        title: "Hannibal Barca Establishes Camp in Apulia Following Coastal March",
-        description: "Hannibal establishes encampments across Apulia, resting veteran troops after the coastal march.",
+        title: "Hannibal Barca stabilisce il campo in Apulia dopo la marcia costiera",
+        description: "Annibale pone gli accampamenti in Apulia e fa riposare i veterani.",
+        tags: ["Military"],
         impacts: { unitOps: [] },
       },
       {
         date: "-0217-09-02",
         title: "Senate Talks Reach Agreement on Grain Taxes",
         description: "Civilian negotiators conclude a fiscal compromise after a long political debate.",
+        tags: ["Economy", "Politics"],
         impacts: { unitOps: [] },
       },
     ],
@@ -187,24 +198,20 @@ test("Punic relocation prose reaches the actual director candidate set without t
   assert.deepEqual(
     input.candidates.map((candidate) => candidate.eventIndex),
     [0, 1],
-    "only the military relocation events should be offered",
+    "only the military relocation events should be offered, the Italian one as the English",
   );
 });
 
-test("explicit story relocations from the Punic campaign are offered to the director", () => {
+test("a story relocation is offered to the director by what it carries, never by its words", () => {
   const relocations = [
     "Hannibal Barca Crosses the Apennines into Etruria",
     "Carthaginian Army Completes Alpine Crossing and Enters Po Valley",
-    "Hannibal Barca Marches Toward the Adriatic Coast",
-    "Hannibal Barca Establishes Camp in Apulia Following Coastal March",
-    "Hannibal Barca Reaches the Pyrenees Passes",
+    "Annibale raggiunge i passi dei Pirenei",
   ];
   for (const title of relocations) {
-    assert.equal(
-      eventNeedsNativeUnitDirector({ title, description: "" }),
-      true,
-      `expected a location-changing event to reach Unit Director: ${title}`,
-    );
+    assert.equal(eventNeedsNativeUnitDirector({ title, description: "", tags: ["Military"] }), true, title);
+    assert.equal(eventNeedsNativeUnitDirector({ title, description: "", warId: "war-punic-2" }), true, title);
+    assert.equal(eventNeedsNativeUnitDirector({ title, description: "" }), false, title);
   }
 });
 
@@ -223,6 +230,7 @@ test("a distant narrative objective is kept for the unit engine instead of being
     date: "-0217-05-05",
     title: "Hannibal Barca Marches Southward Toward Central Italy",
     description: "Hannibal leads the veteran Carthaginian army south from Cisalpine Gaul toward Apulia.",
+    tags: ["Military"],
     impacts: { unitOps: [] },
   }];
 
@@ -263,18 +271,18 @@ test("a distant narrative objective is kept for the unit engine instead of being
 const commissioning = [
   { title: "Royal Navy commissions two Type 45 destroyers into the fleet", description: "HMS Dauntless and HMS Diamond are commissioned at Portsmouth." },
   { title: "RAF stands up a new F-35 squadron at Marham", description: "No. 617 Squadron is formed with its first twelve aircraft." },
-  { title: "Admiralty takes delivery of the first Astute-class submarine", description: "The boat enters service with the Clyde flotilla." },
-  { title: "Carrier strike group formed around HMS Queen Elizabeth", description: "The task group is activated at Portsmouth." },
+  { title: "La Royal Navy met en service deux destroyers de type 45", description: "Le HMS Dauntless et le HMS Diamond entrent en service à Portsmouth." },
 ];
 const notFormations = [
   { title: "British Admiralty Standardizes Global Shipyard Blueprints", description: "Shipyard construction standards are unified across imperial yards." },
   { title: "Ministry commissions a review of defence procurement", description: "An independent panel will report on procurement costs." },
-  { title: "Tehran launches a diplomatic campaign at the UN", description: "Iranian envoys lobby member states over Gulf shipping." },
 ];
 
-test("a warship commissioned or a squadron stood up is offered to the director; paperwork is not", () => {
-  for (const event of commissioning) assert.equal(eventNeedsNativeUnitDirector(event), true, event.title);
-  for (const event of notFormations) assert.equal(eventNeedsNativeUnitDirector(event), false, event.title);
+test("a warship commissioned or a squadron stood up is offered to the director by its tag; paperwork is not", () => {
+  for (const event of commissioning) assert.equal(eventNeedsNativeUnitDirector({ ...event, tags: ["Military"] }), true, event.title);
+  for (const event of notFormations) assert.equal(eventNeedsNativeUnitDirector({ ...event, tags: ["Economy"] }), false, event.title);
+  // Untagged, the words decide nothing either way.
+  for (const event of [...commissioning, ...notFormations]) assert.equal(eventNeedsNativeUnitDirector(event), false, event.title);
 });
 
 test("a commissioned ship or a new squadron may spawn for a power that already has units", async () => {
@@ -292,17 +300,28 @@ test("a commissioned ship or a new squadron may spawn for a power that already h
   assert.equal(directed[1].impacts.unitOps.length, 1, "a squadron stood up is a new formation");
 });
 
-test("a power with units still gains none from an event that forms nothing", async () => {
+// What a spawn is, the director says: it is told to reuse a power's units and
+// to spawn only a new formation, and a spawn named like one of its owner's
+// units is that unit when applied (gameState.js applyUnitOpBatch). No English
+// "new formation" wording is asked of the event, and at most four are raised
+// a turn.
+test("a director's spawns are taken as new formations, at most four a turn", async () => {
   const fleet = [{ id: "n1", name: "Home Fleet", type: "naval", ownerCode: "British Empire", strength: 100, lng: -1, lat: 50.8 }];
+  const spawn = (index) => ({ op: "spawn", unit: { name: `Squadron ${index}`, type: "naval", ownerCode: "British Empire", strength: 100, lng: -6, lat: 49 } });
   const directed = await directGeneratedUnitOps({
-    events: [{ id: "x", date: "2016-08-01", kind: "military", title: "Home Fleet sails to the Western Approaches", description: "The fleet redeploys for exercises.", impacts: { unitOps: [] } }],
+    events: [
+      { id: "x", date: "2016-08-01", kind: "military", title: "Home Fleet sails to the Western Approaches", description: "The fleet redeploys for exercises.", impacts: { unitOps: [] } },
+      { id: "y", date: "2016-08-02", kind: "military", title: "La flotte de la Manche appareille", description: "Elle quitte Portsmouth.", impacts: { unitOps: [] } },
+    ],
     game: { gameDate: "2016-08-04", round: 20 },
     world: { units: fleet },
     analyzeBatch: async () => ({ payload: { eventOrders: [
-      { eventIndex: 0, unitOps: [{ op: "spawn", unit: { name: "Second Home Fleet", type: "naval", ownerCode: "British Empire", strength: 100, lng: -6, lat: 49 } }] },
+      { eventIndex: 0, unitOps: [spawn(1), spawn(2), spawn(3)] },
+      { eventIndex: 1, unitOps: [spawn(4), spawn(5)] },
     ], summary: "" } }),
   });
-  assert.deepEqual(directed[0].impacts.unitOps, [], "a fleet that is merely moving does not duplicate itself");
+  assert.equal(directed[0].impacts.unitOps.length, 3);
+  assert.equal(directed[1].impacts.unitOps.length, 1, "the fifth is past the turn's budget");
 });
 
 test("the director sees each unit's posture, make-up, cover and standing order", () => {
@@ -333,7 +352,7 @@ test("on a crowded map the director is shown the events' own units first, and a 
   });
   assert.equal(input.units.length, 60);
   assert.equal(input.omittedUnits, 22);
-  assert.deepEqual(input.units.slice(0, 2).map((unit) => unit.id), ["u1", "u2"], "the 1st Army and the corps of Borduria, which the events name, lead");
+  assert.deepEqual(input.units.slice(0, 2).map((unit) => unit.id), ["u1", "u2"], "the units of Ruritania and Borduria, the clash's combatants, lead");
 });
 
 test("the player's Cancel during the analysis reaches the skip instead of being kept as a failure", async () => {

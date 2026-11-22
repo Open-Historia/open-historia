@@ -96,18 +96,23 @@ export const toFiledEvent = (row, event = null) => {
 };
 
 // Bounded and shape-checked, for persistence and for rendering. One card per
-// title: a row can be noted by more than one pass.
+// event: a row can be noted by more than one pass, and each knows the event by
+// its id (toFiledEvent `eventId`, in memory). A card saved without one (every
+// card read back from a save) is kept as it was saved. Two cards were once one
+// when their titles matched, and two events that happened to share a headline
+// lost one of their cards.
 export const normalizeFiledEvents = (value) => {
   const out = [];
   const seen = new Set();
   for (const entry of Array.isArray(value) ? value : []) {
     if (!entry || typeof entry !== "object") continue;
     const title = clip(entry.title, TITLE_MAX);
-    if (!title || seen.has(title.toLowerCase())) continue;
+    const eventId = clean(entry.eventId);
+    if (!title || (eventId && seen.has(eventId))) continue;
     const route = clean(entry.route);
     const described = describeFiledRoute(route);
     const fate = Object.values(FILED_FATES).includes(entry.fate) ? entry.fate : described.fate;
-    seen.add(title.toLowerCase());
+    if (eventId) seen.add(eventId);
     out.push({
       title,
       description: clip(entry.description, DESCRIPTION_MAX),

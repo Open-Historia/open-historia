@@ -134,3 +134,17 @@ test("a stored offer is normalized, and stands only on an event still on the rec
   assert.equal(offeredEvent({ offer: { eventId: "gone", round: 7 }, events }), null);
   assert.equal(offeredEvent({ offer: null, events }), null);
 });
+
+// "Interactive events and auto time skip: left out of shared games until designed for several players" (the owner,
+// 2026-11-15). A shared game's round offered a scene to the host's screen, about any player's country, and neither of
+// its buttons could do anything there; a scene the host left in progress stopped every round.
+test("a shared game offers no scene, and one left in progress when it is shared is set aside", async () => {
+  const fs = await import("node:fs");
+  const read = (file) => fs.readFileSync(new URL(file, import.meta.url), "utf8");
+  assert.match(read("../Game/AI/gameplay.js"), /const offer = hostingSharedGame\(\) \? null : chooseInteractiveOffer\(\{/);
+  const engine = read("../multiplayer/host/engineMain.js");
+  assert.match(engine, /if \(docs\.world\?\.activeInteractive\) await setAsideActiveInteractive\(\);/);
+  assert.match(engine, /if \(docs\.world\?\.interactiveOffer\) await declineInteractiveOffer\(\);/);
+  // And the time skip, the automatic one with it, is the host's engine's alone in a shared game.
+  assert.match(read("../Game/AI/gameplayLazy.js"), /export const simulateTimelineJump = hostOnly\(/);
+});

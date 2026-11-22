@@ -39,13 +39,16 @@ import {
   readSuggestionFile,
   suggestionFileName,
 } from "../../runtime/scenarioSuggestion.js";
-import { applyToSnapshot, buildDetailSave, detailChangeStatus, detailStatuses, detailValueIn, diffWords, inverseOf } from "../../runtime/suggestionApply.js";
+import { applyToSnapshot, buildDetailSave, detailChangeStatus, detailStatuses, detailValueIn, diffWords, inverseOf, promptChangeOverLimit } from "../../runtime/suggestionApply.js";
 import { openHubSuggestions } from "../../../server/hubProvenance.js";
 import { FEATURE_DEFINITIONS } from "../../../server/gameFeatures.js";
-import { PROMPT_EDITOR_SECTIONS } from "../AI/gameplayPrompts.js";
+import { PROMPT_EDITOR_SECTIONS, PROMPT_GUIDANCE_DEFAULTS } from "../AI/gameplayPrompts.js";
 import { guidanceSegmentsFor } from "../AI/promptGuidance.js";
 import { REVIEW_SECTIONS, sectionOfChange } from "../../runtime/suggestionSections.js";
+import { summarizePoliticalChanges } from "./politicsSuggestionPresentation.js";
 import { MUSIC_SITUATION_LABELS, SCENARIO_MUSIC_SITUATIONS, normalizeScenarioMusic, scenarioMusicVolumes } from "../../runtime/scenarioMusic.js";
+import { scenarioLanguagePack } from "../../../server/scenarioLanguages.js";
+import { languageDisplayName } from "../../runtime/i18n.js";
 
 // ---- looks (the library's own) -------------------------------------------------
 
@@ -71,7 +74,7 @@ const buttonStyle = {
   minHeight: "2.1rem",
   padding: "0 0.9rem",
 };
-const primaryButtonStyle = { ...buttonStyle, background: "rgba(43,193,243,0.22)", borderColor: "rgba(43,193,243,0.5)", color: "#fff" };
+const primaryButtonStyle = { ...buttonStyle, background: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 22%, transparent)", borderColor: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 50%, transparent)", color: "#fff" };
 const quietTextStyle = { color: "rgba(255,255,255,0.58)", fontSize: "0.78rem", lineHeight: 1.5 };
 const labelStyle = {
   color: "rgba(255,255,255,0.72)",
@@ -177,6 +180,7 @@ const describeDetailChange = (change) => {
   if (change.kind === "stats") return { tab: "Stats", title: "National Stats sheet", detail: "" };
   if (change.kind === "institutionLogos") return { tab: "Politics", title: "Institution logos", detail: "" };
   if (change.kind === "music") return { tab: "Music", title: "Scenario music", detail: "" };
+  if (change.kind === "languages") return { tab: "Languages", title: "Language pack", detail: languageDisplayName(change.code) };
   if (change.kind === "cover") return { tab: "Assets", title: "Cover Image", detail: "" };
   return { tab: "", title: change.kind, detail: "" };
 };
@@ -244,7 +248,53 @@ const DetailValue = ({ change, coverBefore }) => {
   if (change.kind === "stats") {
     return <div style={quietTextStyle}>{statsSummary(change.from)} → {statsSummary(change.to)}</div>;
   }
-  if (change.kind === "politics" || change.kind === "history") {
+  if (change.kind === "politics") {
+    // Review only: retain the original canonical suggestion for Accept/Reject.
+    // Internal generator provenance and stable IDs are not player-facing field
+    // labels, and they must not crowd actual political changes off this card.
+    const summary = summarizePoliticalChanges(change, { max: POLITICS_PATHS_SHOWN });
+    return (
+      <div style={{ display: "grid", gap: "0.25rem" }}>
+        <div style={quietTextStyle}>{change.op === "add" ? "Added" : change.op === "remove" ? "Removed" : "Changed"}</div>
+        {(change.op === "change" || !change.op) && (
+          <>
+            {summary.rows.map((row) => (
+              <div key={row.key} style={{ display: "grid", gap: "0.15rem", fontSize: "0.76rem", lineHeight: 1.45, overflowWrap: "anywhere" }}>
+                <div>
+                  <span style={{ color: "rgba(255,255,255,0.65)", fontWeight: 650 }}>{row.label}</span>
+                  <span style={{ color: "rgba(255,255,255,0.5)" }}>:</span>
+                </div>
+                {row.type === "collection" ? row.edits.map((edit, index) => (
+                  <div key={index} style={{ display: "flex", flexWrap: "wrap", columnGap: "0.3rem" }}>
+                    <span style={{ color: "rgba(255,255,255,0.55)" }}>
+                      {edit.operation === "added" ? "Added" : edit.operation === "removed" ? "Removed"
+                        : edit.operation === "updated" ? "Updated" : "Order changed"}
+                    </span>
+                    {edit.names.map((name, i) => (
+                      <React.Fragment key={i}>
+                        {i > 0 ? <span>,</span> : null}
+                        {name === "Unnamed entry" ? <span>Unnamed entry</span> : <span data-no-translate>{name}</span>}
+                      </React.Fragment>
+                    ))}
+                    {edit.remaining > 0 ? <span data-no-translate>(+{edit.remaining})</span> : null}
+                  </div>
+                )) : row.type === "details" ? <div>Details updated</div> : (
+                  <div>
+                    <span data-no-translate style={{ color: "#fecaca", textDecoration: "line-through" }}>{row.before}</span>
+                    <span style={{ color: "rgba(255,255,255,0.5)" }}> → </span>
+                    <span data-no-translate style={{ color: "#bbf7d0" }}>{row.after}</span>
+                  </div>
+                )}
+              </div>
+            ))}
+            {summary.bookkeepingOnly ? <div style={quietTextStyle}>Only internal record metadata changed.</div> : null}
+            {summary.hiddenCount > 0 ? <div style={quietTextStyle}>More political changes not shown: <span data-no-translate>{summary.hiddenCount}</span></div> : null}
+          </>
+        )}
+      </div>
+    );
+  }
+  if (change.kind === "history") {
     const text = change.op === "add" ? "Added" : change.op === "remove" ? "Removed" : "Changed";
     // Which fields of the entry changed, the way tracked changes show a word;
     // for a value changed whole (the canon context), its fields, a new one's
@@ -258,7 +308,7 @@ const DetailValue = ({ change, coverBefore }) => {
       <div style={{ display: "grid", gap: "0.2rem" }}>
         <div style={quietTextStyle}>{text}</div>
         {paths.slice(0, POLITICS_PATHS_SHOWN).map((entry) => (
-          <div data-no-translate key={entry.path} style={{ fontSize: "0.76rem", lineHeight: 1.45, overflowWrap: "anywhere" }}>
+          <div key={entry.path} style={{ fontSize: "0.76rem", lineHeight: 1.45, overflowWrap: "anywhere" }}>
             <span style={{ color: "rgba(255,255,255,0.55)" }}>{entry.path}: </span>
             <span style={{ color: "#fecaca", textDecoration: "line-through" }}>{politicsValueText(entry.from)}</span>
             <span style={{ color: "rgba(255,255,255,0.5)" }}> → </span>
@@ -270,6 +320,21 @@ const DetailValue = ({ change, coverBefore }) => {
     );
   }
   if (change.kind === "institutionLogos") return <div style={quietTextStyle}>Changed</div>;
+  if (change.kind === "languages") {
+    // How many translations are new or different, and how many go: the
+    // strings themselves are the author's to read in the Languages tab once
+    // taken. Read as the stores would keep them, since a suggestion is a file.
+    const before = scenarioLanguagePack({ [change.code]: change.from }, change.code);
+    const after = scenarioLanguagePack({ [change.code]: change.to }, change.code);
+    const changed = Object.keys(after).filter((source) => before[source] !== after[source]).length;
+    const removed = Object.keys(before).filter((source) => !Object.hasOwn(after, source)).length;
+    return (
+      <div style={{ display: "grid", gap: "0.2rem", fontSize: "0.76rem" }}>
+        {changed ? <div style={{ color: "#bbf7d0" }}>{`${changed} new or changed translations`}</div> : null}
+        {removed ? <div style={{ color: "#fecaca" }}>{`${removed} translations taken out`}</div> : null}
+      </div>
+    );
+  }
   if (change.kind === "music") {
     // Each situation whose list changed: the tracks it had, then the tracks
     // suggested, by their ids on the hub's list. Read as the stores would keep
@@ -425,7 +490,7 @@ const DialogFrame = ({ title, subtitle, onClose, children, footer }) => {
         role="dialog"
         aria-modal="true"
         style={{
-          background: "#1b1b1e",
+          background: "var(--oh-ui-surface, #1b1b1e)",
           border: "1px solid rgba(255,255,255,0.12)",
           borderRadius: isMobile ? 0 : 22,
           boxShadow: "0 24px 64px rgba(0,0,0,0.55)",
@@ -739,7 +804,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
   const applyChanges = async (list) => {
     if (!list.length) return;
     const details = await loadScenarioDetails(scenario.id);
-    const { patch, uploads, clears } = buildDetailSave(list, details);
+    const { patch, uploads, clears } = buildDetailSave(list, details, { guidanceDefaults: PROMPT_GUIDANCE_DEFAULTS });
     // One catalog refresh for the whole batch, not one per write.
     await withSingleLibraryRefresh(async () => {
       if (Object.keys(patch).length) await saveScenario(scenario.id, patch, { refresh: false });
@@ -754,8 +819,15 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
   };
 
   const accept = async (list) => {
-    const pending = list.filter((change) => !decided.has(change.id) && statuses[change.id] !== "applied");
-    if (!pending.length) return;
+    const open = list.filter((change) => !decided.has(change.id) && statuses[change.id] !== "applied");
+    // A prompt passage over the length limit is not accepted: the game would
+    // not use it. It stays open, for the author to reject.
+    const tooLong = open.filter((change) => promptChangeOverLimit(change, PROMPT_GUIDANCE_DEFAULTS));
+    const pending = open.filter((change) => !tooLong.includes(change));
+    if (!pending.length) {
+      if (tooLong.length) setError("This suggested prompt passage is more than 20% longer than the built-in one, so it cannot be accepted.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -771,6 +843,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
       // Applied already: a review that fails to save cannot take it back.
       await decide({ accepted: new Set([...decisions.accepted, ...pending.map((change) => change.id)]), rejected: decisions.rejected })
         .catch((nextError) => { throw new Error(`Your scenario was changed, but the decision could not be saved: ${errorText(nextError)}`); });
+      if (tooLong.length) setError("Some suggested prompt passages are more than 20% longer than the built-in ones, so they were not accepted.");
     } catch (nextError) {
       setError(errorText(nextError));
     } finally {
@@ -934,7 +1007,7 @@ const ContributorSuggestions = ({ login, refs, reviews, busy, touch, onReview, o
       </div>
     )}
     {refs.map((ref) => (
-      <div key={ref.id} style={{ alignItems: "center", background: "rgba(43,193,243,0.08)", border: "1px solid rgba(43,193,243,0.25)", borderRadius: 12, display: "flex", flexWrap: "wrap", gap: "0.5rem", padding: "0.5rem 0.65rem" }}>
+      <div key={ref.id} style={{ alignItems: "center", background: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 8%, transparent)", border: "1px solid color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 25%, transparent)", borderRadius: 12, display: "flex", flexWrap: "wrap", gap: "0.5rem", padding: "0.5rem 0.65rem" }}>
         <div style={{ flex: 1, minWidth: "10rem" }}>
           <div style={{ fontSize: "0.84rem", fontWeight: 700 }}>
             {ref.author ? `Suggested changes from @${ref.author}` : "Suggested changes"}
@@ -1115,7 +1188,7 @@ export const SuggestionCountBadge = ({ count, onClick }) => {
       type="button"
       onClick={onClick}
       title="People have suggested changes to this scenario"
-      style={{ alignItems: "center", background: "rgba(43,193,243,0.22)", border: "1px solid rgba(43,193,243,0.55)", borderRadius: 999, color: "#fff", cursor: "pointer", display: "inline-flex", fontSize: "0.7rem", fontWeight: 700, gap: "0.3rem", padding: "0.3rem 0.6rem", position: "relative", zIndex: 3 }}
+      style={{ alignItems: "center", background: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 55%, transparent)", borderRadius: 999, color: "#fff", cursor: "pointer", display: "inline-flex", fontSize: "0.7rem", fontWeight: 700, gap: "0.3rem", padding: "0.3rem 0.6rem", position: "relative", zIndex: 3 }}
     >
       {count === 1 ? "💬 1 suggestion" : `💬 ${count} suggestions`}
     </button>
@@ -1129,7 +1202,7 @@ export const SuggestionsBanner = ({ scenarios, onOpen }) => {
     .filter((row) => row.count > 0);
   if (!rows.length) return null;
   return (
-    <div style={{ alignItems: "center", background: "rgba(43,193,243,0.1)", border: "1px solid rgba(43,193,243,0.3)", borderRadius: 16, display: "flex", flexWrap: "wrap", gap: "0.6rem", marginBottom: "1rem", padding: "0.7rem 0.9rem" }}>
+    <div style={{ alignItems: "center", background: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 30%, transparent)", borderRadius: 16, display: "flex", flexWrap: "wrap", gap: "0.6rem", marginBottom: "1rem", padding: "0.7rem 0.9rem" }}>
       <span style={{ fontSize: "0.86rem", fontWeight: 700 }}>💬 People have suggested changes to your scenarios</span>
       <span style={{ flex: 1 }} />
       {rows.map(({ scenario, count }) => (

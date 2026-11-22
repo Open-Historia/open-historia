@@ -93,13 +93,18 @@ export const playerGoalOf = (world, player) => {
   return key ? goals[key].text : "";
 };
 
-// The world with the player's goal set (or, with no text, cleared).
+// The world with the player's goal set (or, with no text, cleared). The same
+// world, unchanged, when the goal already stands in those words (or there is
+// none to clear): its record, its date and its reading are kept, and nothing
+// is written. A shared game's host rewrote the whole world for a goal sent
+// again in the same words (multiplayer/host/gameHost.js "goal").
 export const withPlayerGoal = (world, player, text, { round = 0, date = "" } = {}) => {
   const name = asText(player);
   if (!name) return world;
   const goals = normalizePlayerGoals(world?.playerGoals);
   const key = Object.keys(goals).find((existing) => fold(existing) === fold(name)) ?? name;
   const wording = asText(text).slice(0, PLAYER_GOAL_MAX_CHARS);
+  if (wording ? goals[key]?.text === wording : !goals[key]) return world;
   const next = { ...goals };
   // The same goal keeps its reading; a reworded one starts again.
   const kept = goals[key]?.text === wording && goals[key]?.progress ? { progress: goals[key].progress } : {};
@@ -120,6 +125,30 @@ export const describeGoalForSimulation = (goal, player) => (asText(goal)
   ? "[The Player's Standing Goal]\n"
     + `${asText(player) || "The player"}'s government is steering toward: "${asText(goal)}". This is a guiding philosophy, not an order. Where the player's orders do not address a matter, the ministers and officials of the player's own government conduct routine business in its spirit. It never creates an action the player did not order, never decides anything in the player's name that the Player Agency rules reserve for them, and never makes success likelier: other powers do not know it, and the world answers what the player's government actually does.`
   : "");
+
+// The time skip's directive for everyone a person plays (rule 9 of a shared
+// game: what the simulation gives "the player" it gives each seat). A shared
+// skip's one player is every polity people play, named together ("France or
+// Spain"), and that joined name is nobody's goal: with two players or more no
+// standing goal reached the skip at all (the gap audit of 2026-11-18). So each
+// polity's own goal is told under its own name, and a polity with none is left
+// out. One person (single player, or a shared game only its host plays) is
+// told exactly as before.
+export const describeGoalsForSimulation = (world, people) => {
+  const names = [];
+  for (const value of Array.isArray(people) ? people : []) {
+    const name = asText(value);
+    if (name && !names.some((known) => fold(known) === fold(name))) names.push(name);
+  }
+  if (names.length <= 1) return describeGoalForSimulation(playerGoalOf(world, names[0]), names[0]);
+  const goals = names.map((name) => [name, playerGoalOf(world, name)]).filter(([, goal]) => goal);
+  if (!goals.length) return "";
+  return [
+    "[The Players' Standing Goals]",
+    "Each government below, played by its own person, is steering toward its own goal. Each is a guiding philosophy, not an order. Where a player's orders do not address a matter, the ministers and officials of that player's own government conduct routine business in its spirit. A goal never creates an action its player did not order, never decides anything in that player's name that the Player Agency rules reserve for them, never moves another government, and never makes success likelier: other powers, the other players among them, do not know it, and the world answers what each government actually does.",
+    ...goals.map(([name, goal]) => `- ${name}: "${goal}"`),
+  ].join("\n");
+};
 
 // The suggestions' line: the direction they should serve.
 export const describeGoalForSuggestions = (goal) => (asText(goal)

@@ -108,6 +108,17 @@ test("a scenario's structures open as map features and save back whole", () => {
   assert.deepEqual([...MAP_FEATURE_STATUSES].sort(), [...MARKER_STATUSES].sort(), "the Workshop offers the game's statuses");
 });
 
+test("a puppet's row is named for the puppet in any script, as its English twin is", () => {
+  // Cut to a-z and 0-9, every puppet named in another script was
+  // "puppet-polity", told apart by a counter only.
+  const rowId = (puppet, overlord) => setOverlord([], puppet, overlord).puppets[0].id;
+  assert.equal(rowId("Manchukuo", "Japan"), "puppet-manchukuo", "as it always was");
+  for (const [first, second, overlord] of [["Manchukuo", "Mengjiang", "Japan"], ["Маньчжоу-го", "Мэнцзян", "Япония"], ["满洲国", "蒙疆", "日本"]]) {
+    assert.notEqual(rowId(first, overlord), "puppet-polity", first);
+    assert.notEqual(rowId(first, overlord), rowId(second, overlord), first);
+  }
+});
+
 test("puppet states follow the ledger's rules and export as world.puppets rows", () => {
   let { puppets, error } = setOverlord([], "Manchukuo", "Japan", { kind: "satellite", loyalty: 30 });
   assert.equal(error, "");

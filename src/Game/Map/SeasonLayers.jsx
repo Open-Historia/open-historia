@@ -35,8 +35,8 @@ const selectDate = (game) => String(game?.gameDate || game?.startDate || "");
 // A tint, not a colour: a little stronger from far off, where it is the season
 // that is being looked at, than close in, where the ground is.
 const TINT_OPACITY = ["interpolate", ["linear"], ["zoom"], 2, 0.18, 6, 0.14, 10, 0.1];
-// The picture is a blend a few hundred pixels round the world: past this zoom the map enlarges its tiles.
-const TINT_MAX_ZOOM = 5;
+// The picture is only a few hundred pixels round the world, so past z2 the map enlarges its tiles.
+const TINT_MAX_ZOOM = 2;
 
 ensureSeasonTintProtocol();
 

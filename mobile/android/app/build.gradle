@@ -12,11 +12,42 @@ if (!(ohChannel in ["stable", "beta"])) {
 }
 def ohBeta = ohChannel == "beta"
 
+// The app's id: this, or this + ".beta" for the beta channel.
+def ohAppId = "io.github.arkniem.openhistoria"
+
+// The handover build. Until November 2026 the app had another id, and with it
+// another sandbox: Android cannot update an installed app to a new id, and the
+// new app cannot read the old one's saves. So the old id gets one more build of
+// this same code, the handover, which tells the player about the new app,
+// installs it beside itself and hands it every game and setting
+// (SaveMovePlugin.java, src/runtime/native/appMove.js). It is made only when
+// OH_ANDROID_LEGACY_APP_ID names the old stable id (CI reads it from a
+// repository variable; the beta's old id is that + ".beta"), and the WebView
+// address has to be the old one too (mobile/scripts/legacy-config.mjs).
+// server/androidAppMove.test.js holds the pieces together.
+def ohLegacyAppId = (System.getenv("OH_ANDROID_LEGACY_APP_ID") ?: "").trim()
+if (ohLegacyAppId && !(ohLegacyAppId ==~ /[a-zA-Z]\w*(\.[a-zA-Z]\w*)+/)) {
+    throw new GradleException("OH_ANDROID_LEGACY_APP_ID is not an application id: " + ohLegacyAppId)
+}
+if (ohLegacyAppId == ohAppId) {
+    throw new GradleException("OH_ANDROID_LEGACY_APP_ID is the app's own id")
+}
+def ohSuffix = ohBeta ? ".beta" : ""
+// What this build moves its saves to: the app's id in a handover build, "" in the app.
+def ohMoveTo = ohLegacyAppId ? ohAppId + ohSuffix : ""
+
 android {
     namespace "io.github.arkniem.openhistoria"
     compileSdk rootProject.ext.compileSdkVersion
+    buildFeatures {
+        buildConfig true
+    }
     defaultConfig {
-        applicationId ohBeta ? "io.github.arkniem.paxhistoria.beta" : "io.github.arkniem.paxhistoria"
+        applicationId((ohLegacyAppId ?: ohAppId) + ohSuffix)
+        buildConfigField "String", "OH_MOVE_TO", "\"" + ohMoveTo + "\""
+        // The file each app downloads once to be counted (AppFile.java); none
+        // for a handover build, whose player is counted by the app it installs.
+        buildConfigField "String", "OH_APP_FILE", "\"" + (ohLegacyAppId ? "" : ohBeta ? "android.beta.app.txt" : "android.app.txt") + "\""
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // From the workflow's run number (OH_ANDROID_BUILD), so every published
@@ -28,6 +59,9 @@ android {
             appLabel: ohBeta ? "Open Historia Beta" : "Open Historia",
             appIcon: ohBeta ? "@mipmap/ic_launcher_beta" : "@mipmap/ic_launcher",
             appIconRound: ohBeta ? "@mipmap/ic_launcher_beta_round" : "@mipmap/ic_launcher_round",
+            // The package the manifest asks to see (<queries>): the app, from a
+            // handover build; the app itself otherwise, which changes nothing.
+            ohMoveTo: ohMoveTo ?: ohAppId + ohSuffix,
         ])
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {

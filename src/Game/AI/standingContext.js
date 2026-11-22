@@ -23,6 +23,7 @@ import { buildCompactEconomicContext, normalizeCountryStatSheet, normalizeCountr
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { normalizeWorldState } from "../../runtime/gameState.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
+import { normalizeWarOutcome, outcomeSideOf, sideLabel } from "../../runtime/warEndings.js";
 import { intelligenceOf } from "../../runtime/spycraft.js";
 
 const asText = (value) => String(value ?? "").trim();
@@ -67,13 +68,40 @@ export const otherRecordedReputations = (world, exclude = [], limit = OTHER_REPU
     .slice(0, Math.max(0, limit));
 };
 
+// The polities people play, each once, `player` first: a shared game's world
+// task is told of every one of them (rule 9 of a shared game: what the
+// simulation gives "the player" it gives each seat). One name, or none, is
+// single player's, told exactly as it always was.
+const peopleWith = (player, people) => {
+  const names = [];
+  for (const value of [player, ...(Array.isArray(people) ? people : [])]) {
+    const name = asText(value);
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names;
+};
+
 // The player's reputation line, then the other polities whose reputation has
 // been recorded: the skip and the suggestion tasks write absolute values on
 // polityChanges.reputation for any polity, and were never shown another's
-// current value to move from.
-export const describeReputationStanding = (world, player, { fallback = null } = {}) => {
+// current value to move from. With several people (`people`, a shared game's
+// world task) each player's is told by name: only the host's was, unnamed,
+// so a guest's standing moved only if it was already among the recorded ten.
+export const describeReputationStanding = (world, player, { fallback = null, people = [] } = {}) => {
   const name = asText(player);
   if (!name) return "No player polity is currently set.";
+  const players = peopleWith(name, people);
+  if (players.length > 1) {
+    const own = players.map((polity) => {
+      const value = reputationOf(world, polity, polity === name ? fallback : null);
+      return `${polity} ${value}/100 (${reputationBand(value)})`;
+    });
+    const others = otherRecordedReputations(world, players);
+    return [
+      `International reputation of the players' polities: ${own.join(", ")}.`,
+      ...(others.length ? [`Other recorded reputations: ${others.map(([other, score]) => `${other} ${score}/100`).join(", ")}. Every polity not listed stands at 50.`] : []),
+    ].join("\n");
+  }
   const value = reputationOf(world, name, fallback);
   const lines = [`International reputation: ${value}/100 (${reputationBand(value)}).`];
   const others = otherRecordedReputations(world, [name]);
@@ -89,15 +117,21 @@ export const intelligenceBand = (value) => (value >= 75 ? "formidable" : value >
 
 // The player's service, then the other services the AI has actually rated.
 // Unrated is "ordinary", not "none": every polity runs a service whether or not
-// the AI has ever put a number on it (spycraft.js DEFAULT_INTELLIGENCE).
-export const describeIntelligenceStanding = (world, player) => {
+// the AI has ever put a number on it (spycraft.js DEFAULT_INTELLIGENCE). With
+// several people (`people`) every player's service is told, each by name: a
+// guest who built a spy academy for years was shown no rating to move, unless
+// theirs was already among the eight rated.
+export const describeIntelligenceStanding = (world, player, { people = [] } = {}) => {
   const name = asText(player);
   if (!name) return "";
-  const rating = intelligenceOf(world, name);
-  const lines = [`${name}'s intelligence service: ${rating}/100 (${intelligenceBand(rating)}).`];
+  const players = peopleWith(name, people);
+  const lines = players.map((polity) => {
+    const rating = intelligenceOf(world, polity);
+    return `${polity}'s intelligence service: ${rating}/100 (${intelligenceBand(rating)}).`;
+  });
   const rated = Object.entries(asObject(world?.intelligence))
     .map(([code, value]) => [asText(code), Number(value)])
-    .filter(([code, value]) => code && code !== name && Number.isFinite(value))
+    .filter(([code, value]) => code && !players.includes(code) && Number.isFinite(value))
     .sort((left, right) => right[1] - left[1])
     .slice(0, 8);
   if (rated.length > 0) {
@@ -154,7 +188,7 @@ export const describeStatHistory = (world, name, limit = STAT_HISTORY_ROWS) => {
   const samples = normalizeCountryStatsHistory({ [key]: asObject(world?.countryStatsHistory)[key] })[key] ?? [];
   return samples.slice(-Math.max(0, limit)).map((sample) => {
     const values = [
-      field("GDP-eq", sample.gdp, (number) => `€${compactNumber(number)}`),
+      field("GDP-eq", sample.gdp, (number) => `$${compactNumber(number)}`),
       field("growth", sample.gdpGrowth, (number) => `${number}%`),
       field("inflation", sample.inflation, (number) => `${number}%`),
       field("unemployment", sample.unemployment, (number) => `${number}%`),
@@ -254,6 +288,132 @@ export const territorialControlRows = (world, catalog = []) => {
   return rows;
 };
 
+// Issue #1000 (a 1947 save): Germany had surrendered and its wars were ended in the war ledger, but 18 regions of
+// Poland were still held by the German Reich, so the map showed Poland German. Nothing ends an occupation when its
+// war ends: only an event's control op or a transfer does, and the time skip was never told the war behind it was
+// over. These are the occupations whose controller and sovereign face each other in no war still active or in
+// ceasefire, and that are not between a puppet and its overlord: each is for the next time skip to settle. Who keeps
+// the land is the story's to say (a surrender, a treaty, an annexation), so nothing is handed back here.
+const SETTLING_WAR_STATUSES = new Set(["active", "ceasefire"]);
+export const occupationsAfterTheirWar = (rows, world) => {
+  const fold = (value) => asText(value).toLowerCase();
+  const wars = (Array.isArray(world?.wars) ? world.wars : [])
+    .filter((war) => SETTLING_WAR_STATUSES.has(fold(war?.status) || "active"))
+    .map((war) => [new Set((war?.sideA ?? []).map(fold)), new Set((war?.sideB ?? []).map(fold))]);
+  const atWar = (a, b) => wars.some(([sideA, sideB]) => (sideA.has(a) && sideB.has(b)) || (sideA.has(b) && sideB.has(a)));
+  const tied = new Set((Array.isArray(world?.puppets) ? world.puppets : [])
+    .filter((entry) => fold(entry?.status || "active") === "active")
+    .flatMap((entry) => [`${fold(entry?.overlord)}|${fold(entry?.puppet)}`, `${fold(entry?.puppet)}|${fold(entry?.overlord)}`]));
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    const controller = fold(row?.controller);
+    const sovereign = fold(row?.sovereign);
+    return controller && sovereign && controller !== sovereign
+      && !atWar(controller, sovereign) && !tied.has(`${controller}|${sovereign}`);
+  });
+};
+
+// The war that brought an occupation, as the war ledger tells it: the latest ended war with the occupier and the
+// sovereign on opposite sides, { id, title, ended, note, outcome }, or null. A live skip (issue #1000,
+// gemini-3.5-flash-lite) given only "German Reich holds 17 regions of Poland" handed them to the German Reich, which
+// had surrendered; the war's outcome (runtime/warEndings.js) is what settles it.
+export const occupationWar = (world, controller, sovereign) => {
+  const fold = (value) => asText(value).toLowerCase();
+  const a = fold(controller);
+  const b = fold(sovereign);
+  const war = (Array.isArray(world?.wars) ? world.wars : [])
+    .filter((entry) => fold(entry?.status) === "ended")
+    .filter((entry) => {
+      const sideA = (entry?.sideA ?? []).map(fold);
+      const sideB = (entry?.sideB ?? []).map(fold);
+      return (sideA.includes(a) && sideB.includes(b)) || (sideA.includes(b) && sideB.includes(a));
+    })
+    .sort((x, y) => asText(y?.endedDate).localeCompare(asText(x?.endedDate)))[0];
+  if (!war) return null;
+  return {
+    id: asText(war.id),
+    title: asText(war.title),
+    ended: asText(war.endedDate),
+    note: asText(war.note).slice(0, 200),
+    outcome: normalizeWarOutcome(war.outcome),
+  };
+};
+const describeOccupationWar = (war) => (war
+  ? `Their war${war.title ? ` (${war.title})` : ""} ended${war.ended ? ` ${war.ended}` : ""}${war.note ? `: ${war.note}` : ""}`
+  : "");
+
+// What a war's recorded outcome says of an occupation it left: "returned" when the occupier lost, "kept" when the
+// sovereign did, "" when it says neither (no outcome, or nobody lost).
+export const occupationRuling = (war, controller, sovereign) => {
+  if (!war) return "";
+  if (outcomeSideOf(war, controller) === "lost") return "returned";
+  if (outcomeSideOf(war, sovereign) === "lost") return "kept";
+  return "";
+};
+
+// Those rows by occupier and sovereign, the largest first: [{ key, controller, sovereign, rows, war, ruling }].
+// An occupation is settled one of three ways:
+//   - its war has a recorded outcome with a loser: `ruling` says how, and the game settles it (gameplay.js);
+//   - its war is one the skip is asked the outcome of (`awaiting`: war ids, runtime/warEndings.js
+//     warsAwaitingOutcome): it follows from that answer, so it is not asked again;
+//   - otherwise the skip is asked, and `key` ("o1", "o2"…) is what it answers in occupationSettlements.
+// The block, the tool and the reading all take the keys from here, from the same world. At most
+// OCCUPATION_GROUPS_MOST groups are asked (the rest wait for a later skip); the others have key "".
+export const OCCUPATION_GROUPS_MOST = 12;
+export const occupationGroups = (rows, world = null, { awaiting = null } = {}) => {
+  const groups = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const id = `${asText(row.controller).toLowerCase()}\u0001${asText(row.sovereign).toLowerCase()}`;
+    const group = groups.get(id) ?? { controller: row.controller, sovereign: row.sovereign, rows: [] };
+    group.rows.push(row);
+    groups.set(id, group);
+  }
+  const waiting = awaiting instanceof Set ? awaiting : new Set(Array.isArray(awaiting) ? awaiting : []);
+  let asked = 0;
+  return [...groups.values()]
+    .sort((a, b) => b.rows.length - a.rows.length || `${a.controller}|${a.sovereign}`.localeCompare(`${b.controller}|${b.sovereign}`))
+    .map((group) => {
+      const war = occupationWar(world, group.controller, group.sovereign);
+      const ruling = occupationRuling(war, group.controller, group.sovereign);
+      const ask = !ruling && !(war && waiting.has(war.id)) && asked < OCCUPATION_GROUPS_MOST;
+      if (ask) asked += 1;
+      return { key: ask ? `o${asked}` : "", ...group, war, ruling };
+    });
+};
+
+// The block for the time skip: each group it is asked about, under its key, with the regions, every region by the
+// name it is written with (`regionName`, nameRefs.js regionNamer: "region: X" where needed). Empty when there is none.
+export const OCCUPATIONS_AFTER_WAR_MOST = 60;
+export const describeOccupationsAfterTheirWar = (rows, { regionName = null, most = OCCUPATIONS_AFTER_WAR_MOST, world = null, awaiting = null } = {}) => {
+  const groups = occupationGroups(rows, world, { awaiting }).filter((group) => group.key).map((group) => ({
+    ...group,
+    names: group.rows.map((row) => (regionName ? regionName(row.regionId, row.name) : "") || row.name),
+  }));
+  if (!groups.length) return "";
+  let room = most;
+  const lines = groups.map((group) => {
+    const shown = group.names.slice(0, Math.max(0, room));
+    room -= shown.length;
+    const rest = group.names.length - shown.length;
+    return `- ${group.key}: ${group.controller} holds ${group.names.length === 1 ? "a region" : `${group.names.length} regions`} of ${group.sovereign}: ${shown.join(", ") || "(listed above)"}${rest > 0 ? ` (+${rest} more)` : ""}${group.war ? `. ${describeOccupationWar(group.war)}` : ""}`;
+  });
+  return [
+    "[Occupations Outliving Their War]",
+    "These regions are held by a power no longer at war with their sovereign, and nothing has settled the land since. In occupationSettlements, answer each key below as the story has it: 'returned' where the occupier withdrew or was driven out and the sovereign holds the land again, 'kept' where a treaty or annexation made it the occupier's own. Tell it in an event where it matters to the story.",
+    ...lines,
+  ].join("\n");
+};
+
+// The ended wars the skip is asked the outcome of (runtime/warEndings.js warsAwaitingOutcome), as its block:
+// each under its key, its sides, when it ended and how the ledger noted it. Empty when there is none.
+export const describeWarsAwaitingOutcome = (entries) => {
+  if (!Array.isArray(entries) || entries.length === 0) return "";
+  return [
+    "[Wars Ended Without an Outcome]",
+    "These wars have ended, and the game does not yet know how. In warEndings, answer each key below as the story has it: which side had surrendered or been defeated when the war ended, whatever happened earlier in it; whether the defeated state's government was dissolved; and if it was, in landTo, the full names of the powers that took over its land, which the game divides among them by where each stands. The land a defeated occupier still holds goes back to its sovereign, and a defeated sovereign's land its occupier keeps; a dissolved state leaves the map, its armies with it.",
+    ...entries.map((entry) => `- ${entry.key}: ${entry.title || "a war"}: ${sideLabel(entry.sideA)} against ${sideLabel(entry.sideB)}, ended${entry.ended ? ` ${entry.ended}` : ""}${entry.note ? `: ${entry.note}` : ""}`),
+  ].join("\n");
+};
+
 // The rows in which any of `polities` is sovereign, controller or claimant.
 export const territorialRowsInvolving = (rows, polities = []) => {
   const names = new Set(polities.map(asText).filter(Boolean));
@@ -271,6 +431,54 @@ export const describeTerritorialRows = (rows, { maxRows = 80, viaLookups = false
   return lines.join("\n") + (rows.length > maxRows
     ? `\n(+${rows.length - maxRows} more non-normal territorial states omitted${viaLookups ? "; contested_regions lists them all" : ""})`
     : "");
+};
+
+// A time skip's [Occupied and Contested Regions]: the same rows, those with the
+// same sovereign, controller and claimants in one line. The lines that involve a
+// power in view (`inView`, lower-case names: promptFocus.js) come first and name
+// every region; the rest name the first few and count the others, so every
+// region the untiered list showed is still at least counted, under who holds it.
+export const TERRITORIAL_BRIEF_NAMES = 6;
+export const describeTerritorialRowsGrouped = (rows, { inView = new Set(), maxNames = 240, maxBriefLines = 40, viaLookups = false, empty = NO_TERRITORIAL_ROWS } = {}) => {
+  if (!rows.length) return empty;
+  const fold = (value) => asText(value).toLowerCase();
+  const groups = new Map();
+  for (const row of rows) {
+    const claimants = [...row.claimants].sort((a, b) => a.localeCompare(b));
+    const key = [fold(row.sovereign), fold(row.controller), ...claimants.map(fold)].join("|");
+    const group = groups.get(key) ?? { sovereign: row.sovereign, controller: row.controller, claimants, names: [] };
+    group.names.push(row.name);
+    groups.set(key, group);
+  }
+  const involves = (group) => [group.sovereign, group.controller, ...group.claimants].some((name) => inView.has(fold(name)));
+  const ordered = [...groups.values()]
+    .map((group, index) => ({ group, index, viewed: involves(group) }))
+    .sort((a, b) => Number(b.viewed) - Number(a.viewed) || b.group.names.length - a.group.names.length || a.index - b.index);
+  let room = maxNames;
+  let unnamed = 0;
+  let briefLines = 0;
+  let skipped = 0;
+  const lines = [];
+  for (const { group, viewed } of ordered) {
+    if (!viewed && briefLines >= maxBriefLines) {
+      skipped += group.names.length;
+      continue;
+    }
+    if (!viewed) briefLines += 1;
+    const want = viewed ? group.names.length : Math.min(TERRITORIAL_BRIEF_NAMES, group.names.length);
+    const shown = group.names.slice(0, Math.max(0, Math.min(want, room)));
+    room -= shown.length;
+    const more = group.names.length - shown.length;
+    unnamed += more;
+    const who = fold(group.sovereign) === fold(group.controller)
+      ? `sovereign and controller ${group.sovereign || "unknown"}`
+      : `sovereign ${group.sovereign || "unknown"}, controller ${group.controller || "unknown"}`;
+    const claims = group.claimants.length ? `, claimed by ${group.claimants.join(", ")}` : "";
+    lines.push(`- ${who}${claims} (${group.names.length} region${group.names.length === 1 ? "" : "s"}): ${shown.join(", ")}${more > 0 ? `${shown.length ? ", " : ""}(+${more} more)` : ""}`);
+  }
+  return lines.join("\n")
+    + (skipped > 0 ? `\n(+${skipped} more non-normal territorial states among powers not in play omitted${viaLookups ? "; contested_regions lists them all" : ""})` : "")
+    + (unnamed > 0 && !skipped && viaLookups ? "\n(contested_regions lists every region)" : "");
 };
 
 // The advisor's and a leader's [Occupied and Contested Regions]: the rows that

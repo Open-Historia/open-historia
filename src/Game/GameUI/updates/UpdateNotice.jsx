@@ -3,17 +3,21 @@
 // menu and under the vault door, so the door opens onto it (App.jsx). Every
 // banner of the updates shown is a page; several are paged with arrows (and
 // the arrow keys), and the last one's button closes it (as Escape does). A
-// minor update's banner is a plain card; a major one's is its theme's
+// minor update's banner is a plain card, and several minor updates one card,
+// their changelog (ChangelogBanner); a major one's is its theme's
 // (themes/), or the decorated default here. The arrows, page markers, Skip and
 // the button are dressed as the banner shown is: by its theme's chrome, the
 // default's palette, or plainly for a minor one. How to add one: notes.js.
 
-import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 
 import { SAFE_BOTTOM, SAFE_TOP } from "../../../runtime/mobileUi.js";
 import { THEMES } from "./themes/index.js";
 import { ACCENT, Brackets, Emblem, FeatureCards, NOTICE_Z, Plate, Reveal, Rule, motion, noticeDate, useStill } from "./updateKit.jsx";
 import { noticePages } from "./updateNotices.js";
+
+// A release's announcement (notesReleases.js), a page of its own: loaded only when one is shown.
+const ReleaseNotice = lazy(() => import("./ReleaseNotice.jsx"));
 
 const INK = "#f4f4f5";
 const SOFT = "rgba(244,244,245,0.72)";
@@ -31,6 +35,34 @@ export const MinorBanner = ({ banner, update }) => (
         {banner.items.map((item) => <li key={item}>{item}</li>)}
       </ul>
     )}
+  </Plate>
+);
+
+// Several minor updates shown together (updateNotices.js noticePages): one plain card, a changelog of them, newest
+// first, each its date in the accent, then its banners' titles and lines. A long one scrolls in the notice.
+export const ChangelogBanner = ({ banner, updates = [] }) => (
+  <Plate surface={{ background: "#1c1e22", borderRadius: "14px", padding: "1.2rem 1.3rem" }}>
+    <div style={{ color: FAINT, fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>Updates</div>
+    <div style={{ color: INK, fontSize: "1.05rem", fontWeight: 800, marginTop: "0.3rem" }}>{banner.title}</div>
+    <ol style={{ listStyle: "none", margin: "0.4rem 0 0", padding: 0 }}>
+      {updates.map((update, at) => (
+        <li key={update.id} style={{ borderTop: at === 0 ? "none" : "1px solid rgba(255,255,255,0.08)", padding: "0.75rem 0 0.1rem" }}>
+          {update.date && (
+            <div style={{ color: ACCENT, fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{noticeDate(update.date)}</div>
+          )}
+          {(update.banners ?? []).map((entry, index) => (
+            <div key={`${update.id}#${index}`} style={{ marginTop: index === 0 ? "0.15rem" : "0.55rem" }}>
+              <div style={{ color: INK, fontSize: "0.92rem", fontWeight: 800 }}>{entry.title}</div>
+              {(entry.items ?? []).length > 0 && (
+                <ul style={{ color: SOFT, fontSize: "0.82rem", lineHeight: 1.5, margin: "0.35rem 0 0", paddingLeft: "1.1rem" }}>
+                  {entry.items.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              )}
+            </div>
+          ))}
+        </li>
+      ))}
+    </ol>
   </Plate>
 );
 
@@ -68,6 +100,7 @@ export const DefaultBanner = ({ banner, update }) => {
 // One page: the banner as its kind and theme draw it.
 const BannerView = ({ page }) => {
   const { banner, update } = page;
+  if (page.changelog) return <ChangelogBanner banner={banner} updates={page.changelog} />;
   if (update.kind !== "major") return <MinorBanner banner={banner} update={update} />;
   const Theme = banner.theme ? THEMES[banner.theme]?.Page : null;
   if (!Theme) return <DefaultBanner banner={banner} update={update} />;
@@ -118,7 +151,7 @@ const arrow = (disabled) => ({
 });
 
 // The notice: every banner of `updates` as a page, and the way between them.
-export const UpdateNotice = ({ updates = [], onClose }) => {
+const NoticePages = ({ updates = [], onClose }) => {
   const pages = useMemo(() => noticePages(updates), [updates]);
   const [at, setAt] = useState(0);
   const still = useStill();
@@ -203,5 +236,10 @@ export const UpdateNotice = ({ updates = [], onClose }) => {
     </div>
   );
 };
+
+// A release is shown as its own scrolling page; anything else as the notice's pages.
+export const UpdateNotice = ({ updates = [], onClose }) => (updates[0]?.kind === "release"
+  ? <Suspense fallback={null}><ReleaseNotice onClose={onClose} update={updates[0]} /></Suspense>
+  : <NoticePages onClose={onClose} updates={updates} />);
 
 export default UpdateNotice;

@@ -42,7 +42,7 @@ test("every setting is read from its variable", () => {
     MAX_CONNECTIONS: "100",
     MAX_MEMORY_MB: "150",
     TRUST_PROXY: "TRUE",
-    ALLOWED_ORIGINS: "https://openhistoria.com, http://app.paxhistoria,http://localhost:*,HTTP://127.0.0.1:*,https://example.org:443",
+    ALLOWED_ORIGINS: "https://openhistoria.com, http://app.openhistoria,http://localhost:*,HTTP://127.0.0.1:*,https://example.org:443",
   });
   assert.equal(config.port, 9000);
   assert.equal(config.host, "0.0.0.0");
@@ -57,7 +57,7 @@ test("every setting is read from its variable", () => {
   assert.equal(config.trustProxy, true);
   // Written the way a browser sends them: lower case, no default port.
   assert.deepEqual(config.allowedOrigins, [
-    "https://openhistoria.com", "http://app.paxhistoria", "http://localhost:*", "http://127.0.0.1:*", "https://example.org",
+    "https://openhistoria.com", "http://app.openhistoria", "http://localhost:*", "http://127.0.0.1:*", "https://example.org",
   ]);
   assert.equal(loadConfig({ TRUST_PROXY: "no" }).trustProxy, false);
   assert.equal(loadConfig({ HOST: "::" }).host, "::");
@@ -122,14 +122,14 @@ test("allowed origins: exact origins and :* patterns only", () => {
 });
 
 test("an Origin header is allowed only if it is one of the list, exactly as a browser writes it", () => {
-  const allowed = createOriginCheck(["https://openhistoria.com", "http://app.paxhistoria", "http://localhost:*", "http://[::1]:*"]);
-  for (const origin of ["https://openhistoria.com", "http://app.paxhistoria", "http://localhost:3000", "http://localhost", "http://localhost:5173", "http://[::1]:3000"]) {
+  const allowed = createOriginCheck(["https://openhistoria.com", "http://app.openhistoria", "http://localhost:*", "http://[::1]:*"]);
+  for (const origin of ["https://openhistoria.com", "http://app.openhistoria", "http://localhost:3000", "http://localhost", "http://localhost:5173", "http://[::1]:3000"]) {
     assert.equal(allowed(origin), true, origin);
   }
   for (const origin of [
     undefined, "", "null", "http://openhistoria.com", "https://openhistoria.com.evil.example", "https://evil.example",
     "https://openhistoria.com:8443", "https://openhistoria.com/", "http://localhost.evil.example:3000",
-    "https://app.paxhistoria", "http://127.0.0.1:3000", "x".repeat(300), ["https://openhistoria.com"],
+    "https://app.openhistoria", "http://127.0.0.1:3000", "x".repeat(300), ["https://openhistoria.com"],
   ]) {
     assert.equal(allowed(origin), false, String(origin));
   }

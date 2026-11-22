@@ -85,9 +85,11 @@ export const dawn = (run, battle, day) => {
       }
       // A troop that did not advance yesterday is a little stronger today (constants.js STILL_EDGE).
       const still = run.mech.fatigue && troop.still === true ? 1 + STILL_EDGE : 1;
-      troop.punch = (tired ? punch * punchLeft(troop.fatigue) : punch) * worth * blows * (air ? air.punch[side] : 1) * (local ? local.attack : 1) * still;
-      troop.guard = (tired ? guard * guardLeft(troop.fatigue) : guard) * worth * (air ? air.guard[side] : 1) * still;
-      troop.legs = (tired ? legs * legsLeft(troop.fatigue) : legs) * pace * (air ? air.legs[side] : 1) * (local ? local.pace : 1);
+      // And one of the scenario's own unit types is its type's figures over all of it (battle.js stampUnitType):
+      // exactly 1 for every other troop.
+      troop.punch = (tired ? punch * punchLeft(troop.fatigue) : punch) * worth * blows * (air ? air.punch[side] : 1) * (local ? local.attack : 1) * still * (troop.typeAttack ?? 1);
+      troop.guard = (tired ? guard * guardLeft(troop.fatigue) : guard) * worth * (air ? air.guard[side] : 1) * still * (troop.typeToughness ?? 1);
+      troop.legs = (tired ? legs * legsLeft(troop.fatigue) : legs) * pace * (air ? air.legs[side] : 1) * (local ? local.pace : 1) * (troop.typeSpeed ?? 1);
     }
   }
 };

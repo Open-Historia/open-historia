@@ -13,10 +13,11 @@ import {
     resolveTaskFallbackEntries,
     providerSupportsModelDiscovery,
     saveRecentModel,
+    sharedRoundAnswerer,
     updateEntry,
 } from "./providerConfig.js";
-import { formatResetTime, runWithFallback } from "./fallbackRunner.js";
-import { BACKGROUND_REQUEST, PLAYER_REQUEST, requestLedger, savingRequests } from "./requestBudget.js";
+import { fallbackAvailability, formatResetTime, runWithFallback } from "./fallbackRunner.js";
+import { BACKGROUND_REQUEST, PLAYER_REQUEST, lookupRoundLimit, noRequestLimit, requestLedger, savingRequests, unlimitedRequests } from "./requestBudget.js";
 import { requestActivity } from "./requestActivity.js";
 import { agentClient } from "./agentConnection.js";
 import { onSimulationsIdle } from "./simulationStatus.js";
@@ -34,12 +35,15 @@ import {
 } from "./contextWindow.js";
 import { endpointIsLocal, isLocalHostname } from "./localEndpoint.js";
 import { createKoboldCppMemory, endpointOriginOf, isKoboldCppModelName, saysKoboldCpp } from "./koboldCpp.js";
-import { MIN_CACHEABLE_PREFIX_CHARS, splitSystemPromptForCache } from "./promptLayout.js";
+import { MIN_CACHEABLE_PREFIX_CHARS, renderTemplateCached, splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
 import { RELAY_CUT_OFF_MESSAGE, isRelayRefusal, isRelayUnreachable, relayUnreachableReason, withRelayCutoffHint } from "./relayResponse.js";
-import { attachLookupRound, attachCallMetrics, attachRequestOutcome, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
+import { attachLookupRound, attachCallMetrics, attachRequestOutcome, attachAttemptOutcome, finishAiRecord, isTelemetryEnabled, startAiRecord } from "./telemetry.js";
 import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { describePlayerGroupForPrompt, normalizeGroups } from "../../runtime/groups.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
+import { describeGroupLeaderBrief } from "./groupDealTalk.js";
+import { describeTreatyTalk } from "./treatyTalk.js";
 import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describePuppetBriefing, describeRole, livePuppetsFor, puppetBriefingFor } from "../../runtime/puppets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
@@ -51,8 +55,15 @@ import {
   parseDiplomaticEnvelope,
 } from "../../runtime/diplomaticEnvelope.js";
 import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js";
+import { PROJECT_EFFECTS_RULE } from "./projectsDirective.js";
 import { withDifficultyPriority } from "../../runtime/difficulty.js";
-import { normalizePromptPack } from "./gameplayPrompts.js";
+import { guardPromptTemplate, normalizePromptPack } from "./gameplayPrompts.js";
+import {
+    ADVISOR_ACTION_COMPLETION_MAX_TOKENS,
+    ADVISOR_ACTION_COMPLETION_SYSTEM,
+    buildAdvisorActionCompletionQuestion,
+} from "./advisorActionCompletion.js";
+import { notePromptsOverLimit } from "../../runtime/promptLimitNotice.js";
 import { promptTranslationsVersion } from "../../runtime/promptTranslations.js";
 import {
     busyProviderMessage,
@@ -61,6 +72,7 @@ import {
     contextWindowMessage,
     couldNotBeReached,
     describeHtmlErrorPage,
+    errorParamOf,
     errorPayloadText,
     extractErrorMessage,
     isBrokenBodyError,
@@ -71,8 +83,8 @@ import {
     isStreamingRefusal,
     isStreamingRequired,
     isTemperatureRefusal,
+    isProseWithoutPayload,
     isUnreachableError,
-    looksLikeDeliberation,
     providerErrorReplyMessage,
     shouldRetryProviderFailure,
     stoppedAtOutputLimit,
@@ -90,7 +102,7 @@ import { nativeHttpAvailable, nativeHttpFetch } from "../../runtime/native/http.
 import { createRelayOnlyOrigins } from "./relayOrigins.js";
 import { createFirstByteTimer, createStreamUsage, normalizeUsage, sumUsage } from "./usageStats.js";
 import { toGeminiSchema } from "./geminiSchema.js";
-import { buildAnswerFormatBlock } from "./schemaOutline.js";
+import { askGeminiAnswer, geminiAnswersAsText } from "./geminiAnswer.js";
 import {
     applyAnthropicFrame,
     applyGeminiFrame,
@@ -102,7 +114,6 @@ import {
     finishGeminiStream,
     finishOpenAIStream,
     readAnthropicStreamedResponse,
-    readGeminiStreamedResponse,
     readOpenAIStreamedResponse,
 } from "./streamAssembly.js";
 import {
@@ -121,18 +132,19 @@ import {
     lookupCallsFromOpenAI,
     lookupRoundCount,
     openAiMessagesFromHistory,
+    withCachedHistory,
     withCarriedRounds,
 } from "./toolTurns.js";
 import { GROUP_LOOKUP_TOOLS, buildLookupContext, executeLookup } from "./lookupTools.js";
 import { audienceSeesReport, audienceStoleReport, viewerAudience } from "./audience.js";
-import { MAP_SETTING_KEYS, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import {
     buildPromptContext,
     formatDateReadable,
-    renderTemplate,
     resolveHelperValues,
     sortDiplomaticChatsByRecentActivity,
 } from "./promptContext.js";
+import { findPastTalks } from "./relatedEventsSearch.js";
 import { collapseRepeatedWorldContext } from "./promptDedupe.js";
 import { promptVariableDemand } from "./contextDiagnostics.js";
 import { filterChatsVisibleTo, isChatVisibleTo } from "./chatVisibility.js";
@@ -147,8 +159,13 @@ import { describeReportsForPrompt, normalizeReports } from "../../runtime/report
 import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
-import { ADVISOR_MEMORY_DIRECTIVE, advisorMemoryContextEntry, latestAdvisorMemory, splitAdvisorMemory } from "./advisorMemory.js";
-import { ADVISOR_RECIPIENT_TYPES, advisorOfficeStatus, advisorRecipientForReply, advisorRecipientType, assertAdvisorRecipientCanReply, chiefAdvisorProfile } from "../../runtime/advisorThreads.js";
+import { advisorMemoryDirectiveForMode, advisorMemoryContextEntry, latestAdvisorMemory, splitAdvisorMemory } from "./advisorMemory.js";
+import { pendingAdvisorActionDrafts, redactHistoricalAdvisorActionBlocks, renderHistoricalAdvisorReply, renderPendingAdvisorActionDrafts, sanitizeAdvisorModelHistory } from "./advisorActionHistory.js";
+import { advisorDiplomaticLookups, renderAdvisorDiplomaticContext } from "./advisorDiplomaticContext.js";
+import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorGroupForReply, advisorOfficeStatus, advisorRecipientForReply, advisorRecipientType, assertAdvisorRecipientCanReply, chiefAdvisorProfile } from "../../runtime/advisorThreads.js";
+import { GROUP_MEETING_CONTEXT_MAX_CHARS, advisorGroupSpeakerName, OPTIONAL_GROUP_SPEECH_STANDARD, parseAdvisorGroupIndividualReply, malformedAdvisorGroupSilentPass, visibleAdvisorGroupStreamReply, parseAdvisorGroupSilentRepair, renderAdvisorGroupHistory, selectAdvisorGroupSpeakers } from "./advisorGroupMeetings.js";
+import { groupSpeakerBatches, parseAdvisorGroupBatch, advisorBatchOutputContract, buildAdvisorSharedBatchPrompt } from "./advisorGroupBatching.js";
+import { readAdvisorGroupSettings } from "./advisorGroupSettings.js";
 import { describeChiefAdvisorOverride } from "./advisorPersona.js";
 import { buildCharacterSystemPrompt } from "./characterConversations.js";
 import { createConversationGeneration, removeEntry } from "./liveConversation.js";
@@ -160,6 +177,7 @@ import { describeWarsForAdvisor } from "./advisorWars.js";
 import { describeLeaderStanding, describeOurFigures, describeTerritoryForConversation } from "./standingContext.js";
 import { OWN_WARS_HEADING, buildWarStatsBlock, describePeaceTalk } from "./warStatsPrompt.js";
 import { beginAiRequestScope } from "./aiRequestControl.js";
+import { answerOf, carriedCall, failureOf, payProfileOf, payerCallOf } from "./roundCarrier.js";
 
 // A time skip the player's Agent was answering is over once the game stops
 // simulating, so the Agent's `/skip` stops too (ADR 0008).
@@ -378,20 +396,6 @@ function pickLikelyChatModel(models) {
     return safeFallbackModel ?? modelIds[0] ?? "";
 }
 
-function joinGeminiParts(parts) {
-    return (parts ?? [])
-    .map((part) => part?.text ?? "")
-    .join("")
-    .trim();
-}
-
-function extractGeminiToolInput(data, tool) {
-    const call = (data?.candidates?.[0]?.content?.parts ?? [])
-    .map((part) => part?.functionCall)
-    .find((entry) => entry?.name === tool?.name);
-    return call?.args && typeof call.args === "object" ? call.args : null;
-}
-
 // Qwen/DeepSeek thinking models emit reasoning either in a separate field or inline in
 // <think>...</think>. Strip the think block so we return the actual answer; an unclosed
 // <think> means the stream was cut mid-thought, leaving no answer, so drop it too.
@@ -490,61 +494,25 @@ function getGeminiStreamUrl(model, apiKey) {
     return getGeminiUrl(model, apiKey).replace(":generateContent?", ":streamGenerateContent?alt=sse&");
 }
 
-// How a Gemini skip's events arrive one by one, as every other provider's do
-// (streamedEvents.js).
-//
-// Streaming a tool call's arguments needs partialArgs, and
-// toolConfig.functionCallingConfig.streamFunctionCallArguments is Vertex-only:
-// this API's v1beta discovery doc (revision 20260918) gives FunctionCallingConfig
-// only `mode` and `allowedFunctionNames`. Sending it buys a 400 and costs the
-// player a request, so it is not sent, and a skip asked for as a function call
-// arrives whole.
-//
-// Text does stream, so a watched skip is asked for as JSON text: the answer's
-// mime type set to application/json, and the function's contract written out in
-// the prompt in place of its declaration (schemaOutline.js buildAnswerFormatBlock).
-// Gemini refuses a response mime type alongside tools ("Function calling with a
-// response mime type: 'application/json' is unsupported"), so it is used exactly
-// when nothing else needs the function channel: a watched skip (onToolStream)
-// with no lookup functions, which is every skip while requests are being saved,
-// the default. A skip that has lookup functions keeps the function call and its
-// questions, and arrives whole as before.
-//
-// Not generationConfig.responseSchema, which was built first and measured
-// against the live API on 2026-10-05 (gemini-3.5-flash-lite): the schema is
-// compiled into a grammar with a ceiling on its size, and the skip's contract
-// sits at it. As it stood it was refused, 400 "Request contains an invalid
-// argument"; with its four unions merged into single objects it passed; with the
-// Projects board's ops added it was refused again; and the same weight spent
-// anywhere else (the stats block, the institution ops) tipped it the same way.
-// That ceiling has moved before (geminiSchema.js), so a contract that passes
-// today is no promise. Written into the prompt, the contract's size costs tokens
-// and nothing else: measured the same day, the whole folded contract is about
-// 5,800 tokens there, fewer than its declaration, the answer arrived in 72
-// frames with no gap over 0.2 s, in the order the outline gives its fields, and
-// it passed the task's validation as written. What holds an answer to the
-// contract is that validation, as it does for every model that has no function
-// calling at all.
-//
-// A model that refuses the mime type itself is asked again at once as the
-// function call it always was, and that way for the rest of the session rather
-// than paying a refused request per skip.
-//
-// streamAssembly.js still assembles partialArgs if they ever arrive, so the day
-// the field reaches this API, asking for it is the only change.
-const geminiJsonAnswerRefusals = new Set();
+// How a Gemini task's answer is asked for (as a function call, as streamed JSON
+// text, or split around its lookup round) is geminiAnswer.js's, with why.
 
-// The whole answer of a JSON-mode request, or null when it is not one object
-// (cut off, fenced, prose around it): the task's own salvage reads those from
-// the raw text.
-function parseGeminiJsonAnswer(text) {
+// Whether a task's first Fallback entry is Gemini asking for the answer as a
+// call of the output function, the lookup functions declared beside it: the one
+// request whose declarations Gemini can refuse for their size. A time skip
+// weighs its riders against that (gameplay.js fitSkipRiders). `watched`: the
+// skip's events are shown as they are written.
+export const geminiDeclaresTaskFunction = (taskKey, { watched = false } = {}) => {
     try {
-        const value = JSON.parse(text);
-        return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+        const { entries, preferredEntryId } = resolveTaskFallbackEntries(taskKey);
+        const entry = entries.find((candidate) => candidate.id === preferredEntryId) ?? entries[0];
+        if (entry?.provider !== "gemini") return false;
+        const model = normalizeGeminiModel(entry.model) || GEMINI_DEFAULT_MODEL;
+        return !geminiAnswersAsText(model, { watched });
     } catch {
-        return null;
+        return false;
     }
-}
+};
 
 // AI calls go straight from the browser to the provider so the player's API key
 // only ever reaches the provider — never a server or a community node. Direct is
@@ -1189,12 +1157,9 @@ async function callGemini(systemPrompt, history, {
     taskKey = "",
     lookupTools,
     requireOutputTool = false,
+    lookupRoundsAnswered = 0,
 } = {}) {
     const settings = entrySettings;
-    // Lookup functions (lookupTools.js) declared beside the output function.
-    // They stay declared for the whole conversation (the history carries calls
-    // to them); which ones the model may CALL this round is allowedFunctionNames.
-    const lookupDeclarations = tool && Array.isArray(lookupTools) ? lookupTools : [];
     const apiKey = settings.apiKey.trim();
 
     if (!apiKey) {
@@ -1320,181 +1285,46 @@ async function callGemini(systemPrompt, history, {
         }
     }
 
-    let retriedAfterOverload = false;
-    // The answer as JSON text rather than a function call, so a watched skip's
-    // events arrive one at a time (see geminiJsonAnswerRefusals above for when,
-    // and for what happens when it is refused).
-    let jsonAnswer = Boolean(tool && typeof onToolStream === "function" && !lookupDeclarations.length)
-        && !geminiJsonAnswerRefusals.has(model);
-    let jsonAnswerRefused = false;
-    // Events first: they are what the panel shows as they are written.
-    const answerFormat = jsonAnswer
-        ? buildAnswerFormatBlock(tool.schema, { first: Object.keys(tool.schema?.properties ?? {})[0] || "" })
-        : "";
-
-    for (let attempt = 1; attempt <= retries; attempt++) {
-        // Tool calls stream, for the same reason they do on the other three
-        // providers: a timeline jump is the longest request the game makes, and
-        // a buffered one sends nothing over the wire for the whole generation,
-        // which is what an API edge or a proxy cuts. Gemini was the last
-        // provider still sending its tool calls buffered — and it is the
-        // DEFAULT provider, so a jump on a stock install was the one request
-        // most exposed to that. readGeminiStreamedResponse rebuilds the exact
-        // envelope the extractors below already read, so nothing downstream
-        // changes. (The advisor's own streaming is handled above, where the
-        // tokens go to the UI as they arrive.)
-        const requestUrl = tool ? getGeminiStreamUrl(model, apiKey) : getGeminiUrl(model, apiKey);
-        const generationConfig = {
+    // A task's answer, or a reply in words with no output function: the
+    // requests and their forms are geminiAnswer.js's (askGeminiAnswer), the
+    // provider's own rules and errors handed to it here.
+    return askGeminiAnswer({
+        fetch: (url, init) => fetch(url, init),
+        url: (stream) => (stream ? getGeminiStreamUrl(model, apiKey) : getGeminiUrl(model, apiKey)),
+        retryOrFail: (response, attempt) => retryOrFail(response, attempt),
+        sleep: (ms) => sleep(ms, signal),
+        readErrorPayload,
+        readJsonAnswer: (response) => readJsonAnswer(response, "Gemini"),
+        refusedRequestError: (message, failure) => refusedRequestError("Gemini", message, failure),
+        retriesSpentError: () => retriesSpentError("Gemini", retries),
+        failIfClosedEarly: (data, text) => failIfClosedEarly(data, text),
+        keepProseClosedEarly: (closedEarly, text) => keepProseClosedEarly(closedEarly, text, onUnmarkedEnd),
+        canRetryBeforeDeadline: (delayMs) => canRetryBeforeDeadline(deadline, delayMs),
+        waitingCannotFix,
+        retryableStatuses: RETRYABLE_HTTP_STATUSES,
+        overloadedRetryDelay: OVERLOADED_RETRY_DELAY,
+    }, {
+        model,
+        systemPrompt,
+        history,
+        tool,
+        lookupTools,
+        requireOutputTool,
+        lookupRoundsAnswered,
+        retries,
+        generationConfig: {
             ...samplingConfig,
             ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
-            ...(jsonAnswer ? { responseMimeType: "application/json" } : {}),
-        };
-        // The request goes out now: the skip's progress row starts its count
-        // from here, again on every retry (requestActivity.js).
-        onSend?.();
-        const response = await fetch(requestUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                // The contract after the prompt, as a part of its own: nothing
-                // before it changes, so the prompt's cacheable prefix is the
-                // one a function-call request has.
-                system_instruction: { parts: [
-                    { text: systemPrompt },
-                    ...(jsonAnswer ? [{ text: answerFormat }] : []),
-                ] },
-                contents: geminiContentsFromHistory(history),
-                ...(Object.keys(generationConfig).length ? { generationConfig } : {}),
-                ...customParams,
-                ...(tool && !jsonAnswer ? {
-                    tools: [{ functionDeclarations: [
-                        {
-                            name: tool.name,
-                            description: tool.description,
-                            parameters: toGeminiSchema(tool.schema),
-                        },
-                        ...lookupDeclarations.map((entry) => ({
-                            name: entry.name,
-                            description: entry.description,
-                            parameters: toGeminiSchema(entry.schema),
-                        })),
-                    ] }],
-                    toolConfig: { functionCallingConfig: {
-                        mode: "ANY",
-                        // The final round of a lookup conversation may only answer.
-                        allowedFunctionNames: [tool.name, ...(requireOutputTool ? [] : lookupDeclarations.map((entry) => entry.name))],
-                    } },
-                } : {}),
-            }),
-            signal,
-        });
-        // Every response is one request against the player's allowance, whatever
-        // became of it (requestBudget.js): a lookup round, a retry, a refusal.
-        onRequest?.(response.status);
-
-        // A 429 used to be fatal here while every other provider retried it, so
-        // one per-minute trip on a free-tier key destroyed the turn and dropped
-        // the player to canned events. Only a SPENT quota (daily allowance, or
-        // billing) is worth failing over; a rate limit is what waiting is for —
-        // unless the player chose to move straight to the next Fallback entry.
-        if (RETRYABLE_HTTP_STATUSES.has(response.status)) {
-            await retryOrFail(response, attempt);
-            continue;
-        }
-
-        if (!response.ok) {
-            const payload = await readErrorPayload(response);
-            const failure = classifyProviderFailure({ status: response.status, payload });
-            // The JSON-text form of the answer, refused as a request: asked again
-            // at once as the function call it always was. Not one of the
-            // attempts, which are for a busy model; a key, a missing model or a
-            // request too large fails the same either way and is not asked twice.
-            if (jsonAnswer && [400, 422].includes(response.status) && !waitingCannotFix(failure) && failure.kind !== "tooBig") {
-                jsonAnswer = false;
-                jsonAnswerRefused = true;
-                console.warn("[ai] Gemini refused the skip's JSON-text form; asking again as a function call (its events will arrive together).");
-                logDebugEvent("ai", "Gemini refused a JSON-mode request; asked again as a function call.", {
-                    model,
-                    status: response.status,
-                    detail: extractErrorMessage(payload, "").slice(0, 300),
-                }, { verbose: true });
-                attempt -= 1;
-                continue;
-            }
-            throw refusedRequestError("Gemini",
-                extractErrorMessage(payload, `Gemini API request failed (${response.status})`),
-                failure,
-            );
-        }
-        // Accepted as a function call straight after being refused as JSON text:
-        // it was the form that was refused, so this model is asked the function
-        // way for the rest of the session.
-        if (jsonAnswerRefused) geminiJsonAnswerRefusals.add(model);
-
-        // Branch on what actually came back, not on what was asked for: an edge
-        // or proxy that ignored alt=sse still answers plain JSON, and that must
-        // keep working exactly as it did.
-        const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
-            ? await readGeminiStreamedResponse(response, onActivity, onToolStream, onReceived)
-            : await readJsonAnswer(response, "Gemini");
-        onUsage?.(data);
-        if (tool) {
-            // Asked for as JSON text: the text IS the function's arguments. One
-            // that will not parse whole (cut off mid-answer) goes on below as raw
-            // text, where the task's salvage and the busy-retry both read it.
-            const jsonText = jsonAnswer ? joinGeminiParts(data?.candidates?.[0]?.content?.parts) : "";
-            const jsonInput = jsonText ? parseGeminiJsonAnswer(jsonText) : null;
-            // answeredAsText: no function was declared, so a correction asks for
-            // the JSON again and not for a call (gameplay.js runJsonTask).
-            if (jsonInput) return { rawText: jsonText, toolInput: jsonInput, answeredAsText: true };
-            const toolInput = extractGeminiToolInput(data, tool);
-            if (toolInput) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput };
-            failIfClosedEarly(data, joinGeminiParts(data?.candidates?.[0]?.content?.parts));
-            // Not the answer but a question: the model called lookup functions.
-            // Handed back to callAI, which answers them and asks again.
-            if (lookupDeclarations.length) {
-                const lookupCalls = lookupCallsFromGemini(data, tool.name);
-                if (lookupCalls.length) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput: null, lookupCalls };
-            }
-
-            // Now that tool calls stream, an overloaded model can refuse INSIDE
-            // the stream — HTTP 200, an error frame, no function call — where the
-            // same refusal used to arrive as a 503 and be retried by status code
-            // above. Without this, a hiccup would cost the player a whole turn to
-            // the canned fallback, which is what the buffered path protected them
-            // from. (Mirrors the OpenAI-compatible path.)
-            const streamedError = data?.error;
-            const streamedText = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
-            if (!streamedText && isBusyErrorPayload(streamedError) && !retriedAfterOverload && attempt < retries
-                && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
-                retriedAfterOverload = true;
-                console.warn(`[ai] Gemini reported "${errorPayloadText(streamedError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
-                await sleep(OVERLOADED_RETRY_DELAY, signal);
-                continue;
-            }
-            // Fragments that stopped partway assemble into a valid object missing
-            // half the turn, so streamAssembly.js drops the call and leaves this
-            // for the log alone.
-            if (data?.partialToolJson) {
-                logDebugEvent("warn", `[ai] Gemini tool call was cut off mid-argument.`, {
-                    partialChars: data.partialToolJson.length,
-                }, { verbose: true });
-            }
-            // Still refusing: say so, rather than hand back an empty "answer".
-            if (!streamedText && streamedError) throw toolStreamRefusalError("Gemini", streamedError, retriedAfterOverload);
-
-            return { rawText: streamedText, toolInput: null };
-        }
-        const text = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
-        keepProseClosedEarly(data?.closedEarly, text, onUnmarkedEnd);
-
-        if (!text) {
-            throw new Error("Gemini response did not contain text.");
-        }
-
-        return text;
-    }
-    throw retriesSpentError("Gemini", retries);
+        },
+        customParams,
+        signal,
+        onActivity,
+        onReceived,
+        onRequest,
+        onSend,
+        onToolStream,
+        onUsage,
+    });
 }
 
 // Extra output tokens allowed when reasoning is on, because on an OpenAI-style
@@ -1559,6 +1389,9 @@ async function callOpenAIStyleChatCompletions({
     // callAI's word that this entry is a KoboldCpp server (entryOutputLimit):
     // decided once per attempt, where the request's log line is written.
     koboldCpp = false,
+    // OpenAI's prompt_cache_key: requests that share a prefix go to the same
+    // cache with it (callOpenAI passes it; nothing else does).
+    promptCacheKey = "",
 }) {
     // A model under KoboldCpp's own prefix is its /v1/models speaking, typed
     // into the entry or found there a moment ago (resolveConfiguredModel).
@@ -1598,8 +1431,8 @@ async function callOpenAIStyleChatCompletions({
     // costs structured output, so the cheaper concession goes first.
     // Remembered, so the next call on this gateway starts buffered.
     let streamingDisabled = false;
-    // The model answered with its own planning monologue instead of calling the
-    // tool (see looksLikeDeliberation in providerErrors.js). One-shot, same
+    // The model answered in words, with no payload in them, instead of calling
+    // the tool (see isProseWithoutPayload in providerErrors.js). One-shot, same
     // discipline as the two above: it drives a retry that does not consume one of
     // runJsonTask's two output attempts, so it must only ever flip once.
     let insistedOnToolCall = false;
@@ -1694,6 +1527,7 @@ async function callOpenAIStyleChatCompletions({
                 // to no other server: the rest read no limit as none.
                 ...(koboldCppLimit ? { [tokenLimitField]: koboldCppLimit } : {}),
                 ...(disableTemperature ? {} : ownTemperature),
+                ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
                 ...requestCustomParams,
                 ...(structuredMode === "tool" && disableToolReasoning ? { reasoning_effort: "none" } : {}),
                 ...(structuredMode === "tool" ? {
@@ -1756,7 +1590,7 @@ async function callOpenAIStyleChatCompletions({
 
             const sentOwnTemperature = Object.keys(ownTemperature).length > 0
                 && requestCustomParams.temperature === undefined;
-            if (!disableTemperature && sentOwnTemperature && isTemperatureRefusal(errorMessage)) {
+            if (!disableTemperature && sentOwnTemperature && isTemperatureRefusal(errorMessage, payload)) {
                 disableTemperature = true;
                 temperatureRefusals.learn(samplingKey);
                 console.warn(`[ai] ${providerLabel} refused the requested temperature; retrying at the model's own, and remembering.`);
@@ -1767,7 +1601,7 @@ async function callOpenAIStyleChatCompletions({
             // does tools, it just stops keeping the connection warm — whereas
             // dropping out of tool mode costs structured output, which is the
             // difference between a real turn and canned events.
-            if (streamThisRequest && isStreamingRefusal(errorMessage)) {
+            if (streamThisRequest && isStreamingRefusal(errorMessage, payload)) {
                 streamingDisabled = true;
                 streamingRefusals.add(streamingKey);
                 console.warn(`[ai] ${providerLabel} refused a streamed request; retrying buffered — long turns on this endpoint may time out.`);
@@ -1784,7 +1618,11 @@ async function callOpenAIStyleChatCompletions({
             }
 
             if (structuredMode === "tool") {
-                const reasoningConflict = /function tools.*reasoning_effort.*not supported|reasoning_effort.*not supported.*function tools/i.test(errorMessage);
+                // OpenAI names the refused parameter; a gateway relaying only
+                // its message ("Function tools with reasoning_effort are not
+                // supported ...") is read by those words.
+                const reasoningConflict = errorParamOf(payload) === "reasoning_effort"
+                    || /function tools.*reasoning_effort.*not supported|reasoning_effort.*not supported.*function tools/i.test(errorMessage);
 
                 if (!disableToolReasoning && reasoningConflict) {
                     disableToolReasoning = true;
@@ -1951,11 +1789,12 @@ async function callOpenAIStyleChatCompletions({
             }
 
             // The model talked itself out of answering: no tool call, and the text
-            // is a planning monologue rather than anything a salvage pass could
-            // parse. Left alone this returns unparseable prose, runJsonTask spends
-            // an attempt on it, the same thing happens again, and the player loses
+            // holds nothing a salvage pass could parse (isProseWithoutPayload: the
+            // reply's structure decides, never the language it is written in).
+            // Left alone this returns unparseable prose, runJsonTask spends an
+            // attempt on it, the same thing happens again, and the player loses
             // the turn to canned events — 3 of 4 turns in the field report behind
-            // looksLikeDeliberation.
+            // this step.
             //
             // The first version of this just re-asked for the tool call, more
             // firmly. That does not work, and the log says why: the model spent
@@ -1973,7 +1812,7 @@ async function callOpenAIStyleChatCompletions({
             // Reasoning that came back alone is judged here as it was before it
             // was read apart from the answer, so this step is taken when it
             // always was and not more often.
-            if (looksLikeDeliberation(text || reasoningText) && canRetryBeforeDeadline(deadline, 0)) {
+            if (isProseWithoutPayload(text || reasoningText) && canRetryBeforeDeadline(deadline, 0)) {
                 // The rung order lives in structuredMode.js, with the tests that
                 // pin it. Native OpenAI enforces tool_choice, so it never steps
                 // down out of tool mode - a deliberating model there is a
@@ -1981,7 +1820,7 @@ async function callOpenAIStyleChatCompletions({
                 const canStepDown = structuredMode !== "tool" || allowJsonSchemaFallback;
                 const nextMode = canStepDown ? nextStructuredMode(structuredMode) : null;
                 if (nextMode) {
-                    console.warn(`[ai] ${providerLabel} deliberated instead of calling ${tool.name}; dropping from ${structuredMode} to ${nextMode}`);
+                    console.warn(`[ai] ${providerLabel} answered in words instead of calling ${tool.name}; dropping from ${structuredMode} to ${nextMode}`);
                     structuredMode = nextMode;
                     liftedCapForReasoning = true;
                     insistedOnToolCall = true;
@@ -1990,7 +1829,7 @@ async function callOpenAIStyleChatCompletions({
                 if (!insistedOnToolCall) {
                     insistedOnToolCall = true;
                     liftedCapForReasoning = true;
-                    console.warn(`[ai] ${providerLabel} deliberated instead of calling ${tool.name}; retrying once, insisting on the tool call`);
+                    console.warn(`[ai] ${providerLabel} answered in words instead of calling ${tool.name}; retrying once, insisting on the tool call`);
                     continue;
                 }
             }
@@ -2053,7 +1892,9 @@ async function callOpenAIStyleChatCompletions({
 }
 
 async function callOpenAI(systemPrompt, history, opts = {}) {
-    const { entrySettings, ...rest } = opts;
+    // promptCacheKey: OpenAI's own API only (prompt_cache_key); a compatible
+    // gateway is never sent a field it may refuse.
+    const { entrySettings, promptCacheKey = "", ...rest } = opts;
     const settings = entrySettings;
     const apiKey = settings.apiKey.trim();
 
@@ -2088,6 +1929,7 @@ async function callOpenAI(systemPrompt, history, opts = {}) {
         configuredStructuredMode: settings.structuredMode,
         observerKey: settings.id,
         tokenLimitField: "max_completion_tokens",
+        promptCacheKey,
         ...rest,
     });
 }
@@ -2156,17 +1998,69 @@ const anthropicModelMax = new Map(); // model -> learned output ceiling
 // some 70,000 tokens on a long campaign (a Discord test game, 2026-10-27). A
 // request with no such function is answered in one call, and writing its tail
 // to the cache would only cost more.
-function buildAnthropicSystemContent(systemPrompt, staticPrefixEnd, { followUp = false } = {}) {
-    const split = splitSystemPromptForCache(systemPrompt, staticPrefixEnd);
+//
+// A round that follows lookups is a follow-up too, the last one included (it
+// may no longer offer a lookup, so without this it unpinned the tail and paid
+// for it again in full). And the conversation so far gets a breakpoint of its
+// own on its last block (toolTurns.js withCachedHistory, the third of four), so
+// the next round reads the earlier rounds from the cache as well.
+//
+// `sharedPrefixEnd`: where the part of the prefix another task opens with too
+// ends (the time skip and the auto-jump, promptLayout.js CACHE_BREAK_KEY). It
+// gets a breakpoint of its own, so switching between the two still reads that
+// part from the cache. With the tail's and the history's, that is the four the API takes.
+//
+// `ttl`: "1h" keeps the prefix an hour instead of five minutes. Writing it then
+// costs twice the input price instead of 1.25 times, and every read a tenth: on
+// a time skip, whose prefix is most of a long campaign's prompt and whose next
+// turn rarely comes within five minutes, it pays from the third skip in an
+// hour. Only the pinned prefix gets it; the tail, re-read only by the follow-ups
+// of the same call, keeps the default (the API takes the longer TTL first).
+function buildAnthropicSystemContent(systemPrompt, staticPrefixEnd, { followUp = false, sharedPrefixEnd = null, ttl = "" } = {}) {
+    const split = splitSystemPromptForCache(systemPrompt, staticPrefixEnd, { sharedPrefixEnd });
     const pinned = followUp ? { cache_control: { type: "ephemeral" } } : {};
     if (!split) return followUp && String(systemPrompt ?? "").length >= MIN_CACHEABLE_PREFIX_CHARS
         ? [{ type: "text", text: systemPrompt, ...pinned }]
         : systemPrompt;
+    const kept = { cache_control: { type: "ephemeral", ...(ttl ? { ttl } : {}) } };
     return [
-        { type: "text", text: split.prefix, cache_control: { type: "ephemeral" } },
+        ...(split.shared ? [{ type: "text", text: split.shared, ...kept }] : []),
+        { type: "text", text: split.shared ? split.prefix.slice(split.shared.length) : split.prefix, ...kept },
         { type: "text", text: split.tail, ...pinned },
     ];
 }
+
+// The requests whose cacheable prefix is kept an hour (buildAnthropicSystemContent).
+const HOUR_CACHED_TASKS = new Set(["jumpForward", "autoJumpForward"]);
+
+// The conversations' prompts (the advisor's, a leader's) are built here and
+// sent through callAI by several callers, some of which add to them first. The
+// cacheable opening each was rendered with (promptLayout.js) is remembered, and
+// callAI gives a prompt that still opens with one its boundary, as runJsonTask
+// does for the gameplay tasks. A few at a time: one per conversation open.
+const conversationPrefixes = [];
+const rememberConversationPrefix = (prefix) => {
+    const text = String(prefix ?? "");
+    if (text.length < MIN_CACHEABLE_PREFIX_CHARS) return;
+    const at = conversationPrefixes.indexOf(text);
+    if (at >= 0) conversationPrefixes.splice(at, 1);
+    conversationPrefixes.unshift(text);
+    conversationPrefixes.length = Math.min(conversationPrefixes.length, 8);
+};
+const conversationPrefixEnd = (systemPrompt) => {
+    const text = String(systemPrompt ?? "");
+    let best = null;
+    for (const prefix of conversationPrefixes) {
+        if (text.length > prefix.length && text.startsWith(prefix) && (best == null || prefix.length > best)) best = prefix.length;
+    }
+    return best;
+};
+// A conversation's template rendered with its cacheable opening remembered.
+const renderConversationTemplate = (template, values) => {
+    const rendered = renderTemplateCached(template, values);
+    rememberConversationPrefix(rendered.text.slice(0, rendered.staticPrefixEnd));
+    return rendered.text;
+};
 
 async function callAnthropic(systemPrompt, history, {
     canFallBack = false,
@@ -2187,6 +2081,7 @@ async function callAnthropic(systemPrompt, history, {
     onModel,
     signal,
     staticPrefixEnd,
+    sharedPrefixEnd = null,
     tool,
     taskKey = "",
     lookupTools,
@@ -2260,10 +2155,15 @@ async function callAnthropic(systemPrompt, history, {
         // A model that refuses a forced tool_choice is asked for the call in words.
         const forceTool = forcesToolChoice(model, samplingKey);
         const lookupsAllowed = lookupDeclarations.length > 0 && !requireOutputTool;
-        const messages = toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history);
+        const followUp = lookupsAllowed || chatTools.length > 0 || lookupRoundCount(history) > 0;
+        const messages = withCachedHistory(toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history), { followUp });
         const body = {
             model,
-            system: buildAnthropicSystemContent(systemPrompt, staticPrefixEnd, { followUp: lookupsAllowed || chatTools.length > 0 }),
+            system: buildAnthropicSystemContent(systemPrompt, staticPrefixEnd, {
+                followUp,
+                sharedPrefixEnd,
+                ttl: HOUR_CACHED_TASKS.has(taskKey) ? "1h" : "",
+            }),
             max_tokens: requestedMaxTokens,
             ...(thinks ? { thinking: thinkingFor({ adaptive: thinksAdaptive(model) || adaptiveThinkingLearned.has(samplingKey) }) } : {}),
             ...temperatureBody(taskKey, { enabled: !thinks && !temperatureRefused }),
@@ -2344,7 +2244,7 @@ async function callAnthropic(systemPrompt, history, {
             // The model takes no temperature (or none beside thinking): ask at its
             // own, and remember, as the OpenAI-compatible path does.
             if (response.status === 400 && !temperatureRefused && body.temperature !== undefined && customParams.temperature === undefined
-                && isTemperatureRefusal(message) && attempt < retries) {
+                && isTemperatureRefusal(message, payload) && attempt < retries) {
                 temperatureRefused = true;
                 temperatureRefusals.learn(samplingKey);
                 console.warn(`[ai] Anthropic: ${model} refused the requested temperature; retrying at the model's own, and remembering.`);
@@ -2363,7 +2263,7 @@ async function callAnthropic(systemPrompt, history, {
             }
             // The reverse: an endpoint that will not stream at all. Give up the
             // keep-alive rather than the request.
-            if (response.status === 400 && streamThisRequest && isStreamingRefusal(message) && attempt < retries) {
+            if (response.status === 400 && streamThisRequest && isStreamingRefusal(message, payload) && attempt < retries) {
                 streamingDisabled = true;
                 streamingRefusals.add(streamingKey);
                 console.warn("[ai] Anthropic refused a streamed request; retrying buffered — long turns may time out.");
@@ -2479,6 +2379,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
     onModel,
     signal,
     staticPrefixEnd,
+    sharedPrefixEnd = null,
     tool,
     taskKey = "",
     lookupTools,
@@ -2578,10 +2479,12 @@ async function callAnthropicCompatible(systemPrompt, history, {
         // A model that refuses a forced tool_choice is asked for the call in words.
         const forceTool = forcesToolChoice(model, samplingKey);
         const lookupsAllowed = lookupDeclarations.length > 0 && !requireOutputTool;
-        const messages = toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history);
+        const followUp = lookupsAllowed || chatTools.length > 0 || lookupRoundCount(history) > 0;
+        const messages = withCachedHistory(toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history), { followUp });
         const body = {
             model,
-            system: buildAnthropicSystemContent(requestSystemPrompt, staticPrefixEnd, { followUp: lookupsAllowed || chatTools.length > 0 }),
+            // The default TTL only: a proxy may not take the field.
+            system: buildAnthropicSystemContent(requestSystemPrompt, staticPrefixEnd, { followUp, sharedPrefixEnd }),
             max_tokens: requestedMaxTokens,
             ...(thinks ? { thinking: thinkingFor({ adaptive: thinksAdaptive(model) || adaptiveThinkingLearned.has(samplingKey) }) } : {}),
             ...temperatureBody(taskKey, { enabled: !thinks && !temperatureRefused }),
@@ -2650,7 +2553,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
                 continue;
             }
             if (response.status === 400 && !temperatureRefused && body.temperature !== undefined && customParams.temperature === undefined
-                && isTemperatureRefusal(message) && attempt < retries) {
+                && isTemperatureRefusal(message, payload) && attempt < retries) {
                 temperatureRefused = true;
                 temperatureRefusals.learn(samplingKey);
                 console.warn(`[ai] Anthropic-compatible: ${model} refused the requested temperature; retrying at the model's own, and remembering.`);
@@ -2669,7 +2572,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             }
             // The reverse: an endpoint that will not stream at all. Give up the
             // keep-alive rather than the request.
-            if (response.status === 400 && streamThisRequest && isStreamingRefusal(message) && attempt < retries) {
+            if (response.status === 400 && streamThisRequest && isStreamingRefusal(message, payload) && attempt < retries) {
                 streamingDisabled = true;
                 streamingRefusals.add(streamingKey);
                 console.warn("[ai] Anthropic-compatible refused a streamed request; retrying buffered — long turns may time out.");
@@ -2747,16 +2650,16 @@ async function callAnthropicCompatible(systemPrompt, history, {
             const anthropicText = extractAnthropicText(data);
             // Still refusing: say so, rather than hand back an empty "answer".
             if (!anthropicText && data?.error) throw toolStreamRefusalError("Anthropic Compatible", data.error, retriedAfterOverload);
-            // No tool call, and what came back is a planning monologue rather
-            // than anything a salvage pass could parse. The proxy accepted
+            // No tool call, and what came back holds nothing a salvage pass could
+            // parse (isProseWithoutPayload). The proxy accepted
             // tool_choice without enforcing it, so asking again more firmly
             // achieves nothing — change the channel instead. There is only one
             // step down on this API, but it is the step that matters.
             if (structuredMode === "tool" && !insistedOnToolCall && attempt < retries
-                && looksLikeDeliberation(anthropicText) && canRetryBeforeDeadline(deadline, 0)) {
+                && isProseWithoutPayload(anthropicText) && canRetryBeforeDeadline(deadline, 0)) {
                 insistedOnToolCall = true;
                 structuredMode = "text_json";
-                console.warn(`[ai] Anthropic Compatible deliberated instead of calling ${tool.name}; dropping from tool to text_json`);
+                console.warn(`[ai] Anthropic Compatible answered in words instead of calling ${tool.name}; dropping from tool to text_json`);
                 continue;
             }
             if (anthropicText) {
@@ -2864,7 +2767,10 @@ const entryOutputLimit = (entry, maxTokens, koboldCpp) => {
 // Three, not more: every round re-sends the whole prompt, and a model that
 // asks one question per round spent seven rounds and three hundred thousand
 // prompt tokens on one jump. The directive tells it to ask everything at once.
-const DEFAULT_LOOKUP_ROUNDS = 3;
+// Six with no request limit (requestBudget.js lookupRoundLimit): the
+// prompt is slimmer there, and on Anthropic every round reads the one before
+// from the cache (withCachedHistory).
+const defaultLookupRounds = () => lookupRoundLimit({ unlimited: unlimitedRequests() });
 
 // A chat's round comes back as { chatText, lookupCalls } when the model asked
 // (chatLookupsFor); once it stops asking, what the caller gets is the text.
@@ -2886,7 +2792,7 @@ const chatAnswer = (result) => (result && typeof result === "object" && typeof r
 async function runWithLookups(lookups, history, dispatch, { label, provider, onRound = null, carry = null, outputToolName = "" }) {
     const tools = Array.isArray(lookups?.tools) ? lookups.tools.filter((entry) => entry?.name && entry?.schema) : [];
     if (!tools.length || typeof lookups?.execute !== "function") return dispatch(history, {});
-    const maxRounds = Number.isInteger(lookups.maxRounds) && lookups.maxRounds >= 0 ? lookups.maxRounds : DEFAULT_LOOKUP_ROUNDS;
+    const maxRounds = Number.isInteger(lookups.maxRounds) && lookups.maxRounds >= 0 ? lookups.maxRounds : defaultLookupRounds();
     const baseHistory = Array.isArray(history) ? history : [];
     const carried = carriedRoundCount(carry);
     if (carried) {
@@ -2900,7 +2806,10 @@ async function runWithLookups(lookups, history, dispatch, { label, provider, onR
     for (let round = 0; ; round += 1) {
         const requireOutputTool = outputOnly || carried + round >= maxRounds;
         if (round > 0) lookups.onRound?.(round);
-        const result = await dispatch(conversation, { lookupTools: tools, requireOutputTool });
+        // How many rounds are answered already, carried ones too: Gemini asks a
+        // watched answer after its one lookup round with no function declared
+        // (geminiAnswer.js), so that the answer streams.
+        const result = await dispatch(conversation, { lookupTools: tools, requireOutputTool, lookupRoundsAnswered: carried + round });
         const calls = Array.isArray(result?.lookupCalls) ? result.lookupCalls : [];
         // The answer, or a request that could not be turned into one (a final
         // round still asking questions falls through to the runner's retry).
@@ -3030,6 +2939,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
     const {
         languageMode = "ui", logLabel = "", __debug: debugMeta = null, __debugSink: debugSink = null, lookups = null,
         requestKind = PLAYER_REQUEST, onRequest: observeRequest = null, spender = "", agentKind = "",
+        groupDebug = null,
         ...providerOpts
     } = opts;
     // The difficulty's priority line opens every system prompt the game sends
@@ -3039,6 +2949,10 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // decide nothing for the player are named there and get nothing. It is the
     // same for every call of a campaign, so the cacheable prefix of the prompt
     // (promptLayout.js) still leads it and is longer by the line.
+    if (providerOpts.staticPrefixEnd == null) {
+        const known = conversationPrefixEnd(systemPrompt);
+        if (known != null) providerOpts.staticPrefixEnd = known;
+    }
     try {
         const savedGame = await readJson(JSON_URLS.game, { defaultValue: {} });
         const led = withDifficultyPriority({
@@ -3047,8 +2961,13 @@ export async function callAI(systemPrompt, history, opts = {}) {
             difficulty: savedGame?.difficulty,
             staticPrefixEnd: providerOpts.staticPrefixEnd ?? null,
         });
+        // The lead goes in front of everything, so the shared boundary moves by as much.
+        const lead = led.systemPrompt.length - systemPrompt.length;
         systemPrompt = led.systemPrompt;
         if (providerOpts.staticPrefixEnd != null) providerOpts.staticPrefixEnd = led.staticPrefixEnd;
+        if (providerOpts.sharedPrefixEnd != null && Number.isFinite(Number(providerOpts.sharedPrefixEnd))) {
+            providerOpts.sharedPrefixEnd = Number(providerOpts.sharedPrefixEnd) + lead;
+        }
     } catch {
         // Without the save the call goes out as it was built.
     }
@@ -3057,6 +2976,18 @@ export async function callAI(systemPrompt, history, opts = {}) {
         : languageDirective();
     if (directive) {
         systemPrompt = `${systemPrompt}\n\n${directive}`;
+    }
+    // A shared round another player's device pays for (multiplayer/host/
+    // settings.js payment "cycle"): each request of the round's skip goes, as
+    // it was built here, to that device, which carries it to its own AI; its
+    // answer comes back in a provider's shape, with the rest of this call's
+    // contract (roundCarrier.js CALL_CONTRACT: lookup rounds counted and kept,
+    // the output limit, the failure's kind). No key leaves any device, and none
+    // of this one's providers is asked.
+    const carried = carriedCall({ systemPrompt, history, opts: providerOpts, lookups, spender, onRequest: observeRequest, debugSink });
+    if (carried) {
+        logDebugEvent("ai-call", `${logLabel || "AI call"}: carried to the device of the player who pays this round.`, { promptChars: systemPrompt.length }, { verbose: true });
+        return carried;
     }
 
     const { entries, preferredEntryId } = resolveTaskFallbackEntries(providerOpts.taskKey);
@@ -3078,12 +3009,18 @@ export async function callAI(systemPrompt, history, opts = {}) {
             userMessage: Array.isArray(history) ? history.at(-1)?.parts?.[0]?.text ?? "" : "",
             staticPrefixEnd: providerOpts.staticPrefixEnd ?? null,
             awaitingOutcome: Boolean(debugSink),
+            ...(groupDebug ? { groupTurnId: groupDebug.turnId,
+                groupName: groupDebug.name, groupBatchIndex: groupDebug.batchIndex,
+                groupTotalSpeakers: groupDebug.totalSpeakers,
+                groupSpeakerIds: groupDebug.speakerIds } : {}),
         })
         : null;
     if (debugSink && typeof debugSink === "object") debugSink.record = record;
     const callShape = {
         ...conversationShape(systemPrompt, history),
-        streaming: Boolean(providerOpts.onChunk),
+        // A reply shown as it arrives, or a task's answer read as it is written
+        // (a watched time skip).
+        streaming: Boolean(providerOpts.onChunk || providerOpts.onToolStream),
         tool: providerOpts.tool?.name || "(none — raw JSON expected)",
         lookupTools: Array.isArray(lookups?.tools) ? lookups.tools.length : 0,
         maxTokens: providerOpts.maxTokens ?? "(provider maximum)",
@@ -3343,6 +3280,55 @@ export async function callAI(systemPrompt, history, opts = {}) {
     }
 }
 
+// A shared round's request the host sent this device to pay for, on its own AI
+// (multiplayer/host/roundPayers.js, the owner's decision 14): carried as the
+// host built it, and its answer handed back as it came (roundCarrier.js). A
+// lookup the model asks for is answered by the host (`execute`). Nothing of it
+// is written on this device; the host applies the answer.
+// `onRequest` hears the status of every provider response it causes, which the
+// host's skip reads as it reads its own (a contract the provider refused);
+// `onActivity` each piece of the answer and `onRound` each lookup round begun,
+// which the host's deadline and the round's budget count. This device's own
+// settings hold the request, whatever it was sent: no lookups where its own are
+// off, no more rounds than its own allow. A failure is thrown with its kind
+// (`payFailure`), which is all the host is told: the provider's words stay here.
+export async function carryRoundRequest(call, { execute = null, signal = null, onRequest = null, onActivity = null, onRound = null } = {}) {
+    const limits = {
+        lookups: !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
+        rounds: lookupRoundLimit({ unlimited: unlimitedRequests() }),
+    };
+    const { systemPrompt, history, opts, sink, carry } = payerCallOf(call, { execute, signal, onRequest, onActivity, onRound, limits });
+    try {
+        const result = await callAI(systemPrompt, history, opts);
+        // The answer is judged on the host: this device's record of the call is done.
+        attachAttemptOutcome(sink.record, { ok: true });
+        return answerOf(result, { sink, carry });
+    } catch (error) {
+        attachAttemptOutcome(sink.record, { ok: false });
+        const failed = error instanceof Error ? error : new Error(String(error));
+        failed.payFailure = failureOf(error);
+        throw failed;
+    }
+}
+
+// What this device states about paying for a shared round, with no key
+// (roundCarrier.js payProfileOf; the host passes over a device that cannot):
+// whether its list can answer a round now (an entry that serves one, set up and
+// not Spent, Unusable or busy: an Agent never answers a shared round), and its
+// own settings that decide what a round spends on its key.
+export function roundPayProfile() {
+    const list = getResolvedFallbackList();
+    const serving = list.filter((entry) => entryServesCall(entry, { spender: "jump", sharedGame: true }));
+    const ready = Boolean(sharedRoundAnswerer(list)) && fallbackAvailability({ entries: serving, store: fallbackStateStore }).canAnswer;
+    return payProfileOf({
+        ready,
+        noRequestLimit: noRequestLimit(),
+        lookups: getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
+        segmented: getMapSetting(MAP_SETTING_KEYS.chunkLongJumps),
+        declares: geminiDeclaresTaskFunction("jumpForward"),
+    });
+}
+
 let promptPack = normalizePromptPack({});
 let promptsReady = null;
 let promptsReadyKey = "";
@@ -3357,6 +3343,7 @@ async function ensurePromptsLoaded() {
         promptsReady = readJson(JSON_URLS.prompts, { defaultValue: {} })
         .then((data) => {
             promptPack = normalizePromptPack(data);
+            notePromptsOverLimit(promptPack.overLimit);
             return promptPack;
         })
         .catch((error) => {
@@ -3375,6 +3362,7 @@ async function buildPromptVariables({
     chatData,
     eventData,
     gameData,
+    pastTalks = null,
     requiredKeys = null,
     speakingAs = "",
     worldData,
@@ -3398,6 +3386,9 @@ async function buildPromptVariables({
         // speakingAs and therefore sees everything, which is correct — it is the
         // player's own staff, and the player is in every chat.
         chatVisibleTo: speakingAs,
+        // The passages of the older conversations kept on file that bear on
+        // this message (AI/chatArchive.js), found on this device.
+        pastTalks,
         // Only what the prompt can show (chatPromptDemand). Without it every
         // advisor and leader message built the whole context, the force
         // posture's border geometry and the city catalog among it.
@@ -3428,6 +3419,8 @@ To propose an Action, end your reply with a fenced \`\`\`actions block containin
 - Create: {"title":"...","text":"...","kind":"action"} — kind is "action" unless it's specifically a diplomatic outreach, then "chat".
 - Edit an existing one: {"id":"<exact id copied from the list below>","title":"...","text":"..."} — only the fields you include change.
 - Remove an existing one: {"id":"<exact id copied from the list below>","remove":true}.
+An Advisor Action proposal awaiting the player's Proceed is NOT a queued Action. If asked to revise or rename such a proposal, write a NEW create proposal with its own accurate scope and corrected title; never edit an unrelated queued Action just because it has the same title. In a group, editing or removing another member's Advisor-created queued Action requires the player to explicitly identify that target by exact Action ID in their latest instruction. Otherwise, leave that existing Action untouched and propose new work for review.
+
 IDs must be copied EXACTLY from [Current Planned Actions] below — never invented or guessed. Omit the \`\`\`actions block entirely when nothing should change (most replies need none).
 
 Internal acts belong HERE, not on the Projects board: renaming or recolouring the country, a new flag, style, title or anthem, a redesignated capital, a proclamation, a ministry reshuffle. Each is a single decision by a government that needs nobody else's consent, it takes effect at the next time skip, and opening a project for one leaves the player watching a progress bar instead of getting what they asked for. Propose it as an Action for the player's review, say that it will NOT enter the queue until approved, and explain what should visibly change after the time skip if it succeeds (the map label, the country panel, the border). A transfer of territory belongs here too WHEN the other side has already agreed to it, or the ground has already been taken and held — but a contested one does not: that is a project, and you should say what is missing rather than promise it.
@@ -3571,54 +3564,29 @@ Example of a table that earns its place:
 // open one whenever a sustained effort is actually settled on, rather than
 // waiting to be asked.
 const buildAdvisorProjectsDirective = (projectsSummary) => `[Projects & Operations]
-The player has a Projects & Operations board: the running list of their long-term efforts — research and industrial programmes, construction projects, military and covert operations, sustained political campaigns — each with a description, tags, progress, timeline and next milestone. They can read, sort and filter it, and on THEIR OWN entries set a priority or abandon one outright, but they cannot create an entry or write its content, and they hold neither lever over another power's programme (see [Whose project it is]). You and the world's events are the only things that author what a project IS. A project the player has marked HIGH PRIORITY is one they want moved: brief them on it first and unprompted, and chase it when it goes quiet. One marked low priority may be left alone unless they ask. An abandoned project is closed, and you must not re-open it on your own initiative — but if the player explicitly asks you to resume it, do so: reactivate it with op update and status active, or open a fresh entry, and say plainly that is what you have done. Never set a priority yourself unless they have asked you to in this conversation.
+The player has a Projects & Operations board: their long-term efforts — research and industrial programmes, construction projects, military and covert operations, sustained political campaigns — and the projects of other countries their services know of. The engine runs every project by itself: each day its owner's budget pays its monthly cost, and the work moves at the pace its plan, its funding and the country's economy and stability allow. Its checkpoints, its completion and what it then does to the world (its effects) are the engine's. The player starts their own projects from the Projects tab (a name and a goal, then a plan they accept or discard), sets each one's funding — none, low, normal or high: what it costs a month and how fast it goes — and may call one off. Neither you nor they move a project's progress or its dates.
 
-You can create, update and close entries directly from this conversation, with no separate confirmation step. Proactively RECOMMEND relevant long-running Projects in normal prose during strategy discussions, even before commitment; a recommendation is not itself a board mutation. Only emit a projects block to open a player-owned effort once the player has clearly decided to initiate it, not merely asked an exploratory question. Do not demand special phrases like "create a project": an unambiguous commitment is enough. Never reopen an abandoned effort unless the player explicitly asks. If they commit to sustained work across rounds, record it on the board without waiting for a second approval request.
+You can change the board directly from this conversation, with no separate confirmation step, in a fenced \`\`\`projects block:
+- Open a project for the player, once they have clearly decided to start it (an unambiguous commitment is enough; a question is not): {"op":"create","name":"<a name>","summary":"<what it is for>","kind":"project","tags":["naval"],"plan":{"durationDays":540,"monthlyCost":120000000,"milestones":[{"title":"Keel laid","atProgress":30}],"effects":[{"type":"stat","stat":"military.sea","change":4}]}}. kind is "operation" for a military, intelligence or covert undertaking; add "secrecy":"covert" for something deniable. Write the plan as [How a Plan Is Written] says. Without a plan it opens as planning, and the player plans it from the Projects tab.
+- Fund one of the player's projects when they ask: {"op":"update","name":"<its exact name>","funding":"none | low | normal | high"}.
+- Call off one of the player's projects when they ask: {"op":"cancel","name":"<its exact name>","note":"How it ended."}.
+- Say what has become of any entry: {"op":"update","name":"<its exact name>","lastUpdate":"One sentence."}. A doubted foreign entry is settled by itself once a fresh agent has reported: never give it a verdict.
+That is all you can do to the board. You never move a project's progress, complete it, or set it back: the engine runs it, and only the world's events set a project back. You never open another country's project: the world opens those, in its time skips. Proactively RECOMMEND projects in prose during strategy discussions; a recommendation is not a board change. Never reopen an abandoned effort unless the player explicitly asks.
+
+[How a Plan Is Written]
+durationDays: the days of work at normal funding (14 to 3650), as long as it would really take in this era and this country. monthlyCost: for monetary Projects, what it costs a month at normal funding in constant 2026 USD accounting units, never domestic currency (e.g. lev) or the player's display currency; the country's Project allowance is about 2% of canonical GDP a year (adjusted for deficit and debt), and one Project may cost at most half of it per month at creation. In non-monetary scenarios set monthlyCost to 0; no cash is recorded. milestones: two to five checkpoints, each at the share of the work when it is reached (atProgress, 1-99). effects: what it does to the world once, when done. ${PROJECT_EFFECTS_RULE}
 
 [Whose project it is]
-Roughly half a mature board is not the player's. A foreign power's programme sits there because their services have learned of it, and it is marked THEIRS in the list below; anything not so marked is the player's own. The difference is not decoration:
-- The player's OWN efforts they may steer. They set the priority, and they may abandon one outright. Do as they ask with their own work.
-- A FOREIGN effort they may only watch. They do not set its priority, they cannot call it off, and neither can you on their say-so. If they tell you to cancel, shelve, deprioritise or reprioritise another government's programme, REFUSE it plainly in one sentence — that is not a lever anyone here holds — and send no op for it. Do not quietly comply, and do not pretend to: a cancel op you send for a rival's shipyard would close it on the board and the player would believe their word did it.
-- What you may do instead is the useful half of the answer, and you should offer it in the same breath: they cannot stop another power's programme by wishing it, but they can DO something about it. Sabotage, a covert operation, diplomatic pressure, an export ban, buying up the supply, or simply outbuilding them — that is the player's OWN effort against a foreign one, it is theirs to command, and it belongs on the board as a new entry of theirs (no ownerCode). Open it once they actually settle on it, and say plainly that what you have opened is our operation against their programme, not a change to their programme.
-- You still UPDATE foreign entries freely, because that is what they are for: new intelligence, revised progress, a milestone their services have observed, a programme that has evidently finished or collapsed. That is reporting, and it is your job. What you must not do is act on one as though the player commanded it.
-Retaliation is the one case worth naming twice, because it looks like an exception and is not. "They sabotaged ours, so wreck theirs" is a legitimate order — but the thing it opens is OUR operation to wreck theirs, an entry of the player's own with its own progress and its own way of failing. Their programme keeps running on the board until something actually stops it, and what stops it is an event, not our intention.
+A project the board marks with another country's name is THEIRS: the player only watches it. If they tell you to cancel, fund or otherwise steer another government's programme, REFUSE in one sentence — nobody here holds that lever — and send no op for it. Offer instead what they can do: their OWN effort against it (sabotage, a covert operation, diplomatic pressure, an embargo, outbuilding them), which is a project of theirs you may open once they settle on it. Their programme runs on until the world's events stop it.
 
 [What does not belong on the board]
-The board is for work that genuinely runs for rounds and can fall behind. Three things are not that, and putting one here is worse than doing nothing, because the player then watches a progress bar instead of getting what they asked for:
-- Internal acts. Renaming or recolouring the country, a new flag, style, title or anthem, a redesignated capital, a proclamation, a ministry reshuffle, the administration of land they already hold. These are one signature by a government that needs nobody else's consent. They are ACTIONS — propose them in your \`\`\`actions block for the player's review, explain that the player must click Proceed before they are queued, and describe the intended visible change after a subsequent time skip (the map label, the country panel).
-- Anything the player has asked you to simply do. A request is not a programme.
-- Single decisions and one-off events. Signing something already agreed, a speech, a state visit, a purchase already funded.
-Territory is the one that needs judgement. Handing a region over is immediate too WHEN the other side has already agreed to it, or when the ground has already been taken and held — a settled hand-over needs no programme. It is only a project when it is genuinely contested: then the campaign to obtain the consent or the ground is the project, the transfer itself rides on its onComplete, and the world's events will mark the territory disputed in the meantime.
-A project needs all three of: it takes months or years, it can be measured, and it can go wrong. If you cannot name a plausible milestone six months out, it is not a project. When you are unsure, the answer is an action.
+The board is for work that genuinely runs for months or years, can be measured, and can go wrong. Never open a project for an internal act the government simply decides — renaming or recolouring the country, a flag, a title, a proclamation, a reshuffle, the administration of land it already holds — nor for a single decision, a request, or a hand-over the other side has already agreed to. Those are ACTIONS: propose them in your \`\`\`actions block for the player's review, and say the player must click Proceed before they are queued.
 
-To act, end your reply with a fenced \`\`\`projects block containing a JSON array (in ADDITION to your normal prose reply — always also say in plain text what you opened or changed; the array itself is stripped from what the player sees). Each entry:
-- Open one: {"op":"create","name":"Project Leviathan","summary":"...","kind":"project","tags":["military","naval"],"status":"active","progress":0,"targetDate":"YYYY-MM-DD","milestones":[{"title":"...","date":"YYYY-MM-DD"}]} — kind is "operation" for a military, intelligence or covert undertaking and "project" for a programme or build. Add "secrecy":"covert" for something deniable, and "ownerCode":"<full country name>" for a FOREIGN power's programme you have learned of (omit it entirely for the player's own).
-- Change one: {"op":"update","id":"<exact id from the list below>","name":"<its exact name>","progress":58,"status":"stalled","lastUpdate":"One sentence on what just changed."} — send only the fields that actually change.
-- Record a checkpoint: {"op":"milestone","id":"<exact id>","name":"<its exact name>","milestone":{"title":"Sea trials","date":"YYYY-MM-DD","status":"pending"}} — status is pending, done, or missed.
-- End one: {"op":"complete"|"cancel"|"fail","id":"<exact id>","name":"<its exact name>","note":"How it ended."} — complete if it succeeded, cancel if it was called off, fail if it was defeated. All three keep it on the board, where the player can see it under Closed. Do NOT use "op":"remove" for any of these: remove erases the entry entirely and is only for something that should never have been opened.
-Both "id" and "name" must be copied EXACTLY from [Current Projects & Operations] below — never invented or guessed, or the change lands on nothing and is silently dropped. Omit the \`\`\`projects block entirely when nothing should change; most replies need none.
-
-Tags are open vocabulary, lowercase and short (military, political, naval, economic, research, intelligence, infrastructure, nuclear, space). Reuse the same spellings across projects so the player's filters keep working.
-
-Some checkpoints come round again. For a standing commitment — an annual drill, a quarterly review, a monthly rotation — add "repeat":"annual" (or weekly, monthly, quarterly, biennial) to the milestone, and give it a date so it keeps the slot it falls on. Then simply send it as done each time it is actually performed: the engine advances it to the next occurrence, keeping the same day of the year, and sets it pending again on its own. Do NOT create a fresh milestone for each year, and do NOT hand-write the next date — just mark the one that exists as done and it rolls. A checkpoint that happens once and is then finished takes no repeat.
-
-Not everything ends. For a standing effort with no planned completion — a permanent patrol, a continuous intelligence or security programme, an alliance kept in good repair — set "ongoing":true and leave targetDate out entirely. Never invent an end date for something that is simply meant to continue: the board flags a project overdue once its target date passes, so a made-up deadline turns a healthy standing operation into a false alarm. An ongoing effort still takes milestones, and can still be completed or cancelled later if it genuinely ends. Once set, it STAYS ongoing until you explicitly say otherwise — to give one a deadline later, send "ongoing":false together with the targetDate, or the date is ignored.
-
-When you mention a project that is already on the board, send only the fields that actually changed. Everything you leave out is kept as it was, so you never need to restate a project in full just to note that it progressed — and a brief mention can never quietly reset its status, progress or settings.
-
-The block must be STRICT JSON, and the one thing that reliably breaks it is a double quote inside a value: write (the Titan-class megalith), not (the "Titan-class" megalith). Use no quotation marks inside any summary, name or note — and no line breaks inside a value either. Straight double quotes around keys and values only; never curly quotes.
-
-Keep the block SMALL. Your reply has a length limit, and a block that runs past it is cut off mid-array and lost — the board does not update at all. So: one sentence per summary, and only the milestones that still matter (those still ahead, plus at most one already achieved; the board keeps its own history of the events behind each project, so you do not need to restate it). If there is a lot to open at once, do TEN AT MOST in one reply, say which ones you have covered and that more remain, and let the player ask for the next batch. Ten entries that land beat forty that do not.
-
-Some projects exist to make a concrete change to the world, and those must say what the change IS when you open them, not merely describe it. Add "onComplete" to the create op: {"onComplete":{"polityChanges":[{"code":"Ruritania","name":"Federal Republic of Ruritania"}],"regionTransfers":[{"regionId":"Northern Marches","toCode":"Ruritania"}]}}. The engine applies it the moment the project is completed, exactly once, and never on a cancel or a failure — so an annexation that finishes actually moves the border, and a unification that finishes actually renames the polity, instead of the bar reaching 100% while the map stays exactly as it was. Keep "code" as the polity's CURRENT name; the engine matches on it and stores the new one. One rule about these, and it is absolute: YOU DO NOT CLOSE A PROJECT THAT CARRIES AN onComplete. Only the world's events may move a border or rename a polity, and you are not the world's events — so if you send op complete for one of these, the engine keeps it open, tells the player the next time skip will enact it, and nothing changes yet. That is correct and you should not fight it: say in prose that the effort has succeeded and the change lands at the next jump, and let the simulation close it. Most projects have no onComplete at all: a research programme, a construction project or a campaign of influence finishes narratively and takes none. Attach one only when completion causes a specific, nameable change of territory or of a polity's identity.
-
-Keep it honest. Progress and dates are what the board shows the player, and the engine flags a project overdue on its own once its target date passes — so do not quietly push a target date back to hide a slip. Say the programme is late and mark it stalled.
-
-Never invent a project. Every entry must be something that actually happened in this campaign's record — the event history, the player's own actions, or intelligence you have genuinely been given. If you are asked to continue a backfill and everything worth tracking is already on the board, the correct answer is to SAY SO and send no block at all. "That is all of them" is a complete and useful reply; padding the batch with plausible-sounding programmes to fill it corrupts the board, and the player has no way to tell an invented entry from a real one. If you are unsure whether something counts, name it in your prose and ask, rather than opening it.
+The block must be STRICT JSON: a JSON array, straight double quotes, no quotation marks or line breaks inside a value. Always also say in prose what you opened or changed; the block itself is hidden from the player. Name each entry exactly as [Current Projects & Operations] below names it. Omit the block entirely when nothing should change; most replies need none. Never invent an effort that did not happen in this campaign.
 
 Example:
 \`\`\`projects
-[{"op":"update","id":"project-abc123","name":"Project Leviathan","progress":58,"lastUpdate":"Hull section three is complete; the yard says sea trials hold for November."}]
+[{"op":"update","name":"Taranto Naval Base","funding":"high"}]
 \`\`\`
 
 [Current Projects & Operations]
@@ -3679,7 +3647,7 @@ ${lines.length ? lines.join("\n") : "No country is known to direct another."}`;
 // being saved: the narrator's lookups follow the same rule
 // (gameplay.js lookupFunctionsEnabled), since each round is a request.
 // Otherwise the advisor is handed the list itself (describeAdvisorGroups), as
-// Save AI requests promises: the names it needs instead of looking them up.
+// a key with a request limit gets: the names it needs instead of looking them up.
 // Neither while groups are switched off for the game (server/gameFeatures.js).
 const advisorGroupCount = (world) => (isActiveFeatureEnabled("groups") ? Object.keys(normalizeGroups(world?.groups)).length : 0);
 const advisorGroupFunctionsAllowed = () => !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
@@ -3759,7 +3727,7 @@ async function describePlayerStatsForAdvisor(worldData, country) {
     });
 }
 
-async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
+async function buildAdvisorSystemPrompt({ recipient = null, discussionOnly = false, meetingMode = false, noLookups = false, currentQuestion = "" } = {}) {
     if (recipient && advisorRecipientType(recipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER) {
         // This branch deliberately reads NO actions, private diplomatic chats,
         // Advisor transcripts or prompt pack. World is used only by viewAsSeen
@@ -3795,6 +3763,16 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
         game: savedGame, chats: savedChats, world: savedWorld, events: savedEvents,
     });
 
+    // The older conversations kept on file nearest to what the player asks
+    // (AI/chatArchive.js): a moment at most, on this device.
+    const lastQuestion = [...(Array.isArray(advisorData) ? advisorData : [])].reverse()
+        .find((message) => message?.role === "user" && String(message?.text || "").trim());
+    const pastTalks = await findPastTalks({ game: gameData, world: worldData, chats: chatData, actions: actionData }, {
+        // The current question has not necessarily been persisted yet; searching
+        // for the previous saved question misses the exact topic of this turn.
+        about: String(currentQuestion).trim() ? [String(currentQuestion)] : lastQuestion ? [String(lastQuestion.text)] : [],
+        focus: false,
+    });
     const variables = {
         ...(await buildPromptVariables({
             actionData,
@@ -3802,12 +3780,19 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
             chatData,
             eventData,
             gameData,
+            pastTalks,
             worldData,
             requiredKeys: chatPromptDemand(promptPack.advisor, {
                 extra: ["plannedActionsWithIds", "projectsSummary"],
-                exclude: ["advisorMessages"],
+                exclude: ["advisorMessages", "chatHistoryLong"],
             }),
         })),
+        // Time Skip already uses bounded, lookup-backed history. Individual
+        // Advisors now receive their own bounded diplomatic view, with a native
+        // exact-message retrieval path across both active and archived chats.
+        chatHistoryLong: renderAdvisorDiplomaticContext({
+            chats: chatData, world: worldData, game: gameData, pastTalks,
+        }),
         advisorMessages: CONVERSATION_IN_TURNS,
         plannedActions: PLANNED_ACTIONS_IN_ACTION_PLANNING,
     };
@@ -3817,10 +3802,18 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
     // The briefing and the rules also ride inside the world summary; keep one
     // copy of each, as runJsonTask does for the gameplay tasks.
     const rendered = collapseRepeatedWorldContext(
-        renderTemplate(promptPack.advisor, { ...variables, ...helperValues }),
+        renderConversationTemplate(guardPromptTemplate("advisor", promptPack.advisor, promptPack.bypassLengthLimit === true), { ...variables, ...helperValues }),
         variables,
     );
-    const groupLookups = advisorGroupLookups({ world: worldData, player: gameData?.country || "" });
+    const groupLookups = discussionOnly || noLookups ? null : advisorGroupLookups({ world: worldData, player: gameData?.country || "" });
+    const diplomaticLookups = discussionOnly || noLookups || !advisorGroupFunctionsAllowed()
+        ? null : advisorDiplomaticLookups({ chats: chatData });
+    const lookups = groupLookups && diplomaticLookups ? {
+        tools: [...groupLookups.tools, ...diplomaticLookups.tools],
+        maxRounds: Math.max(groupLookups.maxRounds, diplomaticLookups.maxRounds),
+        execute: (name, args) => diplomaticLookups.tools.some((tool) => tool.name === name)
+            ? diplomaticLookups.execute(name, args) : groupLookups.execute(name, args),
+    } : groupLookups || diplomaticLookups;
     const groupsListed = groupLookups ? "" : await describeAdvisorGroups({ world: worldData, player: gameData?.country || "" });
     const advisorPoliticalDiplomacy = buildAdvisorPoliticalDiplomacyContext({
         world: worldData,
@@ -3855,11 +3848,13 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
         describeWeatherForAdvisor({ world: worldData, player: gameData?.country || "", date: gameData?.gameDate || "" }),
         // (The seasons and the weather, which the map shows with no words:
         // advisorWeather.js.)
-        buildAdvisorActionsDirective(variables.plannedActionsWithIds),
-        ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
-        ADVISOR_INSTITUTION_DRAFT_DIRECTIVE,
-        ADVISOR_DEPLOY_DIRECTIVE,
-        buildAdvisorProjectsDirective(variables.projectsSummary),
+        discussionOnly ? "" : buildAdvisorActionsDirective(variables.plannedActionsWithIds),
+        discussionOnly || meetingMode ? "" : renderPendingAdvisorActionDrafts(
+            pendingAdvisorActionDrafts(advisorData, actionData, recipient?.id || CHIEF_ADVISOR_THREAD)),
+        discussionOnly ? "" : ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
+        discussionOnly || meetingMode ? "" : ADVISOR_INSTITUTION_DRAFT_DIRECTIVE,
+        discussionOnly || meetingMode ? "" : ADVISOR_DEPLOY_DIRECTIVE,
+        discussionOnly ? "" : buildAdvisorProjectsDirective(variables.projectsSummary),
         // Subordinations as the PLAYER knows them (runtime/puppets.js). worldData
         // is already the world as the player has been shown it (viewAsSeen), so a
         // subordination a still-unrevealed event installed is not on it yet —
@@ -3884,9 +3879,9 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
         // Observer mode (runtime/sandbox.js): no government to serve.
         describeSandboxForAdvisor(gameData),
         ADVISOR_FORMATTING_DIRECTIVE,
-        // Last, as the last thing it writes: the hidden ADVISOR_MEMORY line
-        // (advisorMemory.js).
-        ADVISOR_MEMORY_DIRECTIVE,
+        // One-to-one replies retain their durable memory suffix. Group
+        // speakers may pass without memory; shared batches use a JSON field.
+        advisorMemoryDirectiveForMode(meetingMode),
     ].filter(Boolean);
     // A manually created contact speaks as its own persistent personality.
     // Its profile is supplied every call, outside history compaction. Only
@@ -3904,10 +3899,182 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
         ? `[Advisor Recipient — Persistent Identity]
 You are ${recipient.name}, known to the player as ${recipient.title}. You are speaking to the player as this specific person, NOT as their chief advisor.
 ${officeContext}
-${recipient.personality ? `Personality and operating principles: ${recipient.personality}\n` : ""}Maintain this identity across turns. Speak within your actual knowledge and office; do not invent appointments or authority. You may propose Actions for human review using fenced actions blocks, but they are NOT queued until the player explicitly selects Proceed; never claim to have executed one. You may also create or update Projects with fenced projects blocks once the player has clearly committed to the sustained effort, or when recording substantiated progress; those Project edits go directly to the existing board without an extra approval. Recommend potential Projects freely in prose, but do not open speculative ones or claim institutional powers merely from your typed title. No other canonical government mutations are authorized by this conversation.`
+${recipient.personality ? `Personality and operating principles: ${recipient.personality}\n` : ""}Maintain this identity across turns. Speak within your actual knowledge and office; do not invent appointments or authority. ${discussionOnly
+  ? "This conversation is discussion-only. Propose plans in prose, but do not emit executable blocks or claim that you changed game state."
+  : "You may propose Actions for human review using fenced actions blocks, but they are NOT queued until the player explicitly selects Proceed; never claim to have executed one. You may also create or update Projects with fenced projects blocks once the player has clearly committed to the sustained effort, or when recording substantiated progress; those Project edits go directly to the existing board without an extra approval. Recommend potential Projects freely in prose, but do not open speculative ones or claim institutional powers merely from your typed title."} No other canonical government mutations are authorized by this conversation.`
         : "";
-    const chiefIdentity = recipient ? "" : describeChiefAdvisorOverride(chiefAdvisorProfile(advisorData));
-    return { systemPrompt: `${rendered}\n\n${[...directives, identity, chiefIdentity].filter(Boolean).join("\n\n")}`, lookups: groupLookups };
+    const chiefIdentity = recipient || meetingMode === "batch" ? "" : describeChiefAdvisorOverride(chiefAdvisorProfile(advisorData));
+    return { systemPrompt: `${rendered}\n\n${[...directives, identity, chiefIdentity].filter(Boolean).join("\n\n")}`, lookups };
+}
+
+// Each group member speaks in their own persistent minister/chief persona.
+// Responses may contain proposals, but the caller must attach them to the
+// specific speaker's saved reply and pass them through native validation.
+// Sequential batches preserve full participation with optional independent generation.
+export async function sendAdvisorGroupMessage({ threadId, messages, onSpeakerChunk, onSpeakerComplete, onBatchComplete, shouldAbort } = {}) {
+    const [stored, currentActions] = await Promise.all([
+        readJson(JSON_URLS.advisor, { defaultValue: [], force: true }),
+        readJson(JSON_URLS.actions, { defaultValue: [], force: true }),
+    ]);
+    if (!Array.isArray(currentActions)) throw new Error("Current Actions could not be verified for Advisor proposal review.");
+    const group = advisorGroupForReply(stored, threadId);
+    const persistedGroupMessages = advisorMessagesFor(stored, threadId);
+    const contacts = advisorContacts(stored);
+    const chiefName = chiefAdvisorProfile(stored)?.name || "Chief advisor";
+    const conversation = (Array.isArray(messages) ? messages : [])
+        .filter((message) => message?.role === "user" || message?.role === "advisor" || message?.role === "error");
+    const question = [...conversation].reverse().find((message) => message.role === "user")?.text || "";
+    if (!String(question).trim()) throw new Error("A group chat needs a question from the player.");
+    const speakers = selectAdvisorGroupSpeakers(group.memberIds, conversation);
+    if (!speakers.length) throw new Error("Every group member has already responded or explicitly declined this question.");
+    const { effectiveBatchSize } = readAdvisorGroupSettings();
+    const batches = groupSpeakerBatches(speakers, effectiveBatchSize);
+    const groupTurnId = `group-turn-${globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,14)}`}`;
+    const participants = group.memberIds.map((id) => {
+        const person = id === CHIEF_ADVISOR_THREAD ? null : contacts.find((contact) => contact.id === id);
+        return `- ${advisorGroupSpeakerName(id, contacts, chiefName)} (${person?.title || "Chief advisor"})`;
+    }).join("\n");
+    const result = [];
+    for (const [batchIndex, batch] of batches.entries()) {
+        if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
+        if (batch.length > 1) {
+            const { systemPrompt } = await buildAdvisorSystemPrompt({
+                meetingMode: "batch", noLookups: true, currentQuestion: question,
+            });
+            const chief = chiefAdvisorProfile(stored);
+            const prompt = buildAdvisorSharedBatchPrompt({
+                groupName: group.name, memberIds: batch, contacts,
+                chiefName, chiefTitle: chief?.title || "Chief advisor",
+                chiefPersonality: chief?.personality || "",
+                transcript: renderAdvisorGroupHistory(conversation, contacts, chiefName, GROUP_MEETING_CONTEXT_MAX_CHARS, { currentActions, draftMessages: persistedGroupMessages }),
+                question,
+            });
+            const sink = {};
+            try {
+                const raw = await callAI(systemPrompt + "\n\n" + prompt,
+                    [{ role: "user", parts: [{ text: "Return all invited group replies as one exact JSON object, preserving speaker identity and order." }] }],
+                    { maxTokens: Math.min(24000, 2400 * batch.length),
+                        languageMode: "chat", logLabel: "advisor group", taskKey: "advisor", agentKind: "advisor",
+                        __debugSink: sink,
+                        groupDebug: { turnId: groupTurnId, name: group.name,
+                            batchIndex: batchIndex + 1, totalSpeakers: speakers.length, speakerIds: batch } });
+                if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
+                const parsed = parseAdvisorGroupBatch(raw, batch);
+                if (typeof onBatchComplete !== "function") throw new Error("Group batch validation callback is missing.");
+                const completed = await onBatchComplete(parsed);
+                if (!Array.isArray(completed) || completed.length !== batch.length
+                    || completed.some((entry, index) => entry.speakerId !== batch[index])) {
+                    throw new Error("Group batch completion did not preserve every speaker.");
+                }
+                conversation.push(...completed);
+                result.push(...completed);
+                attachAttemptOutcome(sink.record, { ok: true });
+            } catch (error) {
+                attachAttemptOutcome(sink.record, {
+                    ok: false, validationError: String(error?.message || error),
+                });
+                throw error;
+            }
+            continue;
+        }
+        const speakerId = batch[0];
+        if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
+        // Enforce contact identity at the model boundary; supplied UI profiles
+        // cannot silently elevate a character into privileged government counsel.
+        const recipient = speakerId === CHIEF_ADVISOR_THREAD ? null
+            : advisorRecipientForReply(stored, speakerId, contacts.find((contact) => contact.id === speakerId));
+        if (recipient && advisorRecipientType(recipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER) {
+            throw new Error("Only government advisors may speak in a government group chat.");
+        }
+        const { systemPrompt, lookups } = await buildAdvisorSystemPrompt({ recipient, meetingMode: true, noLookups: true, currentQuestion: question });
+        const name = advisorGroupSpeakerName(speakerId, contacts, chiefName);
+        const privateHistory = advisorMessagesFor(stored, speakerId)
+            .filter((row) => row.role === "user" || row.role === "advisor")
+            .slice(-6)
+            .map((row) => `${row.role === "user" ? "Player" : name}: ${String(row.text || "").slice(0, 440)}`)
+            .join("\n");
+        const meetingDirective = `[Current Group Chat: ${group.name}]
+Participants, with independent voices:
+${participants}
+
+You are ${name}, ONE specific participant in this group conversation. Your own existing personality, values, title, authority and expertise above remain in force; do not speak for colleagues or invent their replies. If you speak, address the latest message or previous speakers from your distinct perspective, and disagree when the facts warrant it. Do not produce a reply merely to acknowledge the player or maintain a group conversation. Your response will be attributed ONLY to you.
+You are authorized to use the normal Advisor / Minister contracts for formal work: fenced actions proposals are saved for the player's explicit Proceed review, never auto-queued. When the player has clearly committed to sustained work, you may open or update Projects through fenced projects operations, which are applied through the game's normal native validation. You may also prepare diplomatic drafts for the player's review. Do NOT issue deployment or institution execution blocks from this group chat. Do not impersonate another speaker or claim an unapproved Action has executed. No reply of yours binds other ministers or the state.
+
+[Your Existing One-to-One Correspondence — private to you]
+${privateHistory || "(No prior private exchanges.)"}
+Only you have seen these private exchanges. Do not attribute their contents to colleagues unless those facts are also public or spoken in this meeting.
+
+[Group Chat Transcript]
+${renderAdvisorGroupHistory(conversation, contacts, chiefName, GROUP_MEETING_CONTEXT_MAX_CHARS, { currentActions, draftMessages: persistedGroupMessages })}
+
+[Group participation decision]
+${OPTIONAL_GROUP_SPEECH_STANDARD} If no material contribution remains, output ONLY the exact token [[PASS]] and nothing else. That is an intentional pass, not an empty or truncated response.
+
+Decide independently whether you need to speak as ${name}. Address a substantive question when you have useful counsel; otherwise pass. A material objection is always welcome.`;
+        const sink = {};
+        let repairSink = null;
+        let initialResponseAccepted = true;
+        let shownStream = "";
+        try {
+            const raw = await callAI(`${systemPrompt}\n\n${meetingDirective}`,
+                [{ role: "user", parts: [{ text: "Apply the group participation decision above. Speak when you have a substantive answer, necessary clarification or important objection. Otherwise return exactly [[PASS]]. Do not produce a courtesy reply or imply silent execution." }] }],
+                { maxTokens: 2400, languageMode: "chat", logLabel: "advisor group", taskKey: "advisor",
+                    agentKind: "advisor", __debugSink: sink,
+                    groupDebug: { turnId: groupTurnId, name: group.name,
+                        batchIndex: batchIndex + 1, totalSpeakers: speakers.length, speakerIds: batch },
+                    ...(lookups ? { lookups } : {}),
+                    onChunk: (_delta, full) => {
+                        if (shouldAbort?.()) return;
+                        const visible = visibleAdvisorGroupStreamReply(full);
+                        if (!visible || visible === shownStream) return;
+                        const delta = visible.startsWith(shownStream) ? visible.slice(shownStream.length) : visible;
+                        shownStream = visible;
+                        onSpeakerChunk?.(speakerId, delta, visible);
+                    } });
+            if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
+            let record;
+            try {
+                record = parseAdvisorGroupIndividualReply(raw, speakerId, name);
+            } catch (validationError) {
+                if (!malformedAdvisorGroupSilentPass(raw)) throw validationError;
+                // A model chose silence but appended forbidden private memory.
+                // Keep the parser fail-closed. Retry ONLY its short format
+                // contract, without world context, private memory or lookups.
+                // Do not replay earlier speakers and do not commit the first
+                // response, which is invalid. This retry is bounded to once.
+                initialResponseAccepted = false;
+                attachAttemptOutcome(sink.record, {
+                    ok: false, validationError: String(validationError?.message || validationError),
+                });
+                if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
+                repairSink = {};
+                const correctedRaw = await callAI(
+                    "[Advisor group silent-reply protocol correction] This member has already chosen to pass. "
+                      + "The previous reply was invalid because it appended private memory. "
+                      + "Return precisely [[PASS]] and nothing else. Do not write memory, speech or operations.",
+                    [{ role: "user", parts: [{ text: "Return exactly [[PASS]]. No suffix or private memory." }] }],
+                    { maxTokens: 64, languageMode: "chat", logLabel: "advisor group pass correction",
+                        taskKey: "advisor", agentKind: "advisor", __debugSink: repairSink,
+                        groupDebug: { turnId: groupTurnId, name: group.name,
+                            batchIndex: batchIndex + 1, totalSpeakers: speakers.length, speakerIds: batch } },
+                );
+                if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
+                record = parseAdvisorGroupSilentRepair(correctedRaw, speakerId, name);
+            }
+            if (typeof onSpeakerComplete !== "function") throw new Error("Group speaker validation callback is missing.");
+            const completed = await onSpeakerComplete(record);
+            if (!completed || completed.speakerId !== speakerId) throw new Error("Group speaker identity changed during completion.");
+            conversation.push(completed);
+            result.push(completed);
+            attachAttemptOutcome(initialResponseAccepted ? sink.record : repairSink?.record, { ok: true });
+        } catch (error) {
+            attachAttemptOutcome(repairSink?.record || sink.record, {
+                ok: false, validationError: String(error?.message || error),
+            });
+            throw error;
+        }
+    }
+    return result;
 }
 
 // `speakingAs` names the polity whose leader is about to reply. It decides both
@@ -3922,7 +4089,9 @@ ${recipient.personality ? `Personality and operating principles: ${recipient.per
 // to appear there too, a second copy that changed with every message.
 export async function buildDiplomaticSystemPrompt(countries, playerCountry, speakingAs = "", {
     chatId = "",
-    decisionFocusText = "",
+    // The player's line answered now is a treaty proposal (chat.jsx's Propose deal): the leader writes the
+    // treaty as the game models it on a hidden TREATY line (AI/treatyTalk.js).
+    proposal = false,
 } = {}) {
     await ensurePromptsLoaded();
     // The panel passes its country objects; `- ${country}` of one read
@@ -3957,11 +4126,22 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     const ownChats = speaker ? filterChatsVisibleTo(chats, speaker) : [];
     const threadId = String(chatId || "");
     const otherOwnChats = threadId ? ownChats.filter((chat) => String(chat?.id || "") !== threadId) : ownChats;
+    // Of this leader's older conversations kept on file (AI/chatArchive.js),
+    // the passages nearest to what the thread is saying now: only chats it was
+    // in, a moment at most, on this device.
+    const thread = threadId ? ownChats.find((chat) => String(chat?.id || "") === threadId) : null;
+    const pastTalks = await findPastTalks({ game: gameData, world: worldData, chats: otherOwnChats, actions: actionData }, {
+        addressed: speaker ? [participantName(speaker)].filter(Boolean) : [],
+        about: (thread?.messages || []).slice(-3).map((message) => String(message?.text || "")).filter(Boolean),
+        openChatId: threadId,
+        focus: false,
+    });
     const variables = {
         ...(await buildPromptVariables({
             actionData,
             advisorData,
             chatData: otherOwnChats,
+            pastTalks,
             eventData,
             gameData,
             speakingAs: speaker,
@@ -4008,27 +4188,44 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
 
     // One copy each of the briefing and the rules (see buildAdvisorSystemPrompt).
     const rendered = collapseRepeatedWorldContext(
-        renderTemplate(promptPack.leader, { ...variables, ...helperValues }),
+        renderConversationTemplate(guardPromptTemplate("leader", promptPack.leader, promptPack.bypassLengthLimit === true), { ...variables, ...helperValues }),
         variables,
     );
     const politicalDecision = buildDiplomaticPoliticalContext({
         world: worldData,
         speakingAs: speaker,
         playerCountry: playerCountry || gameData?.country || "",
-        decisionFocusText,
     });
     const politicalSection = politicalDecision?.text ? `\n\n${politicalDecision.text}` : "";
 
     // When the player leads a group rather than a country (runtime/groups.js), the
     // leader answering it knows what it is dealing with. Not while groups are
     // switched off for the game (server/gameFeatures.js), as for the time skip.
+    const canonicalPlayerName = toCountryName(playerCountry || gameData?.country || "");
+    const speakerEntry = Array.isArray(countries)
+        ? countries.find((entry) => entry && typeof entry === "object" && String(entry.name || "").trim().toLowerCase() === participantName(speaker).toLowerCase())
+        : null;
+    const speakerIsCountry = Boolean(speakerEntry && String(speakerEntry.code || "").trim());
+
     const playerGroupText = await (async () => {
-        const playerName = playerCountry || gameData?.country || "";
-        if (!worldData?.groups || !playerName || !isActiveFeatureEnabled("groups")) return "";
+        if (!worldData?.groups || !canonicalPlayerName || !isActiveFeatureEnabled("groups")) return "";
         const catalog = await loadRegionCatalog().catch(() => []);
         const names = new Map(catalog.map((region) => [region.id, region.name]));
-        return describePlayerGroupForPrompt(worldData, playerName, { regionName: (id) => names.get(id) || id });
+        return describePlayerGroupForPrompt(worldData, canonicalPlayerName, { regionName: (id) => names.get(id) || id });
     })();
+
+    // A group's leadership speaks as the group it is (Game/AI/groupDealTalk.js). Empty for a country.
+    const groupLeaderText = await (async () => {
+        if (!worldData?.groups || !speaker || speakerIsCountry || !isActiveFeatureEnabled("groups")) return "";
+        const catalog = await loadRegionCatalog().catch(() => []);
+        const names = new Map(catalog.map((region) => [region.id, region.name]));
+        return describeGroupLeaderBrief({ world: worldData, speaker: participantName(speaker), player: canonicalPlayerName, regionName: (id) => names.get(id) || "", isGroup: speakerIsCountry ? false : null });
+    })();
+    // Treaties with the player (AI/treatyTalk.js): those in force and how to break one, and, answering a
+    // proposal, how to write the treaty as the game models it, with its effects, from both sides' means.
+    const treatyText = speaker
+        ? describeTreatyTalk({ world: worldData, speaker: participantName(speaker), player: canonicalPlayerName, proposal, speakerIsGroup: speakerIsCountry ? false : null })
+        : "";
 
     // The Game Master's standing reminders bind a leader too: a leader told the
     // bridge is down does not offer to meet on it.
@@ -4076,7 +4273,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
 
     // How softly or firmly a leader bargains at the chosen difficulty is in its
     // template (${DIFFICULTY_DESCRIPTION_CHATS}, the diplomacy directive), once.
-    return `${rendered}${politicalSection}${espionage}${standing ? `\n\n${standing}` : ""}${territory ? `\n\n${territory}` : ""}${wars ? `\n\n${wars}` : ""}${peaceTalk ? `\n\n${peaceTalk}` : ""}${playerGroupText ? `\n\n${playerGroupText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}`;
+    return `${rendered}${politicalSection}${espionage}${standing ? `\n\n${standing}` : ""}${territory ? `\n\n${territory}` : ""}${wars ? `\n\n${wars}` : ""}${peaceTalk ? `\n\n${peaceTalk}` : ""}${playerGroupText ? `\n\n${playerGroupText}` : ""}${groupLeaderText ? `\n\n${groupLeaderText}` : ""}${treatyText ? `\n\n${treatyText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}`;
 }
 
 // Each recipient has an independent in-memory history, durable memory and
@@ -4127,9 +4324,11 @@ export async function sendMessage(userMessage, options) {
     // The conversation this reply is for, and its history, taken before the
     // first await. Another contact can be opened without replacing this state.
     const conversation = state.conversation.current();
-    const priorHistory = state.history;
+    // Old Action JSON blocks describe previous proposals, not editable queue state.
+    // Filter only provider-bound minister/chief history; retain the saved transcript.
+    const priorHistory = character ? state.history : sanitizeAdvisorModelHistory(state.history);
     const memoryContext = advisorMemoryContextEntry(state.memory);
-    const { systemPrompt, lookups } = await buildAdvisorSystemPrompt({ recipient: storedRecipient });
+    const { systemPrompt, lookups } = await buildAdvisorSystemPrompt({ recipient: storedRecipient, currentQuestion: userMessage });
     const asked = { role: "user", parts: [{ text: withCatchUp(userMessage, catchUp) }] };
     const history = compactConversationHistory([...priorHistory, asked]);
     if (state.conversation.isCurrent(conversation)) state.history = history;
@@ -4157,7 +4356,9 @@ export async function sendMessage(userMessage, options) {
         const { reply: shown, memory } = splitAdvisorMemory(reply);
         if (state.conversation.isCurrent(conversation)) {
             if (memory) state.memory = memory;
-            state.history.push({ role: "model", parts: [{ text: shown }] });
+            // Keep the next in-session turn safe without altering the raw
+            // response passed to the native parser and saved Advisor messages.
+            state.history.push({ role: "model", parts: [{ text: character ? shown : redactHistoricalAdvisorActionBlocks(shown) }] });
         }
         // The raw reply, before advisor.jsx strips its ```actions / ```projects /
         // ```deploy blocks out of it. A block that was malformed, or that the UI
@@ -4175,18 +4376,35 @@ export async function sendMessage(userMessage, options) {
     }
 }
 
-export function loadHistory(savedMessages, threadId = "chief") {
+// A second, bounded provider request verifies an omitted Action proposal
+// without sending the entire campaign prompt again. The UI owns the final
+// parser and native review state; this function creates NO canonical changes.
+export async function checkAdvisorActionCompleteness({ playerRequest, advisorReply, delivered } = {}) {
+    const result = await callAI(ADVISOR_ACTION_COMPLETION_SYSTEM, [
+        { role: "user", parts: [{ text: buildAdvisorActionCompletionQuestion({ playerRequest, advisorReply, delivered }) }] },
+    ], {
+        maxTokens: ADVISOR_ACTION_COMPLETION_MAX_TOKENS,
+        taskKey: "advisor", agentKind: "advisor",
+        logLabel: "advisor Action completeness", languageMode: "none",
+    });
+    return result;
+}
+
+export function loadHistory(savedMessages, threadId = "chief", { character = false } = {}) {
     const state = advisorState(threadId);
     state.conversation.replace();
     state.memory = latestAdvisorMemory(savedMessages);
-    state.history = savedMessages
+    const restoredHistory = savedMessages
     .filter((msg) => msg.role === "user" || msg.role === "advisor")
     .map((msg) => ({
         role: msg.role === "user" ? "user" : "model",
         // Preserve the question's original catch-up across reloads.
-        parts: [{ text: msg.role === "user" ? withCatchUp(msg.text, msg.catchUp) : msg.text }],
+        parts: [{ text: msg.role === "user" ? withCatchUp(msg.text, msg.catchUp)
+            : character ? msg.text : renderHistoricalAdvisorReply(msg) }],
     }));
-    state.history = compactConversationHistory(state.history);
+    // Redact historical machine instructions BEFORE older turns are compacted
+    // into a synthetic user-side summary. Characters do not have Action authority.
+    state.history = compactConversationHistory(character ? restoredHistory : sanitizeAdvisorModelHistory(restoredHistory));
     logDebugEvent("advisor",
         `Advisor history restored for ${threadId}: ${state.history.length} message(s) from a ${savedMessages.length}-message transcript.`,
         undefined, { verbose: true });
@@ -4259,7 +4477,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     // `catchUp` is what the world did since this thread last spoke, written by
     // the panel and kept on the player's message (conversationCatchUp.js
     // buildThreadCatchUp); the leader reads it ahead of what the player typed.
-    const { chatId = "", catchUp = "", ...opts } = options || {};
+    const { chatId = "", catchUp = "", proposal = false, ...opts } = options || {};
     // The thread this reply is for, its history and the memory it was asked
     // with, taken before the first await: the player may open another thread
     // before the reply lands (liveConversation.js).
@@ -4267,11 +4485,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     const priorHistory = diplomaticHistory;
     const priorMemory = diplomaticMemorySummary;
     const priorMemoryTime = diplomaticMemoryThroughTime;
-    const focusText = withCatchUp(playerMessage, catchUp);
-    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs, {
-        chatId,
-        decisionFocusText: focusText,
-    });
+    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs, { chatId, proposal });
 
     const asked = { role: "user", parts: [{ text: withCatchUp(playerMessage, catchUp) }] };
     const history = compactConversationHistory([...priorHistory, asked]);
@@ -4298,7 +4512,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
 
     try {
         const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy → ${speakingAs}`, taskKey: "diplomacy", agentKind: "diplomacy" });
-        const { reply, reaction, memorySummary: generatedMemorySummary, peace } = parseDiplomaticEnvelope(raw);
+        const { reply, reaction, memorySummary: generatedMemorySummary, peace, treaty } = parseDiplomaticEnvelope(raw);
         // A reply that dropped the memory line keeps the last one; the
         // thread never forgets what it knew because one answer was terse.
         const memorySummary = generatedMemorySummary || priorMemory;
@@ -4317,11 +4531,13 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
             { verbose: true });
         // A reply that was only its PEACE line is remembered as that line, as the model wrote it, so the thread knows
         // what was decided.
-        const remembered = reply || String(raw ?? "").match(/^[ \t]*PEACE[ \t]*:.*$/im)?.[0]?.trim() || "";
+        const remembered = reply || (treaty ? `TREATY:${treaty}` : "") || String(raw ?? "").match(/^[ \t]*PEACE[ \t]*:.*$/im)?.[0]?.trim() || "";
         if (stillOpen) diplomaticHistory.push({ role: "model", parts: [{ text: `[${speakingAs}]: ${remembered}` }] });
         // `peace`: what the leader decided of peace with the player, its hidden
         // PEACE line, "" for nothing (the panel carries it out: gameplay.js answerPeaceInChat).
-        return { reply, reaction, memorySummary, peace };
+        // `treaty`: what the leader decided of a treaty and the treaty itself, its hidden TREATY line
+        // (gameplay.js answerTreatyInChat).
+        return { reply, reaction, memorySummary, peace, treaty };
     } catch (err) {
         if (diplomaticConversation.isCurrent(conversation)) removeEntry(diplomaticHistory, asked);
         logDebugEvent("diplomacy", `${speakingAs} failed to reply after ${elapsedSeconds(startedAt)} — the message was rolled back off the history.`, err);
@@ -4339,10 +4555,7 @@ export async function buildDiplomaticEvaluationRequest({
     priorMessages = [],
     chatId = "",
 } = {}) {
-    const systemPrompt = await buildDiplomaticSystemPrompt(participantNames || [], playerCountry, speakingAs, {
-        chatId,
-        decisionFocusText: playerMessage,
-    });
+    const systemPrompt = await buildDiplomaticSystemPrompt(participantNames || [], playerCountry, speakingAs, { chatId });
 
     const priorMemory = latestSavedDiplomaticMemory(priorMessages);
     let history = priorMessages
@@ -4448,13 +4661,15 @@ const pendingBatchIds = new Map(); // customId -> { batchId, apiKey }
 // Resolves to { customId, batchId, connectionId } when the batch was accepted,
 // null when batching is unavailable or the submission was refused — the caller
 // then runs the task synchronously.
-export async function submitAIBatch({ customId, systemPrompt, history, taskKey, tool }) {
+export async function submitAIBatch({ customId, systemPrompt, history, taskKey, tool, staticPrefixEnd = null }) {
     const entry = batchEntryFor(taskKey);
     if (entry?.provider !== "anthropic") return null;
     // A batched task opens with the difficulty's priority line like any other (callAI).
     try {
         const savedGame = await readJson(JSON_URLS.game, { defaultValue: {} });
-        systemPrompt = withDifficultyPriority({ systemPrompt, taskKey, difficulty: savedGame?.difficulty }).systemPrompt;
+        const led = withDifficultyPriority({ systemPrompt, taskKey, difficulty: savedGame?.difficulty, staticPrefixEnd });
+        systemPrompt = led.systemPrompt;
+        staticPrefixEnd = led.staticPrefixEnd;
     } catch {
         // Without the save the batch goes out as it was built.
     }
@@ -4483,7 +4698,9 @@ export async function submitAIBatch({ customId, systemPrompt, history, taskKey, 
         messages: tool && !forceTool
             ? withToolCallReminder(messages, toolCallReminder({ toolName: tool.name, lookupsAllowed: false }))
             : messages,
-        system: systemPrompt,
+        // Batches take cache_control like any request: the cacheable prefix is
+        // read from the cache when the batch runs, at a tenth of its price.
+        system: buildAnthropicSystemContent(systemPrompt, staticPrefixEnd),
         ...temperatureBody(taskKey, { enabled: !temperatureRefusals.refuses(samplingKey) }),
         ...(tool ? {
             tools: [{ name: tool.name, description: tool.description, input_schema: tool.schema }],
