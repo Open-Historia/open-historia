@@ -306,6 +306,9 @@ export const WORLD_DEFAULTS = {
   // game. A save from before the ledgers keeps 0, and keeps what its records
   // hold: nothing is seeded into them from its old events or chats.
   diplomaticLedgerVersion: 0,
+  // Bumped once repairWarSides (AI/warSidesRepair.js) has read the wars' sides
+  // against the ledgers, so a save is repaired only once (#892).
+  warSidesRepairVersion: 0,
   wars: [],
   // Where land wars are fought: two sides, the troops each has there, and the
   // front line between what each holds (runtime/fronts/record.js). Written by
@@ -4619,6 +4622,9 @@ export const normalizeWorldState = (world) => {
     agreements: normalizeWorldAgreements(nextWorld.agreements, diplomaticIdentityWorld),
     diplomaticLedgerVersion: Number.isFinite(Number(nextWorld.diplomaticLedgerVersion))
       ? Math.max(0, Math.trunc(Number(nextWorld.diplomaticLedgerVersion)))
+      : 0,
+    warSidesRepairVersion: Number.isFinite(Number(nextWorld.warSidesRepairVersion))
+      ? Math.max(0, Math.trunc(Number(nextWorld.warSidesRepairVersion)))
       : 0,
     wars: normalizeWorldWars(nextWorld.wars, nextWorld),
     // Shape and length only: the engine wrote every record, and this runs on

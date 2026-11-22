@@ -74,7 +74,7 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "ownBasemaps", "ownerCodes", "ownerSchema", "polityOverrides", "powerStatus", "regionClaimants",
   "regionOwnershipOverrides", "regionRenames", "regionSovereigntyOverrides", "settledRegionClaims",
   // Scenario funding BASIS is public; no financial ledger is disclosed.
-  "projectFundingMode", "simulationRules", "startingTimelineText", "unitSystem", "wars", "agreements",
+  "projectFundingMode", "simulationRules", "startingTimelineText", "unitSystem", "wars", "warSidesRepairVersion", "agreements",
   // And what an event's strike looked like: every map plays it.
   "strikes",
   // And what the war room's air strikes did: who was struck knows it (runtime/fronts/airStrike.js).

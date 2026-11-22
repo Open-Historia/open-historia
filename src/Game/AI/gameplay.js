@@ -296,6 +296,7 @@ import { countryClaimWithdrawals } from "./claimsByCountry.js";
 import { describeUndeployedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
 import { findUnitByRef, newestTwinByRef, readNameRef, stripKindTags } from "./nameRefs.js";
 import { areaRegionsFor, buildAreaIndex, findArea, readAreaName } from "./namedAreas.js";
+import { repairWarSides } from "./warSidesRepair.js";
 import { EVENT_PLACES_RULE, findEventPlace, findEventPlaces, placesAsWritten, readEventPlace } from "./eventPlaces.js";
 import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
 import { describeTravelPace, eraOf, kmOnMap, seaShareOf } from "../../runtime/unitMotion.js";
@@ -1242,6 +1243,20 @@ const advanceLedgerWorld = (world, payload, { stopDate = "", round = 0 } = {}) =
     stopDate,
     round,
   }).world;
+};
+
+// A save from before joins named the side they fight can carry a polity on
+// the wrong side of a war (#892). Read the sides against the ledgers once
+// (warSidesRepair.js).
+// `log`: only where the repaired world is then written (a time skip), so the
+// forecast, which reads the save without writing, does not repeat the lines.
+const withWarSidesRepair = (bundle, { log = true } = {}) => {
+  const repair = repairWarSides(bundle.world);
+  if (repair.world === bundle.world) return bundle;
+  for (const entry of log ? repair.moved : []) {
+    logDebugEvent("turn", `War sides repaired: ${entry.polity} moved to side ${entry.to} of ${entry.warId}, ${entry.reason}.`, entry);
+  }
+  return { ...bundle, world: repair.world };
 };
 
 // ---- Native country stats (Continuum C7) ------------------------------------
@@ -13268,7 +13283,7 @@ export const warRoomRouteAttacks = ({ world, game, record, ask = true } = {}) =>
 // made (runtime/fronts/mind/trained.js), so a skip that fights these days has
 // them again rather than thinking them through.
 const foreseeFrom = async ({ days, signal }) => {
-  const bundle = await readGameStateBundle({ force: true });
+  const bundle = withWarSidesRepair(await readGameStateBundle({ force: true }), { log: false });
   const fromDate = normalizeString(bundle.game.gameDate);
   const span = Math.max(0, Number(days) || 0);
   if (!(span >= 1)) return null;
@@ -18968,6 +18983,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   // copy only, for the skip to move it as it moves the host's; it goes home in
   // the turn's commit (runtime/seatBoards.js).
   const bundle = withBoardsLent(await readGameStateBundle({ force: true }));
+  // A wrong side of a war from an older save is put right once, here (#892).
+  bundle.world = withWarSidesRepair(bundle).world;
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   // Fractional days are allowed so sub-day skips (e.g. 6h = 0.25) work; the game
   // date only advances in whole days, so a sub-day skip keeps the same date.
