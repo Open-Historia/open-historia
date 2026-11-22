@@ -26,3 +26,8 @@ test("the two colours can be told apart", () => {
   assert.ok(contrast("#1f1f23", "#f4f4f5") > 12);
   assert.ok(contrast("#1f1f23", "#8b8b93") > 4);
 });
+
+test("nondefault palette keeps the global readability rule and colors native options", () => {
+  assert.match(css, /:root\[data-oh-ui-theme\]:not\(\[data-oh-ui-theme="default"\]\) select option,\s*:root\[data-oh-ui-theme\]:not\(\[data-oh-ui-theme="default"\]\) select optgroup \{\s*background-color: var\(--oh-grey-surface\) !important;\s*color: var\(--oh-grey-text\) !important;\s*\}/);
+  assert.match(css, /:root\[data-oh-ui-theme\]:not\(\[data-oh-ui-theme="default"\]\) select option:disabled \{\s*color: var\(--oh-grey-muted\) !important;\s*\}/);
+});

@@ -130,7 +130,7 @@ test("the page may only say which scene, who, which scenario and when", () => {
 });
 
 test("Discord shows who, where and when, the logo and a way to play", () => {
-  const activity = activityFor(game, { startedAt: 1234.5 });
+  const activity = activityFor(game, { startedAt: 1_234_500 });
   assert.equal(activity.details, "Playing as France");
   assert.equal(activity.state, "Modern Day · 1 January 2016");
   assert.deepEqual(activity.timestamps, { start: 1234 });
@@ -218,12 +218,12 @@ test("the elapsed timer starts again with each new game, not with each new date"
   try {
     presence.update({ scene: "menu" });
     const menuStart = (await shown(1, "the menu")).timestamps.start;
-    assert.equal(menuStart, clock.now());
+    assert.equal(menuStart, Math.floor(clock.now() / 1000));
 
     clock.advance(2 * 60000);
     presence.update(game);
     const gameStart = (await shown(2, "the game")).timestamps.start;
-    assert.equal(gameStart, clock.now(), "opening a game starts the timer, not the menu before it");
+    assert.equal(gameStart, Math.floor(clock.now() / 1000), "opening a game starts the timer, not the menu before it");
 
     clock.advance(2 * 60000);
     presence.update({ ...game, date: "2 January 2016" });
@@ -231,7 +231,7 @@ test("the elapsed timer starts again with each new game, not with each new date"
 
     clock.advance(2 * 60000);
     presence.update({ ...game, player: "Germany" });
-    assert.equal((await shown(4, "another country")).timestamps.start, clock.now());
+    assert.equal((await shown(4, "another country")).timestamps.start, Math.floor(clock.now() / 1000));
   } finally {
     presence.stop();
     await discord.close();
@@ -263,7 +263,7 @@ test("the page going quiet takes the activity down; its next report puts it back
     presence.update(game);
     await discord.until(() => discord.activities.length === 3, "the activity back");
     assert.equal(discord.activities[2].activity.details, "Playing as France");
-    assert.equal(discord.activities[2].activity.timestamps.start, clock.now(), "a fresh timer");
+    assert.equal(discord.activities[2].activity.timestamps.start, Math.floor(clock.now() / 1000), "a fresh timer");
   } finally {
     presence.stop();
     await discord.close();
@@ -370,4 +370,50 @@ test("stop lets go of Discord, which takes the activity down", async () => {
   await closed;
   assert.equal(presence.connected, false);
   await discord.close();
+});
+
+
+test("N008: the private game id identifies an elapsed session but never appears in Discord's public activity", () => {
+  const old = normalizePresence({ ...game, gameId: "save-one" });
+  const next = normalizePresence({ ...game, gameId: "save-two" });
+  assert.equal(old.gameId, "save-one");
+  assert.equal(next.gameId, "save-two");
+  assert.equal(normalizePresence({ scene: "menu", gameId: "save-one" }).gameId, undefined);
+  const activity = activityFor(next, { startedAt: 1_700_000_000_500 });
+  assert.equal(activity.timestamps.start, 1_700_000_000, "raw Discord RPC expects Unix seconds, not Date.now() milliseconds");
+  assert.equal(JSON.stringify(activity).includes("save-two"), false, "internal save identifier never leaves for Discord");
+  assert.equal(normalizePresence({ ...game, gameId: "x".repeat(500) }).gameId.length, 128, "bound arbitrary IDs");
+});
+
+test("N008: switching saves with identical visible text refreshes once and restarts the timer; time skips do not", async () => {
+  const discord = await fakeDiscord();
+  const clock = manualClock();
+  const presence = createDiscordPresence({ applicationId: "123", enabled: true, paths: () => [discord.path], ...clock });
+  const waitFor = async (count, reason) => {
+    await discord.until(() => discord.activities.length >= count, reason);
+    return discord.activities[count - 1].activity;
+  };
+  try {
+    presence.update(normalizePresence({ ...game, gameId: "save-one" }));
+    const first = await waitFor(1, "first campaign");
+    clock.advance(MIN_UPDATE_MS);
+    presence.update(normalizePresence({ ...game, gameId: "save-two" }));
+    const second = await waitFor(2, "second campaign with identical visible values");
+    assert.deepEqual({ ...second, timestamps: undefined }, { ...first, timestamps: undefined }, "labels are identical");
+    assert.notEqual(first.timestamps.start, second.timestamps.start, "the new save has a new elapsed timer");
+
+    clock.advance(MIN_UPDATE_MS);
+    presence.update(normalizePresence({ ...game, gameId: "save-two" }));
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    assert.equal(discord.activities.length, 2, "same save and same displayed data is a no-op");
+
+    clock.advance(MIN_UPDATE_MS);
+    presence.update(normalizePresence({ ...game, gameId: "save-two", date: "8 January 2016" }));
+    const third = await waitFor(3, "date after a time skip");
+    assert.equal(third.state, "Modern Day · 8 January 2016");
+    assert.equal(third.timestamps.start, second.timestamps.start, "time skipping must retain this campaign's elapsed time");
+  } finally {
+    presence.stop();
+    await discord.close();
+  }
 });

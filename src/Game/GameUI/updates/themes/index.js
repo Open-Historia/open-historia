@@ -23,6 +23,8 @@ import { CHRONICLE_CHROME } from "./chronicleChrome.js";
 import { DIPLOMATIC_ATLAS_CHROME } from "./diplomaticAtlasChrome.js";
 import { ESPIONAGE_2_CHROME } from "./espionage2Chrome.js";
 import { MUSIC_CHROME } from "./musicChrome.js";
+import { MAP_EDITOR_V2_CHROME } from "./mapEditorV2Chrome.js";
+import { CAMPAIGN_RECORDS_CHROME } from "./campaignRecordsChrome.js";
 import { PROJECTS_CHROME } from "./projectsChrome.js";
 import { ROSTRA_CHROME } from "./rostraChrome.js";
 import { SEASONS_CHROME } from "./seasonsChrome.js";
@@ -32,6 +34,8 @@ import { THEMES_CHROME } from "./themesChrome.js";
 import { WARS_AND_FRONTS_2_CHROME } from "./warsAndFronts2Chrome.js";
 
 export const THEMES = Object.freeze({
+  mapEditorV2: { Page: lazy(() => import("./MapEditorV2.jsx")), chrome: MAP_EDITOR_V2_CHROME },
+  campaignRecords: { Page: lazy(() => import("./CampaignRecords.jsx")), chrome: CAMPAIGN_RECORDS_CHROME },
   backChannels: { Page: lazy(() => import("./BackChannels.jsx")), chrome: BACK_CHANNELS_CHROME },
   sharedWorlds: { Page: lazy(() => import("./SharedWorlds.jsx")), chrome: SHARED_WORLDS_CHROME },
   diplomaticAtlas: { Page: lazy(() => import("./DiplomaticAtlas.jsx")), chrome: DIPLOMATIC_ATLAS_CHROME },

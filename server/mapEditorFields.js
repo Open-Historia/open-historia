@@ -27,6 +27,11 @@ export const DOCUMENT_FIELDS = {
   units: array,
   groups: object,
   puppets: array,
+  // The scenario relation baseline and unapplied author edits must survive
+  // both desktop JSON and IndexedDB document create/reopen cycles.
+  relations: array,
+  relationEdits: array,
+  actorGovernmentEdits: array,
   // What the scenario draws on its map for war (src/runtime/warGeography.js).
   terrainAreas: array,
   fortifications: array,

@@ -89,6 +89,10 @@ const persistCountryStats = async (payload = {}) => {
     world.countryStats = {};
   }
 
+  // The worker's cache echo carries one sheet, not finance debt state.
+  // Delegate finance-owned sheets before any PUT, to the normal canonical
+  // main-thread fallback which can publish the whole reconciled World.
+  if (world.projectFinanceDebt?.some(row=>row.owner===country)) return { delegatedToCanonical:true };
   const nextSheet = mergeCountryStatPatch(
     world.countryStats[country],
     payload?.sheet || {},

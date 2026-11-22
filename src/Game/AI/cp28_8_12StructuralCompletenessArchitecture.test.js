@@ -95,7 +95,7 @@ test("GM and ordinary turn prompts share the native politicalActorOps argsJson g
 test("structural scripted political beats block prose-only deterministic fallback", () => {
   assert.match(gameplay, /scriptedPoliticalImpactRequirements\(scriptedBeats/);
   assert.match(gameplay, /buildScriptedPoliticalImpactInstruction\(scriptedPoliticalRequirements,\s*\{\s*world:\s*ledgerWorld\s*\}\)/);
-  assert.match(gameplay, /state\.structuralScriptedFallbackBlocked = scriptedPoliticalRequirements\.length > 0/);
+  assert.match(gameplay, /state\.structuralScriptedFallbackBlocked = scriptedPoliticalRequirements\.length > 0 \|\| authoredNativeOutcomes/);
   // (A shared game's skip refuses the canned turn too: `|| context.cannedTurn === false`.)
   assert.match(gameplay, /if \(state\.structuralScriptedFallbackBlocked(?: \|\| context\.cannedTurn === false)?\) throw error/);
   // The events that tell such a beat are held to its authored impacts, never

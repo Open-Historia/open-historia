@@ -14,6 +14,7 @@ const game = { id: "g1", country: "FRA", currentDate: "2016-01-01" };
 test("in a game: who, which scenario and the in-game date", () => {
   assert.deepEqual(presenceFor({ activeGame: game, playerName: "France", scenarioName: "Modern Day" }), {
     scene: "game",
+    gameId: "g1",
     player: "France",
     scenario: "Modern Day",
     date: "1 January 2016",
@@ -106,4 +107,37 @@ test("Settings has the switch, only where there is a Discord app to tell", () =>
   assert.match(settings, /updateMapSetting\("discordPresence", MAP_SETTING_KEYS\.discordPresence, !mapSettings\.discordPresence\)/);
   const page = fs.readFileSync(new URL("./discordPresence.js", import.meta.url), "utf8");
   assert.match(page, /export const presenceAvailable = onLocalServer;/, "the row and the reports are decided by the same test");
+});
+
+
+test("N008: the live saved game date takes precedence over a stale library catalog entry", () => {
+  const shown = presenceFor({
+    activeGame: game,
+    playerName: "France",
+    scenarioName: "Modern Day",
+    gameDate: "2016-02-15",
+  });
+  assert.deepEqual(shown, {
+    scene: "game",
+    gameId: "g1",
+    player: "France",
+    scenario: "Modern Day",
+    date: "15 February 2016",
+  });
+  const switched = presenceFor({
+    activeGame: { ...game, id: "g2" },
+    playerName: "France",
+    scenarioName: "Modern Day",
+    gameDate: "2016-02-15",
+  });
+  assert.notDeepEqual(switched, shown, "switching saves must be observable even with identical displayed text");
+  assert.equal(switched.gameId, "g2");
+  assert.deepEqual(presenceFor({ activeGame: game, inMenu: true, gameDate: "2016-02-15" }), { scene: "menu" });
+});
+
+test("N008: HUD subscribes to canonical game.json date instead of trusting the library's stale date", () => {
+  const hud = fs.readFileSync(new URL("../Game/GameUI/main.jsx", import.meta.url), "utf8");
+  assert.match(hud, /const liveGameDate = useRuntimeState\("game", selectPlayedDate\)/);
+  assert.match(hud, /useDiscordPresence\(presenceFor\(\{[\s\S]{0,230}gameDate: liveGameDate,/);
+  assert.match(hud, /const selectPlayedDate = \(game\) =>/);
 });

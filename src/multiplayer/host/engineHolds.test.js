@@ -95,7 +95,8 @@ test("a shared round never lands as a canned turn, and takes the game's lock at 
   assert.ok(entered > -1 && jumped > entered, "the lock is taken before the world is read");
   assert.ok(ended > jumped, "and given back after the skip has written its turn");
   // The skip itself: no fallback offered, and the whole-period canned turn refused.
-  assert.match(gameplay, /scriptedPoliticalRequirements\.length \|\| context\.cannedTurn === false\n\s*\? \{\}\n\s*: \{ fallback: \(\) => fallbackJumpSimulation/);
+  assert.match(gameplay, /state\.structuralScriptedFallbackBlocked = scriptedPoliticalRequirements\.length > 0 \|\| authoredNativeOutcomes;/);
+  assert.match(gameplay, /state\.structuralScriptedFallbackBlocked \|\| context\.cannedTurn === false\n\s*\? \{\}\n\s*: \{ fallback: \(\) => fallbackJumpSimulation/);
   assert.match(gameplay, /if \(state\.structuralScriptedFallbackBlocked \|\| context\.cannedTurn === false\) throw error;/);
 });
 

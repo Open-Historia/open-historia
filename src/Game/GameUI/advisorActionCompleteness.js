@@ -21,6 +21,7 @@ export const completeAdvisorActionReply = async ({ reply, canPropose, check, all
     projects: current.projectsProposal?.length ?? 0,
     diplomaticDrafts: current.messageDrafts?.length ?? 0,
     institutionDrafts: current.institutionDrafts?.length ?? 0,
+    publicStatements: current.publicDrafts?.filter(Boolean).length ?? 0,
   };
   let response;
   try {
@@ -46,7 +47,7 @@ export const completeAdvisorActionReply = async ({ reply, canPropose, check, all
   if (!Array.isArray(proposed.actionsProposal) || proposed.actionsProposal.length === 0
       || proposed.actionBlockProblems.length || proposed.text
       || proposed.projectsProposal || proposed.deployments?.length || proposed.institutionDrafts?.length
-      || proposed.messageDrafts?.length || proposed.chartConfig
+      || proposed.messageDrafts?.length || proposed.publicDrafts?.length || proposed.chartConfig
       // There is no canonical planned-order reference in the bounded check.
       // It may only recover a CREATE draft, never guess an edit/remove target.
       || proposed.actionsProposal.some((op) => !op || typeof op !== "object" || Array.isArray(op)

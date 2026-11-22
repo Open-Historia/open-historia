@@ -34,6 +34,8 @@ import { EVENT_TAG_ENUM } from "../../runtime/eventTags.js";
 import { documentsForEvent } from "../../runtime/reportDelivery.js";
 import { unseenEvents } from "../../runtime/unseenEvents.js";
 import { isSceneInProgress } from "../AI/interactiveRewind.js";
+const LazyInteractiveTranscript = React.lazy(() => import("./interactive.jsx").then(module => ({ default: module.InteractiveTranscript })));
+import { olderLedgerEvents, filterOlderEvents, olderEventPage, uniqueLedgerEvent, projectTimelineHistory, OLDER_EVENT_PAGE_SIZE } from "./olderEventHistory.js";
 import { offeredEvent } from "../../runtime/interactiveOffer.js";
 import { describeReceiptForPlayer } from "../../runtime/applicationReceipt.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
@@ -76,6 +78,7 @@ import {
     describeEventMapChanges,
     eventDisclosureKey,
     findTurnIndexOfEvent,
+    revealedEventCards,
     findTurnSnapshot,
     resolvePolityName,
     resolveRegionName,
@@ -542,6 +545,8 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game }) => {
         // only the newest turn keeps its notes.
         receipt: entry.receipt || null,
         round: entry.round || 0,
+        latestCommitRound: entry.latestCommitRound ?? entry.round ?? 0,
+        sceneAppendCount: entry.sceneAppendCount || 0,
         source: entry.source || "ai",
         summary: entry.summary || "",
         title:
@@ -886,13 +891,14 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
             </div>
         )}
 
+        {event.kind === "interactive" && <React.Suspense fallback={null}><LazyInteractiveTranscript event={event} sourceEvent={lookups?.sourceEvent?.(event.interactiveTranscript?.sourceEventId)} onOpenSource={lookups?.openSourceEvent} /></React.Suspense>}
         {footer}
         </div>
         </div>
     );
 };
 
-// Opens the interactive event panel (main.jsx listens): on the offer, or on
+// Opens the standalone interactive event panel (main.jsx listens): on the offer, or on
 // the scene in progress.
 const openInteractiveEvent = () => window.dispatchEvent(new Event("oh:open-interactive-event"));
 
@@ -2049,6 +2055,45 @@ const TurnPicker = ({ index, count, onOlder, onNewer, round, rangeLabel }) => {
     );
 };
 
+// Read-only ledger cards, not synthetic turns. No reveal, rollback or scene
+// controls live here. Limit the number of mounted cards in long campaigns.
+const OlderEventsBrowser = ({ events, lookups, focusRequest }) => {
+    const [query, setQuery] = useState("");
+    const [category, setCategory] = useState("");
+    const focusedId = focusRequest?.eventId || "";
+    const [page, setPage] = useState(() => Math.max(0, Math.floor(events.findIndex(event => event.id === focusedId) / OLDER_EVENT_PAGE_SIZE)));
+    const filtered = useMemo(() => filterOlderEvents(events, query, category), [events, query, category]);
+    const pageCount = Math.max(1, Math.ceil(filtered.length / OLDER_EVENT_PAGE_SIZE));
+    const pageIndex = Math.min(page, pageCount - 1);
+    const pageEvents = olderEventPage(filtered, pageIndex);
+    const listRef = React.useRef(null);
+    useEffect(() => {
+        const card = Array.from(listRef.current?.querySelectorAll("[data-event-id]") ?? []).find(node => node.dataset.eventId === focusedId);
+        card?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, [focusedId, focusRequest?.seq, pageIndex]);
+    return (
+        <div style={{ display: "grid", gap: "0.65rem", minWidth: 0 }}>
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.74rem", lineHeight: 1.5 }}>Earlier recorded events. Reading them does not change the world or restore an old turn.</div>
+            <input aria-label="Search earlier events" placeholder="Search by title or date" value={query} onChange={e => { setQuery(e.target.value); setPage(0); }} style={{ ...ghostButtonStyle, width: "100%", boxSizing: "border-box", cursor: "text" }} />
+            <select aria-label="Filter earlier events by category" value={category} onChange={e => { setCategory(e.target.value); setPage(0); }} style={{ ...ghostButtonStyle, width: "100%" }}>
+                <option value="">All categories</option>
+                {EVENT_TAG_ENUM.map(tag => <option key={tag} value={tag}>{tag}</option>)}
+            </select>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.4rem" }}>
+                <button type="button" className="oh-tap-row" disabled={!pageIndex} onClick={() => setPage(pageIndex - 1)} style={{ ...ghostButtonStyle, opacity: pageIndex ? 1 : 0.5 }}>Newer</button>
+                <span data-no-translate style={{ fontSize: "0.72rem" }}>{pageIndex + 1} / {pageCount}</span>
+                <button type="button" className="oh-tap-row" disabled={pageIndex + 1 >= pageCount} onClick={() => setPage(pageIndex + 1)} style={{ ...ghostButtonStyle, opacity: pageIndex + 1 < pageCount ? 1 : 0.5 }}>Older</button>
+            </div>
+            {!pageEvents.length && <div style={{ fontSize: "0.76rem", opacity: 0.7 }}>No earlier recorded events match.</div>}
+            <div ref={listRef} style={{ display: "grid", gap: "0.75rem" }}>
+                {pageEvents.map((event, index) => <div key={event.id + ":" + index} data-event-id={event.id} style={{ minWidth: 0 }}>
+                    <EventCard event={event} lookups={lookups} />
+                </div>)}
+            </div>
+        </div>
+    );
+};
+
 const TimelineHistoryPanel = ({
     isOpen,
     onRevealNextEvent,
@@ -2062,6 +2107,9 @@ const TimelineHistoryPanel = ({
     onIntervene = null,
     // The event of this turn offered as an interactive event, by id; "" for none.
     offeredInteractiveId = "",
+    archiveMode = false,
+    archiveEvents = [],
+    onToggleArchive,
     // The record is still being written: nothing is saved and the world has not
     // moved. The cards and the reveal are a finished turn's, but everything that
     // acts on a written turn waits for it to land.
@@ -2100,18 +2148,10 @@ const TimelineHistoryPanel = ({
         }
         return EVENT_TAG_ENUM.filter((tag) => present.has(tag));
     }, [record?.events]);
-    const filteredEvents = useMemo(() => {
-        const events = record?.events ?? [];
-        return categoryFilter
-            ? events.filter((event) => Array.isArray(event?.tags) && event.tags.includes(categoryFilter))
-            : events;
-    }, [record?.events, categoryFilter]);
-    const totalEvents = filteredEvents.length;
-    const visibleEvents =
-    totalEvents > 0
-    ? filteredEvents.slice(0, Math.min(visibleEventCount, totalEvents))
-    : [];
-    const hasMoreEvents = visibleEvents.length < totalEvents;
+    const totalEvents = record?.events?.length ?? 0;
+    const visibleEvents = revealedEventCards(record?.events, visibleEventCount, categoryFilter);
+    const remainingEvents = Math.max(0, totalEvents - visibleEventCount);
+    const hasMoreEvents = remainingEvents > 0;
     const scrollAnchorRef = React.useRef(null);
     const scrollAnchorIndex = pastTurn ? 0 : visibleEvents.length - 1;
     // The reveal buttons pin a compact minHeight inline, which the finger-sized
@@ -2155,7 +2195,7 @@ const TimelineHistoryPanel = ({
     };
 
     useEffect(() => {
-        if (!isOpen || !scrollAnchorRef.current) {
+        if (!isOpen || archiveMode || !scrollAnchorRef.current) {
             return;
         }
 
@@ -2163,7 +2203,7 @@ const TimelineHistoryPanel = ({
             behavior: "smooth",
             block: "start",
         });
-    }, [isOpen, record?.id, visibleEvents.length]);
+    }, [isOpen, archiveMode, record?.id, visibleEvents.length]);
 
     // A card another panel asked for (focusRequest): scrolled to and marked
     // for a moment once it is on screen, once per request. Declared after the
@@ -2175,7 +2215,7 @@ const TimelineHistoryPanel = ({
     const focusInRecord = Boolean(focusId) && (record?.events ?? []).some((event) => event?.id === focusId);
     const focusOnScreen = focusInRecord && visibleEvents.some((event) => event.id === focusId);
     useEffect(() => {
-        if (!isOpen || !focusInRecord || handledFocusRef.current === focusRequest.seq) return;
+        if (!isOpen || archiveMode || !focusInRecord || handledFocusRef.current === focusRequest.seq) return;
         if (!focusOnScreen) {
             // Hidden by a category filter: lift it, and come back once it shows.
             if (categoryFilter) setCategoryChoice({ recordId: record.id, tag: null });
@@ -2186,7 +2226,7 @@ const TimelineHistoryPanel = ({
             .find((node) => node.dataset.eventId === focusId);
         card?.scrollIntoView({ behavior: "smooth", block: "start" });
         setMarkedEventId(focusId);
-    }, [categoryFilter, focusId, focusInRecord, focusOnScreen, focusRequest?.seq, isOpen, record?.id]);
+    }, [categoryFilter, focusId, focusInRecord, focusOnScreen, focusRequest?.seq, isOpen, archiveMode, record?.id]);
     useEffect(() => {
         if (!markedEventId) return undefined;
         const timer = setTimeout(() => setMarkedEventId(""), 2600);
@@ -2198,7 +2238,7 @@ const TimelineHistoryPanel = ({
         eyebrow=""
         isOpen={isOpen}
         onClose={onClose}
-        subtitle={turnPicker && record ? (
+        subtitle={archiveMode ? "Earlier recorded events" : turnPicker && record ? (
             <TurnPicker
             index={turnPicker.index}
             count={turnPicker.count}
@@ -2213,6 +2253,9 @@ const TimelineHistoryPanel = ({
         >
         {/* The shared markdown sheet: tables in an event body or a document. */}
         <MarkdownStyleInjector />
+        {!live && (archiveEvents.length > 0 || archiveMode) && <button type="button" className="oh-tap-row" onClick={onToggleArchive} style={{ ...ghostButtonStyle, flexShrink: 0 }}>{archiveMode ? "Back to recent turns" : "Browse earlier events"}</button>}
+        {archiveMode && <OlderEventsBrowser key={focusRequest?.seq ?? 0} events={archiveEvents} lookups={lookups} focusRequest={focusRequest} />}
+        <div style={{ display: archiveMode ? "none" : "contents" }}>
         {pastTurn && (
             <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", lineHeight: 1.45, marginBottom: "0.75rem" }}>
             This is an earlier turn, shown in full. The map shows the world as it is now.
@@ -2287,7 +2330,7 @@ const TimelineHistoryPanel = ({
                 className="oh-tap-row"
                 onClick={handleRollbackClick}
                 disabled={rollbackState === "working"}
-                title="Undoes this turn and restores the world to how it was before the jump, so you can fix the provider settings and try again."
+                title={record?.sceneAppendCount ? "Undo the latest scene completion, leaving the preceding turn intact." : "Undoes this turn and restores the world to how it was before the jump, so you can fix the provider settings and try again."}
                 style={{
                     alignItems: "center",
                     background: "rgba(180,83,9,0.22)",
@@ -2305,7 +2348,7 @@ const TimelineHistoryPanel = ({
                     transition: "background 0.15s, border-color 0.15s, color 0.15s",
                 }}
                 >
-                {rollbackState === "working" ? "Rolling back…" : "↩ Rollback turn"}
+                {rollbackState === "working" ? "Rolling back…" : record?.sceneAppendCount ? "Undo scene completion" : "↩ Rollback turn"}
                 </button>
             )}
             </div>
@@ -2402,7 +2445,7 @@ const TimelineHistoryPanel = ({
                     width: "100%",
                 }}
                 >
-                <span>Skip to end ({totalEvents - visibleEvents.length} more)</span>
+                <span>Skip to end ({remainingEvents} more)</span>
                 </button>
                 {/* Intervene: stop the round HERE. The revealed events are canon,
                     the rest never happened, and the game's date is the last
@@ -2486,6 +2529,7 @@ const TimelineHistoryPanel = ({
             <SkipProgressRow label={progress.label} onCancel={progress.onCancel} startedAt={progress.startedAt} />
             </div>
         )}
+        </div>
         </PanelChrome>
     );
 };
@@ -3343,10 +3387,13 @@ const DateWidget = ({
     const eventLookup = useMemo(() => buildEventLookup(events), [events]);
     const lookups = useMemo(() => ({ polityLookup, regionLookup }), [polityLookup, regionLookup]);
 
+    // Read-only page projection: completed scenes share the preceding Events page.
+    // The real commit order remains authoritative for restore points and engine checks.
+    const timelineHistory = useMemo(() => projectTimelineHistory(worldState?.simulationHistory), [worldState?.simulationHistory]);
     // The newest turn alone: this runs on every world write, and an older turn
     // is built only while the player has turned back to it (below).
     const latestTurnRecord = useMemo(() => {
-        const rawHistory = worldState?.simulationHistory ?? [];
+        const rawHistory = timelineHistory;
         return buildTurnRecord({
             entry: rawHistory[0],
             index: 0,
@@ -3354,16 +3401,19 @@ const DateWidget = ({
             eventLookup,
             game: gameData,
         });
-    }, [eventLookup, gameData, worldState]);
+    }, [eventLookup, gameData, timelineHistory]);
     // The turn picker in the panel's header: which of the kept turns is shown,
     // 0 for the newest (turnReveal.js shownTurnIndex). An older turn is shown
     // whole and read only: no reveal, no staging, no camera, no undo.
     const [turnChoice, setTurnChoice] = useState({ latestId: null, index: 0 });
-    const keptTurnCount = worldState?.simulationHistory?.length ?? 0;
+    const keptTurnCount = timelineHistory.length;
+    const [archiveOpen, setArchiveOpen] = useState(false);
+    const archiveMode = archiveOpen && !skipInFlight;
+    const archiveEvents = useMemo(() => olderLedgerEvents(events, worldState?.simulationHistory, unseenEventIds), [events, worldState?.simulationHistory, unseenEventIds]);
     const turnIndex = skipInFlight ? 0 : shownTurnIndex(turnChoice, latestTurnRecord?.id ?? null, keptTurnCount);
     const olderTurnRecord = useMemo(() => {
         if (turnIndex <= 0) return null;
-        const rawHistory = worldState?.simulationHistory ?? [];
+        const rawHistory = timelineHistory;
         return buildTurnRecord({
             entry: rawHistory[turnIndex],
             index: turnIndex,
@@ -3371,11 +3421,14 @@ const DateWidget = ({
             eventLookup,
             game: gameData,
         });
-    }, [eventLookup, gameData, turnIndex, worldState]);
-    const showTurn = (index) => setTurnChoice({ latestId: latestTurnRecord?.id ?? null, index });
+    }, [eventLookup, gameData, turnIndex, timelineHistory]);
+    const showTurn = (index) => { setArchiveOpen(false); setTurnChoice({ latestId: latestTurnRecord?.id ?? null, index }); };
     // Closing the panel puts it back on the newest turn for next time.
     useEffect(() => {
-        if (openPanel !== "history") setTurnChoice((choice) => (choice.index ? { latestId: null, index: 0 } : choice));
+        if (openPanel !== "history") {
+            setTurnChoice((choice) => (choice.index ? { latestId: null, index: 0 } : choice));
+            setArchiveOpen(false);
+        }
     }, [openPanel]);
     // Another panel asking for one event (SHOW_EVENT_ON_TIMELINE, turnReveal.js;
     // the Stats panel's war cards): open on the kept turn that holds it, with
@@ -3383,12 +3436,19 @@ const DateWidget = ({
     // it and mark it. `seq` makes a second ask for the same event a new one.
     const [focusRequest, setFocusRequest] = useState({ eventId: "", seq: 0 });
     const showEventRef = React.useRef(null);
+    useEffect(() => { if (skipInFlight) setArchiveOpen(false); }, [skipInFlight]);
     useEffect(() => {
         showEventRef.current = (eventId) => {
             // As « does: while something runs, only a skip being watched opens it.
             if (isLoading && !skipInFlight) return;
-            const index = findTurnIndexOfEvent(worldState?.simulationHistory, eventId);
-            if (index < 0) return;
+            const index = findTurnIndexOfEvent(timelineHistory, eventId);
+            if (index < 0) {
+                if (skipInFlight || !uniqueLedgerEvent(archiveEvents, eventId)) return;
+                setArchiveOpen(true);
+                setPanel("history");
+                setFocusRequest(previous => ({ eventId, seq: previous.seq + 1 }));
+                return;
+            }
             setPanel("history");
             // Mid-skip the panel is the turn being written; it only opens.
             if (skipInFlight) return;
@@ -3426,12 +3486,15 @@ const DateWidget = ({
         : null), [skipInFlight, streamedEvents, liveRange.from, liveRange.to, gameData?.round]);
     const displayRecord = liveTurnRecord ?? shownWrittenRecord;
     const totalVisibleEvents = displayRecord?.events?.length || 0;
+    // Scene resolution happens only after reveal. A joined page is already read,
+    // not a fresh reveal or a staged replay of multiple canonical generations.
+    const displayedVisibleCount = !liveTurnRecord && (olderTurnRecord || displayRecord?.sceneAppendCount) ? totalVisibleEvents : visibleEventCount;
     // The newest revealed event, written turn or not: the camera follows the
     // live reveal for the same reason the map stages along with it. Not on an
     // older turn being reread: the map shows the world as it is now.
     const activeVisibleEvent =
-    openPanel === "history" && totalVisibleEvents > 0 && !olderTurnRecord
-    ? displayRecord.events[Math.min(Math.max(visibleEventCount, 1), totalVisibleEvents) - 1]
+    openPanel === "history" && !archiveMode && totalVisibleEvents > 0 && !olderTurnRecord
+    ? displayRecord.events[Math.min(Math.max(displayedVisibleCount, 1), totalVisibleEvents) - 1]
     : null;
 
     // Resolve a valid date defensively: gameDate, else startDate, else nothing.
@@ -3581,7 +3644,7 @@ const DateWidget = ({
             }
             return;
         }
-        setVisibleEventCount(Math.max(1, ids.length - unseenEvents.unseenInTurn(ids).size));
+        setVisibleEventCount(latestTurnRecord?.sceneAppendCount ? Math.max(1, ids.length) : Math.max(1, ids.length - unseenEvents.unseenInTurn(ids).size));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [latestTurnRecord?.id, writtenEventCount, skipInFlight]);
 
@@ -3605,7 +3668,7 @@ const DateWidget = ({
         const ids = (latestTurnRecord?.events ?? []).map((event) => event?.id).filter(Boolean);
         if (unseenEvents.unseenInTurn(ids).size > 0) return;
         toldHostRevealedRef.current = id;
-        void requestFromHost("revealed", { round: Number(latestTurnRecord?.round) || 0 });
+        void requestFromHost("revealed", { round: Number(latestTurnRecord?.latestCommitRound ?? latestTurnRecord?.round) || 0 });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [latestTurnRecord?.id, writtenEventCount, visibleEventCount, skipInFlight]);
 
@@ -3674,6 +3737,8 @@ const DateWidget = ({
     const worldStrikes = worldState?.strikes;
     const cardLookups = useMemo(() => ({
         ...lookups,
+        sourceEvent: (id) => id && !unseenEventIds.has(id) ? uniqueLedgerEvent(events, id) : null,
+        openSourceEvent: (id) => showEventRef.current?.(id),
         unitName: unitNameById,
         eventLinks: (event) => deriveEventLinks(event, currentFocusContext(), {
             unitName: unitNameById,
@@ -3687,7 +3752,7 @@ const DateWidget = ({
             // (Once the camera is on its way there: a launch is over in a moment.)
             window.setTimeout(() => replayStrikes({ eventId: event?.id }), bounds ? 900 : 0);
         },
-    }), [lookups, currentFocusContext, mapRef, documentReports, documentPlayer, worldStrikes]);
+    }), [lookups, currentFocusContext, mapRef, documentReports, documentPlayer, worldStrikes, events, unseenEventIds]);
 
     // What an event tells of flying is flown as the event is read: its
     // missiles, its bombing runs (Map/StrikeLayers.jsx). One the map has only
@@ -3773,7 +3838,7 @@ const DateWidget = ({
     // The index is a few hundred bytes, so an index miss is simply asked again
     // next time (it can read empty at boot); a restore point that turns out
     // not to hold the turn's world is remembered.
-    const needsStaging = revealNeedsStaging(latestTurnRecord, visibleEventCount);
+    const needsStaging = !latestTurnRecord?.sceneAppendCount && revealNeedsStaging(latestTurnRecord, visibleEventCount);
     const stagingMissRef = React.useRef("");
     // The world as the skip found it (the live reveal's base), kept when the skip lands: the turn it wrote is revealed
     // on it at once. Waiting for the restore point to be read showed the turn's end meanwhile, its battlefields
@@ -3797,7 +3862,7 @@ const DateWidget = ({
         const record = latestTurnRecord;
         // Not mid-skip: the snapshot that would load belongs to the turn before.
         // Nor while an older turn is reread: it is not staged.
-        if (skipInFlight || openPanel !== "history" || !record || !needsStaging || turnIndex > 0) {
+        if (skipInFlight || archiveMode || openPanel !== "history" || !record || !needsStaging || turnIndex > 0) {
             return undefined;
         }
         if (stagedBase.recordId === record.id && stagedBase.world) {
@@ -3828,7 +3893,7 @@ const DateWidget = ({
         return () => {
             cancelled = true;
         };
-    }, [latestTurnRecord?.id, needsStaging, openPanel, skipInFlight, stagedBase.recordId, turnIndex]);
+    }, [latestTurnRecord?.id, needsStaging, openPanel, skipInFlight, stagedBase.recordId, turnIndex, archiveMode]);
 
     useEffect(() => {
         // No snapshot needed while the skip writes: the world has not moved, so
@@ -3878,7 +3943,9 @@ const DateWidget = ({
             !skipInFlight &&
             openPanel === "history" &&
             !olderTurnRecord &&
+            !archiveMode &&
             record &&
+            !record.sceneAppendCount &&
             base &&
             totalVisibleEvents > 0 &&
             visibleEventCount < totalVisibleEvents;
@@ -3917,7 +3984,7 @@ const DateWidget = ({
             revealed[revealed.length - 1]?.date,
             revealed.length > 1 ? revealed[revealed.length - 2]?.date : record.fromDate,
         ));
-    }, [foreseen, latestTurnRecord, liveStageBase, liveTurnRecord, olderTurnRecord, openPanel, skipInFlight, stagedBase, totalVisibleEvents, visibleEventCount]);
+    }, [foreseen, latestTurnRecord, liveStageBase, liveTurnRecord, olderTurnRecord, openPanel, skipInFlight, stagedBase, totalVisibleEvents, visibleEventCount, archiveMode]);
 
     // Never leave a stale override behind when this widget unmounts.
     useEffect(
@@ -3978,16 +4045,19 @@ const DateWidget = ({
         // Nor while a held turn's retry runs: it is about to write one.
         canRollbackTurn={undoCount > 0 && !isLoading && !skipInFlight && !isRetryingHeld && !olderTurnRecord}
         onRollbackTurn={() => runUndo({ stayOnHistory: true })}
-        canIntervene={canInterveneTurn && undoCount > 0 && !isLoading && !skipInFlight && !isRetryingHeld && !olderTurnRecord}
+        canIntervene={!latestTurnRecord?.sceneAppendCount && canInterveneTurn && undoCount > 0 && !isLoading && !skipInFlight && !isRetryingHeld && !olderTurnRecord}
         onIntervene={runIntervene}
         // The last written turn's offer, never on a skip still being written:
         // that skip replaces it.
         offeredInteractiveId={!skipInFlight && !olderTurnRecord && shownOffer ? shownOffer.id : ""}
+        archiveMode={archiveMode}
+        archiveEvents={archiveEvents}
+        onToggleArchive={() => { setArchiveOpen(value => !value); setFocusRequest(previous => ({ eventId: "", seq: previous.seq + 1 })); }}
         live={Boolean(liveTurnRecord)}
         progress={skipInFlight ? { label: jumpProgress, onCancel: cancelJump, startedAt: progressStartedAt } : null}
         record={displayRecord}
         topOffset={topOffset}
-        visibleEventCount={olderTurnRecord ? totalVisibleEvents : visibleEventCount}
+        visibleEventCount={displayedVisibleCount}
         // Not while a skip is written, and only once there is a turn to go back to.
         turnPicker={!liveTurnRecord && keptTurnCount > 1 ? {
             index: turnIndex,

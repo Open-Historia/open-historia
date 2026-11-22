@@ -27,7 +27,7 @@ const readImageFile = (file) =>
     reader.readAsDataURL(file);
   });
 
-const ReferencePanel = ({ refImage, setRefImage, onRecenter, onClose }) => {
+const ReferencePanel = ({ refImage, activeTool, setRefImage, onRecenter, onClose }) => {
   const handleUpload = async (file) => {
     if (!file) return;
     try {
@@ -100,7 +100,9 @@ const ReferencePanel = ({ refImage, setRefImage, onRecenter, onClose }) => {
           <div style={{ fontSize: 11, lineHeight: 1.5, color: "rgba(255,255,255,0.55)" }}>
             {refImage.locked
               ? "Locked: dragging moves the map. Unlock to move or resize the image."
-              : "Drag inside the image to move it; drag a corner to resize (free stretch, so you can match the map projection; hold Shift to keep its shape)."}{" "}
+              : activeTool === "pan"
+                ? "Hand tool: dragging pans the map. Switch to Select to move or resize the reference."
+                : "Drag inside the image to move it; drag a corner to resize (free stretch, so you can match the map projection; hold Shift to keep its shape)."}{" "}
             Close this panel to draw and edit through the image.
           </div>
         </>

@@ -1,4 +1,5 @@
 import { DEMAND_CHECK_OUTCOMES } from "../../runtime/demandCheck.js";
+import { MAX_SEMANTIC_DAY_ONE_FACTS } from "../../runtime/scenarioPrehistory.js";
 import { STATS_BACKEND_FIELD, STATS_BACKEND_KEYS } from "../../runtime/statsBackend.js";
 import { EVENT_TAG_ENUM, MAX_EVENT_TAGS } from "../../runtime/eventTags.js";
 import { PROCESS_STORYLINE_KINDS, STORYLINE_KINDS } from "../../runtime/storylineKinds.js";
@@ -1815,7 +1816,7 @@ export const PREGAME_HISTORY_SCHEMA = {
       type: "array",
       description:
         "Semantic Day-One baseline facts. Persistent ids and lifecycle operations are forbidden; native code compiles these facts into the canonical ledgers.",
-      maxItems: 32,
+      maxItems: MAX_SEMANTIC_DAY_ONE_FACTS,
       items: pregameCanonicalFactSchema,
     },
   },

@@ -42,3 +42,15 @@ test("scenario recovery keeps the accepted political-fill and flood baseline int
     /const hiddenAwareFillOpacity = useMemo\(\(\) => \(diplomaticOn[\s\S]*?\[\s*"case",[\s\S]*?POLITICAL_FILL_OPACITY/,
   );
 });
+
+test("N029: gameplay and settings share a local visibility policy without publishing new PTR records", () => {
+  const settings = fs.readFileSync(path.join(here, "../../GameUI/settings.jsx"), "utf8");
+  assert.match(settings, /<PolityLabelVisibilitySetting hidden=\{mapSettings\.hideCountryLabels\} \/>/);
+  assert.match(settings, /type="range"[\s\S]*?value=\{cutoff\}[\s\S]*?onChange=\{\(event\) => setPolityLabelMaxZoom\(event\.target\.value\)\}/);
+  assert.match(nations, /const labelMaxZoom = usePolityLabelMaxZoom\(\)/);
+  assert.equal(nations.match(/maxzoom=\{labelMaxZoom\}/g)?.length, 6);
+  assert.match(nations, /<PolityTextLayer[\s\S]*?visibility=\{labelVisibility\}/);
+  assert.match(nations, /buildPolityTextPtr1Records\(\{[\s\S]*?\}\), \[polityLabelCollections\.ptrLabelData, polityLabelCollections\.labelData\]\)/);
+  assert.match(layer, /getVisibility: \(\) => latestVisibilityRef\.current/);
+  assert.match(layer, /triggerRepaint\?\.\(\);\s*\}, \[enabled, map, mode, visibility\]\)/);
+});

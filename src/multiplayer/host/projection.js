@@ -103,7 +103,7 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "reparations",
   "peaceTreaties",
   // Rostra, the social network (runtime/socialFeed.js): posts are public.
-  "socialFeed",
+  "socialFeed", "publicStatementCursor",
   // The stat sheets, and how each has moved: public figures (see the limits above).
   "countryStats", "countryStatsHistory",
   // The map itself, as the scenario draws it: how it is projected, its region
@@ -126,12 +126,14 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
 export const HOST_ONLY_WORLD_KEYS = Object.freeze([
   "actionSuggestions", "chargedRefusals", "chatKnowledgeCursors", "consolidatedHistory",
   "gmAudit", "gmChanges", "historyDocument", "idlePulseTick", "lastJumpSummary", "naviesRaised", "notes",
-  "pendingEventOutreach", "politicalSimulation", "seatBoards", "seatSeals", "seenFleetPostures",
+  "cancelledPublicDrafts", "pendingEventOutreach", "politicalSimulation", "seatBoards", "seatSeals", "seenFleetPostures",
   // A beta save's record of the work its older lending put on the game's
   // board (runtime/seatBoards.js settleBoards reads it, and drops it).
   // Projects deliberately shelved by the game owner are save-management
   // records, not public game intelligence; the archive may contain covert work.
   "projectSeatLoans", "projectRecoveryArchive",
+  // Finance V1 is single-player bookkeeping; never disclose the ledger or residual debt.
+  "projectFinance", "projectFinanceDebt",
   "storylines",
   // What a seat's person left waiting while nobody shared the game (heldSeats.js):
   // given back to the game before anything is sent, and never in a view.
@@ -515,7 +517,7 @@ export const projectEvents = (events, viewer, { ownOrderIds = new Set(), unitOwn
   if (!isRecord(event)) return event;
   // The narrator's provenance, NPC-reaction bookkeeping and storyline links stay
   // with the host, and so does who else an event was for.
-  const { impacts, agency: _agency, npcReaction: _npc, storylineIds: _storylines, audience: _audience, ...rest } = event;
+  const { impacts, agency: _agency, npcReaction: _npc, storylineIds: _storylines, audience: _audience, interactiveTranscript, ...rest } = event;
   const own = list(impacts?.actionIds).filter((id) => ownOrderIds.has(clean(id)));
   const unitOps = list(impacts?.unitOps).filter((op) => isRecord(op)
     && (op.op !== "move" || same(unitOwner(op.unitId), viewer)));
@@ -531,6 +533,9 @@ export const projectEvents = (events, viewer, { ownOrderIds = new Set(), unitOwn
     : [];
   return {
     ...rest,
+    // Scenes are solo-player records. A later guest sees the ordinary outcome,
+    // not the private scene that the original host played.
+    ...(same(host, viewer) && interactiveTranscript ? { interactiveTranscript } : {}),
     impacts: {
       ...projected,
       actionIds: own,

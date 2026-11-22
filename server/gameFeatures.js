@@ -253,6 +253,8 @@ export const SCRIPTED_EVENT_CONDITION_OPERATORS = Object.freeze(["all", "any", "
 export const SCRIPTED_EVENT_CONDITION_TYPES = Object.freeze([
   "polity_exists",
   "polity_not_exists",
+  "polity_player_controlled",
+  "polity_not_player_controlled",
   "political_actor_exists",
   "political_actor_not_exists",
   "institution_exists",

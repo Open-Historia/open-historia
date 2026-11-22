@@ -71,7 +71,8 @@ import {
     getStoredLanguage,
     setStoredChatLanguage,
 } from "../../runtime/i18n.js";
-import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSetting, useMapSettingDefaultOn, useMapSettingValue, useSystemReducedMotion } from "../../runtime/mapSettings.js";
+import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSetting, useMapSettingDefaultOn, useMapSettingValue, useSystemReducedMotion, usePolityLabelMaxZoom, setPolityLabelMaxZoom } from "../../runtime/mapSettings.js";
+import { POLITY_LABEL_MIN_ZOOM, POLITY_LABEL_MAX_ZOOM, POLITY_LABEL_DEFAULT_MAX_ZOOM, POLITY_LABEL_ZOOM_STEP } from "../../runtime/polityLabelVisibility.js";
 import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
 // The Map Editor's basemap window, opened here to browse, download and manage
 // maps without opening the editor. Loaded on first use: it brings the editor's
@@ -2756,6 +2757,46 @@ const DownloadedMusic = () => {
 // added to MUSIC_TRACKS.
 const MUSIC_WORKS = Object.values(MUSIC_TRACKS).filter(Boolean).map((track) => `“${track.work}”`).join(", ");
 
+const PolityLabelVisibilitySetting = ({ hidden }) => {
+    const cutoff = usePolityLabelMaxZoom();
+    const atDefault = cutoff === POLITY_LABEL_DEFAULT_MAX_ZOOM;
+    return (
+        <div style={{ ...fieldGroupStyle, opacity: hidden ? 0.55 : 1 }}>
+            <label style={labelStyle} htmlFor="game-polity-label-zoom">Polity name visibility</label>
+            <input
+                id="game-polity-label-zoom"
+                type="range"
+                min={POLITY_LABEL_MIN_ZOOM}
+                max={POLITY_LABEL_MAX_ZOOM}
+                step={POLITY_LABEL_ZOOM_STEP}
+                value={cutoff}
+                disabled={hidden}
+                onChange={(event) => setPolityLabelMaxZoom(event.target.value)}
+                aria-describedby="game-polity-label-zoom-help"
+                aria-valuetext={Math.round((cutoff - POLITY_LABEL_MIN_ZOOM) / (POLITY_LABEL_MAX_ZOOM - POLITY_LABEL_MIN_ZOOM) * 100) + "%"}
+                style={{ accentColor: "var(--oh-ui-accent, #3b82f6)", width: "100%" }}
+            />
+            <div style={{ ...helperStyle, display: "flex", justifyContent: "space-between", gap: "0.75rem", marginTop: "0.1rem" }}>
+                <span>Hide sooner</span>
+                <span>Hide later</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
+                <div id="game-polity-label-zoom-help" style={{ ...helperStyle, marginTop: 0, flex: "1 1 14rem" }}>Keep names visible as you zoom in. Large or overlapping names may still fade out.</div>
+                <button
+                    type="button"
+                    className="oh-tap-row"
+                    disabled={hidden || atDefault}
+                    onClick={() => setPolityLabelMaxZoom(POLITY_LABEL_DEFAULT_MAX_ZOOM)}
+                    style={{ ...smallButtonStyle, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "0.4rem", flexShrink: 0, opacity: hidden || atDefault ? 0.5 : 1, cursor: hidden || atDefault ? "default" : "pointer" }}
+                >
+                    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 1 3 6.7M3 4v8h8" /></svg>
+                    Restore default
+                </button>
+            </div>
+        </div>
+    );
+};
+
 const SoundSection = ({ musicOn, onToggleMusic, effectsOn, onToggleEffects }) => {
     const stored = useMapSettingValue(MAP_SETTING_KEYS.musicVolume, "");
     const volume = musicVolumeOf(stored);
@@ -3210,6 +3251,7 @@ const SettingsWorkspace = ({
                         <div style={helperStyle}>Empty uses the font the scenario author chose. Any font installed on this computer works; overrides apply immediately.</div>
                     </div>
                     <Toggle label="Hide country labels" enabled={mapSettings.hideCountryLabels} onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)} />
+                    <PolityLabelVisibilitySetting hidden={mapSettings.hideCountryLabels} />
                     <Toggle label="Seasons and weather" enabled={mapSettings.seasonsWeather} onToggle={() => updateMapSetting("seasonsWeather", MAP_SETTING_KEYS.seasonsWeather, !mapSettings.seasonsWeather)} />
                     <div style={settingsHelper}>
                     On (default): the map is tinted by the season and shows its weather. Frozen water is drawn as ice either way.
@@ -3441,6 +3483,7 @@ const SettingsMenu = ({
     onOpenDebugConsole,
     onOpenEvents,
     onOpenGameManagement,
+    onOpenCampaignLore,
     onClose,
     discordUrl,
     redditUrl,
@@ -3620,6 +3663,9 @@ const SettingsMenu = ({
                 <ContextSummaryCard context={context} />
                 {typeof onOpenGameManagement === "function" && (
                     <QuickAction title="Game Management" description="Switch, duplicate, import or manage campaigns" symbol="▦" onClick={() => runAndClose(onOpenGameManagement)} />
+                )}
+                {typeof onOpenCampaignLore === "function" && (
+                    <QuickAction title="Campaign Lore" description="Read and export your campaign’s recorded history" symbol="▤" onClick={() => runAndClose(onOpenCampaignLore)} />
                 )}
             </QuickMenuPanel>
         );

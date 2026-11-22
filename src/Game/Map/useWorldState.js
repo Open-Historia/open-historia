@@ -1,3 +1,4 @@
+import { capitalMapNames } from "../../runtime/capitalSeats.js";
 import { useEffect, useState } from "react";
 import { JSON_URLS, encodeOwnBasemaps, readJson, reportPerfOperation } from "../../runtime/assets.js";
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
@@ -169,12 +170,13 @@ export const withoutHeldDisputes = (claimants, state, owners) => {
 
 // The capitals countries name in their figures, lower case and one a line; a
 // dissolved country's no longer counts.
+export const retiredCapitalNamesOf = (state) => capitalMapNames(state).retired.join("\n");
 export const capitalNamesOf = (state) => {
   const stats = state?.countryStats && typeof state.countryStats === "object" ? state.countryStats : {};
   const gone = (name) => String(state?.polityOverrides?.[name]?.status ?? "").toLowerCase() === "dissolved";
   return [...new Set(Object.entries(stats)
     .filter(([name]) => !gone(name))
-    .map(([, sheet]) => String(sheet?.capital ?? "").trim().toLowerCase())
+    .map(([, sheet]) => String(sheet?.capitalMap?.current?.baseName || sheet?.capital || "").trim().toLowerCase())
     .filter(Boolean))].sort().join("\n");
 };
 
@@ -238,6 +240,7 @@ const deriveMapState = (state) => ({
   // lower case, for the city layers' stars (Cities.jsx). A string, so a
   // republish that names the same ones is the same value.
   capitalNames: capitalNamesOf(state),
+  retiredCapitalNames: retiredCapitalNamesOf(state),
   labelFont: state?.labelFont ?? "",
   labelHaloColor: state?.labelHaloColor ?? "",
   labelTextColor: state?.labelTextColor ?? "",
@@ -275,6 +278,7 @@ const sameMapState = (prev, next) =>
   prev.cityRenames === next.cityRenames &&
   prev.cityPopulations === next.cityPopulations &&
   prev.capitalNames === next.capitalNames &&
+  prev.retiredCapitalNames === next.retiredCapitalNames &&
   prev.groups === next.groups &&
   prev.groupAreas === next.groupAreas &&
   prev.polityOverrides === next.polityOverrides;

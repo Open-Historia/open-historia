@@ -24,6 +24,8 @@ import { SEASON_KINDS, TERRAIN_LEVEL_MOST, WALL_LEVEL_LEAST, WALL_LEVEL_MOST } f
 import { isGameDate, normalizeGameDate } from "../runtime/gameDates.js";
 import { CLIMATE_PRESETS, DAYS_IN_MONTH, monthDayOf, monthDayParts, newClimateEvent, newSeason, seasonsOfClimate } from "./warGeographyDoc.js";
 import { WORLD_CLIMATE_ZONES, WORLD_TERRAIN_AREAS } from "../runtime/worldGeographyDefaults.js";
+import { filterWarShapesForWorkspace, pageOf, WORKSPACE_PAGE_SIZE } from "./editorWorkspaceFilters.js";
+import { WorkspaceHeading, WorkspaceSearch, WorkspaceSelect, WorkspaceStats, WorkspaceMore, WorkspaceEmpty } from "./EditorWorkspaceControls.jsx";
 
 const TABS = [
   { id: "terrain", label: "Terrain" },
@@ -546,6 +548,7 @@ const WarMapPanel = ({
   setTerrainAreas,
   setFortifications,
   setClimateZones,
+  onReplacePreset,
   selection = null,
   onPick,
   onUnpick,
@@ -558,19 +561,32 @@ const WarMapPanel = ({
   freezingCount = 0,
   onClose,
 }) => {
+  const [query, setQuery] = useState("");
+  const [ownerFilter, setOwnerFilter] = useState("*");
+  const [shown, setShown] = useState(WORKSPACE_PAGE_SIZE);
   const lists = { terrain: terrainAreas, fortification: fortifications, climate: climateZones };
   const setters = { terrain: setTerrainAreas, fortification: setFortifications, climate: setClimateZones };
   const list = lists[tab] || [];
   const picked = selection?.kind === tab ? list.find((row) => row.id === selection.id) : null;
   const drawing = activeTool === tab;
   const ownerName = (key) => owners.find((row) => row.key === key)?.name || key;
+  const filtered = filterWarShapesForWorkspace(list, { query, owner: tab === "fortification" ? ownerFilter : "*", ownerName });
+  const visible = pageOf(filtered, shown);
+  const presentOwners = [...new Set(fortifications.map((row) => row.owner || "").filter(Boolean))].sort();
+  const changeTab = (id) => { setQuery(""); setOwnerFilter("*"); setShown(WORKSPACE_PAGE_SIZE); onTab(id); };
   const patch = (id, fields) => setters[tab]?.((rows) => (rows || []).map((row) => (row.id === id ? withFields(row, fields) : row)));
 
   return (
-    <Panel title="War map" icon="mountain" onClose={onClose} width={420}>
+    <Panel title="War map" icon="mountain" onClose={onClose} width={490}>
+      <WorkspaceHeading title="Terrain & war geography" detail="Native starting geography: terrain difficulty, defensive lines, climate zones and freezing water."/>
+      <WorkspaceStats items={[
+        { label: "Terrain areas", value: terrainAreas.length },
+        { label: "Fortified lines", value: fortifications.length },
+        { label: "Climate zones", value: climateZones.length },
+      ]}/>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         {TABS.map((entry) => (
-          <button key={entry.id} type="button" onClick={() => onTab(entry.id)} style={tabButton(tab === entry.id)}>
+          <button key={entry.id} type="button" onClick={() => changeTab(entry.id)} style={tabButton(tab === entry.id)}>
             {entry.label}
           </button>
         ))}
@@ -587,6 +603,12 @@ const WarMapPanel = ({
       ) : (
         <>
           <div style={hint}>{TAB_INTROS[tab]}</div>
+          <WorkspaceSearch value={query} onChange={(value) => { setQuery(value); setShown(WORKSPACE_PAGE_SIZE); }} placeholder="Find shape by name, level, owner or scenario note..." />
+          {tab === "fortification" && <WorkspaceSelect label="Fortification owner" value={ownerFilter}
+            onChange={(value) => { setOwnerFilter(value); setShown(WORKSPACE_PAGE_SIZE); }}
+            options={[{ value: "*", label: "All owners" }, ...presentOwners.map((key) => ({ value: key, label: ownerName(key) }))]}/>}
+          <WorkspaceHeading title="Authored geography" detail={filtered.length + " of " + list.length + " shapes match. Select one to inspect its native details."}/>
+          {!filtered.length && list.length > 0 && <WorkspaceEmpty title="No matching shapes" description="Change the search or owner filter. Existing terrain and war geography are unchanged."/>}
           <button
             type="button"
             onClick={() => setActiveTool(drawing ? "select" : tab)}
@@ -597,9 +619,9 @@ const WarMapPanel = ({
           </button>
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {list.length === 0 && <div style={{ ...hint, padding: "4px 2px" }}>{EMPTY_LABELS[tab]}</div>}
-            {list.map((row) => (
-              <div key={row.id} style={{ border: "1px solid rgba(255,255,255,0.09)", borderRadius: 8, display: "flex", alignItems: "center", gap: 6, padding: "6px 8px" }}>
-                <button type="button" onClick={() => onPick(tab, row.id)} style={{ background: "transparent", border: "none", color: "white", cursor: "pointer", flex: 1, minWidth: 0, textAlign: "left", padding: 0, display: "flex", alignItems: "center", gap: 8 }}>
+            {visible.map((row) => (
+              <div key={row.id} style={{ border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.09))", borderRadius: 8, display: "flex", alignItems: "center", gap: 6, padding: "6px 8px" }}>
+                <button type="button" onClick={() => onPick(tab, row.id)} style={{ background: "transparent", border: "none", color: "var(--oh-ui-text, white)", cursor: "pointer", flex: 1, minWidth: 0, textAlign: "left", padding: 0, display: "flex", alignItems: "center", gap: 8 }}>
                   {tab === "climate" && <Swatch color={row.color || "#7f8c99"} />}
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <span style={{ display: "block", fontSize: 13, fontWeight: 600, overflowWrap: "anywhere" }}>{row.name || "Unnamed"}</span>
@@ -615,16 +637,17 @@ const WarMapPanel = ({
               </div>
             ))}
           </div>
+          <WorkspaceMore shown={visible.length} total={filtered.length} onMore={() => setShown((value) => value + WORKSPACE_PAGE_SIZE)}/>
           {(tab === "climate" || tab === "terrain") && (
             <WorldStart
               tab={tab}
               count={list.length}
-              onStart={() => setters[tab]?.(() => JSON.parse(JSON.stringify(tab === "climate" ? WORLD_CLIMATE_ZONES : WORLD_TERRAIN_AREAS)))}
+              onStart={() => onReplacePreset?.(tab, JSON.parse(JSON.stringify(tab === "climate" ? WORLD_CLIMATE_ZONES : WORLD_TERRAIN_AREAS)))}
             />
           )}
           {tab === "climate" && (
             <>
-              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.75)" }}>
+              <div style={{ fontSize: 12, color: "var(--oh-ui-muted, rgba(255,255,255,0.75))" }}>
                 {freezingCount === 0 ? "No water region can freeze yet." : freezingCount === 1 ? "1 water region can freeze." : `${freezingCount} water regions can freeze.`}
               </div>
               <div style={hint}>Mark lakes and seas in the region panel (Can freeze). They freeze in a season whose effects say Water freezes.</div>

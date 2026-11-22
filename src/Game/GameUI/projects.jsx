@@ -49,7 +49,9 @@ import {
   isProjectOpen,
   sortProjects,
 } from "../../runtime/projects.js";
-import { DAYS_PER_MONTH, dailyCostOf, estimateProjectFinish, ownerMeans, statMeasure } from "../../runtime/projectEngine.js";
+import { ProjectFinancePanel } from "./projectFinance.jsx";
+import { projectFinanceSnapshot } from "../../runtime/projectFinance.js";
+import { projectOwnerOf, DAYS_PER_MONTH, dailyCostOf, estimateProjectFinish, ownerMeans, statMeasure } from "../../runtime/projectEngine.js";
 import { DEFAULT_STAT_INDEX_ROWS } from "../../runtime/statIndexDefinitions.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { uiString } from "../../runtime/translator.js";
@@ -57,7 +59,7 @@ import { TAG_SEARCH_FROM, searchTags, stepTagFocus, tickedFirst } from "./projec
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { nameInitials } from "../../../server/nameKey.js";
 import { planProject } from "../AI/gameplayLazy.js";
-import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame, isSharedMultiplayerSession, requestFromHost, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 
 // The card seeds are whole sentences, one per variant, handed over in the
 // interface's language (uiString): a kind or an owner glued in as a word would
@@ -1240,6 +1242,7 @@ const selectGameStamp = (game) => ({
   country: game?.country || "",
   gameDate: String(game?.gameDate ?? ""),
   round: Number(game?.round) || 0,
+  economicDisplayCurrency: game?.economicDisplayCurrency,
 });
 
 const SectionTitle = ({ children, count }) => (
@@ -1257,6 +1260,8 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const polityOverrides = useRuntimeState("world", selectPolities);
   const countryStats = useRuntimeState("world", selectCountryStats);
   const projectFundingMode = useRuntimeState("world", selectProjectFundingMode);
+  const financing = useRuntimeState("world", world=>world?.projectFinance ?? null);
+  const [financeOpen,setFinanceOpen]=useState(false);
   const { country, gameDate, round } = useRuntimeState("game", selectGameStamp);
   const displayCurrency = useSyncExternalStore(subscribeEconomicDisplayCurrency, getActiveEconomicDisplayCurrency);
   const [eventTitles, setEventTitles] = useState(() => new Map());
@@ -1363,6 +1368,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
     setShowClosed(false);
     setArchiveOpen(false);
     setTagMenuOpen(false);
+    setFinanceOpen(false);
   }, [isOpen]);
 
   // Only the projects the player knows of: their own, and those abroad their
@@ -1402,11 +1408,24 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   // going (projectEngine.js), worked out here from the world as it stands.
   const engineWorld = useMemo(() => ({ countryStats, projects, projectFundingMode }), [countryStats, projects, projectFundingMode]);
   const means = useMemo(() => ownerMeans(engineWorld, playerCountry, projects, playerCountry), [engineWorld, playerCountry, projects]);
+  const financedOwners = useMemo(() => {
+    if (!financing?.receipts?.length) return new Set();
+    try {
+      return new Set(
+        projectFinanceSnapshot(financing, financing.receipts.at(-1).date)
+          .filter((f) => f.outstandingMinor || f.interestDueMinor || f.buckets.some((b) => b.projectId && b.remainingMinor))
+          .map((f) => f.terms.borrower),
+      );
+    } catch {
+      return new Set();
+    }
+  }, [financing]);
   const finishes = useMemo(() => new Map(visible.map((project) => [
     project.id,
-    project.targetDate || estimateProjectFinish(project, { world: engineWorld, projects, host: playerCountry, date: gameDate }),
-  ])), [visible, engineWorld, projects, playerCountry, gameDate]);
+    financedOwners.has(projectOwnerOf(project,playerCountry))?"":project.targetDate || estimateProjectFinish(project, { world: engineWorld, projects, host: playerCountry, date: gameDate }),
+  ])), [visible, engineWorld, projects, playerCountry, gameDate, financedOwners]);
 
+  const sharedSession = useSyncExternalStore(subscribeSharedGameRole, isSharedMultiplayerSession, () => false);
   const toggleTag = useCallback((tag) => {
     setActiveTags((current) => (current.includes(tag) ? current.filter((entry) => entry !== tag) : [...current, tag]));
   }, []);
@@ -1598,6 +1617,11 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
       >
       <div style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", flexDirection: "column", gap: "0.5rem", padding: "0.6rem 1rem 0.7rem" }}>
         <NewProject owner={playerCountry} fundingMode={means.mode} displayCurrency={displayCurrency} writeOps={writeOps} onStarted={() => setShowClosed(false)} />
+        {!sharedSession && means.mode !== "nonmonetary" && playerCountry && <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+          <button type="button" onClick={()=>setFinanceOpen(true)} style={{...selectStyle,cursor:"pointer",fontWeight:700}}>{uiString("Financing")}</button>
+          <span style={{fontSize:"0.68rem",color:"rgba(255,255,255,0.55)"}}>{uiString("Agreements, disbursements and finite project funds")}</span>
+          {financeOpen&&<ProjectFinancePanel displayCurrency={displayCurrency} onClose={()=>setFinanceOpen(false)}/>}
+        </div>}
         <div
           style={{ color: "rgba(255,255,255,0.5)", display: "flex", flexWrap: "wrap", fontSize: "0.68rem", gap: "0.6rem" }}
           title={means.mode === "nonmonetary"

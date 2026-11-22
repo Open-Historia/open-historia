@@ -11,6 +11,8 @@ import Panel from "./Panel.jsx";
 import Icon from "./Icon.jsx";
 import { pillButton } from "./editorStyles.js";
 import { describeClipboard, formatCopiedDay } from "./regionClipboard.js";
+import { WorkspaceEmpty, WorkspaceHeading, WorkspaceStats, workspaceCard, workspaceMuted } from "./EditorWorkspaceControls.jsx";
+import { confirmDialog } from "../runtime/uiDialog.js";
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -32,17 +34,22 @@ const ClipboardPanel = ({ clipboard, selectionCount = 0, result = null, simplify
       title="Clipboard"
       icon="copy"
       onClose={onClose}
-      width={340}
+      width={490}
       footer={
         summary ? (
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12 }}>
             <span style={{ color: "rgba(255,255,255,0.5)" }}>{plural(summary.count, "region")} from {summary.source}</span>
-            <button onClick={onClear} style={{ ...pillButton(false), color: "#f87171" }}>Clear</button>
+            <button type="button" onClick={async () => { if (await confirmDialog("Clear the copied regions from the cross-map clipboard? This does not delete map regions.", { danger: true, confirmLabel: "Clear" })) onClear?.(); }} style={{ ...pillButton(false), color: "#f87171" }}>Clear clipboard</button>
           </div>
         ) : null
       }
     >
-
+      <WorkspaceHeading title="Cross-map region clipboard" detail="Copy selected regions from one map and paste them into another. Political ownership and references travel with their regions."/>
+      <WorkspaceStats items={[
+        { label: "Copied regions", value: summary?.count || 0 },
+        { label: "Source polities", value: summary?.owners?.length || 0 },
+        { label: "Selected on this map", value: selectionCount },
+      ]}/>
       {selectionCount > 0 && (
         <button
           type="button"
@@ -81,16 +88,17 @@ const ClipboardPanel = ({ clipboard, selectionCount = 0, result = null, simplify
           >
             <Icon name="paint" size={14} /> Paste into this map
           </button>
+          <div style={{ ...workspaceCard, ...workspaceMuted }}>
+            Pasting may replace or trim existing territory. You will be asked to confirm. One native Undo reverses the pasted territory and its newly imported polity, group, type, flag, colour and tag metadata. Later edits to those records are preserved.
+          </div>
           <label style={{ fontSize: 11.5, display: "flex", alignItems: "center", gap: 6 }}>
             <input type="checkbox" checked={simplify} onChange={(e) => onSimplifyChange?.(e.target.checked)} />
             Simplify to this map's detail
           </label>
         </>
       ) : (
-        <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.5)", padding: "6px 2px" }}>
-          Nothing copied yet. Select regions (click, Shift-click, lasso, or double-click a country) and press{" "}
-          <b>Copy to clipboard</b> in the selection panel, or Ctrl+C.
-        </div>
+        <WorkspaceEmpty title="Nothing copied yet"
+          description="Select regions on the map, or select matching entries in the Regions workspace. Copy them with Ctrl+C or the selection inspector, then paste into another map."/>
       )}
 
       {result?.kind === "pasted" && (

@@ -70,10 +70,13 @@ import { applyReportOps, normalizeReportOp, normalizeReports } from "./reports.j
 import { normalizeGmChanges, normalizeReminders } from "./gmChanges.js";
 import { normalizePlayerGoals } from "./playerGoal.js";
 import { normalizeInteractiveOffer } from "./interactiveOffer.js";
+import { normalizeInteractiveTranscript, assertInteractiveTranscriptsRetained } from "./interactiveTranscript.js";
+import { normalizePublicStatement, assertPublicStatementsRetained, normalizeCancelledPublicDrafts } from "./publicCommunications.js";
 import { normalizeSpyOp, spyTasking } from "./spycraft.js";
 import { eventsFromLegacyChat, normalizeChatEvents, projectChatThread, withUnloggedMessages } from "./chatThreads.js";
 import { latestTurnEventIds, unseenEvents, withoutUnseenChats, withoutUnseenEvents, withoutUnseenReports } from "./unseenEvents.js";
-import { COUNTRY_STATS_EVENT_RESCALE_LIMIT, mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
+import { COUNTRY_STATS_EVENT_RESCALE_LIMIT, normalizeCountryStatSheet } from "./countryStats.js";
+import { financeWorldFields, mergeFinanceAwareCountryStat, refreshFinanceDebtRatios, settleFinanceClockWorld } from "./projectFinanceWorld.js";
 import { advanceCountryStatsInterval } from "./countryStatsProgression.js";
 import {
   canonicalInstitutionIdentity,
@@ -3734,6 +3737,8 @@ export const normalizeEventEntry = (entry, index = 0) => {
   // The polities the event says it is about (runtime/eventConcerns.js), read
   // as its combatants are.
   const concerns = normalizeEventConcerns(entry.concerns, { toName: (name) => toCountryName(name) });
+  const interactiveTranscript = normalizeRenamedKind(entry.kind) === "interactive"
+    ? normalizeInteractiveTranscript(entry.interactiveTranscript) : null;
 
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
@@ -3741,6 +3746,8 @@ export const normalizeEventEntry = (entry, index = 0) => {
     description: presentation.description,
     // Only when present, so an event without one saves exactly as before.
     ...(digest ? { digest } : {}),
+    ...(interactiveTranscript ? { interactiveTranscript } : {}),
+    ...(normalizePublicStatement(entry) ? {publicStatement:normalizePublicStatement(entry)} : {}),
     ...(presentation.quote ? { quote: presentation.quote } : {}),
     // Only when present, so an event without one saves exactly as before.
     ...(npcReaction ? { npcReaction } : {}),
@@ -4413,6 +4420,7 @@ export const normalizeWorldState = (world) => {
     ...nextWorld,
     countryTags,
     countryStats,
+    ...financeWorldFields({ ...nextWorld, countryStats }),
     politicalActors: formerPolitics && typeof formerPolitics === "object" && Object.keys(formerPolitics).length > 0
       ? foldPoliticsIntoActors(nextWorld.politicalActors, formerPolitics)
       : normalizePoliticalActors(nextWorld.politicalActors),
@@ -4442,6 +4450,8 @@ export const normalizeWorldState = (world) => {
     labelHaloColor: normalizeOptionalString(nextWorld.labelHaloColor),
     labelTextColor: normalizeOptionalString(nextWorld.labelTextColor),
     language: normalizeOptionalString(nextWorld.language) || WORLD_DEFAULTS.language,
+    ...(Object.hasOwn(nextWorld,"cancelledPublicDrafts")?{cancelledPublicDrafts:normalizeCancelledPublicDrafts(nextWorld.cancelledPublicDrafts)}:{}),
+    ...(Object.hasOwn(nextWorld,"publicStatementCursor")?{publicStatementCursor:Number.isSafeInteger(nextWorld.publicStatementCursor)&&nextWorld.publicStatementCursor>=0?nextWorld.publicStatementCursor:0}:{}),
     lastJumpMode: normalizeOptionalString(nextWorld.lastJumpMode),
     lastJumpSummary: normalizeOptionalString(nextWorld.lastJumpSummary),
     lastJumpTargetDate: normalizeOptionalString(nextWorld.lastJumpTargetDate),
@@ -4932,6 +4942,8 @@ export const writeEventsState = async (events, options = {}) => {
   const normalized = preserveApprovedEvents
     ? dedupeEventLog(normalizedEvents, { keyOf: eventCanonicalKey })
     : dedupeEventLog(normalizedEvents);
+  assertInteractiveTranscriptsRetained(normalizedEvents, normalized);
+  assertPublicStatementsRetained(normalizedEvents, normalized);
   // A scenario's own events follow the UI language immediately (see above);
   // the AI's are written in it.
   enqueueEventStrings(normalized);
@@ -5003,6 +5015,8 @@ const buildCanonicalTurnPayload = ({
   const normalizedEvents = preserveApprovedEvents
     ? dedupeEventLog(eventLog, { keyOf: eventCanonicalKey })
     : dedupeEventLog(eventLog);
+  assertInteractiveTranscriptsRetained(eventLog, normalizedEvents);
+  assertPublicStatementsRetained(eventLog, normalizedEvents);
   enqueueEventStrings(normalizedEvents);
 
   return {
@@ -5463,7 +5477,7 @@ export const applyCountryStatPatchToWorld = (world, canonicalName, patch, option
   if (!world || typeof world !== "object" || !canonicalName) return null;
   if (!world.countryStats || typeof world.countryStats !== "object") world.countryStats = {};
 
-  const next = mergeCountryStatPatch(world.countryStats[canonicalName], patch, options);
+  const next = mergeFinanceAwareCountryStat(world, canonicalName, patch, options);
   if (next && typeof next === "object") world.countryStats[canonicalName] = next;
   return next;
 };
@@ -6099,6 +6113,7 @@ export const applyEventImpactsToWorld = ({
       fromDate: statsCursor, toDate: date,
     });
     nextWorld.countryStats = settled.countryStats;
+    refreshFinanceDebtRatios(nextWorld);
     statsCursor = date;
   };
   // Every polity renamed by this apply, for gameplay.js to carry into what the
@@ -6384,6 +6399,14 @@ export const applyEventImpactsToWorld = ({
             nextWorld.regionRenames = { ...(nextWorld.regionRenames || {}), [cleanName]: op.newName };
           } else {
             nextWorld.cityRenames = { ...(nextWorld.cityRenames || {}), [cleanName]: op.newName };
+            // A selected capital follows its city, not the old displayed spelling.
+            for(const [country,sheet] of Object.entries(nextWorld.countryStats||{})){
+              const ref=sheet?.capitalMap?.current;
+              if(ref && [ref.baseName,sheet.capital].some(name=>String(name||"").trim().toLowerCase()===cleanName)){
+                nextWorld.cityRenames[String(ref.baseName).toLowerCase()]=op.newName;
+                applyCountryStatPatchToWorld(nextWorld,country,{capital:op.newName},{nativeCapitalMap:sheet.capitalMap});
+              }
+            }
           }
         }
         // Population is recorded in the override for EVERY city, matched or not.
@@ -6571,10 +6594,10 @@ export const applyProjectOpsToWorld = ({
 export const advanceProjectsInWorld = ({ baseWorld, world, fromDate = "", toDate = "", host = "", round = 0 } = {}) => {
   const base = normalizeWorldState(baseWorld ?? world);
   const after = normalizeWorldState(world);
-  const tick = tickProjects({ projects: base.projects, world: base, fromDate, toDate, host, round });
+  const tick = tickProjects({ projects: base.projects, world: base, fromDate, toDate, host, round, finance: base.projectFinance });
   if (!tick.days) return { world: after, outcomes: [], days: 0 };
   const merged = mergeTickedBoard({ base: base.projects, ticked: tick.projects, current: after.projects });
-  return { world: { ...after, projects: normalizeProjects(merged) }, outcomes: tick.outcomes, days: tick.days };
+  return { world: settleFinanceClockWorld(base, { ...after, projects: normalizeProjects(merged) }, tick.finance), outcomes: tick.outcomes, days: tick.days };
 };
 
 // The yields a programme that runs on has banked as fractions of a point, by

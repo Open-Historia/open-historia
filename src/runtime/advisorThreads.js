@@ -47,6 +47,14 @@ export const advisorRecipientType = (contact) => {
   return RECIPIENT_TYPE_SET.has(contact.recipientType) ? contact.recipientType : null;
 };
 
+// This opt-in is strictly lore access, not a government recipient capability.
+export const CHARACTER_SIMULATION_RULES_MAX_CHARS = 12000;
+export const characterMayReadSimulationRules = (contact) => {
+  const type = advisorRecipientType(contact);
+  return Boolean(type && type !== ADVISOR_RECIPIENT_TYPES.MINISTER &&
+    !contact.archived && contact.binding == null && contact.canReadSimulationRules === true);
+};
+
 // A caller must never use a caller-selected profile to elevate a civilian or
 // foreign persona into the privileged government Advisor prompt.
 export const assertAdvisorRecipientCanReply = (threadId, recipient) => {
@@ -245,6 +253,7 @@ export const createAdvisorContact = (entries, proposed) => {
     role: ADVISOR_CONTACT_ROLE,
     id, name, title, personality, recipientType,
     archived: false,
+    ...(characterMayReadSimulationRules({...proposed, recipientType}) ? {canReadSimulationRules:true} : {}),
     ...(validatedBinding ? { binding: validatedBinding } : {}),
   }];
 };
@@ -271,9 +280,18 @@ export const reviseAdvisorContact = (entries, contactId, changes) => {
   if (current.binding && name.toLocaleLowerCase() !== String(current.binding.name).toLocaleLowerCase()) {
     throw new Error("A Political World contact's canonical name cannot be changed.");
   }
-  return array(entries).map((entry) => (entry?.role === ADVISOR_CONTACT_ROLE && entry.id === contactId)
-    ? { ...entry, name, title, recipientType, personality: cleanParagraphs(changes?.personality, ADVISOR_PERSONALITY_MAX_CHARS) }
-    : entry);
+  const canReadSimulationRules=characterMayReadSimulationRules({
+    ...current, recipientType, archived:false,
+    canReadSimulationRules:Object.hasOwn(changes ?? {}, "canReadSimulationRules")
+      ? changes.canReadSimulationRules : current.canReadSimulationRules,
+  });
+  return array(entries).map((entry) => {
+    if(entry?.role !== ADVISOR_CONTACT_ROLE || entry.id !== contactId)return entry;
+    const next={...entry,name,title,recipientType,personality:cleanParagraphs(changes?.personality, ADVISOR_PERSONALITY_MAX_CHARS)};
+    if(canReadSimulationRules)next.canReadSimulationRules=true;
+    else delete next.canReadSimulationRules;
+    return next;
+  });
 };
 
 export const archiveAdvisorContact = (entries, contactId, archived = true) => {

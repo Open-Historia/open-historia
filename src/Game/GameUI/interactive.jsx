@@ -13,7 +13,9 @@
 // scene that reaches its own end is usually written up by its last move at no
 // extra cost (gameplay.js resolveInteractiveScene). Letting an offer pass,
 // taking a move back and setting a scene aside cost nothing.
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useBackToClose } from "../../runtime/backToClose.js";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { offeredEvent } from "../../runtime/interactiveOffer.js";
@@ -22,6 +24,8 @@ import { canRewindInteractiveTo, interactiveChoiceTexts, isSceneInProgress } fro
 import { advanceActiveInteractive, createInteractive, declineInteractiveOffer, endActiveInteractive, rewindActiveInteractive, setAsideActiveInteractive } from "../AI/gameplayLazy.js";
 import { sceneCompletionTitle } from "../AI/interactiveCompletion.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
+import { interactiveTranscriptIsComplete } from "../../runtime/interactiveTranscript.js";
+import { showEventOnTimeline } from "./turnReveal.js";
 
 const YELLOW = "#facc15";
 // A scene the player never took up (one a time skip proposed, before skips
@@ -40,10 +44,10 @@ const panelStyle = {
     fontFamily: "sans-serif",
     // Inside the backdrop's padding, which keeps clear of a notch and a home
     // indicator (the insets are 0 everywhere else).
-    maxHeight: `min(46rem, calc(${APP_HEIGHT} - 2rem - ${SAFE_TOP} - ${SAFE_BOTTOM}))`,
+    maxHeight: `min(52rem, calc(${APP_HEIGHT} - 2rem - ${SAFE_TOP} - ${SAFE_BOTTOM}))`,
     maxWidth: `calc(100vw - 2rem - ${SAFE_LEFT} - ${SAFE_RIGHT})`,
     overflow: "hidden",
-    width: "40rem",
+    width: "48rem",
 };
 const primaryButton = (disabled) => ({
     background: disabled ? "rgba(250,204,21,0.25)" : YELLOW,
@@ -93,12 +97,74 @@ const inputStyle = {
     resize: "vertical",
     width: "100%",
 };
-const caption = { color: "rgba(255,255,255,0.42)", fontSize: "0.68rem", lineHeight: 1.45 };
+const caption = { color: "rgba(255,255,255,0.60)", fontSize: "0.74rem", lineHeight: 1.45 };
 
 // The scene's own words, written in the game's language already.
 const SceneText = ({ children, style }) => (
-    <div data-no-translate style={{ fontSize: "0.88rem", lineHeight: 1.6, whiteSpace: "pre-wrap", ...style }}>{children}</div>
+    <div data-no-translate style={{ fontSize: "0.94rem", lineHeight: 1.7, whiteSpace: "pre-wrap", overflowWrap: "anywhere", ...style }}>{children}</div>
 );
+
+// Completed scenes are read-only. The timeline owns only a small launcher;
+// the reader is a separate top-level dialog, with no simulation callbacks.
+export const InteractiveTranscript = ({ event, sourceEvent, onOpenSource }) => {
+    const [expanded, setExpanded] = useState(false);
+    const dialogRef = useRef(null);
+    const transcript = event.interactiveTranscript;
+    useBackToClose(expanded, () => setExpanded(false));
+    useEffect(() => {
+        if (!expanded) return undefined;
+        const dialog = dialogRef.current;
+        if (!dialog) return undefined;
+        dialog.showModal();
+        return () => { if (dialog.open) dialog.close(); };
+    }, [expanded]);
+    if (!transcript) return <div style={caption}>Interactive transcript unavailable for this event.</div>;
+    return (
+        <>
+            <button type="button" className="oh-tap-row" aria-haspopup="dialog" onClick={() => setExpanded(true)} style={{ ...quietButton(false), width: "100%", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.6rem", borderColor: "rgba(250,204,21,0.28)" }}>
+                <span><span style={{ color: "#fde68a", fontWeight: 800 }}>Explore interactive event</span><span style={{ ...caption, display: "block", marginTop: "0.2rem" }}>Read the scene and your decisions</span></span><span aria-hidden="true" style={{ color: "#fde68a", fontSize: "1rem" }}>→</span>
+            </button>
+            {expanded && createPortal(
+                <dialog ref={dialogRef} aria-label="Interactive event transcript" onCancel={e => { e.preventDefault(); setExpanded(false); }} onClick={e => { if (e.target === e.currentTarget) setExpanded(false); }} style={{ ...panelStyle, position: "fixed", inset: 0, margin: "auto", padding: 0, maxWidth: "calc(100vw - 2rem)", height: "fit-content", zIndex: 2147483000 }}>
+                    <style>{'dialog[aria-label="Interactive event transcript"]::backdrop { background: rgba(0,0,0,.68); }'}</style>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.8rem", borderBottom: "1px solid rgba(250,204,21,0.18)", padding: "1rem 1.25rem", flexShrink: 0 }}>
+                        <div style={{ minWidth: 0 }}>
+                            <div style={{ color: "#fde68a", fontWeight: 800, fontSize: "0.78rem" }}>Interactive event transcript</div>
+                            <div style={{ ...caption, marginTop: "0.2rem" }}>Completed scene · Read-only history</div>
+                        </div>
+                        <button type="button" className="oh-tap" onClick={() => setExpanded(false)} style={quietButton(false)}>Close</button>
+                    </div>
+                    <div style={{ overflowY: "auto", minHeight: 0, padding: "clamp(1rem, 2.5vw, 1.65rem)", display: "flex", flexDirection: "column", gap: "1.15rem" }}>
+                        <div>
+                            <SceneText style={{ fontSize: "1.3rem", lineHeight: 1.35, fontWeight: 800 }}>{transcript.title}</SceneText>
+                            <div style={{ ...caption, marginTop: "0.35rem", display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                                {transcript.startedOn && <span>{isGameDate(transcript.startedOn) ? formatGameDateReadable(transcript.startedOn, "MMMM Do, YYYY") : transcript.startedOn}</span>}
+                                <span>{transcript.beats.length} <span>moves</span></span>
+                                <span>{transcript.endedBy === "player" ? "Ended by the player" : "Resolved by the scene"}</span>
+                            </div>
+                        </div>
+                        {sourceEvent && typeof onOpenSource === "function" && <button type="button" className="oh-tap-row" onClick={() => { setExpanded(false); onOpenSource(sourceEvent.id); }} style={{ ...quietButton(false), textAlign: "left", overflowWrap: "anywhere" }}>Source event: <span data-no-translate>{sourceEvent.title} ({sourceEvent.date})</span></button>}
+                        {transcript.premise && <SceneText style={{ color: "rgba(255,255,255,0.72)", fontStyle: "italic" }}>{transcript.premise}</SceneText>}
+                        {transcript.request && <div style={{ ...caption, fontSize: "0.8rem" }}>Your angle: <span data-no-translate>{transcript.request}</span></div>}
+                        {transcript.firstOpening && <div><div style={{ ...caption, fontWeight: 800, marginBottom: "0.4rem" }}>Scene opening</div><SceneText>{transcript.firstOpening}</SceneText></div>}
+                        {!interactiveTranscriptIsComplete(transcript) && <div style={caption}>Some original scene text or choices were not saved. Only recorded information is shown.</div>}
+                        {transcript.beats.map((beat, index) => <div key={index} style={{ display: "grid", gap: "0.7rem", borderLeft: "2px solid rgba(250,204,21,0.35)", padding: "0.2rem 0 0.65rem 1rem", minWidth: 0 }}>
+                            <div style={{ ...caption, color: "#fde68a", fontWeight: 800 }}>Move {index + 1}</div>
+                            {beat.before && beat.before !== (index === 0 ? transcript.firstOpening : transcript.beats[index - 1]?.summary) && <div><div style={caption}>Before the move</div><SceneText>{beat.before}</SceneText></div>}
+                            {beat.offered?.length > 0 && <div><div style={caption}>Offered choices</div><ul style={{ margin: "0.3rem 0", paddingLeft: "1.15rem", display: "grid", gap: "0.25rem" }}>{beat.offered.map((choice, i) => <li key={i} data-no-translate style={{ fontSize: "0.82rem", overflowWrap: "anywhere", color: choice === beat.choice ? "#fde68a" : "rgba(255,255,255,0.65)", fontWeight: choice === beat.choice ? 700 : 400 }}>{choice}</li>)}</ul></div>}
+                            <div style={{ background: "rgba(250,204,21,0.06)", border: "1px solid rgba(250,204,21,0.18)", borderRadius: "8px", padding: "0.65rem 0.8rem" }}><div style={{ ...caption, color: "#fde68a" }}>Your move</div><SceneText>{beat.choice}</SceneText></div>
+                            {beat.summary && <div><div style={{ ...caption, marginBottom: "0.3rem" }}>Scene response</div><SceneText>{beat.summary}</SceneText></div>}
+                        </div>)}
+                        <div style={{ borderTop: "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))", paddingTop: "1rem" }}>
+                            <div style={{ ...caption, fontWeight: 800, marginBottom: "0.3rem" }}>Outcome</div>
+                            <SceneText style={{ fontWeight: 800, fontSize: "1rem" }}>{event.title}</SceneText>
+                            {event.description && <SceneText style={{ marginTop: "0.4rem" }}>{event.description}</SceneText>}
+                        </div>
+                    </div>
+                </dialog>, document.body)}
+        </>
+    );
+};
 
 export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
     const scene = useRuntimeState("world", selectScene);
@@ -162,13 +228,13 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
         const title = scene?.title || "";
         const result = await advanceActiveInteractive(wording);
         setMove("");
-        if (result && !result.interactive) setFinished({ title: sceneCompletionTitle(result, title) });
+        if (result && !result.interactive) setFinished({ title: sceneCompletionTitle(result, title), eventId: result.resolvedSceneEventId });
     });
     const takeBack = (index) => run("Taking the move back…", () => rewindActiveInteractive({ beatIndex: index }));
     const end = () => run("Writing the scene into the record…", async () => {
         const title = scene?.title || "";
         const result = await endActiveInteractive();
-        if (result?.resolved) setFinished({ title: sceneCompletionTitle(result, title) });
+        if (result?.resolved) setFinished({ title: sceneCompletionTitle(result, title), eventId: result.resolvedSceneEventId });
     });
     const setAside = () => {
         if (beats.length > 0 && !confirmingAside) {
@@ -183,8 +249,8 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
     const idle = !busy;
 
     return (
-        <div style={{ alignItems: "center", background: "rgba(0,0,0,0.55)", display: "flex", inset: 0, justifyContent: "center", padding: `calc(1rem + ${SAFE_TOP}) calc(1rem + ${SAFE_RIGHT}) calc(1rem + ${SAFE_BOTTOM}) calc(1rem + ${SAFE_LEFT})`, position: "fixed", zIndex: 10001 }}>
-            <div role="dialog" aria-label="Interactive event" style={panelStyle}>
+        <div style={{ alignItems: "center", background: "rgba(0,0,0,0.63)", display: "flex", inset: 0, justifyContent: "center", padding: `calc(1rem + ${SAFE_TOP}) calc(1rem + ${SAFE_RIGHT}) calc(1rem + ${SAFE_BOTTOM}) calc(1rem + ${SAFE_LEFT})`, position: "fixed", zIndex: 10001 }}>
+            <div role="dialog" aria-modal="true" aria-label="Interactive event" style={panelStyle}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(250,204,21,0.18)", display: "flex", gap: "0.75rem", justifyContent: "space-between", padding: "0.9rem 1.1rem" }}>
                     <div>
                         <div style={{ color: YELLOW, fontSize: "0.95rem", fontWeight: 850, letterSpacing: "0.02em" }}>⚡ Interactive event</div>
@@ -195,12 +261,12 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
                     <button type="button" className="oh-tap" onClick={onClose} aria-label="Leave" title="Close — a scene in progress stays where it is, and an offer stays until the next time skip" style={{ ...quietButton(false), flexShrink: 0, whiteSpace: "nowrap" }}>✕ Leave</button>
                 </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.9rem", overflowY: "auto", padding: "1rem 1.1rem 1.1rem" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "1.05rem", minHeight: 0, overflowY: "auto", padding: "clamp(1rem, 2.5vw, 1.65rem)" }}>
                     {finished && (
                         <div style={{ background: "rgba(250,204,21,0.08)", border: "1px solid rgba(250,204,21,0.3)", borderRadius: "10px", fontSize: "0.8rem", lineHeight: 1.5, padding: "0.7rem 0.85rem" }}>
                             The scene is over and written into the record{finished.title ? <>: <span data-no-translate style={{ fontWeight: 800 }}>{finished.title}</span></> : null}.
                             {typeof onOpenTimeline === "function" && (
-                                <button type="button" className="oh-tap-row" onClick={onOpenTimeline} style={{ ...quietButton(false), marginLeft: "0.6rem", padding: "0.3rem 0.6rem" }}>See it on the timeline</button>
+                                <button type="button" className="oh-tap-row" onClick={() => { onOpenTimeline(); if (finished.eventId) showEventOnTimeline(finished.eventId); }} style={{ ...quietButton(false), marginLeft: "0.6rem", padding: "0.3rem 0.6rem" }}>See it on the timeline</button>
                             )}
                         </div>
                     )}
@@ -208,7 +274,7 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
                     {scene ? (
                         <>
                             <div>
-                                <SceneText style={{ fontSize: "1.05rem", fontWeight: 850 }}>{scene.title || "Untitled scene"}</SceneText>
+                                <SceneText style={{ fontSize: "1.3rem", lineHeight: 1.35, fontWeight: 800 }}>{scene.title || "Untitled scene"}</SceneText>
                                 {scene.premise && <SceneText style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem", fontStyle: "italic", marginTop: "0.2rem" }}>{scene.premise}</SceneText>}
                                 {scene.request && <div style={{ ...caption, marginTop: "0.3rem" }}>Your angle: <span data-no-translate>{scene.request}</span></div>}
                             </div>
@@ -225,7 +291,7 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
                                                     <button type="button" className="oh-tap-row" onClick={() => takeBack(index)} disabled={!idle} title="Return the scene to just before this move — free; choosing again is one request" style={{ ...quietButton(!idle), fontSize: "0.68rem", padding: "0.2rem 0.5rem" }}>↶ Take back</button>
                                                 )}
                                             </div>
-                                            {beat.summary && <SceneText style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.8rem", marginTop: "0.25rem" }}>{beat.summary}</SceneText>}
+                                            {beat.summary && <SceneText style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.9rem", marginTop: "0.4rem" }}>{beat.summary}</SceneText>}
                                         </div>
                                     ))}
                                 </div>
@@ -248,7 +314,7 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
                                     onChange={(event) => setMove(event.target.value)}
                                     onKeyDown={(event) => { if (event.key === "Enter") play(move); }}
                                     placeholder="Or write your own move…"
-                                    style={{ ...inputStyle, resize: "none" }}
+                                    style={{ ...inputStyle, minWidth: 0, resize: "none" }}
                                 />
                                 <button type="button" className="oh-tap-row" onClick={() => play(move)} disabled={!idle || !move.trim()} style={primaryButton(!idle || !move.trim())}>Play</button>
                             </div>
@@ -280,16 +346,16 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
                         <>
                             <div>
                                 <div style={caption}>The last time skip offers this moment to be played out</div>
-                                <SceneText style={{ fontSize: "1.05rem", fontWeight: 850, marginTop: "0.2rem" }}>{offerShown.title}</SceneText>
+                                <SceneText style={{ fontSize: "1.3rem", lineHeight: 1.35, fontWeight: 800, marginTop: "0.35rem" }}>{offerShown.title}</SceneText>
                                 {offerShown.date && <div style={{ ...caption, marginTop: "0.1rem" }}>{isGameDate(offerShown.date) ? formatGameDateReadable(offerShown.date, "MMMM Do, YYYY") : offerShown.date}</div>}
                                 {offerShown.description && (
-                                    <SceneText style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.8rem", marginTop: "0.4rem", maxHeight: "9.5rem", overflowY: "auto" }}>{offerShown.description}</SceneText>
+                                    <SceneText style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.92rem", marginTop: "0.8rem", lineHeight: 1.7 }}>{offerShown.description}</SceneText>
                                 )}
                             </div>
                             <label htmlFor="interactive-angle" style={{ fontSize: "0.84rem", fontWeight: 800 }}>Your angle <span style={{ ...caption, fontWeight: 400 }}>(optional)</span></label>
                             <textarea
                                 id="interactive-angle"
-                                rows={2}
+                                rows={3}
                                 value={angle}
                                 disabled={!idle}
                                 onChange={(event) => setAngle(event.target.value)}
@@ -297,13 +363,13 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
                                 style={inputStyle}
                             />
                             {revealing && <div style={{ ...caption, color: "#fde68a" }}>Finish revealing the last time skip first: a scene starts from what you have seen.</div>}
-                            <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                            <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", flexWrap: "wrap", borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "1rem" }}>
                                 <button type="button" className="oh-tap-row" onClick={begin} disabled={!idle || revealing} style={primaryButton(!idle || revealing)}>Play it out</button>
                                 <button type="button" className="oh-tap-row" onClick={letPass} disabled={!idle} title="Let the moment pass as it happened — free" style={quietButton(!idle)}>Let it pass</button>
-                                <span style={caption}>Playing it out is one AI request, and each move is one more. Ending it yourself is one more; a scene that reaches its own end is usually written up with its last move. Letting it pass costs nothing.</span>
+                                <span style={{ ...caption, flexBasis: "100%" }}>Playing it out is one AI request, and each move is one more. Ending it yourself is one more; a scene that reaches its own end is usually written up with its last move. Letting it pass costs nothing.</span>
                             </div>
                         </>
-                    ) : !finished && (
+                    ) : !finished && !busy && (
                         <div style={{ ...caption, fontSize: "0.8rem" }}>
                             No interactive event is waiting. Now and then a time skip offers one of its events that concerns you to be played out; the event's card says so.
                         </div>

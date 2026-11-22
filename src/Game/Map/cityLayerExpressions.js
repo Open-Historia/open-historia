@@ -49,14 +49,16 @@ export const populationLabelFilter = (pop, capital = STOCK_CAPITAL) => [
 // country's figures now name its capital (`names`, world.countryStats[...]
 // .capital in lower case, useWorldState.js capitalNames). A capital named by
 // its new name (world.cityRenames) is matched back to the name on the tile.
-export const capitalExpr = (names, renames = null, base = STOCK_CAPITAL) => {
+export const capitalExpr = (names, renames = null, base = STOCK_CAPITAL, retired = []) => {
     const wanted = new Set((Array.isArray(names) ? names : []).map((name) => String(name ?? "").trim().toLowerCase()).filter(Boolean));
-    if (!wanted.size) return base;
+    const removed = [...new Set((Array.isArray(retired)?retired:[]).map(name=>String(name??"").trim().toLowerCase()).filter(Boolean))];
+    const tileName = ["downcase", ["coalesce", ["get", "city"], ["get", "name"], ""]];
+    const original = removed.length ? ["all", base, ["!", ["in", tileName, ["literal", removed]]]] : base;
+    if (!wanted.size) return original;
     for (const [from, to] of Object.entries(renames && typeof renames === "object" ? renames : {})) {
         if (wanted.has(String(to ?? "").trim().toLowerCase())) wanted.add(String(from ?? "").trim().toLowerCase());
     }
-    const tileName = ["downcase", ["coalesce", ["get", "city"], ["get", "name"], ""]];
-    return ["any", base, ["in", tileName, ["literal", [...wanted].sort()]]];
+    return ["any", original, ["in", tileName, ["literal", [...wanted].sort()]]];
 };
 
 // A stock city's population: world.cityPopulations over the tile's own figure.

@@ -133,3 +133,16 @@ test("a save that carries the whole map still replaces it", () => {
   const stored = JSON.parse(readFileSync(docPath(root, "world"), "utf-8"));
   assert.deepEqual(ids(stored.regions), ["7", "8"]);
 });
+
+test("a settled generated-world marker uses an explicit null to clear merged map metadata", () => {
+  const root = buildDataDir();
+  runStore(root, `
+    store.updateMapEditorDocument("world", { metadata: { generatedWorldReplacementId: "generated-1" } });
+    store.updateMapEditorDocument("world", { metadata: { generatedWorldReplacementId: null } });
+    ${report("true")}
+  `);
+  const stored = JSON.parse(readFileSync(docPath(root, "world"), "utf-8"));
+  assert.equal(stored.metadata.generatedWorldReplacementId, null);
+  assert.equal(stored.metadata.name, "World");
+  assert.deepEqual(ids(stored.regions), ["1", "2", "3"]);
+});

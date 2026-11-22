@@ -12,6 +12,7 @@ import { normalizeWorldState } from "../../runtime/gameState.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { compareGameDates, parseGameDate } from "../../runtime/gameDates.js";
 import { MAX_WAR_SIDE_MEMBERS } from "../../runtime/warRecord.js";
+import { MAX_SEMANTIC_DAY_ONE_FACTS } from "../../runtime/scenarioPrehistory.js";
 import {
   buildPregameWarBaselineRecord,
   mergePregameWarBaselineRecord,
@@ -48,7 +49,7 @@ import {
 
 export const PREGAME_BOOTSTRAP_CONTRACT_VERSION = 1;
 
-const MAX_FACTS = 32;
+const MAX_FACTS = MAX_SEMANTIC_DAY_ONE_FACTS;
 const MAX_SOURCE_EVENT_REFS = 16;
 // A war's sides hold what any war's do (runtime/warRecord.js): a Round-Zero
 // coalition is no smaller than one the time skip may build.

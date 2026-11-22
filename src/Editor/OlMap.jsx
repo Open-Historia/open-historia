@@ -17,7 +17,18 @@ import TileLayer from "ol/layer/Tile";
 import OSM from "ol/source/OSM";
 import XYZ from "ol/source/XYZ";
 import { editorBasemapById, esriXyzUrl } from "./basemaps.js";
+import { streetReferenceActive } from "./editorStreetReference.js";
+import {
+  EDITOR_MAX_ZOOM, EDITOR_MIN_ZOOM, EDITOR_FOCUS_MAX_ZOOM,
+  EDITOR_REGION_GEOJSON_OPTIONS,
+} from "./editorZoomPrecision.js";
+import { regionsInRectangle } from "./regionSelectionTools.js";
+import { regionMoveInteractions } from "./regionMoveInteractions.js";
+import { restoreCarvedEdited } from "./regionCarveHistory.js";
+import { splitRegionFeature } from "./regionScissors.js";
+import { toolForHotkey } from "./editorToolHotkeys.js";
 import { useBrowserOnline } from "../runtime/networkStatus.js";
+import { alertDialog, hasOpenUiDialog } from "../runtime/uiDialog.js";
 import VectorLayer from "ol/layer/Vector";
 import VectorImageLayer from "ol/layer/VectorImage";
 import WebGLVectorLayer from "ol/layer/WebGLVector";
@@ -35,7 +46,7 @@ import CircleStyle from "ol/style/Circle";
 import Point from "ol/geom/Point";
 import Draw from "ol/interaction/Draw";
 import Modify from "ol/interaction/Modify";
-import Translate from "ol/interaction/Translate";
+
 import Snap from "ol/interaction/Snap";
 import RegionSnap from "./regionSnap.js";
 import PointerInteraction from "ol/interaction/Pointer";
@@ -62,6 +73,8 @@ import { readBackgroundPixels } from "./backgroundPixels.js";
 import { createEmpty as emptyExtent, extend as extendExtent } from "ol/extent";
 import { defaults as defaultInteractions } from "ol/interaction/defaults";
 import MouseWheelZoom from "ol/interaction/MouseWheelZoom";
+import { createEditorZoomControl } from "./editorZoomControl.js";
+import { editorZoomStep, EDITOR_WHEEL_UNITS_PER_NOTCH } from "./editorZoomSteps.js";
 import ImageCanvasSource from "ol/source/ImageCanvas";
 import { buildPoliticalBoundaryTopology } from "../Game/Map/vnext/politicalBoundaryTopology.js";
 import { buildGroupAreaIndex, deriveGroupAreas } from "../Game/Map/vnext/groupAreas.js";
@@ -70,7 +83,7 @@ import { isMapFeature, mapFeatureFamily } from "./mapFeatures.js";
 import { loadSeedFeatures, SEEDED_KINDS, seedUrlOf } from "./regionImport.js";
 import { ownersMatchingQuery, regionMatchesQuery } from "./regionSearch.js";
 import { newId } from "./useMapDocument.js";
-import { mergeRegionFeatures, trackMove } from "./shapeEdits.js";
+import { mergeRegionFeatures } from "./shapeEdits.js";
 import { resolvePastedIds } from "./regionClipboard.js";
 import { createWarGeographyLayers, drawTypeOf, pointsOfLine, ringsOfPolygon, shapeNear, syncShapes } from "./warGeographyLayers.js";
 import { isWarTool, mostCommon } from "./warGeographyDoc.js";
@@ -583,6 +596,9 @@ const interiorPoint = (geom) => {
 
 const OlMap = ({
   basemap = "dark",
+  // Modern OSM streets are an opt-in, session-only trace reference, never a
+  // replacement for the scenario's saved historical basemap or its geometry.
+  streetReference = false,
   types,
   colors,
   selectionIds,
@@ -605,6 +621,7 @@ const OlMap = ({
   onUnitEdit,
   onUnitRemove,
   onSelectionChange,
+  onToolShortcut,
   onRegionCount,
   onRegionsChanged,
   onFeatureCreate,
@@ -729,6 +746,7 @@ const OlMap = ({
   const paintOwnerRef = useRef(paintOwner);
   const paintOnlyOwnerRef = useRef(paintOnlyOwner);
   const onSelectionRef = useRef(onSelectionChange);
+  const onToolShortcutRef = useRef(onToolShortcut);
   const onRegionsChangedRef = useRef(onRegionsChanged);
   const scenarioModeRef = useRef(scenarioMode);
   const selectionKey = (selectionIds || []).join("|");
@@ -763,6 +781,7 @@ const OlMap = ({
   paintOwnerRef.current = paintOwner;
   paintOnlyOwnerRef.current = paintOnlyOwner;
   onSelectionRef.current = onSelectionChange;
+  onToolShortcutRef.current = onToolShortcut;
   onRegionsChangedRef.current = onRegionsChanged;
 
   // Groups' outlines follow every change to the regions, a beat later: they are
@@ -1107,22 +1126,32 @@ const OlMap = ({
       (region) => isWaterType(typesByIdRef.current[region.get("typeId") || "land"]),
     );
 
-    // OpenLayers zooms a third of a level per mouse-wheel notch (300 wheel units
-    // a level; a notch is 100), so getting from the world to a province took
-    // about seventeen notches. One level a notch, as most map apps do, and the
-    // same rate the game map's MapLibre uses for a trackpad.
-    // shortcut: deltaPerZoom_ is private (OpenLayers has no option for it); if a
-    // later OpenLayers renames it, the wheel falls back to its own rate.
+    // Progressive editor zoom. Stock OL +/- is hardwired to a fixed delta,
+    // so give this editor its own OL Control instead of intercepting clicks.
+    // OL's wheel keeps cursor anchoring and trackpad/pinch handling; its
+    // existing private deltaPerZoom_ compatibility seam follows our rate.
+    const zoomControl = createEditorZoomControl();
     const wheelZoom = new MouseWheelZoom({ maxDelta: 2, duration: 180 });
-    wheelZoom.deltaPerZoom_ = 100;
     const map = new Map({
       target: containerRef.current,
-      controls: defaultControls({ rotate: false }),
+      controls: defaultControls({ rotate: false, zoom: false }).extend([zoomControl.control]),
       interactions: defaultInteractions({ mouseWheelZoom: false }).extend([wheelZoom]),
       layers: [regionLayer, regionOverlayLayer, ...war.layers, groupOutlineLayer, labelLayer, pointLayer, unitLayer, importPreviewLayer, paintPreviewLayer, topologyLayer, borderAssistLayer, scale.layer],
-      view: new View({ center: fromLonLat([0, 20]), zoom: 2.1, minZoom: 1, maxZoom: 20 }),
+      view: new View({
+        center: fromLonLat([0, 20]), zoom: 2.1,
+        minZoom: EDITOR_MIN_ZOOM, maxZoom: EDITOR_MAX_ZOOM,
+      }),
     });
 
+    // View zoom (not tile detail): one listener updates both the compact
+    // indicator and OL wheel sensitivity. Trackpads keep fractional motion.
+    const updateZoomReadout = () => {
+      const level = map.getView().getZoom();
+      zoomControl.update(level);
+      wheelZoom.deltaPerZoom_ = EDITOR_WHEEL_UNITS_PER_NOTCH / editorZoomStep(level);
+    };
+    map.getView().on("change:resolution", updateZoomReadout);
+    updateZoomReadout();
     regionSourceRef.current = regionSource;
     regionLayerRef.current = regionLayer;
     if (regionDisplay) {
@@ -1299,7 +1328,7 @@ const OlMap = ({
           // save's border cleanup (repairTopologyEverywhere) is the only thing
           // that repairs those: a scenario's Save buttons, or the standalone
           // editor's exports. The Merge button says the same.
-          window.alert(scenarioModeRef.current
+          void alertDialog(scenarioModeRef.current
             ? "The border between these two regions could not be removed. Borders are repaired when the map is saved into its scenario, so save the map and then try again."
             : "The border between these two regions could not be removed. Borders are repaired when the map is exported, so export the map and then try again.");
           return;
@@ -1360,7 +1389,7 @@ const OlMap = ({
         layerFilter: isRegionLayer,
       });
       const tool = activeToolRef.current;
-      if (tool === "lasso" || tool === "draw" || tool === "modify" || tool === "paint" || tool === "feature-box" || isWarTool(tool)) {
+      if (tool === "lasso" || tool === "region-box" || tool === "draw" || tool === "scissors" || tool === "modify" || tool === "paint" || tool === "feature-box" || isWarTool(tool)) {
         map.getTargetElement().style.cursor = "crosshair";
       } else if (tool === "feature" || tool === "marker" || tool === "delete" || tool === "unit") {
         // City-aware tools: pointer over an existing city (edit/remove target).
@@ -1398,6 +1427,7 @@ const OlMap = ({
     };
 
     const onKeyDown = (e) => {
+      if (hasOpenUiDialog()) return;
       const ae = document.activeElement;
       const typing = ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName);
       // Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl+Y redo
@@ -1410,13 +1440,26 @@ const OlMap = ({
           // map-maker meant, and there is no way back to the half-drawn shape.
           if (activeDrawRef.current && placedPointsRef.current.length > 0) {
             activeDrawRef.current.removeLastPoint();
-            placedPointsRef.current.pop();
+            // Scissors syncs placedPointsRef directly from sketchGeom's change event;
+            // popping here as well would remove two points for one undo key.
+            if (activeToolRef.current !== "scissors") placedPointsRef.current.pop();
             return;
           }
           doUndo();
           return;
         }
         if ((k === "z" && e.shiftKey) || k === "y") { e.preventDefault(); doRedo(); return; }
+      }
+      // Tool letters are map-editor shortcuts, not text input, browser
+      // shortcuts or a request to abandon an unfinished geometry sketch.
+      const toolShortcut = toolForHotkey(e, {
+        sketching: Boolean(activeDrawRef.current && placedPointsRef.current.length),
+        modalOpen: Boolean(document.querySelector('[role="dialog"][aria-modal="true"]')),
+      });
+      if (toolShortcut && onToolShortcutRef.current) {
+        e.preventDefault();
+        onToolShortcutRef.current(toolShortcut);
+        return;
       }
       // In a war tool (terrain, fortified line, climate zone) these keys are
       // about its shapes, never the regions selected underneath: Escape lets go
@@ -1450,6 +1493,27 @@ const OlMap = ({
           if (cmd) pushCmd(cmd);
         }
         return;
+      }
+      // The Scissors sketch is not a canonical region. Escape abandons it;
+      // Backspace undoes just the last sketch point, never deletes territory.
+      if (activeToolRef.current === "scissors" && activeDrawRef.current && !typing) {
+        if (e.key === "Escape" && placedPointsRef.current.length) {
+          e.preventDefault();
+          activeDrawRef.current.abortDrawing();
+          placedPointsRef.current = [];
+          return;
+        }
+        if (e.key === "Backspace" && placedPointsRef.current.length) {
+          e.preventDefault();
+          if (placedPointsRef.current.length > 1) {
+            // sketchGeom's change listener (syncSketchPoints) synchronously updates placedPointsRef.
+            activeDrawRef.current.removeLastPoint();
+          } else {
+            activeDrawRef.current.abortDrawing();
+            placedPointsRef.current = [];
+          }
+          return;
+        }
       }
       // Delete / Backspace removes the current selection
       if (e.key !== "Delete" && e.key !== "Backspace") return;
@@ -2217,7 +2281,7 @@ const OlMap = ({
       },
       zoomToRegion: (id) => {
         const f = regionSource.getFeatureById(id);
-        if (f) map.getView().fit(f.getGeometry().getExtent(), { padding: [80, 80, 80, 80], duration: 350, maxZoom: 8 });
+        if (f) map.getView().fit(f.getGeometry().getExtent(), { padding: [80, 80, 80, 80], duration: 350, maxZoom: EDITOR_FOCUS_MAX_ZOOM });
       },
       zoomToSelection: (ids) => {
         const feats = (ids || []).map((id) => regionSource.getFeatureById(id)).filter(Boolean);
@@ -2227,16 +2291,16 @@ const OlMap = ({
           const e = f.getGeometry().getExtent();
           ext = [Math.min(ext[0], e[0]), Math.min(ext[1], e[1]), Math.max(ext[2], e[2]), Math.max(ext[3], e[3])];
         }
-        map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 350, maxZoom: 8 });
+        map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 350, maxZoom: EDITOR_FOCUS_MAX_ZOOM });
       },
       // A terrain area, fortified line or climate zone, by its kind and id.
       zoomToWarShape: (kind, id) => {
         const extent = war.sources[kind]?.getFeatureById(String(id))?.getGeometry()?.getExtent();
-        if (extent && Number.isFinite(extent[0])) map.getView().fit(extent, { padding: [80, 80, 80, 80], duration: 350, maxZoom: 8 });
+        if (extent && Number.isFinite(extent[0])) map.getView().fit(extent, { padding: [80, 80, 80, 80], duration: 350, maxZoom: EDITOR_FOCUS_MAX_ZOOM });
       },
       // `patch.claimants` may be a function of the region's own list, so one
       // edit over a selection with differing claims keeps each region's rest.
-      setRegionAttrs: (ids, patch) => {
+      setRegionAttrs: (ids, patch, { deferHistory = false } = {}) => {
         const undos = [];
         for (const id of ids) {
           const f = regionSource.getFeatureById(id);
@@ -2260,7 +2324,7 @@ const OlMap = ({
         notifyRegions();
         if (undos.length) {
           const after = { ...patch };
-          pushCmd({
+          const step = {
             undo: () => undos.forEach(([f, b]) => Object.keys(b).forEach((k) => f.set(k, b[k]))),
             redo: () => undos.forEach(([f, , claimants]) => {
               if ("owner" in after) f.set("owner", after.owner || null);
@@ -2269,12 +2333,15 @@ const OlMap = ({
               if ("claimants" in after) f.set("claimants", claimants);
               if ("group" in after) f.set("group", after.group || null);
             }),
-          });
+          };
+          if (deferHistory) return step;
+          pushCmd(step);
         }
+        return null;
       },
       // Re-key an owner across the whole map (Polities panel rename): every
       // region owned by, or claimed for, `from` now says `to`, as ONE undo step.
-      renameOwner: (from, to) => {
+      renameOwner: (from, to, { deferHistory = false } = {}) => {
         const same = (value) => samePolityName(value, from);
         const undos = [];
         for (const f of regionSource.getFeatures()) {
@@ -2290,17 +2357,19 @@ const OlMap = ({
           f.set("claimants", after.claimants);
           undos.push([f, before, after]);
         }
-        if (!undos.length) return 0;
+        if (!undos.length) return deferHistory ? null : 0;
         const refresh = () => {
           restyleRegions();
           labelLayer.changed();
           notifyRegions();
         };
         refresh();
-        pushCmd({
+        const step = {
           undo: () => { undos.forEach(([f, b]) => { f.set("owner", b.owner); f.set("claimants", b.claimants); }); refresh(); },
           redo: () => { undos.forEach(([f, , a]) => { f.set("owner", a.owner); f.set("claimants", a.claimants); }); refresh(); },
-        });
+        };
+        if (deferHistory) return step;
+        pushCmd(step);
         return undos.length;
       },
       // Remove several owners from the map in one scan and one undo command.
@@ -2364,7 +2433,7 @@ const OlMap = ({
         if (feats.length < 2) return;
         const cmd = mergeRegionFeatures(regionSource, feats);
         if (!cmd) {
-          window.alert(scenarioModeRef.current
+          void alertDialog(scenarioModeRef.current
             ? "These regions could not be merged. Borders are repaired when the map is saved into its scenario, so save the map and then try again."
             : "These regions could not be merged. Borders are repaired when the map is exported, so export the map and then try again.");
           return;
@@ -2406,7 +2475,8 @@ const OlMap = ({
         const apply = (forward) => {
           for (const change of changes) {
             change.feature.setGeometry(forward ? change.after : change.before);
-            change.feature.set("edited", forward ? true : change.edited);
+            if (forward) change.feature.set("edited", true);
+          else restoreCarvedEdited(change.feature, change.edited);
           }
           restyleRegions();
           labelLayer.changed();
@@ -2484,7 +2554,8 @@ const OlMap = ({
             const apply = (forward) => {
               for (const change of changes) {
                 change.feature.setGeometry(forward ? change.after : change.before);
-                change.feature.set("edited", forward ? true : change.edited);
+                if (forward) change.feature.set("edited", true);
+          else restoreCarvedEdited(change.feature, change.edited);
               }
               restyleRegions();
               labelLayer.changed();
@@ -2532,9 +2603,7 @@ const OlMap = ({
       exportRegions: (ids) => {
         const feats = (ids || []).map((id) => regionSource.getFeatureById(id)).filter(Boolean);
         const fc = new GeoJSON().writeFeaturesObject(feats, {
-          dataProjection: "EPSG:4326",
-          featureProjection: "EPSG:3857",
-          decimals: 5,
+          ...EDITOR_REGION_GEOJSON_OPTIONS,
         });
         for (const f of fc.features || []) {
           if (f.id != null) f.properties = { ...(f.properties || {}), id: String(f.id) };
@@ -2549,7 +2618,10 @@ const OlMap = ({
       // linkage), otherwise it gets a fresh one; it is always marked edited,
       // since its shape is this map's own now whatever tiles it came from. The
       // whole paste is one undo step.
-      pasteRegions: (fc, { select = true, simplify = false } = {}) => {
+      pasteRegions: (fc, { select = true, simplify = false, documentStep = null } = {}) => {
+        if (documentStep && (typeof documentStep.undo !== "function" || typeof documentStep.redo !== "function")) {
+          throw new TypeError("Region paste document history must provide undo and redo");
+        }
         const incoming = fc && Array.isArray(fc.features)
           ? new GeoJSON().readFeatures(fc, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" })
           : [];
@@ -2634,8 +2706,7 @@ const OlMap = ({
         const entries = [...carved.values()];
         const restore = (entry) => {
           entry.feature.setGeometry(entry.before.clone());
-          if (entry.edited) entry.feature.set("edited", entry.edited);
-          else entry.feature.unset("edited");
+          restoreCarvedEdited(entry.feature, entry.edited);
           if (entry.removed) regionSource.addFeature(entry.feature);
         };
         const reapply = (entry) => {
@@ -2646,6 +2717,20 @@ const OlMap = ({
             entry.feature.set("edited", true);
           }
         };
+        // Commit the canonical document half only after usable polygons were
+        // added. Include it in THIS geometry command so one Undo reverses both.
+        // A failed document commit rolls geometry back instead of leaving an
+        // untracked map mutation.
+        try {
+          documentStep?.redo();
+        } catch (error) {
+          added.forEach((f) => regionSource.removeFeature(f));
+          entries.forEach(restore);
+          restyleRegions();
+          labelLayer.changed();
+          notifyRegions();
+          throw error;
+        }
         restyleRegions();
         labelLayer.changed();
         if (select) onSelectionRef.current?.(added.map((f) => f.getId()));
@@ -2654,10 +2739,12 @@ const OlMap = ({
           undo: () => {
             added.forEach((f) => regionSource.removeFeature(f));
             entries.forEach(restore);
+            documentStep?.undo();
             restyleRegions();
             labelLayer.changed();
           },
           redo: () => {
+            documentStep?.redo();
             entries.forEach(reapply);
             added.forEach((f) => regionSource.addFeature(f));
             restyleRegions();
@@ -2708,7 +2795,7 @@ const OlMap = ({
             steps.push({
               undo: () => {
                 existing.setGeometry(before.geometry.clone());
-                if (before.edited) existing.set("edited", before.edited); else existing.unset("edited");
+                restoreCarvedEdited(existing, before.edited);
                 for (const [field, value] of Object.entries(before.attrs)) existing.set(field, value);
               },
               redo: () => {
@@ -2806,7 +2893,7 @@ const OlMap = ({
             const e = f.getGeometry().getExtent();
             ext = [Math.min(ext[0], e[0]), Math.min(ext[1], e[1]), Math.max(ext[2], e[2]), Math.max(ext[3], e[3])];
           }
-          map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 300, maxZoom: 7 });
+          map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 300, maxZoom: EDITOR_FOCUS_MAX_ZOOM });
         }
         return ids;
       },
@@ -2846,7 +2933,7 @@ const OlMap = ({
             const e = f.getGeometry().getExtent();
             ext = [Math.min(ext[0], e[0]), Math.min(ext[1], e[1]), Math.max(ext[2], e[2]), Math.max(ext[3], e[3])];
           }
-          map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 300, maxZoom: 7 });
+          map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 300, maxZoom: EDITOR_FOCUS_MAX_ZOOM });
         }
         return ids;
       },
@@ -3028,9 +3115,7 @@ const OlMap = ({
       // -> string. That churn is what ran the tab out of memory.
       serializeRegions: () =>
         new GeoJSON().writeFeaturesObject(regionSource.getFeatures(), {
-          dataProjection: "EPSG:4326",
-          featureProjection: "EPSG:3857",
-          decimals: 5,
+          ...EDITOR_REGION_GEOJSON_OPTIONS,
         }),
 
       // What a save actually has to carry (regionChanges.js). Each region is
@@ -3046,7 +3131,7 @@ const OlMap = ({
       // forgetting them.
       serializeRegionChanges: () => {
         const format = new GeoJSON();
-        const options = { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857", decimals: 5 };
+        const options = EDITOR_REGION_GEOJSON_OPTIONS;
         const features = regionSource.getFeatures();
         const writtenFeatures = (function* write() {
           for (const feature of features) yield format.writeFeatureObject(feature, options);
@@ -3202,6 +3287,8 @@ const OlMap = ({
       scaleLayerRef.current = null;
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKeyDown);
+      map.getView().un("change:resolution", updateZoomReadout);
+      zoomControl.dispose();
       map.setTarget(null);
       regionLayer.dispose();
       regionOverlayLayerRef.current = null;
@@ -3410,6 +3497,66 @@ const OlMap = ({
           previewSource?.clear();
         },
       });
+    } else if (activeTool === "scissors") {
+      // A true topological split: do not paint or remove a strip of land.
+      // Restrict to a single selected source region to avoid ever cutting
+      // an unintended neighbour (or trying to split the entire world).
+      const sketch = new Draw({
+        type: "LineString",
+        features: new Collection(), // preview only; never a canonical region
+        condition: (event) => {
+          const oe = event.originalEvent;
+          return !(oe && (oe.ctrlKey || oe.metaKey || oe.altKey || oe.shiftKey));
+        },
+      });
+      activeDrawRef.current = sketch;
+      let sketchGeom = null;
+      const syncSketchPoints = () => {
+        const coords = sketchGeom?.getCoordinates?.() || [];
+        // OpenLayers LineString sketch includes the trailing pointer coordinate;
+        // committed vertices are coords.slice(0, -1) (at least 1 once drawstart fires).
+        placedPointsRef.current = coords.length > 1 ? coords.slice(0, -1) : coords.slice(0, 1);
+      };
+      const detachSketch = () => {
+        sketchGeom?.un("change", syncSketchPoints);
+        sketchGeom = null;
+        placedPointsRef.current = [];
+      };
+      sketch.on("drawstart", (event) => {
+        sketchGeom = event.feature?.getGeometry?.() || null;
+        syncSketchPoints();
+        sketchGeom?.on("change", syncSketchPoints);
+      });
+      sketch.on("drawabort", detachSketch);
+      sketch.on("drawend", (event) => {
+        detachSketch();
+        const ids = [...selectedIdsRef.current];
+        if (ids.length !== 1) {
+          void alertDialog("Scissors needs exactly one selected region. Select a region first, then draw a line across both of its borders.");
+          return;
+        }
+        const target = source.getFeatureById(ids[0]);
+        const coordinates = event.feature.getGeometry()?.getCoordinates();
+        const step = splitRegionFeature(source, target, coordinates, () => newId("reg"));
+        if (!step) {
+          void alertDialog("The cut did not divide the selected region into two valid pieces. Draw a continuous line across it, from outside one border to outside the other. Nothing was changed.");
+          return;
+        }
+        onSelectionRef.current?.([step.retainedId, step.createdId]);
+        notifyRegions();
+        pushCmd({
+          undo: () => {
+            step.undo();
+            onSelectionRef.current?.([step.retainedId]);
+          },
+          redo: () => {
+            step.redo();
+            onSelectionRef.current?.([step.retainedId, step.createdId]);
+          },
+        });
+      });
+      added.push(sketch);
+      snapTolerance = 10;
     } else if (activeTool === "draw") {
       // trace: click a point on an existing border and the sketch FOLLOWS that
       // border as the cursor moves, instead of making the map-maker click every
@@ -3503,17 +3650,18 @@ const OlMap = ({
           const geom = other.getGeometry();
           if (!geom || !overlaps(geom, cutter)) continue;
           const before = geom.clone();
+          const wasEdited = other.get("edited");
           const after = subtractFrom(geom, cutter);
           if (!after) {
             // Fully covered: nothing of it is left to own.
             source.removeFeature(other);
-            carved.push({ feature: other, before, after: null });
+            carved.push({ feature: other, before, after: null, edited: wasEdited });
           } else {
             other.setGeometry(after);
             // Mark it edited so the exporter ships this geometry rather than
             // assuming the stock GADM shape still describes it.
             other.set("edited", true);
-            carved.push({ feature: other, before, after: after.clone() });
+            carved.push({ feature: other, before, after: after.clone(), edited: wasEdited });
           }
         }
         if (carved.length) {
@@ -3528,6 +3676,7 @@ const OlMap = ({
             source.removeFeature(f);
             for (const c of carved) {
               c.feature.setGeometry(c.before.clone());
+              restoreCarvedEdited(c.feature, c.edited);
               if (!c.after) source.addFeature(c.feature);
             }
             restyleRegionsRef.current?.();
@@ -3536,7 +3685,10 @@ const OlMap = ({
             source.addFeature(f);
             for (const c of carved) {
               if (!c.after) source.removeFeature(c.feature);
-              else c.feature.setGeometry(c.after.clone());
+              else {
+                c.feature.setGeometry(c.after.clone());
+                c.feature.set("edited", true);
+              }
             }
             restyleRegionsRef.current?.();
           },
@@ -3723,17 +3875,10 @@ const OlMap = ({
         });
       }
     } else if (activeTool === "move") {
-      // A moved region is reshaped as far as the stock tiles know, so it is
-      // marked edited, and the move is one undo step (shapeEdits.js).
-      const translate = new Translate({ layers: [layer], hitTolerance: 2 });
-      const move = trackMove();
-      translate.on("translatestart", (e) => move.start(e.features.getArray(), e.startCoordinate));
-      translate.on("translateend", (e) => {
-        const cmd = move.end(e.features.getArray(), e.coordinate);
-        if (cmd) pushCmd(cmd);
-        notifyRegions();
-      });
-      added.push(translate);
+      added.push(...regionMoveInteractions({
+        source, layer, selectionIds, selectedIdsRef,
+        onStep: pushCmd, onRegionsChanged: notifyRegions,
+      }));
     } else if (isWarTool(activeTool) && warLayersRef.current) {
       // Terrain, Fortified line, Climate zone: draw a shape of that kind into its
       // own source (warGeographyLayers.js), never the regions'. Nothing is
@@ -3855,6 +4000,16 @@ const OlMap = ({
       const draw = new Draw({ type: "Polygon", features: new Collection(), freehand: true });
       draw.on("drawend", (e) => selectWithinPolygon(e.feature.getGeometry()));
       added.push(draw);
+    } else if (activeTool === "region-box") {
+      // Rectangle-marquee selects any region actually touched by the box,
+      // not just a region whose bounding box overlaps it. Shift adds.
+      const box = new DragBox();
+      box.on("boxend", (e) => {
+        const extent = box.getGeometry().getExtent();
+        const additive = Boolean(e?.mapBrowserEvent?.originalEvent?.shiftKey);
+        onSelectionRef.current?.(regionsInRectangle(source, extent, [...selectedIdsRef.current], additive));
+      });
+      added.push(box);
     } else if (activeTool === "feature-box") {
       // Hold the mouse down and drag a rectangle: every city/feature inside it
       // is selected (shift-drag adds to the selection). The Features panel then
@@ -3983,13 +4138,14 @@ const OlMap = ({
     // A custom uploaded map (image or vector) replaces the basemap — don't load
     // any ESRI tiles at all while it's active, to save the requests.
     const customActive = customBackground?.kind === "image" || customBackground?.kind === "vector" || customBackground?.kind === "plain";
-    const esri = customActive ? null : editorBasemapById(basemap);
+    const usingStreetReference = streetReferenceActive({ enabled: streetReference, online, background: customBackground });
+    const esri = customActive || usingStreetReference ? null : editorBasemapById(basemap);
     let base = null;
     fitBackgroundsRef.current.tiles = esri && !online
       ? { kind: "tiles", template: "/offline-relief/{z}/{y}/{x}.jpg", maxZoom: 3 }
       : esri
         ? { kind: "tiles", template: esriXyzUrl(esri.service), maxZoom: esri.maxZoom }
-        : !customActive && basemap === "osm"
+        : !customActive && (usingStreetReference || basemap === "osm")
           ? { kind: "tiles", template: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", maxZoom: 19 }
           : null;
     if (esri && !online) {
@@ -4002,6 +4158,9 @@ const OlMap = ({
         source: new XYZ({ url: esriXyzUrl(esri.service), maxZoom: esri.maxZoom, crossOrigin: "anonymous" }),
         opacity: Number.isFinite(esri.editorOpacity) ? esri.editorOpacity : 1,
       });
+    } else if (usingStreetReference) {
+      // OL's OSM source supplies standard source attribution, unlike a raw XYZ.
+      base = new TileLayer({ source: new OSM() });
     } else if (!customActive && (basemap === "osm" || basemap === "light")) {
       base = new TileLayer({ source: new OSM(), opacity: basemap === "light" ? 0.85 : 1 });
     }
@@ -4014,9 +4173,9 @@ const OlMap = ({
     if (el) {
       el.style.background = customActive
         ? "#0b1a2b"
-        : esri?.editorBackground || BASEMAP_BG[basemap] || "#131315";
+        : usingStreetReference ? "#e5e8ea" : esri?.editorBackground || BASEMAP_BG[basemap] || "#131315";
     }
-  }, [basemap, customBackground, online]);
+  }, [basemap, customBackground, online, streetReference]);
 
   // Custom uploaded background: a georeferenced vector/raster layer beneath the
   // regions, or a plain image placed with a draggable/resizable frame.
@@ -4186,14 +4345,15 @@ const OlMap = ({
   // free aspect so a distorted source map can still be aligned; Shift keeps
   // the picture's shape) and dragging inside moves. Mounted only while the
   // Reference panel is open, and added last so it wins the event race over
-  // the editing interactions. Locked, it is only an outline and every drag
-  // pans the map: a reference laid over the whole basemap covers the whole
-  // map, and unlocked it caught every drag.
+  // the editing interactions. Locked, or with the Hand tool selected, keep
+  // only the outline: navigation must never claim a reference-image drag.
+  const referencePan = activeTool === "pan";
   useEffect(() => {
     const map = mapRef.current;
     const dataUrl = referenceImage?.dataUrl;
     if (!map || !dataUrl || !referenceAdjust) return undefined;
     const locked = referenceImage?.locked === true;
+    const canAdjust = !locked && !referencePan;
 
     // wrapX off, as every other editor layer: otherwise the frame is drawn
     // again on the world copy beside it.
@@ -4228,7 +4388,7 @@ const OlMap = ({
       frameSource.clear();
       if (!extent) return;
       frameSource.addFeature(new Feature({ geometry: polygonFromExtent(extent) }));
-      if (locked) return;
+      if (!canAdjust) return;
       for (const corner of cornersOf(extent)) {
         frameSource.addFeature(new Feature({ geometry: new Point(corner) }));
       }
@@ -4239,7 +4399,7 @@ const OlMap = ({
     // picture (to move), or nothing.
     const grabAt = (pixel, coordinate) => {
       const extent = refImageExtentRef.current;
-      if (!extent || locked) return null;
+      if (!extent || !canAdjust || activeToolRef.current === "pan") return null;
       const corners = cornersOf(extent);
       for (let index = 0; index < corners.length; index += 1) {
         const corner = map.getPixelFromCoordinate(corners[index]);
@@ -4268,7 +4428,7 @@ const OlMap = ({
       },
       handleDragEvent: (event) => {
         const extent = refImageExtentRef.current;
-        if (!drag || !extent) return;
+        if (!drag || !extent || activeToolRef.current === "pan") return;
         if (drag.mode === "move") {
           const dx = event.coordinate[0] - drag.last[0];
           const dy = event.coordinate[1] - drag.last[1];
@@ -4297,7 +4457,7 @@ const OlMap = ({
         return false;
       },
     });
-    map.addInteraction(interaction);
+    if (canAdjust) map.addInteraction(interaction);
 
     // Added after the map's own pointermove (which sets the tool's cursor), so
     // over the picture this one has the last word.
@@ -4306,17 +4466,17 @@ const OlMap = ({
       const grab = grabAt(event.pixel, event.coordinate);
       if (grab) map.getTargetElement().style.cursor = cursorFor(grab);
     };
-    map.on("pointermove", showCursor);
+    if (canAdjust) map.on("pointermove", showCursor);
 
     return () => {
-      map.un("pointermove", showCursor);
+      if (canAdjust) map.un("pointermove", showCursor);
       map.getTargetElement().style.cursor = "";
-      map.removeInteraction(interaction);
+      if (canAdjust) map.removeInteraction(interaction);
       map.removeLayer(frameLayer);
       refImageFrameSourceRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [referenceAdjust, referenceImage?.dataUrl, referenceImage?.locked]);
+  }, [referenceAdjust, referenceImage?.dataUrl, referenceImage?.locked, referencePan]);
 
   return <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />;
 };

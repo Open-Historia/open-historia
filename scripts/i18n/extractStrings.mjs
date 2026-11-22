@@ -53,6 +53,7 @@ const looksTechnical = (text) => {
   if (/^(?:https?:|data:|blob:|mailto:|\/|\.\/|\.\.\/|#)/i.test(t)) return true; // urls, paths, anchors
   if (/(?:^|\s)(?:-?\d*\.?\d+(?:px|rem|em|vh|vw|%|ms|s|deg|fr)\b)/.test(t) && !/[a-z]{4,}\s+[a-z]{3,}/i.test(t.replace(/-?\d*\.?\d+(?:px|rem|em|vh|vw|%|ms|s|deg|fr)\b/g, ""))) return true;
   if (/rgba?\(|hsla?\(|#[0-9a-f]{3,8}\b|var\(--|calc\(|color-mix\(|linear-gradient|cubic-bezier|translate[XY]?\(|scale\(|rotate\(/i.test(t)) return true;
+  if (/,\s*(?:ui-monospace|monospace|sans-serif|serif|system-ui|cursive|fantasy)\s*$/i.test(t)) return true; // CSS font-family stacks
   if (CSS_WORD.test(t)) return true;
   if (/^[\w.-]+(?:\s+[\w.-]+)*$/.test(t) && t.split(/\s+/).every((w) => CSS_WORD.test(w) || /^-?\d*\.?\d+$/.test(w))) return true; // "0 1 auto"
   if (/^[\w.-]+\.(?:js|jsx|mjs|json|png|jpg|webp|svg|geojson|pmtiles|css|html|zip)$/i.test(t)) return true;

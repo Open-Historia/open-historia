@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { addRowStep, groupEraseSteps, groupRenameSteps, membershipStep, patchRowStep, removeRowStep, removeRowsStep } from "./documentUndo.js";
+import { addRowStep, groupEraseSteps, groupRenameSteps, membershipStep, patchRowStep, removeRowStep, removeRowsStep, replaceRowsStep } from "./documentUndo.js";
 
 // A document setter as useMapDocument has them: a value or an updater.
 const store = (initial) => {
@@ -184,4 +184,18 @@ test("marking water that can freeze moves only the ids that were not marked, and
   assert.deepEqual(freezing.value.sort(), ["lake", "sea"]);
 
   assert.equal(membershipStep(freezing.value, freezing.set, ["lake"], true), null, "nothing to move, no step");
+});
+
+test("replacing a terrain/climate list with real-world defaults is one reversible native document step", () => {
+  const original = [{ id: "t-custom", name: "Mountain range", level: 8 }];
+  const replacement = [{ id: "t-world", name: "Real-world terrain", level: 6 }];
+  const state = store(original);
+  const step = replaceRowsStep(state.value, state.set, replacement);
+  assert.strictEqual(state.value, replacement, "new preset applied immediately");
+  step.undo();
+  assert.strictEqual(state.value, original, "undo restores the prior entire authored list");
+  step.redo();
+  assert.strictEqual(state.value, replacement, "redo restores the preset");
+  assert.equal(replaceRowsStep(state.value, null, replacement), null, "no setter cannot create untracked changes");
+  assert.equal(replaceRowsStep(state.value, state.set, null), null, "invalid replacement is refused");
 });

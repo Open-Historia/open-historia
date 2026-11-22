@@ -331,7 +331,7 @@ export const excerptAroundError = (body, message, radius = 140) => {
 // with extractFencedJson): the openers a fused closing fence may run into. One
 // list, so a new channel gets the same recovery (advisorBlocks.test.js checks
 // advisorReply.js reads none outside it).
-export const ADVISOR_FENCE_LANGS = Object.freeze(["chart", "actions", "senddraft", "institutiondraft", "deploy", "projects"]);
+export const ADVISOR_FENCE_LANGS = Object.freeze(["chart", "actions", "senddraft", "institutiondraft", "deploy", "projects", "publicstatement"]);
 
 export const extractFencedJson = (text, lang, { salvageTruncated = false, streaming = false } = {}) => {
   // Markdown fences are block constructs, not arbitrary backtick runs in

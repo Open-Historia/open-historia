@@ -1,5 +1,7 @@
 /*! Open Historia — native eligibility and exactly-once resolution for scenario scripted events © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
+import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+
 const text = (value) => String(value ?? "").trim();
 const lower = (value) => text(value).toLowerCase();
 const array = (value) => Array.isArray(value) ? value : [];
@@ -135,7 +137,25 @@ export const normalizeScriptedEventState = (value) => {
   return out;
 };
 
-export const evaluateScriptedEventCondition = (conditionInput, world = {}, { scriptedEventState = {} } = {}) => {
+// Resolve both the target and actual human seats through the canonical identity
+// registry. Ambiguous/missing identities cannot satisfy either predicate.
+export const resolveScriptedPolityIdentity = (world, value) => {
+  if (typeof value !== "string" || !value.trim()) return "";
+  const result = resolvePolityIdentity(value, world, {
+    allowUnknown: false, requireActive: true, allowStockBase: !world?.customRegions,
+  });
+  if (result.resolved) {
+    return lower(world?.polityOverrides?.[result.resolved]?.status) === "dissolved" ? "" : result.resolved;
+  }
+  // Legacy custom maps can have an exact owner key but no declared identity.
+  // Never override a declared-but-inactive or ambiguous identity with it.
+  if (result.status !== "unresolved" || result.candidates.length) return "";
+  const key = text(value);
+  if (Object.hasOwn(record(world?.polityOverrides), key)) return "";
+  const owners = new Set([...array(world?.ownerCodes), ...Object.values(record(world?.regionOwnershipOverrides))]);
+  return owners.has(key) ? key : "";
+};
+export const evaluateScriptedEventCondition = (conditionInput, world = {}, { scriptedEventState = {}, playerPolities = null } = {}) => {
   const condition = record(conditionInput);
   const type = lower(condition.type);
 
@@ -147,6 +167,39 @@ export const evaluateScriptedEventCondition = (conditionInput, world = {}, { scr
   case "polity_not_exists": {
     if (!text(condition.polityId)) return { matched: false, reason: "missing polity id" };
     return { matched: !activePolityExists(world, condition.polityId), reason: "" };
+  }
+  case "polity_player_controlled":
+  case "polity_not_player_controlled": {
+    const target = resolveScriptedPolityIdentity(world, condition.polityId);
+    const rawSeats = Array.isArray(playerPolities) ? playerPolities : [];
+    if (!target || !rawSeats.length) {
+      return { matched: false, reason: "player or target polity identity unavailable" };
+    }
+    const activeSeats = [];
+    for (const rawSeat of rawSeats) {
+      const active = resolveScriptedPolityIdentity(world, rawSeat);
+      if (active) {
+        activeSeats.push(active);
+        continue;
+      }
+      // Distinguish a known dissolved human seat (which no longer controls any
+      // country and must not break evaluation for surviving countries in MP)
+      // from an unknown or ambiguous identity (which fails closed).
+      const dissolvedCheck = resolvePolityIdentity(rawSeat, world, {
+        allowUnknown: false,
+        requireActive: false,
+        allowStockBase: !world?.customRegions,
+      });
+      const isKnownDissolved = Boolean(
+        dissolvedCheck.resolved
+        && lower(world?.polityOverrides?.[dissolvedCheck.resolved]?.status) === "dissolved",
+      );
+      if (!isKnownDissolved) {
+        return { matched: false, reason: "player or target polity identity unavailable" };
+      }
+    }
+    const controlled = activeSeats.includes(target);
+    return { matched: type === "polity_player_controlled" ? controlled : !controlled, reason: "" };
   }
   case "political_actor_exists": {
     if (!text(condition.polityId)) return { matched: false, reason: "missing polity id" };
@@ -274,14 +327,14 @@ export const evaluateScriptedEventConditions = (triggerInput, world = {}, option
   };
 };
 
-const resolutionFor = (event, world, random, scriptedEventState = {}) => {
+const resolutionFor = (event, world, random, scriptedEventState = {}, playerPolities = null) => {
   const trigger = record(event?.trigger);
   const mode = lower(trigger.mode || "always");
 
   if (mode === "rules") {
     const conditions = array(trigger.conditions);
     const evaluation = conditions.length
-      ? evaluateScriptedEventConditions(trigger, world, { scriptedEventState })
+      ? evaluateScriptedEventConditions(trigger, world, { scriptedEventState, playerPolities })
       : { matched: true, matchedCount: 0, requiredCount: 0, results: [], reason: "" };
     const percent = Math.max(0, Math.min(100, Number.isFinite(Number(trigger.percent)) ? Number(trigger.percent) : 100));
     if (!evaluation.matched) {
@@ -327,7 +380,7 @@ const resolutionFor = (event, world, random, scriptedEventState = {}) => {
   }
 
   if (mode === "conditional") {
-    const evaluation = evaluateScriptedEventConditions(trigger, world, { scriptedEventState });
+    const evaluation = evaluateScriptedEventConditions(trigger, world, { scriptedEventState, playerPolities });
     return {
       outcome: evaluation.matched ? "fired" : "skipped",
       mode,
@@ -387,6 +440,7 @@ export const planScriptedEvents = (eventsInput, {
   world = {},
   resolvedState = {},
   pendingState = {},
+  playerPolities = null,
   random = Math.random,
 } = {}) => {
   const resolved = normalizeScriptedEventState(resolvedState);
@@ -401,7 +455,7 @@ export const planScriptedEvents = (eventsInput, {
     let resolution = pending[id];
     if (!resolution || !["fired", "skipped"].includes(lower(resolution.outcome))) {
       const stateForConditions = resolvedScriptedState(resolved, pending);
-      resolution = resolutionFor(event, world, random, stateForConditions);
+      resolution = resolutionFor(event, world, random, stateForConditions, playerPolities);
       if (resolution.outcome === "fired" && array(event?.outcomes).length) {
         const branch = selectWeightedOutcome(event, random);
         if (branch.error) {
@@ -435,6 +489,115 @@ export const planScriptedEvents = (eventsInput, {
   }
 
   return { eligible, resolutions, pendingState: pending };
+};
+
+const SCRIPTED_DEPENDENCY_TYPES = new Set([
+  "scripted_event_fired",
+  "scripted_event_skipped",
+  "scripted_outcome_selected",
+  "scripted_outcome_not_selected",
+]);
+
+const referencedScriptedEventIds = (event) => {
+  const conditions = array(event?.trigger?.conditions);
+  const refs = [];
+  for (const cond of conditions) {
+    if (SCRIPTED_DEPENDENCY_TYPES.has(lower(cond?.type))) {
+      const targetId = text(cond?.eventId);
+      if (targetId) refs.push(targetId);
+    }
+  }
+  return refs;
+};
+
+// When native outcome validation skips one or more beats in the current segment
+// due to world-state drift, re-evaluate any same-segment beats whose conditions
+// depend on scripted_event_* / scripted_outcome_* for those beats while
+// preserving all unrelated cached pending rolls (and reusing cached dependent
+// rolls from `preservedPending` whenever their referenced outcomes & branches match).
+export const replanAfterSkippedScriptedBeats = (eventsInput, plan, skippedEntries, {
+  world = {},
+  resolvedState = {},
+  playerPolities = null,
+  random = Math.random,
+  preservedPending = null,
+} = {}) => {
+  const skipped = array(skippedEntries);
+  if (!skipped.length) return plan;
+  const skippedMap = new Map(
+    skipped
+      .map((entry) => [text(entry?.beat?.id), text(entry?.reason)])
+      .filter(([id]) => Boolean(id)),
+  );
+  if (!skippedMap.size) return plan;
+
+  const events = array(eventsInput);
+  const preserved = record(preservedPending);
+  const nextPending = { ...record(plan?.pendingState) };
+  for (const [beatId, reason] of skippedMap.entries()) {
+    const { selectedOutcomeId: _droppedBranch, ...rest } = record(nextPending[beatId]);
+    nextPending[beatId] = { ...rest, outcome: "skipped", reason };
+  }
+
+  // Phase 1: collect the complete transitive set of dependent event IDs first
+  // so out-of-order multi-dependency beats never read stale upstream state.
+  const dirty = new Set(skippedMap.keys());
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const event of events) {
+      const id = text(event?.id);
+      if (!id || dirty.has(id)) continue;
+      if (referencedScriptedEventIds(event).some((refId) => dirty.has(refId))) {
+        dirty.add(id);
+        changed = true;
+      }
+    }
+  }
+
+  // Clear every non-skipped dirty entry before Phase 2 so out-of-order beats
+  // never observe stale pre-replan upstream outcomes from `plan.pendingState`.
+  for (const id of dirty) {
+    if (!skippedMap.has(id)) delete nextPending[id];
+  }
+
+  // Phase 2: iteratively restore dependent entries from preservedPending
+  // whenever every referenced beat resolves to the same outcome AND
+  // selectedOutcomeId. Running to fixpoint handles out-of-order chains.
+  let restored = true;
+  while (restored) {
+    restored = false;
+    for (const event of events) {
+      const id = text(event?.id);
+      if (!id || !dirty.has(id) || skippedMap.has(id) || nextPending[id]) continue;
+      const refs = referencedScriptedEventIds(event);
+      const preservedEntry = preserved[id];
+      const depsMatchPreserved = Boolean(preservedEntry)
+        && ["fired", "skipped"].includes(lower(preservedEntry.outcome))
+        && refs.every((refId) => {
+          const currentEntry = nextPending[refId] || resolvedState?.[refId];
+          const savedEntry = preserved[refId] || resolvedState?.[refId];
+          const currentOutcome = lower(currentEntry?.outcome);
+          const savedOutcome = lower(savedEntry?.outcome);
+          if (!currentOutcome || currentOutcome !== savedOutcome) return false;
+          const currentBranch = currentOutcome === "fired" ? text(currentEntry?.selectedOutcomeId) : "";
+          const savedBranch = savedOutcome === "fired" ? text(savedEntry?.selectedOutcomeId) : "";
+          return currentBranch === savedBranch;
+        });
+      if (depsMatchPreserved) {
+        nextPending[id] = { ...preservedEntry };
+        restored = true;
+      }
+    }
+  }
+
+  return planScriptedEvents(events, {
+    world,
+    resolvedState,
+    pendingState: nextPending,
+    playerPolities,
+    random,
+  });
 };
 
 export const commitScriptedEventPlan = (resolvedState, plan, { throughDate = "" } = {}) => {

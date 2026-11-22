@@ -53,7 +53,7 @@ test("nextEvents is built AFTER espionage has appended its events", () => {
   // it cannot see an exposure, and that copy is what writeEventsState persists —
   // so the events are never written anywhere and the player never sees them.
   const espionageAppend = at("freshEvents.push(entry);", "the espionage event append");
-  const nextEvents = at("const nextEvents = [...priorEvents, ...freshEvents];", "the nextEvents copy");
+  const nextEvents = at("let nextEvents = [...priorEvents, ...freshEvents];", "the nextEvents copy");
   assert.ok(
     espionageAppend < nextEvents,
     "nextEvents must be built after the espionage loop, or espionage events are never persisted",

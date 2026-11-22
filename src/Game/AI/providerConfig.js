@@ -275,6 +275,8 @@ export const AI_TASK_ROUTING = [
     { key: "interactiveCreation", label: "Interactive event creation", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveExecutor", label: "Interactive event execution", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveSummary", label: "Interactive event summary", hint: "Small model", group: "Player" },
+    { key: "campaignChronicle", label: "Campaign chronicle", hint: "Strong model: read-only history summary, only on request", group: "Player" },
+    { key: "projectFinanceReview", label: "Project finance review", hint: "Small/mid-tier: read-only extraction of recorded terms", group: "Player" },
     { key: "spyIntercept", label: "Spy intercept", hint: "Small/mid-tier model", group: "Player" },
     { key: "intelligenceAssessment", label: "Intelligence assessment", hint: "Mid-tier model", group: "Player" },
     { key: "demandCheck", label: "Demand check", hint: "Small model: reads a leader's answer to a demand", group: "Player" },

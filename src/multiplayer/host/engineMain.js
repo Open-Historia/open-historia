@@ -452,6 +452,7 @@ const boot = async () => {
     // A stand-in shows a shared game this device joined: it is no game to share
     // (runtime/standInGames.js), whatever it is called.
     if (standInOf(docs.game)) throw new Error(STAND_IN_NOT_SHARED);
+    if (docs.world?.projectFinance?.receipts?.length) throw new Error("Campaigns with Project Finance records cannot be hosted yet; financing requires single-player authority.");
     // Every round is asked of this computer's AI, which an Agent Connection
     // never answers there (#1042): a list that cannot answer a round is refused
     // now, not after everyone has joined a lobby whose every round fails.

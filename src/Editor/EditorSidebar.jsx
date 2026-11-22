@@ -5,59 +5,16 @@
 
 import { useState } from "react";
 import Icon from "./Icon.jsx";
+import EditorWorkspaceNav from "./EditorWorkspaceNav.jsx";
+import { TOOL_GROUPS, TOOLS } from "./editorToolCatalog.js";
 import { EDITOR_CARD, EDITOR_NAV, inputStyle, navButton, panelSurface, sectionLabel, toolButton } from "./editorStyles.js";
-import { editorBasemapById } from "./basemaps.js";
 import { useBackToClose } from "../runtime/backToClose.js";
 
 export const SIDEBAR_WIDTH = 268;
 
-const TOOL_GROUPS = [
-  {
-    label: "Select",
-    tools: [
-      { id: "select", icon: "select", label: "Select" },
-      { id: "lasso", icon: "lasso", label: "Lasso select (drag to circle regions)" },
-      { id: "pan", icon: "pan", label: "Pan" },
-    ],
-  },
-  {
-    label: "Edit",
-    tools: [
-      { id: "draw", icon: "split", label: "Draw region (click a border to trace along it)" },
-      { id: "modify", icon: "modify", label: "Edit vertices (select regions first; snap + undo enabled)" },
-      { id: "border", icon: "merge", label: "Shared border precision (select exactly 2 neighbouring regions)" },
-      { id: "move", icon: "move", label: "Move" },
-      { id: "delete", icon: "trash", label: "Delete (click a region)" },
-      { id: "dissolve", icon: "eraser", label: "Delete border (merge two regions)" },
-      { id: "paint", icon: "paint", label: "Paint polity (click or drag across regions; one stroke = one undo)" },
-    ],
-  },
-  {
-    label: "On the map",
-    tools: [
-      { id: "feature", icon: "feature", label: "City tool (click map to add a city, click a city to edit it)" },
-      { id: "marker", icon: "pin", label: "Map feature tool (click the map to place a base, port, landmark or other feature; click one to edit it)" },
-      { id: "unit", icon: "unit", label: "Unit tool (click the map to place a starting unit, click a unit to edit it)" },
-      { id: "feature-box", icon: "boxSelect", label: "Box-select features (drag a rectangle over cities and features to select them all)" },
-    ],
-  },
-  {
-    // What the scenario draws on its map for war (warGeographyDoc.js). Each draws
-    // into a layer of its own and never carves the regions it is drawn over.
-    label: "War map",
-    tools: [
-      { id: "terrain", icon: "mountain", label: "Terrain (draw an area troops cross more slowly; click an outline to pick one)" },
-      { id: "fortification", icon: "wall", label: "Fortified line (draw a wall troops have to break through; click a line to pick one)" },
-      { id: "climate", icon: "climate", label: "Climate zone (draw an area with its own seasons and weather; click an outline to pick one)" },
-    ],
-  },
-];
-
-const TOOLS = TOOL_GROUPS.flatMap((group) => group.tools);
-
 const SAVE = {
-  saved: { color: "#22c55e", label: "All saved" },
-  dirty: { color: "#f59e0b", label: "Unsaved changes" },
+  saved: { color: "#22c55e", label: "Working map saved" },
+  dirty: { color: "#f59e0b", label: "Working map unsaved" },
   saving: { color: "#f59e0b", label: "Saving…" },
   error: { color: "#ef4444", label: "Save failed" },
 };
@@ -69,21 +26,6 @@ const smallIconButton = (disabled = false) => ({
   padding: 0,
   borderRadius: 8,
 });
-
-const NavItem = ({ icon, label, value, count, active, onClick }) => (
-  <button type="button" onClick={onClick} style={navButton(active)} title={value ? `${label}: ${value}` : undefined}>
-    <Icon name={icon} size={16} style={{ flexShrink: 0, opacity: active ? 1 : 0.8 }} />
-    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-    {value && (
-      <span style={{ maxWidth: 92, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "rgba(255,255,255,0.45)", fontSize: 11.5, fontWeight: 600 }}>{value}</span>
-    )}
-    {count !== undefined && count !== null && (
-      <span style={{ flexShrink: 0, minWidth: 22, padding: "1px 7px", borderRadius: 999, background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.7)", fontSize: 11, fontWeight: 700, textAlign: "center" }}>
-        {count}
-      </span>
-    )}
-  </button>
-);
 
 const EditorSidebar = ({
   name,
@@ -104,16 +46,19 @@ const EditorSidebar = ({
   clipboardCount = 0,
   suggestionCount = null,
   openPanel,
-  onOpenPanel,
-  basemap,
-  hasCustomBackground,
+  onSetPanel,
   onOpenBasemaps,
-  detailedMapLabel = "",
+  onOpenGenerator,
+  generatorAvailable = false,
   saveStatus,
   saveError = "",
   onRetrySave = null,
   scenarioDirty = false,
   actions = null,
+  onReviewSave = null,
+  onReviewPlay = null,
+  reviewBusy = false,
+  reviewScenarioMode = false,
   isMobile = false,
   mobileOpen = false,
   onMobileOpenChange,
@@ -126,7 +71,6 @@ const EditorSidebar = ({
   useBackToClose(isMobile && mobileOpen, () => onMobileOpenChange?.(false));
   const onRight = side !== "left";
   const save = SAVE[saveStatus] || SAVE.saved;
-  const basemapLabel = hasCustomBackground ? "Custom" : editorBasemapById(basemap)?.label || "";
   const tool = TOOLS.find((t) => t.id === activeTool) || null;
   const closeOnPhone = () => {
     if (isMobile) onMobileOpenChange?.(false);
@@ -135,43 +79,6 @@ const EditorSidebar = ({
     onToolChange(id);
     closeOnPhone();
   };
-  const open = (panel) => {
-    onOpenPanel(panel);
-    closeOnPhone();
-  };
-  const panelGroups = [
-    {
-      label: "Map",
-      items: [
-        { id: "regions", icon: "list", label: "Regions", count: counts.regions },
-        { id: "polities", icon: "flag", label: "Countries", count: polityCount },
-        { id: "groups", icon: "users", label: "Groups", count: groupCount },
-        { id: "types", icon: "types", label: "Region Types", count: counts.types },
-        { id: "features", icon: "pin", label: "Map features", count: counts.features },
-        { id: "units", icon: "unit", label: "Units", count: counts.units ?? 0 },
-        { id: "war", icon: "mountain", label: "War map" },
-      ],
-    },
-    {
-      label: "View",
-      items: [
-        { id: "basemap", icon: "map", label: "Basemap", value: basemapLabel, run: () => onOpenBasemaps?.() },
-        { id: "detailed", icon: "image", label: "Detailed map", value: detailedMapLabel, run: () => onOpenBasemaps?.() },
-        { id: "layers", icon: "layers", label: "Layers" },
-        { id: "reference", icon: "image", label: "Reference" },
-        { id: "projection", icon: "globe", label: "Projection" },
-      ],
-    },
-    {
-      label: "Import",
-      items: [
-        ...(suggestionCount !== null ? [{ id: "suggestions", icon: "review", label: "Suggested changes", count: suggestionCount }] : []),
-        { id: "province-import", icon: "upload", label: "Import Map" },
-        { id: "clipboard", icon: "copy", label: "Clipboard", count: clipboardCount },
-      ],
-    },
-  ];
-
   const sidebar = (
     <aside
       style={{
@@ -183,16 +90,16 @@ const EditorSidebar = ({
         display: "flex",
         flexDirection: "column",
         background: EDITOR_NAV,
-        [onRight ? "borderLeft" : "borderRight"]: "1px solid rgba(255,255,255,0.08)",
+        [onRight ? "borderLeft" : "borderRight"]: "1px solid var(--oh-ui-line, rgba(255,255,255,0.08))",
         boxShadow: isMobile ? "0 24px 70px rgba(0,0,0,0.55)" : "none",
-        color: "white",
+        color: "var(--oh-ui-text, white)",
         fontFamily: "sans-serif",
         zIndex: isMobile ? 50 : 34,
       }}
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "14px 12px 12px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "14px 12px 12px", borderBottom: "1px solid var(--oh-ui-line, rgba(255,255,255,0.07))" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 40, height: 40, flexShrink: 0, borderRadius: 12, background: "#1c1f27", border: "1px solid rgba(255,255,255,0.09)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 40, height: 40, flexShrink: 0, borderRadius: 12, background: EDITOR_CARD, border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.09))" }}>
             <Icon name="map" size={20} />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -216,7 +123,10 @@ const EditorSidebar = ({
               <Icon name="settings" size={16} />
             </button>
             {settingsOpen && (
-              <div style={{ ...panelSurface, position: "absolute", top: "calc(100% + 6px)", [onRight ? "right" : "left"]: 0, zIndex: 60, width: 200, padding: 10, display: "flex", flexDirection: "column", gap: 7 }}>
+              // Keep the 200px menu inside either 268px desktop sidebar. On the
+              // left, opening it outward placed the Right-side button underneath
+              // adjacent editor panels (which have a higher stacking context).
+              <div style={{ ...panelSurface, position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 60, width: 200, padding: 10, display: "flex", flexDirection: "column", gap: 7 }}>
                 <span style={{ ...sectionLabel, fontSize: 10 }}>Side</span>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
                   {[["left", "Left"], ["right", "Right"]].map(([value, label]) => (
@@ -245,7 +155,7 @@ const EditorSidebar = ({
       </div>
 
       <div style={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto", scrollbarWidth: "thin", padding: "12px 12px 14px", display: "flex", flexDirection: "column", gap: 18 }}>
-        <section style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {(isMobile || toolOptions) && (<section style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <span style={sectionLabel}>Tools</span>
             <span style={{ display: "flex", gap: 4 }}>
@@ -260,9 +170,9 @@ const EditorSidebar = ({
               </button>
             </span>
           </div>
-          {TOOL_GROUPS.map((group) => (
+          {isMobile && TOOL_GROUPS.map((group) => (
             <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11.5, fontWeight: 600 }}>{group.label}</span>
+              <span style={{ color: "var(--oh-ui-muted, rgba(255,255,255,0.55))", fontSize: 11.5, fontWeight: 600 }}>{group.label}</span>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 4 }}>
                 {group.tools.map((t) => (
                   <button
@@ -281,7 +191,7 @@ const EditorSidebar = ({
             </div>
           ))}
           {tool && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 11px", borderRadius: 12, background: EDITOR_CARD, border: "1px solid rgba(255,255,255,0.08)", fontSize: 12, lineHeight: 1.4 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 11px", borderRadius: 12, background: EDITOR_CARD, border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.08))", fontSize: 12, lineHeight: 1.4 }}>
               <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                 <Icon name={tool.icon} size={15} style={{ flexShrink: 0, marginTop: 1 }} />
                 <span style={{ fontWeight: 700, color: "rgba(255,255,255,0.92)" }}>{tool.label}</span>
@@ -289,37 +199,31 @@ const EditorSidebar = ({
               {toolOptions}
             </div>
           )}
-        </section>
+        </section>)}
 
-        <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <span style={sectionLabel}>Panels</span>
-          {panelGroups.map((group) => (
-            <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11.5, fontWeight: 600, marginBottom: 3 }}>{group.label}</span>
-              {group.items.map((item) => (
-                <NavItem
-                  key={item.id}
-                  icon={item.icon}
-                  label={item.label}
-                  value={item.value}
-                  count={item.count}
-                  active={!item.run && openPanel === item.id}
-                  onClick={() => {
-                    if (item.run) {
-                      item.run();
-                      closeOnPhone();
-                    } else {
-                      open(item.id);
-                    }
-                  }}
-                />
-              ))}
-            </div>
-          ))}
-        </section>
+        <EditorWorkspaceNav
+          counts={counts}
+          polityCount={polityCount}
+          groupCount={groupCount}
+          clipboardCount={clipboardCount}
+          suggestionCount={suggestionCount}
+          openPanel={openPanel}
+          onSetPanel={onSetPanel}
+          onOpenBasemaps={onOpenBasemaps}
+          onOpenGenerator={onOpenGenerator}
+          generatorAvailable={generatorAvailable}
+          saveLabel={save.label}
+          scenarioDirty={scenarioDirty}
+          onReviewSave={onReviewSave}
+          onReviewPlay={onReviewPlay}
+          reviewBusy={reviewBusy}
+          reviewScenarioMode={reviewScenarioMode}
+          onAfterNavigate={closeOnPhone}
+        />
+
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 9, padding: "12px", borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 9, padding: "12px", borderTop: "1px solid var(--oh-ui-line, rgba(255,255,255,0.07))" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12 }}>
           {saveStatus === "error" && onRetrySave ? (
             // A failed save says why and is its own Retry: the only other way was
@@ -375,7 +279,7 @@ const EditorSidebar = ({
         height: 64,
         padding: 0,
         background: EDITOR_NAV,
-        border: "1px solid rgba(255,255,255,0.1)",
+        border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))",
         [onRight ? "borderRight" : "borderLeft"]: "none",
         borderRadius: onRight ? "10px 0 0 10px" : "0 10px 10px 0",
         boxShadow: onRight ? "-6px 0 18px rgba(0,0,0,0.3)" : "6px 0 18px rgba(0,0,0,0.3)",

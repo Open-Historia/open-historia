@@ -17,6 +17,7 @@ import { OWNER_SCHEMA } from "./documentMigration.js";
 import { findGroupKey, normalizeGroupAreas, normalizeGroups } from "../runtime/groups.js";
 import { buildMarkersForGame, isMapFeature } from "./mapFeatures.js";
 import { buildPuppetsForGame } from "./scenarioPuppets.js";
+import { applyStartingRelationEdits } from "./scenarioStartingRelations.js";
 import { buildOwnBasemapsForGame } from "./ownBasemaps.js";
 import { populationByYearField } from "../runtime/cityPopulation.js";
 import { normalizeRegionTypes } from "../runtime/regionTypes.js";
@@ -413,6 +414,13 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
   const gameCities = buildCitiesForGame(doc.features);
   const { background, backgroundData } = buildBackgroundForGame(doc.metadata?.customBackground, doc.metadata?.tiledBasemap, { name: doc.metadata?.startingMapName });
   const { ownBasemaps, ownBasemapsData } = buildOwnBasemapsForGame(doc.metadata?.ownBasemaps);
+  const relationResult = applyStartingRelationEdits(
+    doc.relations, doc.relationEdits,
+    [...new Set([...owners, ...claimants, ...Object.keys(declaredPolities)])].map((key) => ({
+      key, ...(declaredPolities[key] || {}),
+    })),
+  );
+  if (!relationResult.ok) throw new Error(relationResult.reason);
   const world = {
     ownerSchema: doc.ownerSchema ?? OWNER_SCHEMA,
     regionOwnershipOverrides,
@@ -431,6 +439,9 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     markers: buildMarkersForGame(doc.features),
     // The puppet states the scenario starts with (Countries panel).
     puppets: buildPuppetsForGame(doc.puppets, { startDate: doc.metadata?.startDate || "" }),
+    // Authored starting bilateral scores share the game's native world.relations.
+    // No unrecorded pair receives a fictitious neutral zero.
+    relations: relationResult.relations,
     // The map's region types (Region Types panel). Each region names its type
     // by typeId in the regions file; the game draws a type's colour, opacity,
     // border and zoom range, and tells the AI its movement rules
@@ -493,11 +504,14 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     hasCustomGeometry,
     stats: { ownedRegions: Object.keys(regionOwnershipOverrides).length, owners: owners.size, customGeometry: customCount },
     world,
-    // Merge onto the full base palette so re-ownership (tier-1) maps keep colors
-    // for every country the stock pmtiles still renders, not just the edited ones.
-    // Overrides go on last so a colour the map-maker picked survives even for a
-    // country that owns no regions on this map — the stock tiles still paint it.
-    colors: { ...palette, ...colors, ...overrides },
+    // A stock/tier-1 reownership map still renders countries from the stock
+    // PMTiles: preserve their full palette, including authored overrides.
+    // Custom geometry instead declares its COMPLETE polity universe; leaking
+    // the stock or old scenario palette would carry unrelated historical
+    // owners into the independently generated world's static colors asset.
+    // emitPolity covers region owners, claimants and registered landless
+    // polities, so their colors remain even when they have no territory.
+    colors: world.customRegions ? colors : { ...palette, ...colors, ...overrides },
     game,
     // flags.json: owner code -> PNG data URL. Deliberately NOT part of world, which
     // the game re-polls every 5s — these are re-fetched only when the scenario

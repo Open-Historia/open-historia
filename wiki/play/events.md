@@ -118,6 +118,8 @@ turns of the last.
 makes an offer one time in four, never on the skip right after the last offer, and a scene you play
 or a Game Master command in between does not count as a skip.</p>
 
+<p class="beta-note"><b>Interactive scenes retain their own dedicated window.</b> Once a scene is completed, use <b>Explore interactive event</b> on the outcome card to open a separate read-only window and reread the recorded opening, choices, moves and responses. Older completed scenes may have no saved transcript; missing text cannot be reconstructed. <b>Browse earlier events</b> in Events to search and read the recorded history outside the recent-turn picker, without replaying the world.</p>
+
 **Play it out** opens the scene on that event. You can add an **angle** of your own — what you
 want the scene to be about — then play it: take one of the offered choices or write your own
 move, take a move back and choose again, and finally **End the scene**, which writes it into the

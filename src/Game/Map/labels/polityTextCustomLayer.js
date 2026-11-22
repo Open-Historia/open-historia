@@ -651,6 +651,8 @@ export const createPolityTextCustomLayer = ({
   id = POLITY_TEXT_RENDERER_LAYER_ID,
   records = null,
   preparedEntries = null,
+  // Read live presentation policy once per frame, not from record fingerprints.
+  getVisibility = null,
   fontFamilies = ["Georgia", "Times New Roman", "serif"],
   fillStyle = "rgba(255, 52, 214, 1)",
   haloStyle = "rgba(0, 0, 0, 0.96)",
@@ -860,6 +862,7 @@ export const createPolityTextCustomLayer = ({
       if (!this._ensurePrograms(gl, shaderDataFromRenderArgs(args))) return;
 
       const zoom = Number(this._map?.getZoom?.() ?? 0);
+      const visibility = getVisibility?.();
       // The mercator AABB cull is only meaningful while the view IS a mercator
       // plane. On the globe, getBounds() describes a lat/lng box around a curved
       // visible cap, and near the horizon or the antimeridian that box can
@@ -877,9 +880,9 @@ export const createPolityTextCustomLayer = ({
           const opacity = polityTextOpacityAtZoom({
             zoom,
             minZoom: entry.record.minZoom,
-            maxZoom: entry.record.maxZoom,
+            maxZoom: visibility?.maxZoom ?? entry.record.maxZoom,
             fadeInZoomSpan: entry.record.fadeInZoomSpan,
-            fadeOutStartZoom: entry.record.fadeOutStartZoom,
+            fadeOutStartZoom: visibility?.fadeOutStartZoom ?? entry.record.fadeOutStartZoom,
           });
           if (opacity <= 0.002 || !boundsOverlap(entry.mercatorBounds, viewportBounds)) continue;
           if (entry.texture && entry.ribbonBuffer) continue;
@@ -904,9 +907,9 @@ export const createPolityTextCustomLayer = ({
           const opacity = polityTextOpacityAtZoom({
             zoom,
             minZoom: entry.record.minZoom,
-            maxZoom: entry.record.maxZoom,
+            maxZoom: visibility?.maxZoom ?? entry.record.maxZoom,
             fadeInZoomSpan: entry.record.fadeInZoomSpan,
-            fadeOutStartZoom: entry.record.fadeOutStartZoom,
+            fadeOutStartZoom: visibility?.fadeOutStartZoom ?? entry.record.fadeOutStartZoom,
           });
           return opacity > 0.002
             && boundsOverlap(entry.mercatorBounds, viewportBounds)
@@ -937,9 +940,9 @@ export const createPolityTextCustomLayer = ({
         const opacity = polityTextOpacityAtZoom({
           zoom,
           minZoom: entry.record.minZoom,
-          maxZoom: entry.record.maxZoom,
+          maxZoom: visibility?.maxZoom ?? entry.record.maxZoom,
           fadeInZoomSpan: entry.record.fadeInZoomSpan,
-          fadeOutStartZoom: entry.record.fadeOutStartZoom,
+          fadeOutStartZoom: visibility?.fadeOutStartZoom ?? entry.record.fadeOutStartZoom,
         });
         if (opacity <= 0.002 || !boundsOverlap(entry.mercatorBounds, viewportBounds)) continue;
         if (globePlane && behindGlobe(entry.globeSamples ?? [], globePlane)) continue;

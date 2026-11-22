@@ -1,5 +1,7 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { nextTask } from "../../runtime/nextTask.js";
+import { projectFinancePrompt } from "../../runtime/projectFinanceWorld.js";
+import { PUBLICATION_SOURCE, publicStatementContext, nextPublicStatementCursor } from "../../runtime/publicCommunications.js";
 import { callAI, geminiDeclaresTaskFunction, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
 import { forgetBatch, readStoredBatches, rememberBatch } from "./batchRegistry.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
@@ -472,7 +474,8 @@ import { advancePoliticalBackgroundSimulation, describePoliticalBackgroundResult
 import { refreshPowerStatusForTurn } from "../../runtime/powerStatus.js";
 import { markerOpKind } from "../../runtime/markerOps.js";
 import { firstSentence, withoutFinalTerminal } from "../../../server/sentences.js";
-import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
+import { dedupeGeneratedEvents, dedupeEventLog, eventCanonicalKey } from "../../runtime/eventDedup.js";
+import { archiveInteractiveScene, attachInteractiveTranscript } from "../../runtime/interactiveTranscript.js";
 import { validateQueuedActionIds } from "./actionOutcomeAssociations.js";
 import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
 import { sortTimelineEventsChronologically } from "../../runtime/timelineOrder.js";
@@ -632,6 +635,7 @@ import {
   commitScriptedEventPlan,
   normalizeScriptedEventState,
   planScriptedEvents,
+  replanAfterSkippedScriptedBeats,
 } from "./scriptedEventResolution.js";
 import {
   buildScriptedImpactsInstruction,
@@ -640,6 +644,20 @@ import {
   scriptedBeatWrittenNote,
   scriptedEventsCarryingImpacts,
 } from "./scriptedEventImpacts.js";
+import {
+  hasNativeScriptedOutcomes,
+  hasNativeCapitalOutcomes,
+  partitionPreparedNativeScriptedOutcomes,
+  prepareNativeScriptedOutcomes,
+  bindNativeScriptedOutcomes,
+  verifyNativeScriptedRecords,
+  verifyNativeScriptedCoverage,
+  remapNativeScriptedOutcomes,
+  verifyNativeScriptedOutcomes,
+} from "./scriptedNativeOutcomes.js";
+import { applyNativeCapitalOutcomes } from "./scriptedCapitalRelocation.js";
+import { cityReference } from "../../runtime/capitalSeats.js";
+import { isPrimaryCityCapital } from "../../runtime/cityFeatures.js";
 import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import {
   EMPTY_RESPONSE_BODY_NOTE,
@@ -2032,7 +2050,7 @@ function lazyLookupContext(bundle, { audience = SIMULATION_AUDIENCE, renderedReg
               cityPopulations: world.cityPopulations,
               name,
             }),
-            capital: normalizeString(props.capital),
+            capital: isPrimaryCityCapital(props) ? "primary" : normalizeString(props.capital),
           };
         });
         return buildLookupContext({
@@ -2418,6 +2436,11 @@ const buildPlacementGazetteer = (context, world) => {
     const owner = context.resolveOwner(name) || normalizeString(name);
     const key = fold(owner);
     if (!key) return null;
+    const ref=world?.countryStats?.[owner]?.capitalMap?.current;
+    if(ref){
+      const selected=context.cityRows.find(city=>cityReference(city)?.id===ref.id&&fold(context.regionOfCity(city)?.owner)===key);
+      if(selected)return {name:selected.name,point:selected.coordinates};
+    }
     const held = context.cityRows.filter((city) => city.capital && fold(context.regionOfCity(city)?.owner) === key);
     // A country of several nations marks each one's capital "primary" (London,
     // Cardiff, Edinburgh, Belfast): the largest is the country's own.
@@ -3215,6 +3238,8 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
     round: Number(game?.round) || 0,
   }));
 
+  const publications=publicStatementContext(await readEventsState(),world,game,{onlyPending:true});
+  if(publications)blocks.push(publications);
   const reputation = normalizeString(variables.playerPolityReputationContext);
   const intelligence = normalizeString(variables.playerPolityIntelligenceContext);
   if (reputation || intelligence) {
@@ -3269,6 +3294,8 @@ ${pending}`);
     players: humanCountriesOf(game),
   });
   if (board) blocks.push(board);
+  const financeContext = projectFinancePrompt(world?.projectFinance);
+  if (financeContext) blocks.push(financeContext);
 
   if (isActiveFeatureEnabled("espionage")) {
     // Every player's service: its agents, the agents inside it and what it has
@@ -8391,7 +8418,9 @@ const normalizeGeneratedEvent = (entry, index = 0) => {
   // Whether an event invites a reaction, and what came of it, is the Event
   // Editor's to write. The schema has no such field, but not every provider
   // holds a model to its schema.
-  const { npcReaction, ...generated } = normalized;
+  const { npcReaction, interactiveTranscript: _interactiveTranscript, ...generated } = normalized;
+  delete generated.publicStatement;
+  if(generated.source===PUBLICATION_SOURCE)generated.source="ai";
   return {
     ...generated,
     id: normalized.id || `generated-event-${index}`,
@@ -8839,14 +8868,13 @@ const projectsHost = (game) => toCountryName(normalizeString(game?.country)) || 
 // The period a time skip of `bundle` to `toDate` runs for the board, as the
 // engine runs it (projectEngine.js tickProjects): the same inputs before the
 // prompt (the forecast) and after the answer (the apply), so the same days.
-const projectsPeriod = (bundle, toDate, fromDate = normalizeString(bundle?.game?.gameDate)) => tickProjects({
-  projects: normalizeWorldState(bundle?.world).projects,
-  world: bundle?.world,
-  fromDate,
-  toDate,
-  host: projectsHost(bundle?.game),
-  round: (Number(bundle?.game?.round) || 1) + 1,
-});
+const projectsPeriod = (bundle, toDate, fromDate = normalizeString(bundle?.game?.gameDate)) => {
+  const world=normalizeWorldState(bundle?.world);
+  return tickProjects({
+    projects:world.projects,world,finance:world.projectFinance,fromDate,toDate,
+    host:projectsHost(bundle?.game),round:(Number(bundle?.game?.round)||1)+1,
+  });
+};
 
 // What the engine decided for a skip's period, as its prompt is told it.
 const projectsForecastText = (outcomes, world, host) =>
@@ -9205,6 +9233,12 @@ const applySimulationResult = async ({
     round: (baseGame.round || 1) + 1,
   });
   const freshEvents = canonicalEventIdentity.events;
+  const authoredNativeOutcomes = remapNativeScriptedOutcomes(result.scriptedNativeOutcomes, canonicalEventIdentity.idMap);
+  const resolvedSceneEventId = result.sceneArchive
+    ? canonicalEventIdentity.idMap.get(result.sceneArchive.outcomeId) : "";
+  if (result.sceneArchive && (!resolvedSceneEventId || freshEvents.filter((event) => event.id === resolvedSceneEventId && event.kind === "interactive").length !== 1)) {
+    throw new Error("The completed scene would not have a unique event on the timeline. The scene remains open.");
+  }
   const warUpdates = remapLedgerEventIds(normalizeArray(keptWarUpdates), canonicalEventIdentity.idMap);
   const relationUpdates = remapLedgerEventIds(normalizeArray(keptRelationUpdates), canonicalEventIdentity.idMap);
   const agreementUpdates = remapLedgerEventIds(normalizeArray(keptAgreementUpdates), canonicalEventIdentity.idMap);
@@ -9399,6 +9433,10 @@ const applySimulationResult = async ({
       ...(Array.isArray(result.seatAdvice)
         ? { seatAdvice: mergeSeatAdvice(baseWorld?.seatAdvice, result.seatAdvice, { people: humanCountriesOf(baseGame), round: nextGame.round }) }
         : null),
+      ...(() => {
+        const cursor = nextPublicStatementCursor(priorEvents, baseWorld, result.mode, nextGame.round);
+        return cursor !== undefined ? { publicStatementCursor: cursor } : {};
+      })(),
       lastJumpMode: normalizeString(result.mode),
       lastJumpSummary: normalizeString(result.summary),
       lastJumpTargetDate: nextGame.gameDate,
@@ -9434,7 +9472,7 @@ const applySimulationResult = async ({
   });
   // `let`: a Project the board pass completes can recolour a polity too.
   let nextColors = impactMerge.colors;
-  let impactedWorld = impactMerge.world;
+  let impactedWorld = applyNativeCapitalOutcomes(authoredNativeOutcomes, impactMerge.world);
   // EXPERIMENT, in the lab: where the lab's own staff leads the land war (frontsGate.js strategyNetOn), the
   // countries nobody plays have an engineer too (runtime/fronts/engineer.js): one outmatched on a battlefield has
   // a fortified line built behind its front, by the very op a person's war room sends, on its own ground only.
@@ -9876,7 +9914,7 @@ const applySimulationResult = async ({
   // ran appends to it. `[...priorEvents, ...freshEvents]` is a copy, so a snapshot
   // taken before the loop cannot see an exposure or a discovery — and that copy is
   // what the canonical commit persists and what this function returns.
-  const nextEvents = [...priorEvents, ...freshEvents];
+  let nextEvents = [...priorEvents, ...freshEvents];
   // Same reason, for this turn's own record: simulationHistory is built as an
   // argument to applyEventImpactsToWorld, which has to run BEFORE espionage
   // resolves on its output, so its eventIds snapshot also predates the loop.
@@ -10505,6 +10543,19 @@ const applySimulationResult = async ({
   throwIfAborted(projects?.signal, "Timeline jump cancelled.");
   assertCampaignUnchanged(campaignId, activeCampaignId());
 
+  // Archive only the accepted native scene, after all event removals and before
+  // the same canonical commit that closes it. The ordinary event remains the
+  // simulation's condensed record; no transcript is sent through the directors.
+  if (result.sceneArchive) {
+    nextEvents = attachInteractiveTranscript(nextEvents, resolvedSceneEventId, result.sceneArchive.transcript);
+    const persisted = dedupeEventLog(normalizeEvents(nextEvents));
+    if (!persisted.some((event) => event.id === resolvedSceneEventId && event.interactiveTranscript)) {
+      throw new Error("The scene outcome would be removed as a duplicate. The scene remains open.");
+    }
+  }
+
+  verifyNativeScriptedOutcomes(authoredNativeOutcomes, nextWorld, dedupeEventLog(normalizeEvents(nextEvents)));
+
   // A time skip is shown one event at a time (time.jsx), its first on screen as
   // it lands; until the reveal reaches an event, nothing the player or the AI
   // speaking to them is shown may contain it (runtime/unseenEvents.js). Marked
@@ -10560,6 +10611,8 @@ const applySimulationResult = async ({
         mode: result.mode,
         receipt,
         covertOperations: result.covertOperations,
+        scriptedNativeOutcomes: authoredNativeOutcomes,
+        scriptedEventState: nextGame.scriptedEventState,
       })
       : null,
   });
@@ -10625,6 +10678,7 @@ const applySimulationResult = async ({
     chats: chatsToWrite, // what was actually persisted, not the pre-turn snapshot
     colors: nextColors,
     events: nextEvents,
+    ...(resolvedSceneEventId ? { resolvedSceneEventId } : {}),
     game: nextGame,
     generation: result.generation ?? { source: "ai", fallbackReason: "" },
     // With saving off, the agents whose report failed after this turn was
@@ -16719,7 +16773,8 @@ const sceneRecordFrom = (payload) => {
   };
 };
 
-const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interactive, history, record = null, recordGeneration = null }) => {
+const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interactive, history, endedBy = "player", record = null, recordGeneration = null }) => {
+  const transcript = archiveInteractiveScene({ ...interactive, history }, endedBy);
   const ownRecord = record && recordGeneration && !(await hasAuthoredSummaryGuidance()) ? record : null;
   let summaryGeneration = recordGeneration;
   let summaryPayload = ownRecord;
@@ -16782,6 +16837,7 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
   const mapChanged = sceneChangedMap(summaryPayload);
   const scene = outcome ? await sceneMapConsequences({ bundle, outcome: markSceneOutcome(outcome, mapChanged), generation: summaryGeneration, mapChanged }) : null;
   const sceneOutcome = scene?.events?.[0] ?? outcome;
+  if (!sceneOutcome?.id) throw new Error("The scene has no valid outcome. The scene remains open.");
 
   const applyScene = async (withBoard) => {
     const applied = await applySimulationResult({
@@ -16799,7 +16855,8 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
     projects: withBoard ? { bundle, signal: null, review: scene.review, requests: null } : null,
     result: {
       clearActions: false,
-      events: sceneOutcome ? [sceneOutcome] : [],
+      events: [sceneOutcome],
+      sceneArchive: { outcomeId: sceneOutcome.id, transcript },
       structureLinks: scene?.structureLinks ?? [],
       mode: "interactive",
       stopDate: bundle.game.gameDate,
@@ -16878,9 +16935,12 @@ const sceneMapConsequences = async ({ bundle, outcome, generation, mapChanged = 
 // End the scene where it stands (the panel's End the scene). With no beat
 // played there is nothing to record, and it is simply set aside.
 export const endActiveInteractive = async () => {
+  if (isSimulationBusy()) throw new Error("A simulation is already running; wait for it to finish.");
+  const campaignId = activeCampaignId();
   beginSimulation();
   try {
     const bundle = await readGameStateBundle({ force: true });
+    assertCampaignUnchanged(campaignId, activeCampaignId());
     const interactive = normalizeWorldState(bundle.world).activeInteractive;
     if (!interactive) throw new Error("No scene is in progress.");
     if (!normalizeArray(interactive.history).length) {
@@ -16888,7 +16948,7 @@ export const endActiveInteractive = async () => {
       return { resolved: false };
     }
     const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
-    const applied = await resolveInteractiveScene({ bundle, baseColors, campaignId: activeCampaignId(), interactive, history: interactive.history });
+    const applied = await resolveInteractiveScene({ bundle, baseColors, campaignId, interactive, history: interactive.history });
     logDebugEvent("turn", `Interactive event: scene "${interactive.title || "untitled"}" ended by the player after ${interactive.history.length} beat(s).`);
     return { resolved: true, ...applied };
   } finally {
@@ -16921,11 +16981,13 @@ export const rewindActiveInteractive = async ({ beatIndex, choice = "" } = {}) =
 };
 
 export const advanceActiveInteractive = async (choiceText) => {
+  if (isSimulationBusy()) throw new Error("A simulation is already running; wait for it to finish.");
+  const campaignId = activeCampaignId();
   beginSimulation();
   try {
   const bundle = await readGameStateBundle({ force: true });
   // Same hazard as a jump: AI calls run for a while, then the whole turn is written.
-  const campaignId = activeCampaignId();
+  assertCampaignUnchanged(campaignId, activeCampaignId());
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   const world = normalizeWorldState(bundle.world);
   const interactive = world.activeInteractive;
@@ -16976,6 +17038,8 @@ export const advanceActiveInteractive = async (choiceText) => {
   });
 
   if (!payload?.resolved) {
+    archiveInteractiveScene(nextInteractive);
+    assertCampaignUnchanged(campaignId, activeCampaignId());
     // Only the scene is this beat's to write: the rest of the world is taken
     // as it stands now, not as it was read before the model call.
     const nextWorld = await mutateWorldState((latest) => ({
@@ -16992,8 +17056,9 @@ export const advanceActiveInteractive = async (choiceText) => {
     bundle,
     baseColors,
     campaignId,
-    interactive,
-    history: [...normalizeArray(interactive.history), historyEntry],
+    interactive: nextInteractive,
+    history: nextInteractive.history,
+    endedBy: "scene",
     record: sceneRecordFrom(payload),
     recordGeneration: generation,
   });
@@ -17447,10 +17512,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       );
       // A retry of the player's failed events (retryHeldPlayerEvents) writes no
       // scripted beat: the period's were decided by the answer it adds to.
-      const scriptedPlan = context.amend
+      let scriptedPlan = context.amend
         ? { eligible: [], pendingState: state.scriptedEventPending }
         : planScriptedEvents(authoredScriptedBeats, {
           world: ledgerWorld,
+          playerPolities: humanCountriesOf(bundle.game),
           resolvedState: state.scriptedEventState,
           pendingState: state.scriptedEventPending,
         });
@@ -17464,10 +17530,102 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // that day, and left out when found: a telling in another language was
       // never found, and a different event that shared a few names dropped the
       // beat and its author's impacts with it.
-      const scriptedBeats = scriptedPlan.eligible;
+      const initialScriptedBeats = scriptedPlan.eligible;
+      const initialNativeOutcomes = hasNativeScriptedOutcomes(initialScriptedBeats);
+      const scriptedRegionCatalog = initialNativeOutcomes
+        ? filterToRenderedRegions(await loadRegionCatalog().catch(() => []), ledgerWorld) : [];
+      let scriptedCityContext = null;
+      const ensureScriptedCityContext = async (beats) => {
+        if (!scriptedCityContext && hasNativeCapitalOutcomes(beats)) {
+          scriptedCityContext = await lazyLookupContext({ ...bundle, world: ledgerWorld })();
+        }
+        return scriptedCityContext;
+      };
+      await ensureScriptedCityContext(initialScriptedBeats);
+      const markInapplicableScriptedBeats = (skippedEntries, { throughDate = "" } = {}) => {
+        const throughKey = throughDate ? dateKey(throughDate) : null;
+        const activeSkipped = throughKey === null
+          ? skippedEntries
+          : skippedEntries.filter((entry) => {
+            const k = dateKey(entry?.beat?.date);
+            return k === null || k <= throughKey;
+          });
+        if (!activeSkipped.length) return;
+        const skippedMap = new Map(activeSkipped.map((entry) => [entry.beat.id, entry.reason]));
+        for (const entry of activeSkipped) {
+          console.warn(`[OH scripted outcomes] Skipping inapplicable beat "${entry.beat.title || entry.beat.id}" (${entry.beat.date}): ${entry.reason}`);
+        }
+        if (Array.isArray(scriptedPlan.resolutions)) {
+          scriptedPlan.resolutions = scriptedPlan.resolutions.map((resolution) => (
+            skippedMap.has(resolution?.event?.id)
+              ? { ...resolution, outcome: "skipped", reason: skippedMap.get(resolution.event.id) }
+              : resolution
+          ));
+        }
+        if (state.scriptedEventPending && typeof state.scriptedEventPending === "object") {
+          for (const [beatId, reason] of skippedMap.entries()) {
+            if (state.scriptedEventPending[beatId]) {
+              state.scriptedEventPending[beatId] = { ...state.scriptedEventPending[beatId], outcome: "skipped", reason };
+            }
+          }
+        }
+      };
+      let scriptedBeats = initialScriptedBeats;
+      let fixedNativeRequirements = [];
+      let preSkippedNativeBeats = [];
+      let reconciledPrePlan = null;
+      // Include native outcomes already committed in earlier segments of this
+      // multi-segment jump so per-turn limits (e.g. one capital relocation per
+      // polity per turn) are enforced before prompting instead of crashing commit.
+      const priorSegmentNativeOutcomes = normalizeArray(state.segmentPayloads)
+        .flatMap((entry) => normalizeArray(entry?.scriptedNativeOutcomes));
+      if (initialNativeOutcomes) {
+        // Run a bounded fixpoint over partitionPreparedNativeScriptedOutcomes and
+        // replanAfterSkippedScriptedBeats in BOTH jump and auto modes so:
+        // 1) the AI is never prompted to narrate an inapplicable native beat,
+        // 2) multi-hop scripted_event_fired/skipped chains and newly unlocked
+        //    relocate_capital beats settle completely before prompting, and
+        // 3) reconciledPrePlan.resolutions already marks every skipped beat skipped.
+        let workingPlan = scriptedPlan;
+        const seenSkippedIds = new Set();
+        const maxPasses = Math.max(1, authoredScriptedBeats.length + 1);
+        for (let pass = 0; pass < maxPasses; pass += 1) {
+          await ensureScriptedCityContext(workingPlan.eligible);
+          const partitioned = partitionPreparedNativeScriptedOutcomes(workingPlan.eligible, ledgerWorld, {
+            regionCatalog: scriptedRegionCatalog,
+            cityContext: scriptedCityContext,
+            priorRequirements: priorSegmentNativeOutcomes,
+          });
+          fixedNativeRequirements = partitioned.requirements;
+          scriptedBeats = partitioned.eligibleBeats;
+          const newlySkipped = partitioned.skippedBeats.filter((entry) => !seenSkippedIds.has(entry.beat.id));
+          if (!newlySkipped.length) break;
+          for (const entry of newlySkipped) {
+            seenSkippedIds.add(entry.beat.id);
+            preSkippedNativeBeats.push(entry);
+          }
+          if (context.amend) break;
+          workingPlan = replanAfterSkippedScriptedBeats(
+            authoredScriptedBeats,
+            workingPlan,
+            newlySkipped,
+            {
+              world: ledgerWorld,
+              resolvedState: state.scriptedEventState,
+              playerPolities: humanCountriesOf(bundle.game),
+            },
+          );
+          reconciledPrePlan = workingPlan;
+        }
+        if (reconciledPrePlan && mode !== "auto") {
+          scriptedPlan = reconciledPrePlan;
+          state.scriptedEventPending = scriptedPlan.pendingState;
+        }
+      }
       const scriptedPoliticalRequirements = scriptedPoliticalImpactRequirements(scriptedBeats);
       const scriptedPoliticalInstruction = buildScriptedPoliticalImpactInstruction(scriptedPoliticalRequirements, { world: ledgerWorld });
-      state.structuralScriptedFallbackBlocked = scriptedPoliticalRequirements.length > 0;
+      const authoredNativeOutcomes = hasNativeScriptedOutcomes(scriptedBeats);
+      state.structuralScriptedFallbackBlocked = scriptedPoliticalRequirements.length > 0 || authoredNativeOutcomes;
       const [pacedMin, pacedMax] = segmentCount > 1
         ? segmentEventRange(spanDays, plannedActionShare, { pace: direction?.eventPace, totalDays: safeDays })
         : segmentEventRange(safeDays, plannedActionCount, { pace: direction?.eventPace });
@@ -17555,6 +17713,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // fills a draft of its own and only the run that returned clean is merged
       // into the turn's receipt. A rejected attempt's drops never reach the record.
       let segmentDraft = null;
+      let segmentNativeOutcomes = [];
+      let acceptedSkippedNativeBeats = preSkippedNativeBeats;
       const segmentComplaints = [];
 
       // A folded skip's own additions (see "The folded time skip" above). The
@@ -17654,7 +17814,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
         // instead, so the catch below can hold the turn and hand the player the
         // choice rather than quietly deciding for them.
-        ...(context.amend || segmentCount > 1 || scriptedPoliticalRequirements.length || context.cannedTurn === false
+        ...(context.amend || segmentCount > 1 || state.structuralScriptedFallbackBlocked || context.cannedTurn === false
           ? {}
           : { fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }) }),
         ...(showEvents ? { onPartialEvents: markStreamedEvents(showEvents, { priorEvents: segmentBundle.events }) } : {}),
@@ -17691,6 +17851,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // attempt 1 skips this validator entirely, which used to make attempt 2
           // look "first" and leak strict feedback out as the fallback reason).
           const strict = !finalAttempt;
+          let boundNativeOutcomes = [];
+          let attemptSkippedNativeBeats = preSkippedNativeBeats;
           // A retry's events are new events in a period whose first answer used
           // the same temporary ids (segment-1-event-1) and maybe the same ids of
           // the model's own: each gets a prefix of its own, before anything is
@@ -17788,7 +17950,25 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // the events that tell them are marked, and the tempo leaves them be.
           if (scriptedBeats.length) {
             const stopKey = mode === "auto" ? dateKey(candidate?.stopDate) : null;
-            const due = stopKey === null ? scriptedBeats : scriptedBeats.filter((beat) => dateKey(beat.date) <= stopKey);
+            const candidateDue = stopKey === null ? scriptedBeats : scriptedBeats.filter((beat) => dateKey(beat.date) <= stopKey);
+            let due = candidateDue;
+            let requirements = fixedNativeRequirements;
+            if (authoredNativeOutcomes && mode === "auto") {
+              try {
+                // Partition before inserting scripted events or binding political
+                // claims so inapplicable beats are never force-inserted into
+                // candidate.events without their native effects, and defer state
+                // mutation until after this segment is accepted.
+                const partitioned = partitionPreparedNativeScriptedOutcomes(candidateDue, ledgerWorld, {
+                  regionCatalog: scriptedRegionCatalog,
+                  cityContext: scriptedCityContext,
+                  priorRequirements: priorSegmentNativeOutcomes,
+                });
+                requirements = partitioned.requirements;
+                due = partitioned.eligibleBeats;
+                attemptSkippedNativeBeats = [...preSkippedNativeBeats, ...partitioned.skippedBeats];
+              } catch (error) { return error.message; }
+            }
             const scripted = ensureScriptedEventsWithImpacts(candidate?.events, due, { language: scriptedLanguage });
             if (scripted.inserted.length) {
               candidate.events = scripted.events;
@@ -17808,6 +17988,12 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             // event must carry the matching Political World ops. Read from the
             // impacts the engine attached, never from the beat's words.
             bindScriptedPoliticalClaims(scriptedEventsCarryingImpacts(candidate.events), scriptedPoliticalImpactRequirements(due));
+            if (authoredNativeOutcomes) {
+              try {
+                boundNativeOutcomes = bindNativeScriptedOutcomes(candidate, due, requirements, ledgerWorld);
+                sortTimelineEventsChronologically(candidate);
+              } catch (error) { return error.message; }
+            }
           }
           // The map's tempo, an author's ceiling on how many regions change hands
           // in a period (worldDirection.js): counted in event order, before the
@@ -17864,8 +18050,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           delete candidate.politicalClaims;
           const ledgerError = validateSegmentLedgers(candidate, { world: ledgerWorld, strict, segmentIndex, receipt: draft });
           if (ledgerError) return ledgerError;
+          try {
+            verifyNativeScriptedRecords(boundNativeOutcomes, candidate, ledgerWorld);
+          } catch (error) { return error.message; }
           screenSegmentFrontOrders(candidate, { game: bundle.game, actions: bundle.actions, receipt: draft });
-          return validateSegmentStorylines(candidate, {
+          const storylineError = validateSegmentStorylines(candidate, {
             world: ledgerWorld,
             analysis: worldInitiative.analysis,
             strict,
@@ -17875,6 +18064,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             gameCountry: bundle.game.country,
             board: normalizeArray(bundle.world?.projects),
           });
+          if (!storylineError) {
+            segmentNativeOutcomes = boundNativeOutcomes;
+            acceptedSkippedNativeBeats = attemptSkippedNativeBeats;
+          }
+          return storylineError;
         }, {
           onAccepted: (draft) => { segmentDraft = draft; },
           onRejected: (complaint) => { segmentComplaints.push(complaint); },
@@ -17919,6 +18113,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // (The skip asked again keeps its request: requestBudget.js keepForRefusedSkip.)
           keepForRefusedSkip(state.requests?.budget);
           segmentDraft = null;
+          segmentNativeOutcomes = [];
+          acceptedSkippedNativeBeats = preSkippedNativeBeats;
           segmentComplaints.length = 0;
           statuses.length = 0;
           answer = await askSegment(false);
@@ -17940,6 +18136,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       if (state.folded && riders.board) state.foldedBoardCarried = true;
       if (isFinalSegment) state.foldedHistoryCarried = state.folded && Boolean(historyJob);
       const { generation: segmentGeneration, payload, removed: removedFromSegment } = answer;
+      if (authoredNativeOutcomes && segmentGeneration?.source === "fallback") {
+        throw new Error("A scripted native outcome cannot be resolved by a canned turn.");
+      }
+      // This metadata is constructed by the accepted native validator alone.
+      payload.scriptedNativeOutcomes = segmentNativeOutcomes;
       // The agents' reports leave the payload here (foldedTurnReview files
       // them); nothing between this and the write reads the field.
       if (payload && typeof payload === "object" && AGENT_REPORTS_FIELD in payload) {
@@ -17962,9 +18163,40 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // accepted. A held/rejected attempt persists nothing; its ephemeral plan
       // remains on `state` so Retry sees the same Chance roll and condition result.
       const scriptedStopDate = normalizeString(payload?.stopDate) || segmentTarget;
+      if (mode === "auto" && acceptedSkippedNativeBeats.length) {
+        const throughKey = dateKey(scriptedStopDate);
+        const skippedThroughStop = throughKey === null
+          ? acceptedSkippedNativeBeats
+          : acceptedSkippedNativeBeats.filter((entry) => {
+            const k = dateKey(entry?.beat?.date);
+            return k === null || k <= throughKey;
+          });
+        if (skippedThroughStop.length && !context.amend) {
+          const sameAsPreSkipped = reconciledPrePlan
+            && skippedThroughStop.length === preSkippedNativeBeats.length
+            && skippedThroughStop.every((entry, idx) => entry?.beat?.id === preSkippedNativeBeats[idx]?.beat?.id);
+          scriptedPlan = sameAsPreSkipped
+            ? reconciledPrePlan
+            : replanAfterSkippedScriptedBeats(
+              authoredScriptedBeats,
+              scriptedPlan,
+              skippedThroughStop,
+              {
+                world: ledgerWorld,
+                resolvedState: state.scriptedEventState,
+                playerPolities: humanCountriesOf(bundle.game),
+                preservedPending: reconciledPrePlan?.pendingState,
+              },
+            );
+        }
+      }
+      // Always apply skip marks onto the final selected scriptedPlan so
+      // reconciledPrePlan assignment above can never overwrite them.
+      markInapplicableScriptedBeats(acceptedSkippedNativeBeats, { throughDate: scriptedStopDate });
       const scriptedCommit = commitScriptedEventPlan(state.scriptedEventState, scriptedPlan, {
         throughDate: scriptedStopDate,
       });
+      verifyNativeScriptedCoverage(scriptedCommit.fired, segmentNativeOutcomes);
       state.scriptedEventState = scriptedCommit.state;
       state.scriptedEventPending = {};
 
@@ -18876,6 +19108,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     receipt: state.receipt,
     covertOperations: normalizeString(state.generation?.source) === "fallback" ? [] : normalizeArray(state.covertOperations),
     scriptedEventState: state.scriptedEventState,
+    scriptedNativeOutcomes: state.segmentPayloads.flatMap(payload => normalizeArray(payload.scriptedNativeOutcomes)),
     // A canned turn is never held: the fallback page already says the model is
     // not answering. Nor once the player chose to keep the turn as it is.
     holdOnPlayerFailures: Boolean(context.stopOnPlayerFailures) && !state.playerFailuresAccepted

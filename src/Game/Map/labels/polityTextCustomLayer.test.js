@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { behindGlobe, createPolityTextCustomLayer, globeSamples } from "./polityTextCustomLayer.js";
+import { polityLabelVisibilityFor } from "../../../runtime/polityLabelVisibility.js";
 
 // Just enough WebGL for the layer: every resource is a tagged object, every
 // other call is a no-op, and textures bound for a draw are recorded.
@@ -145,4 +146,67 @@ test("the rim is left to the shader, and a label reaching back over the horizon 
 test("nothing is held back on a flat map, where the plane is zero, or for a label with no shape", () => {
   assert.equal(behindGlobe(globeSamples(ribbonAt(134, -25)), [0, 0, 0, 0]), false);
   assert.equal(behindGlobe([], ATLANTIC_VIEW), false);
+});
+
+test("N029: adjust the close-zoom cutoff live without replacing the existing PTR texture or geometry", () => {
+  const { gl, deletedTextures, drawnTextures } = fakeGl();
+  const label = entry("Bulgaria");
+  label.record.maxZoom = 6.2;
+  label.record.fadeOutStartZoom = 5;
+  let zoom = 4;
+  let visibility = polityLabelVisibilityFor("");
+  let reads = 0;
+  const layer = createPolityTextCustomLayer({
+    preparedEntries: [label], debugBaseline: false,
+    getVisibility: () => { reads += 1; return visibility; },
+  });
+  layer.onAdd({ ...fakeMap(), getZoom: () => zoom }, gl);
+  const frameOwners = () => {
+    drawnTextures.length = 0;
+    const before = reads;
+    layer.render(gl, frame);
+    assert.equal(reads, before + 1, "one shared policy read per draw frame");
+    return drawnOwners(layer, drawnTextures);
+  };
+  assert.deepEqual(frameOwners(), ["Bulgaria"]);
+  const texture = label.texture;
+  const ribbon = label.ribbonBuffer;
+  zoom = 7;
+  assert.deepEqual(frameOwners(), []);
+  visibility = polityLabelVisibilityFor(9);
+  assert.deepEqual(frameOwners(), ["Bulgaria"], "the same prepared label reappears at close zoom");
+  assert.equal(label.texture, texture);
+  assert.equal(label.ribbonBuffer, ribbon);
+  assert.equal(deletedTextures.has(texture), false);
+  assert.equal(label.record.maxZoom, 6.2, "canonical record was not changed");
+  zoom = 9;
+  assert.deepEqual(frameOwners(), []);
+  zoom = 4.8;
+  visibility = polityLabelVisibilityFor(5);
+  assert.deepEqual(frameOwners(), ["Bulgaria"]);
+  zoom = 5;
+  assert.deepEqual(frameOwners(), []);
+  visibility = polityLabelVisibilityFor(6.2);
+  assert.deepEqual(frameOwners(), ["Bulgaria"], "reset restores the existing renderer's default");
+});
+
+test("N029: pending atomic PTR replacements use the same live visibility as accepted entries", () => {
+  const { gl, drawnTextures } = fakeGl();
+  const old = entry("Bulgaria");
+  const next = entry("New Bulgaria", { uploadable: false });
+  const layer = createPolityTextCustomLayer({
+    preparedEntries: [old], debugBaseline: false,
+    getVisibility: () => polityLabelVisibilityFor(9),
+  });
+  layer.onAdd({ ...fakeMap(), getZoom: () => 7 }, gl);
+  old.record.maxZoom = next.record.maxZoom = 6.2;
+  layer.render(gl, frame);
+  layer.replacePreparedEntries([next]);
+  drawnTextures.length = 0;
+  layer.render(gl, frame);
+  assert.deepEqual(drawnOwners(layer, drawnTextures), ["Bulgaria"], "do not swap until the new now-visible label uploads");
+  next.raster.canvas = { width: 4, height: 2 };
+  drawnTextures.length = 0;
+  layer.render(gl, frame);
+  assert.deepEqual(drawnOwners(layer, drawnTextures), ["New Bulgaria"]);
 });

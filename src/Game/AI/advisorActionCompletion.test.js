@@ -55,3 +55,10 @@ test("the second AI call has no lookups, cannot access campaign-wide prompt cont
   assert.match(body, /agentKind: "advisor"/);
   assert.doesNotMatch(body, /buildAdvisorSystemPrompt|mutateActionsState|applyAdvisorAction|lookups:/);
 });
+
+test("public statement receipt reaches the bounded checker without conflating publication and policy execution",()=>{
+  const question=buildAdvisorActionCompletionQuestion({playerRequest:"Prepare a public statement",advisorReply:"Below is my draft for review.",delivered:{publicStatements:1}});
+  assert.match(question,/1 public statement draft/);
+  assert.match(ADVISOR_ACTION_COMPLETION_SYSTEM,/publication button is not an Action Proceed button/);
+  assert.match(ADVISOR_ACTION_COMPLETION_SYSTEM,/Only recover a separately requested formal Action/);
+});

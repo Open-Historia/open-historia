@@ -1,0 +1,41 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
+import {applyStartingRelationEdits,startingRelationOverview,planReviewedStartingRelationEdit} from "../../Editor/scenarioStartingRelations.js";
+import {buildBoundedDiplomaticContext} from "../AI/nativeDiplomaticDirector.js";
+const choices=[{key:"Latvia",aliases:["Latvian Republic"]},{key:"Estonia"},{key:"Lithuania"}];
+const source=[{id:"first",a:"Latvian Republic",b:"Estonia",score:10,summary:"Historical context",sourceEventIds:["e1"]},{a:"Estonia",b:"Lithuania",score:25,summary:"Keep"}];
+test("N022 scenario description uses same native record; score-only Map Editor preserves it",()=>{
+ const plan=planReviewedStartingRelationEdit(source,{a:"Latvia",b:"Estonia",score:0,summary:"A firm commercial relationship."},source[0],choices);
+ assert.equal(plan.ok,true);
+ const [row,other]=plan.relations;
+ assert.equal(row.score,0);assert.equal(row.status,"neutral");assert.equal(row.id,"first");
+ assert.equal(row.summary,"A firm commercial relationship.");
+ assert.deepEqual(row.sourceEventIds,["e1"]);assert.deepEqual(other,source[1]);
+ const map=applyStartingRelationEdits(plan.relations,[{a:"Estonia",b:"Latvia",score:30}],choices);
+ assert.equal(map.relations[0].summary,row.summary);
+ assert.match(buildBoundedDiplomaticContext({relations:map.relations},{playerPolity:"Latvia",focusActors:["Estonia"]}).text,/A firm commercial relationship\./);
+ const clear=planReviewedStartingRelationEdit(plan.relations,{a:"Latvia",b:"Estonia",score:0,summary:""},row,choices);
+ assert.equal(clear.relations[0].summary,"");
+ assert.deepEqual(planReviewedStartingRelationEdit(plan.relations,{a:"Latvia",b:"Estonia",score:null},row,choices).relations,[other]);
+});
+test("N022 stale pair, duplicates, malformed summaries and unresolved identities fail closed",()=>{
+ const changes=[{...source[0],summary:"New external description"},source[1]];
+ assert.match(planReviewedStartingRelationEdit(changes,{a:"Latvia",b:"Estonia",score:2},source[0],choices).reason,/changed since review/);
+ for(const summary of [null,{},42,"a~b","a".repeat(241)])assert.equal(applyStartingRelationEdits(source,[{a:"Latvia",b:"Estonia",score:0,summary}],choices).ok,false);
+ assert.equal(planReviewedStartingRelationEdit(source,{a:"Latvia",b:"Estonia",score:2},null,choices).ok,false);
+ const rows=startingRelationOverview([...source,{a:"Unknown",b:"Latvia",score:6},{a:"Estonia",b:"Latvia",score:8}],choices);
+ assert.deepEqual(rows.map(r=>r.editable),[false,true,false,false]);
+ const updated=planReviewedStartingRelationEdit([...source,{a:"Unknown",b:"Latvia",score:6}],{a:"Latvia",b:"Lithuania",score:0,summary:"New neutral pair"},null,choices);
+ assert.equal(updated.ok,true);assert.equal(updated.relations.length,4);
+ assert.equal(updated.relations[2].a,"Unknown");
+});
+test("N022 scenario Politics manager loads latest scenario and writes only relations",()=>{
+ const library=readFileSync(new URL("./libraryBar.jsx",import.meta.url),"utf8");
+ const panel=readFileSync(new URL("./DiplomaticRelationsAuthoringPanel.jsx",import.meta.url),"utf8");
+ assert.match(library,/editorSection === "politics" && kind === "scenario"[\s\S]*?<DiplomaticRelationsAuthoringPanel/);
+ assert.match(panel,/Manage Diplomatic Relations/);assert.match(panel,/Search relationships/);assert.match(panel,/Filter by polity/);
+ assert.match(panel,/loadScenarioDetails\(scenarioId\)/);
+  assert.match(panel, /worldPatch:\s*\{\s*relations:\s*plan\.relations\s*\}/);
+ assert.match(panel,/planReviewedStartingRelationEdit/);
+});
