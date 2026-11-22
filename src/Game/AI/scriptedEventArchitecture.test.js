@@ -13,7 +13,8 @@ test("time skips gate authored beats natively before prompting and persist accep
   assert.ok(gameplay.includes("includeOrigin: includeOriginScripted"));
   // Every fired beat is the period's, the start day's too: the prehistory is
   // not searched for a beat's words (they are matched by id: worldDirection.js).
-  assert.ok(gameplay.includes("const scriptedBeats = scriptedPlan.eligible;"));
+  assert.ok(gameplay.includes("const initialScriptedBeats = scriptedPlan.eligible;") || gameplay.includes("const scriptedBeats = scriptedPlan.eligible;"));
+  assert.ok(gameplay.includes("partitionPreparedNativeScriptedOutcomes("));
   assert.equal(gameplay.includes("scriptedBeatsNotAlreadyWritten"), false);
   assert.equal(gameplay.includes("simulationHistory).length === 0 && segmentIndex === 0"), false);
   assert.match(gameplay, /planScriptedEvents\(/);

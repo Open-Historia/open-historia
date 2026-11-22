@@ -18,8 +18,13 @@ const comparableMetadata = (metadata) => {
     .sort().map((key) => [key, metadata[key]]));
 };
 const regionShape = (fc) => fc && fc.type === "FeatureCollection" && Array.isArray(fc.features);
-const keyCounts = (value) =>
-  Array.isArray(value) ? value.length : value && typeof value === "object" ? Object.keys(value).length : 0;
+const keyCounts = (value) => (
+  Array.isArray(value)
+    ? value.length
+    : value && typeof value === "object"
+      ? Object.entries(value).filter(([, entry]) => entry !== undefined).length
+      : 0
+);
 
 export const verifyRecoverySnapshot = (expected,actual) => {
   if (!expected || !actual || !regionShape(expected.regions) || !regionShape(actual.regions)) return false;

@@ -6,15 +6,15 @@
 // A presentation-only directory over the existing native Map Editor panels.
 // Every panel ID maps back to its original stateful editor implementation.
 export const EDITOR_WORKSPACES = Object.freeze([
-  { id: "overview", icon: "map", label: "Overview", description: "Scenario and editing status", panel: null, items: [] },
+  { id: "overview", section: "Your world", icon: "map", label: "Overview", description: "Scenario and editing status", panel: null, items: [] },
   {
-    id: "countries", icon: "flag", label: "Polities", description: "Sovereign actors, territory and identity", panel: "polities",
+    id: "countries", section: "Edit the scenario", icon: "flag", label: "Polities", description: "Sovereign actors, territory and identity", panel: "polities",
     items: [
       { id: "polities", icon: "flag", label: "Polity details" },
     ],
   },
   {
-    id: "territory", icon: "list", label: "Territory & borders", description: "Regions, types and clipboard", panel: "regions",
+    id: "territory", section: "Edit the scenario", icon: "list", label: "Territory & borders", description: "Regions, types and clipboard", panel: "regions",
     items: [
       { id: "regions", icon: "list", label: "Regions" },
       { id: "types", icon: "types", label: "Region types" },
@@ -22,22 +22,22 @@ export const EDITOR_WORKSPACES = Object.freeze([
     ],
   },
   {
-    id: "places", icon: "pin", label: "Places & units", description: "Cities, landmarks and armies", panel: "features",
+    id: "places", section: "Edit the scenario", icon: "pin", label: "Places & units", description: "Cities, landmarks and armies", panel: "features",
     items: [
       { id: "features", icon: "pin", label: "Cities and map features" },
       { id: "units", icon: "unit", label: "Starting units" },
     ],
   },
   {
-    id: "groups", icon: "users", label: "Groups", description: "Non-sovereign actors and territory", panel: "groups",
+    id: "groups", section: "Edit the scenario", icon: "users", label: "Groups", description: "Non-sovereign actors and territory", panel: "groups",
     items: [{ id: "groups", icon: "users", label: "Group details" }],
   },
   {
-    id: "war", icon: "mountain", label: "Terrain & war", description: "Climate and defensive lines", panel: "war",
+    id: "war", section: "Edit the scenario", icon: "mountain", label: "Terrain & war", description: "Climate and defensive lines", panel: "war",
     items: [{ id: "war", icon: "mountain", label: "War geography" }],
   },
   {
-    id: "appearance", icon: "layers", label: "Maps & appearance", description: "Layers, flags and projection", panel: "layers",
+    id: "appearance", section: "Edit the scenario", icon: "layers", label: "Maps & appearance", description: "Layers, flags and projection", panel: "layers",
     items: [
       { id: "basemap", icon: "map", label: "Base and detailed maps", action: "basemap" },
       { id: "layers", icon: "layers", label: "Map layers" },
@@ -46,7 +46,7 @@ export const EDITOR_WORKSPACES = Object.freeze([
     ],
   },
   {
-    id: "import", icon: "upload", label: "Import or generate", description: "Maps, suggestions and recovery", panel: "province-import",
+    id: "import", section: "Finish & play", icon: "upload", label: "Import or generate", description: "Maps, suggestions and recovery", panel: "province-import",
     items: [
       { id: "province-import", icon: "upload", label: "Import map" },
       { id: "generator", icon: "map", label: "Generate world", action: "generator" },
@@ -54,7 +54,7 @@ export const EDITOR_WORKSPACES = Object.freeze([
       { id: "clipboard", icon: "copy", label: "Clipboard" },
     ],
   },
-  { id: "review", icon: "review", label: "Review & save", description: "Document and scenario state", panel: null, items: [] },
+  { id: "review", section: "Finish & play", icon: "review", label: "Review & save", description: "Document and scenario state", panel: null, items: [] },
 ]);
 
 export const EDITOR_PANEL_IDS = Object.freeze([

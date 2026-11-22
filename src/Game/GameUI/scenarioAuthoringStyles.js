@@ -20,7 +20,7 @@ export const authoringButtonStyle = {
 };
 export const authoringInputStyle = {
   background:"var(--oh-grey-raised)", border:"1px solid var(--oh-grey-border)", borderRadius:"10px", boxSizing:"border-box",
-  color:"var(--oh-grey-text)", colorScheme:"dark", fontFamily:"inherit", fontSize:"0.76rem", minWidth:0,
+  color:"var(--oh-grey-text)", fontFamily:"inherit", fontSize:"0.76rem", minWidth:0,
   padding:"0.58rem 0.64rem", width:"100%",
 };
 export const authoringOptionStyle = { backgroundColor:"var(--oh-grey-surface)", color:"var(--oh-grey-text)" };

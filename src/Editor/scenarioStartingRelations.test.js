@@ -4,6 +4,7 @@ import {
   MAX_STARTING_RELATIONS, applyStartingRelationEdits, planStartingRelationDraft,
   mergeStartingRelationEdit, rekeyStartingRelations, withoutStartingRelations, startingRelationRowsFor, settleStartingRelationEdits,
 } from "./scenarioStartingRelations.js";
+import { planMapPolityRename } from "./polityIdentityTransaction.js";
 const keys = [{ key: "Latvia" }, { key: "Estonia" }, { key: "Lithuania" }];
 test("authored zero is a real bilateral row, unlike an unset pair", () => {
   const original = [{ a: "Estonia", b: "Lithuania", score: 44, id: "keep", summary: "Original" }];
@@ -154,4 +155,37 @@ test("editing a score preserves its scenario-authored narrative and provenance",
   assert.equal(result.ok, true);
   assert.deepEqual(result.relations[0], { ...before[0], a: "Kingdom of Bulgaria", b: "Kingdom of Serbia", score: 37, status: "cordial" });
   assert.equal(before[0].score, 12);
+});
+
+test("settleStartingRelationEdits handles real in-flight Workshop renames (which strip formerNames) with or without _editId", () => {
+  const initialDoc = {
+    polities: {
+      Latvia: { name: "Latvia", code: "Latvia", aliases: ["LV"] },
+      Estonia: { name: "Estonia", code: "Estonia" },
+    },
+    relations: [],
+    relationEdits: mergeStartingRelationEdit([], { a: "Latvia", b: "Estonia", score: 25 }),
+    polityRenames: [],
+  };
+  const savedInFlight = [initialDoc.relationEdits[0]];
+  const savedCloned = JSON.parse(JSON.stringify(savedInFlight));
+
+  // Real Workshop rename strips formerNames/old aliases and records polityRenames.
+  const renamedOnce = planMapPolityRename(initialDoc, "Latvia", "Republic of Latvia", ["Latvia", "Estonia"]);
+  const renamedTwice = planMapPolityRename(renamedOnce, "Republic of Latvia", "Baltic Federation", ["Republic of Latvia", "Estonia"]);
+  assert.equal(renamedTwice.polities["Baltic Federation"].formerNames, undefined);
+
+  const settledWithId = settleStartingRelationEdits(renamedTwice, savedInFlight);
+  assert.equal(settledWithId.ok, true);
+  assert.equal(settledWithId.document.relations.length, 1);
+  assert.equal(settledWithId.document.relations[0].a, "Baltic Federation");
+  assert.equal(settledWithId.document.relations[0].score, 25);
+  assert.deepEqual(settledWithId.document.relationEdits, []);
+
+  // Even if savedEdits lost its non-enumerable _editId through cloning, polityRenames replays cleanly.
+  const settledCloned = settleStartingRelationEdits(renamedTwice, savedCloned);
+  assert.equal(settledCloned.ok, true);
+  assert.equal(settledCloned.document.relations.length, 1);
+  assert.equal(settledCloned.document.relations[0].a, "Baltic Federation");
+  assert.equal(settledCloned.document.relations[0].score, 25);
 });

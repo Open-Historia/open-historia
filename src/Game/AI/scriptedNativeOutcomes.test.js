@@ -125,3 +125,66 @@ test("N031 Intervene keeps a native outcome and its once-only receipt together",
  assert.equal(after.result.scriptedNativeOutcomes.length,1);
  assert.throws(()=>truncateTurn({...journal,events:[{id:"same-day",date},source]},1,{originDate:"1914-03-19"}),/cannot split a day/);
 });
+
+test("N031 partitionPreparedNativeScriptedOutcomes skips inapplicable beats on world-state drift without blocking valid beats", async () => {
+  const { partitionPreparedNativeScriptedOutcomes } = await import("./scriptedNativeOutcomes.js");
+  const live = pipeline([beat("existing-war", [declaration])]).world;
+  const driftedBeat = beat("drifted-war", [declaration]);
+  const validBeat = beat("valid-subordinate", [install]);
+  const partitioned = partitionPreparedNativeScriptedOutcomes([driftedBeat, validBeat], live, { regionCatalog });
+  assert.equal(partitioned.skippedBeats.length, 1);
+  assert.equal(partitioned.skippedBeats[0].beat.id, "drifted-war");
+  assert.equal(partitioned.eligibleBeats.length, 1);
+  assert.equal(partitioned.eligibleBeats[0].id, "valid-subordinate");
+  assert.equal(partitioned.requirements.length, 1);
+  assert.equal(partitioned.requirements[0].beatId, "valid-subordinate");
+
+  // Running ensureScriptedEventsWithImpacts + bindNativeScriptedOutcomes on activeDue (eligibleBeats)
+  // never force-inserts the skipped beat into candidate.events.
+  const candidate = { events: [], warUpdates: [], puppetUpdates: [] };
+  candidate.events = ensureScriptedEventsWithImpacts(candidate.events, partitioned.eligibleBeats).events;
+  giveSegmentEventIds(candidate.events);
+  const bound = bindNativeScriptedOutcomes(candidate, partitioned.eligibleBeats, partitioned.requirements, live);
+  assert.equal(candidate.events.length, 1);
+  assert.equal(candidate.events[0].scriptedBeat, "valid-subordinate");
+  assert.equal(bound.length, 1);
+  verifyNativeScriptedCoverage(partitioned.eligibleBeats, bound);
+});
+
+test("N031 replanAfterSkippedScriptedBeats re-evaluates same-segment scripted_event_fired chains without rerolling unrelated beats", async () => {
+  const { replanAfterSkippedScriptedBeats } = await import("./scriptedEventResolution.js");
+  const { partitionPreparedNativeScriptedOutcomes } = await import("./scriptedNativeOutcomes.js");
+  const live = pipeline([beat("existing-war", [declaration])]).world;
+  const drifted = beat("drifted-war", [declaration]);
+  const dependentFired = beat("follows-war", [], {
+    date: "1914-03-22",
+    trigger: { mode: "conditional", operator: "all", conditions: [{ type: "scripted_event_fired", eventId: "drifted-war" }] },
+  });
+  const dependentSkipped = beat("fallback-after-skip", [], {
+    date: "1914-03-22",
+    trigger: { mode: "conditional", operator: "all", conditions: [{ type: "scripted_event_skipped", eventId: "drifted-war" }] },
+  });
+  const unrelatedChance = beat("coin-flip", [], {
+    date: "1914-03-23",
+    trigger: { mode: "chance", percent: 50 },
+  });
+
+  const events = [drifted, dependentFired, dependentSkipped, unrelatedChance];
+  const initialPlan = planScriptedEvents(events, { world: live, random: () => 0.1 });
+  assert.deepEqual(initialPlan.eligible.map((e) => e.id), ["drifted-war", "follows-war", "coin-flip"]);
+
+  const partitioned = partitionPreparedNativeScriptedOutcomes(initialPlan.eligible, live, { regionCatalog });
+  assert.equal(partitioned.skippedBeats.length, 1);
+
+  // Replan with random=() => 0.99 to prove unrelatedChance keeps its cached 0.1 roll!
+  const reconciled = replanAfterSkippedScriptedBeats(events, initialPlan, partitioned.skippedBeats, {
+    world: live,
+    random: () => 0.99,
+  });
+  assert.deepEqual(reconciled.eligible.map((e) => e.id), ["fallback-after-skip", "coin-flip"]);
+  const committed = commitScriptedEventPlan({}, reconciled, { throughDate: "1914-03-25" });
+  assert.equal(committed.state["drifted-war"].outcome, "skipped");
+  assert.equal(committed.state["follows-war"].outcome, "skipped");
+  assert.equal(committed.state["fallback-after-skip"].outcome, "fired");
+  assert.equal(committed.state["coin-flip"].outcome, "fired");
+});

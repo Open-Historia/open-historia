@@ -27,7 +27,7 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 
 const actionButtonStyle = authoringButtonStyle;
 
-const inputStyle = { ...authoringInputStyle, colorScheme: "dark" };
+const inputStyle = { ...authoringInputStyle };
 
 const optionStyle = authoringOptionStyle;
 

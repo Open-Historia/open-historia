@@ -264,12 +264,22 @@ export const renamePolityInWorld = (world, fromName, toName) => {
   put("projects", mapRows(world?.projects, (project) => ({ ...project, ownerCode: one(project.ownerCode) })));
   // Preserve every receipt identity and amount. Only the canonical current
   // party tokens follow a polity rename; historical source events stay intact.
-  if (world?.projectFinance) {
-    put("projectFinance", { ...world.projectFinance, receipts: world.projectFinance.receipts.map(r=>r.type==="authorize"?{
-      ...r, borrower:one(r.borrower), lenderId:r.lenderKind==="polity"?one(r.lenderId):r.lenderId,
-    }:r) });
-    put("projectFinanceDebt", world.projectFinanceDebt.map(row=>({...row,owner:one(row.owner)})));
+  if (world?.projectFinance && typeof world.projectFinance === "object") {
+    const receipts = mapRows(world.projectFinance.receipts, (receipt) => (
+      receipt?.type === "authorize"
+        ? {
+          ...receipt,
+          borrower: one(receipt.borrower),
+          lenderId: receipt.lenderKind === "polity" ? one(receipt.lenderId) : receipt.lenderId,
+        }
+        : receipt
+    ));
+    put("projectFinance", {
+      ...world.projectFinance,
+      ...(receipts !== undefined ? { receipts } : {}),
+    });
   }
+  put("projectFinanceDebt", mapRows(world?.projectFinanceDebt, (row) => ({ ...row, owner: one(row.owner) })));
   // The fortified lines it holds (runtime/warGeography.js): a wall keeps its owner.
   put("fortifications", mapRows(world?.fortifications, (line) => ({ ...line, owner: one(line.owner) })));
   // The scenario's own unit types it may field (runtime/unitTypes.js).

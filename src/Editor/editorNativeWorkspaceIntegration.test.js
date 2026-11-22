@@ -117,12 +117,12 @@ test("Region Types use the native region-change epoch and never delete reference
 
 test("clipboard metadata participates in the same native region-paste Undo command", () => {
   const map = src("./MapEditor.jsx");
-  const method = map.slice(map.indexOf("  const pasteClipboard = () => {"), map.indexOf("  const clipboardKeysRef ="));
+  const method = map.slice(map.indexOf("  const pasteClipboard = async () => {"), map.indexOf("  const clipboardKeysRef ="));
   const nativeMap = src("./OlMap.jsx");
-  assert.match(method, /documentStep: clipboardMetadataStep\(plan, d\.doc, d\.setDoc, d\.setSaveStatus\)/);
+  assert.match(method, /documentStep: clipboardMetadataStep\(plan, (?:d|latestDoc)\.doc, (?:d|latestDoc)\.setDoc, (?:d|latestDoc)\.setSaveStatus\)/);
   assert.match(method, /if \(!result\?\.added\?\.length\)/);
   assert.match(method, /MAX_REGION_TYPES/);
-  assert.match(method, /window\.confirm/);
+  assert.match(method, /confirmDialog/);
   assert.match(nativeMap, /documentStep\?\.redo\(\);/);
   assert.match(nativeMap, /documentStep\?\.undo\(\);/);
   const pasteBlock = nativeMap.slice(nativeMap.indexOf("      pasteRegions: ("), nativeMap.indexOf("      applyRegionPatch: ("));

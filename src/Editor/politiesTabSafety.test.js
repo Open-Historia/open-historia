@@ -57,7 +57,7 @@ test("new country only registers the validated, fully authored draft", () => {
   // mutations. One validated document plan and one native history step are
   // the accepted authoring seam.
   const mapEditor = readFileSync(new URL("./MapEditor.jsx", import.meta.url), "utf8");
-  assert.match(source, /commitCountryDraft\(plan, plan\.assignSelectedRegions \? selection : \[\]\)/);
+  assert.match(source, /(?:live\.)?commitCountryDraft\(plan, plan\.assignSelectedRegions \? (?:live\.)?selection : \[\]\)/);
   assert.match(mapEditor, /planMapPolityCreation\(before, plan\)/);
   assert.match(mapEditor, /api\.setRegionAttrs\(ids, \{ owner: plan\.key \}, \{ deferHistory: true \}\)/);
   assert.match(mapEditor, /api\.pushStep\(\{/);
@@ -68,11 +68,11 @@ test("new country only registers the validated, fully authored draft", () => {
 });
 
 test("bulk transfer requires informed confirmation before selecting or changing the source territory", () => {
-  const start = source.indexOf("const transferAll = () => {");
+  const start = source.indexOf("const transferAll = async () => {");
   const end = source.indexOf("\n  };", start);
   assert.ok(start >= 0 && end > start, "Expected a bounded native transferAll function");
   const body = source.slice(start, end);
-  const confirm = body.indexOf("window.confirm(");
+  const confirm = body.indexOf("confirmDialog(");
   const select = body.indexOf("api?.selectOwner?.(");
   assert.ok(confirm >= 0 && select > confirm, "Consent must precede even selection side effects");
   assert.match(body, /if \(!ok\) return;/);
@@ -80,7 +80,7 @@ test("bulk transfer requires informed confirmation before selecting or changing 
 });
 
 test("new country creation opens its real Overview instead of leaving the user in dangerous Manage actions", () => {
-  const body = source.slice(source.indexOf("const createPolity = (draft) => {"), source.indexOf("\n  };", source.indexOf("const createPolity = (draft) => {")));
+  const body = source.slice(source.indexOf("const createPolity = async (draft) => {"), source.indexOf("\n  };", source.indexOf("const createPolity = async (draft) => {")));
   assert.match(body, /setSelectedKey\(plan.key\)/);
   assert.match(body, /setDetailsTab\("overview"\)/);
   assert.match(body, /setCountryListOpen\(false\)/);

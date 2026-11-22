@@ -51,13 +51,13 @@ test("Scenario Political World authoring uses the canonical trait registry and p
   assert.match(source, /politicalActorToEditorState/);
 });
 
-test("Scenario Political World selects use explicit dark option colors", () => {
+test("Scenario Political World selects use theme-aware option colors", () => {
   const source = read("./PoliticalWorldAuthoringPanel.jsx");
 
   const shared = read("./scenarioAuthoringStyles.js");
   assert.match(source, /const optionStyle = authoringOptionStyle/);
   assert.match(shared, /authoringOptionStyle = \{ backgroundColor:"var\(--oh-grey-surface\)", color:"var\(--oh-grey-text\)" \}/);
-  assert.match(source, /colorScheme: "dark"/);
+  assert.doesNotMatch(source, /colorScheme:\s*"dark"/);
   assert.match(source, /<option style=\{optionStyle\}/);
 });
 

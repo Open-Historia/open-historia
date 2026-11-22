@@ -89,3 +89,56 @@ test("scissors does not change the existing region when split fails or a new ID 
   assert.deepEqual(feature.getGeometry().getCoordinates(),before);
   assert.equal(source.getFeatures().length,1);
 });
+
+test("scissors does not slice an unrelated island in a MultiPolygon and rejects collinear/T-junction paths", () => {
+  const islandA = rectangle(0, 0, 100, 100).getCoordinates();
+  const islandB = rectangle(150, 0, 180, 30).getCoordinates();
+  const multi = new MultiPolygon([islandA, islandB]);
+  const split = splitGeometryByLine(multi, [[10, 15], [90, 15]]);
+  assert.ok(split);
+  // Island B (area 900) must remain completely uncut inside the larger piece (area 8500 + 900 = 9400),
+  // while the smaller piece is only the bottom slice of Island A (area 1500).
+  assert.ok(approx(area(split[0]), 9400));
+  assert.ok(approx(area(split[1]), 1500));
+  // Collinear backtracking and T-junction self-touching lines fail closed.
+  assert.equal(splitGeometryByLine(rectangle(0, 0, 100, 100), [[10, 50], [80, 50], [40, 50]]), null);
+  assert.equal(splitGeometryByLine(rectangle(0, 0, 100, 100), [[10, 50], [90, 50], [90, 80], [50, 50]]), null);
+
+  // An L-shaped island whose bounding box overlaps the cut line's bounding box
+  // without actually intersecting the cut line must remain completely uncut.
+  const lIsland = [[[10, 0], [120, 0], [120, 20], [30, 20], [30, 120], [10, 120], [10, 0]]];
+  const mainSquare = rectangle(40, 40, 100, 100).getCoordinates();
+  const lMulti = new MultiPolygon([mainSquare, lIsland]);
+  const lSplit = splitGeometryByLine(lMulti, [[50, 70], [90, 70]]);
+  assert.ok(lSplit);
+  const lArea = area(new Polygon(lIsland));
+  // Main square (3600) splits evenly into 1800 + 1800; L-island attaches intact to one side.
+  assert.ok(approx(area(lSplit[0]), 1800 + lArea));
+  assert.ok(approx(area(lSplit[1]), 1800));
+
+  // Web Mercator magnitude (~1e7 m) collinear backtracking still fails closed via scale-normalized tolerance.
+  const mercatorRect = rectangle(1e7, 1e7, 1e7 + 1e5, 1e7 + 1e5);
+  assert.equal(
+    splitGeometryByLine(mercatorRect, [[1e7 + 1e4, 1e7 + 5e4], [1e7 + 9e4, 1e7 + 5e4], [1e7 + 5e4, 1e7 + 5e4]]),
+    null,
+  );
+
+  // Drawing strictly in water between two disconnected islands separates them without slicing either.
+  const westIsland = rectangle(0, 0, 100, 100).getCoordinates();
+  const eastIsland = rectangle(200, 0, 250, 100).getCoordinates();
+  const archipelago = new MultiPolygon([westIsland, eastIsland]);
+  const waterSplit = splitGeometryByLine(archipelago, [[150, 10], [150, 90]]);
+  assert.ok(waterSplit);
+  assert.ok(approx(area(waterSplit[0]), 10000));
+  assert.ok(approx(area(waterSplit[1]), 5000));
+
+  // Cutting off a smaller peninsula keeps an offshore islet on the peninsula's side of the cut.
+  const mainland = rectangle(0, 0, 100, 100).getCoordinates();
+  const offshoreIslet = rectangle(10, 120, 30, 140).getCoordinates(); // area 400, strictly above y=80
+  const coastRegion = new MultiPolygon([mainland, offshoreIslet]);
+  const coastSplit = splitGeometryByLine(coastRegion, [[-10, 80], [110, 80]]);
+  assert.ok(coastSplit);
+  // Mainland below y=80 is 8000; mainland above y=80 (2000) + offshore islet (400) = 2400.
+  assert.ok(approx(area(coastSplit[0]), 8000));
+  assert.ok(approx(area(coastSplit[1]), 2400));
+});

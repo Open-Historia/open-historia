@@ -2075,7 +2075,7 @@ const OlderEventsBrowser = ({ events, lookups, focusRequest }) => {
         <div style={{ display: "grid", gap: "0.65rem", minWidth: 0 }}>
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.74rem", lineHeight: 1.5 }}>Earlier recorded events. Reading them does not change the world or restore an old turn.</div>
             <input aria-label="Search earlier events" placeholder="Search by title or date" value={query} onChange={e => { setQuery(e.target.value); setPage(0); }} style={{ ...ghostButtonStyle, width: "100%", boxSizing: "border-box", cursor: "text" }} />
-            <select aria-label="Filter earlier events by category" value={category} onChange={e => { setCategory(e.target.value); setPage(0); }} style={{ ...ghostButtonStyle, width: "100%", colorScheme: "dark" }}>
+            <select aria-label="Filter earlier events by category" value={category} onChange={e => { setCategory(e.target.value); setPage(0); }} style={{ ...ghostButtonStyle, width: "100%" }}>
                 <option value="">All categories</option>
                 {EVENT_TAG_ENUM.map(tag => <option key={tag} value={tag}>{tag}</option>)}
             </select>

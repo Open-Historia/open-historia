@@ -187,49 +187,63 @@ const AtlasScene = ({ scene, narrow, still, edited }) => (
 );
 
 const MapEditorV2 = ({ banner, update }) => {
-  const still=useStill();
-  const narrow=useNarrow(600);
-  const [edited,setEdited]=useState(false);
-  const scene=SCENES[banner.scene]?banner.scene:"draft";
-  const info=SCENES[scene];
+  const still = useStill();
+  const narrow = useNarrow(600);
+  const [edited, setEdited] = useState(false);
+  const scene = SCENES[banner.scene] ? banner.scene : "draft";
+  const info = SCENES[scene];
   return (
-    <Plate surface={{ background:C.desk, border:"1px solid "+C.line, borderRadius:"5px" }}>
-      <Brackets colour={C.brass} inset="0.6rem" length="1.35rem" thickness={1.5}/>
-      <div style={{ boxSizing:"border-box", padding:narrow?"1.3rem 1.15rem 1.2rem":"1.6rem 2.2rem 1.9rem" }}>
-        <Reveal delay={100} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, flexWrap:"wrap" }}>
-          <span style={{ color:C.brass, fontFamily:MONO, fontSize:"0.65rem", letterSpacing:"0.16em", fontWeight:700 }}>OPENHISTORIA  /  CARTOGRAPHER'S EDITION</span>
-          <span style={{ color:C.muted, fontFamily:MONO, fontSize:"0.64rem", letterSpacing:"0.10em" }}>BETA  /  {noticeDate(update.date)}</span>
+    <Plate surface={{ background: C.desk, border: `1px solid ${C.line}`, borderRadius: "5px" }}>
+      <Brackets colour={C.brass} inset="0.6rem" length="1.35rem" thickness={1.5} />
+      <div style={{ boxSizing: "border-box", padding: narrow ? "1.3rem 1.15rem 1.2rem" : "1.6rem 2.2rem 1.9rem" }}>
+        <Reveal delay={100} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ color: C.brass, fontFamily: MONO, fontSize: "0.65rem", letterSpacing: "0.16em", fontWeight: 700 }}>OPENHISTORIA  /  CARTOGRAPHER'S EDITION</span>
+          <span style={{ color: C.muted, fontFamily: MONO, fontSize: "0.64rem", letterSpacing: "0.10em" }}>BETA  /  {noticeDate(update.date)}</span>
         </Reveal>
-        <Rule colour={C.brass} margin="0.75rem 0 0.9rem"/>
-        <Reveal delay={185} style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:12 }}>
-          <div style={{ minWidth:0 }}>
-            <div style={{ color:C.brass, fontFamily:MONO, fontSize:"0.69rem", fontWeight:700, letterSpacing:"0.18em" }}>{info.kicker}</div>
-            <h1 style={{ color:C.paperSoft, fontFamily:SERIF, fontWeight:700, letterSpacing:"-0.035em", fontSize:narrow?"clamp(1.65rem, 8vw, 2.45rem)":"clamp(2.1rem, 4.2vw, 3.05rem)", lineHeight:1.08, margin:"0.4rem 0 0.25rem" }}>{banner.title}</h1>
-            <div style={{ color:C.brass, fontFamily:MONO, fontSize:narrow?"0.65rem":"0.74rem", letterSpacing:"0.12em" }}>{banner.subtitle}</div>
+        <Rule colour={C.brass} margin="0.75rem 0 0.9rem" />
+        <Reveal delay={185} style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: C.brass, fontFamily: MONO, fontSize: "0.69rem", fontWeight: 700, letterSpacing: "0.18em" }}>{info.kicker}</div>
+            <h1 style={{ color: C.paperSoft, fontFamily: SERIF, fontWeight: 700, letterSpacing: "-0.035em", fontSize: narrow ? "clamp(1.65rem, 8vw, 2.45rem)" : "clamp(2.1rem, 4.2vw, 3.05rem)", lineHeight: 1.08, margin: "0.4rem 0 0.25rem" }}>{banner.title}</h1>
+            <div style={{ color: C.brass, fontFamily: MONO, fontSize: narrow ? "0.65rem" : "0.74rem", letterSpacing: "0.12em" }}>{banner.subtitle}</div>
           </div>
-          <div aria-hidden="true" style={{ color:C.muted, fontFamily:MONO, fontSize:narrow?"0.66rem":"0.76rem", flexShrink:0, letterSpacing:"0.06em", paddingTop:3, textAlign:"right" }}>
+          <div aria-hidden="true" style={{ color: C.muted, fontFamily: MONO, fontSize: narrow ? "0.66rem" : "0.76rem", flexShrink: 0, letterSpacing: "0.06em", paddingTop: 3, textAlign: "right" }}>
             <div>{info.number}</div>
-            {!narrow&&<div style={{marginTop:9,color:C.brass,fontSize:"0.6rem",letterSpacing:"0.14em"}}>{info.side}</div>}
+            {!narrow && <div style={{ marginTop: 9, color: C.brass, fontSize: "0.6rem", letterSpacing: "0.14em" }}>{info.side}</div>}
           </div>
         </Reveal>
-        <AtlasScene scene={scene} narrow={narrow} still={still} edited={edited}/>
-        {scene==="polities" && (
-          <Reveal delay={350} style={{ display:"flex", justifyContent:"flex-end", marginTop:"0.55rem" }}>
-            <button type="button" className="oh-tap" aria-label={edited?"View original borders and polity name":"Preview edited borders and polity name"} aria-pressed={edited} onClick={()=>setEdited(v=>!v)}
-              style={{ border:"1px solid "+C.brass, color:C.brass, background:C.stage, fontFamily:MONO, fontSize:"0.68rem", letterSpacing:"0.08em", padding:"0.55rem 0.8rem", cursor:"pointer" }}>
-              {edited?"VIEW ORIGINAL  ↺":"PREVIEW AN EDIT  ↗"}
+        <AtlasScene scene={scene} narrow={narrow} still={still} edited={edited} />
+        {scene === "polities" && (
+          <Reveal delay={350} style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.55rem" }}>
+            <button
+              type="button"
+              className="oh-tap"
+              aria-label={edited ? "View original borders and polity name" : "Preview edited borders and polity name"}
+              aria-pressed={edited}
+              onClick={() => setEdited((value) => !value)}
+              style={{ border: `1px solid ${C.brass}`, color: C.brass, background: C.stage, fontFamily: MONO, fontSize: "0.68rem", letterSpacing: "0.08em", padding: "0.55rem 0.8rem", cursor: "pointer" }}
+            >
+              {edited ? "VIEW ORIGINAL  ↺" : "PREVIEW AN EDIT  ↗"}
             </button>
           </Reveal>
         )}
         <Reveal delay={260}>
-          <p style={{ color:C.muted, fontFamily:SERIF, fontSize:narrow?"0.92rem":"1.04rem", lineHeight:1.45, maxWidth:"51rem", margin:"0.9rem 0 1rem" }}>{banner.lead}</p>
+          <p style={{ color: C.muted, fontFamily: SERIF, fontSize: narrow ? "0.92rem" : "1.04rem", lineHeight: 1.45, maxWidth: "51rem", margin: "0.9rem 0 1rem" }}>{banner.lead}</p>
         </Reveal>
-        <FeatureCards sections={banner.sections||[]} accent={C.brass} soft={C.muted} font={SERIF} caps={false}
-          card={{background:"#202d2e",border:"1px solid "+C.line,borderRadius:"2px"}}
-          columns={narrow?"1fr":"repeat(2,minmax(0,1fr))"} delay={380} step={120}/>
-        <Reveal delay={570} style={{ display:"flex", justifyContent:"space-between", flexWrap:"wrap", gap:6, borderTop:"1px solid "+C.line, marginTop:"1.1rem", paddingTop:"0.7rem" }}>
-          <span style={{ color:C.muted, fontFamily:MONO, fontSize:"0.59rem", letterSpacing:"0.1em" }}>A NEW WAY TO DRAW YOUR WORLD</span>
-          <span style={{ color:C.brass, fontFamily:MONO, fontSize:"0.59rem", letterSpacing:"0.1em" }}>{info.number}</span>
+        <FeatureCards
+          sections={banner.sections || []}
+          accent={C.brass}
+          soft={C.muted}
+          font={SERIF}
+          caps={false}
+          card={{ background: "#202d2e", border: `1px solid ${C.line}`, borderRadius: "2px" }}
+          columns={narrow ? "1fr" : "repeat(2,minmax(0,1fr))"}
+          delay={380}
+          step={120}
+        />
+        <Reveal delay={570} style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6, borderTop: `1px solid ${C.line}`, marginTop: "1.1rem", paddingTop: "0.7rem" }}>
+          <span style={{ color: C.muted, fontFamily: MONO, fontSize: "0.59rem", letterSpacing: "0.1em" }}>A NEW WAY TO DRAW YOUR WORLD</span>
+          <span style={{ color: C.brass, fontFamily: MONO, fontSize: "0.59rem", letterSpacing: "0.1em" }}>{info.number}</span>
         </Reveal>
       </div>
     </Plate>

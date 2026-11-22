@@ -84,6 +84,7 @@ import { generatedWorldReplacementId, settleGeneratedWorldReplacement } from "./
 import {
   planMapPolityCreation, planMapPolityRename, revertMapPolityCreation,
 } from "./polityIdentityTransaction.js";
+import { alertDialog, confirmDialog, hasOpenUiDialog } from "../runtime/uiDialog.js";
 
 const hexToRgb = (value) => {
   const m = /^#?([a-f0-9]{6})$/i.exec(String(value || "").trim());
@@ -350,48 +351,87 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     setClipboardResult({ kind: "copied", count: regions.features.length });
     return true;
   };
-  const pasteClipboard = () => {
-    const count = clipboard?.regions?.features?.length || 0;
+  const pastingClipboardRef = useRef(false);
+  const removingAllUnitsRef = useRef(false);
+  const liveClipboardContextRef = useRef({ api, d, pasteSimplified });
+  liveClipboardContextRef.current = { api, d, pasteSimplified };
+  const pasteClipboard = async () => {
+    if (pastingClipboardRef.current) return false;
+    const confirmedClipboard = getRegionClipboard() || clipboard;
+    const count = confirmedClipboard?.regions?.features?.length || 0;
     if (!api || !count) return false;
-    // Validate the cross-document type merge before any geometry is carved.
-    // The native game only accepts MAX_REGION_TYPES; silently overflowing here
-    // would strand freshly pasted regions with unresolved type references.
-    const plan = planClipboardMerge(clipboard, { polities: d.polities, colors: d.colors, flags: d.flags, tags: d.tags, types: d.types, groups: d.groups });
-    if (d.types.length + plan.types.length > MAX_REGION_TYPES) {
-      window.alert(`Cannot paste: this map would contain ${d.types.length + plan.types.length} region types, above the native limit of ${MAX_REGION_TYPES}. Remove unused types or import fewer types before pasting.`);
-      return false;
+    pastingClipboardRef.current = true;
+    try {
+      // Validate the cross-document type merge before any geometry is carved.
+      // The native game only accepts MAX_REGION_TYPES; silently overflowing here
+      // would strand freshly pasted regions with unresolved type references.
+      const initialPlan = planClipboardMerge(confirmedClipboard, { polities: d.polities, colors: d.colors, flags: d.flags, tags: d.tags, types: d.types, groups: d.groups });
+      if (d.types.length + initialPlan.types.length > MAX_REGION_TYPES) {
+        await alertDialog(`Cannot paste: this map would contain ${d.types.length + initialPlan.types.length} region types, above the native limit of ${MAX_REGION_TYPES}. Remove unused types or import fewer types before pasting.`);
+        return false;
+      }
+      if (!(await confirmDialog(
+        `Paste ${count} region${count === 1 ? "" : "s"} into this map? Overlapping existing territory will be carved or replaced. One Undo reverses both pasted geometry and newly imported polity/type/group metadata.`,
+      ))) return false;
+      const latest = liveClipboardContextRef.current;
+      const latestApi = latest?.api || api;
+      const latestDoc = latest?.d || d;
+      if (!latestApi || !confirmedClipboard?.regions?.features?.length) return false;
+      // Always paste the exact clipboard snapshot the user confirmed, while
+      // recomputing the merge plan against the latest destination document.
+      const plan = planClipboardMerge(confirmedClipboard, {
+        polities: latestDoc.polities,
+        colors: latestDoc.colors,
+        flags: latestDoc.flags,
+        tags: latestDoc.tags,
+        types: latestDoc.types,
+        groups: latestDoc.groups,
+      });
+      if (latestDoc.types.length + plan.types.length > MAX_REGION_TYPES) {
+        await alertDialog(`Cannot paste: this map would contain ${latestDoc.types.length + plan.types.length} region types, above the native limit of ${MAX_REGION_TYPES}. Remove unused types or import fewer types before pasting.`);
+        return false;
+      }
+      // A paste can contain no usable polygon. Import document-side metadata
+      // only after the native map confirms that at least one region was added.
+      const result = latestApi.pasteRegions(confirmedClipboard.regions, {
+        simplify: latest?.pasteSimplified ?? pasteSimplified,
+        documentStep: clipboardMetadataStep(plan, latestDoc.doc, latestDoc.setDoc, latestDoc.setSaveStatus),
+      });
+      if (!result?.added?.length) {
+        setClipboardResult({ kind: "pasted", added: [], trimmed: result?.trimmed || 0, removed: result?.removed || 0 });
+        return false;
+      }
+      latestApi.zoomToSelection(result.added);
+      setClipboardResult({ kind: "pasted", ...result });
+      return true;
+    } finally {
+      pastingClipboardRef.current = false;
     }
-    if (!window.confirm(
-      `Paste ${count} region${count === 1 ? "" : "s"} into this map? Overlapping existing territory will be carved or replaced. One Undo reverses both pasted geometry and newly imported polity/type/group metadata.`,
-    )) return false;
-    // A paste can contain no usable polygon. Import document-side metadata
-    // only after the native map confirms that at least one region was added.
-    const result = api.pasteRegions(clipboard.regions, {
-      simplify: pasteSimplified,
-      documentStep: clipboardMetadataStep(plan, d.doc, d.setDoc, d.setSaveStatus),
-    });
-    if (!result?.added?.length) {
-      setClipboardResult({ kind: "pasted", added: [], trimmed: result?.trimmed || 0, removed: result?.removed || 0 });
-      return false;
-    }
-    api.zoomToSelection(result.added);
-    setClipboardResult({ kind: "pasted", ...result });
-    return true;
   };
-  const clipboardKeysRef = useRef({ copy: copySelectionToClipboard, paste: pasteClipboard });
-  clipboardKeysRef.current = { copy: copySelectionToClipboard, paste: pasteClipboard };
+  const clipboardKeysRef = useRef({ copy: copySelectionToClipboard, paste: pasteClipboard, canPaste: () => false });
+  clipboardKeysRef.current = {
+    copy: copySelectionToClipboard,
+    paste: pasteClipboard,
+    canPaste: () => Boolean(api && !pastingClipboardRef.current && (getRegionClipboard()?.regions?.features?.length || clipboardCount) > 0),
+  };
   useEffect(() => {
     // Ctrl/Cmd+C copies the selected regions, Ctrl/Cmd+V pastes — unless the
-    // author is typing in a field or has text selected, which stay the browser's.
+    // author is typing in a field, a modal dialog is open, or text is selected.
     const onKeyDown = (e) => {
+      if (hasOpenUiDialog()) return;
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
       const key = e.key.toLowerCase();
       if (key !== "c" && key !== "v") return;
       const active = document.activeElement;
       if (active && (/^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName) || active.isContentEditable)) return;
-      if (key === "c" && String(window.getSelection?.()?.toString() || "").length) return;
-      const acted = key === "c" ? clipboardKeysRef.current.copy() : clipboardKeysRef.current.paste();
-      if (acted) e.preventDefault();
+      if (key === "c") {
+        if (String(window.getSelection?.()?.toString() || "").length) return;
+        if (clipboardKeysRef.current.copy()) e.preventDefault();
+        return;
+      }
+      if (!clipboardKeysRef.current.canPaste()) return;
+      e.preventDefault();
+      void clipboardKeysRef.current.paste();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -769,7 +809,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         "",
         "Before replacement a complete recovery map will be saved and VERIFIED in Saved maps. This action cannot be undone through the map Undo button.",
       ].join("\n");
-      if (!window.confirm(confirmText)) {
+      if (!(await confirmDialog(confirmText, { danger: true, confirmLabel: "Replace world" }))) {
         fmgLogLine("World replacement cancelled; the map was not changed.");
         return;
       }
@@ -929,7 +969,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const persistScenario = async ({ play = false, closeAfter = false, destination = "current", newScenarioName = "" } = {}) => {
     if (!api || !onApplyToScenario || scenarioAction || cleanAnswerRef.current) return false;
     if (destination === "new" && !generatedWorldReplacementId(d.doc)) {
-      window.alert("Generate a world before creating a separate scenario from it.");
+      await alertDialog("Generate a world before creating a separate scenario from it.");
       return false;
     }
     // Before the scenario's map has loaded the document is empty, and a save
@@ -1024,9 +1064,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     } catch (e) {
       console.warn("[editor] scenario save/follow-up failed:", e);
       if (canonicalSaved) {
-        window.alert(`The scenario was saved, but the follow-up could not finish: ${e?.message || e}`);
+        await alertDialog(`The scenario was saved, but the follow-up could not finish: ${e?.message || e}`);
       } else {
-        window.alert(`Could not save the map into the scenario: ${e?.message || e}`);
+        await alertDialog(`Could not save the map into the scenario: ${e?.message || e}`);
       }
       return false;
     } finally {
@@ -1215,7 +1255,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       try { regionStep?.undo(); } catch (rollbackError) {
         console.error("[editor] country rename rollback failed:", rollbackError);
       }
-      window.alert(error?.message || String(error));
+      void alertDialog(error?.message || String(error));
       return false;
     }
   };
@@ -2178,10 +2218,20 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
             const step = removeRowStep(d.units, d.setUnits, id);
             if (step) api?.pushStep?.(step);
           }}
-          onRemoveAll={() => {
-            if (!window.confirm(`Remove all ${d.units.length} starting units from this map? The map Undo button can restore them.`)) return;
-            const step = removeRowsStep(d.units, d.setUnits, () => true);
-            if (step) api?.pushStep?.(step);
+          onRemoveAll={async () => {
+            if (removingAllUnitsRef.current || !d.units.length) return;
+            removingAllUnitsRef.current = true;
+            try {
+              if (!(await confirmDialog(`Remove all ${d.units.length} starting units from this map? The map Undo button can restore them.`, { danger: true, confirmLabel: "Remove all" }))) return;
+              const latest = liveClipboardContextRef.current;
+              const latestDoc = latest?.d || d;
+              const latestApi = latest?.api || api;
+              if (!latestDoc.units.length) return;
+              const step = removeRowsStep(latestDoc.units, latestDoc.setUnits, () => true);
+              if (step) latestApi?.pushStep?.(step);
+            } finally {
+              removingAllUnitsRef.current = false;
+            }
           }}
           onClose={() => {
             setOpenPanel(null);
@@ -2232,6 +2282,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         setSelection={d.setSelection}
         polities={d.polities}
         upsertPolity={d.upsertPolity}
+        commitCountryDraft={createCountryAtomically}
         regionEpoch={regionEpoch}
         onOpenPolities={() => setOpenPanel("polities")}
         groups={d.groups}

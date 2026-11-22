@@ -72,3 +72,24 @@ test("new country creation changes all authored document fields as a single plan
   const undone=revertMapPolityCreation(created,"C",before);
   assert.deepEqual(undone,before);
 });
+
+test("revertMapPolityCreation restores displaced puppet rows without clobbering unrelated post-creation puppet edits", () => {
+  const before = document();
+  const plan = {
+    ok: true,
+    key: "C",
+    record: { name: "C", aliases: [], status: "active" },
+    // Creation displaces A's prior overlord B with C.
+    puppets: [{ puppet: "A", overlord: "C", status: "active" }],
+  };
+  const created = planMapPolityCreation(before, plan);
+  // Author makes an unrelated puppet edit after C was created.
+  const editedAfter = {
+    ...created,
+    puppets: [...created.puppets, { id: "puppet-d", puppet: "D", overlord: "B", loyalty: 90, status: "active" }],
+  };
+  const undone = revertMapPolityCreation(editedAfter, "C", before);
+  assert.equal(undone.puppets.some((row) => row.puppet === "A" && row.overlord === "B"), true);
+  assert.equal(undone.puppets.some((row) => row.puppet === "D" && row.overlord === "B" && row.loyalty === 90), true);
+  assert.equal(undone.puppets.some((row) => row.overlord === "C" || row.puppet === "C"), false);
+});

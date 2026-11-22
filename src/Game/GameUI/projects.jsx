@@ -59,7 +59,7 @@ import { TAG_SEARCH_FROM, searchTags, stepTagFocus, tickedFirst } from "./projec
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { nameInitials } from "../../../server/nameKey.js";
 import { planProject } from "../AI/gameplayLazy.js";
-import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame, isSharedMultiplayerSession, requestFromHost, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 
 // The card seeds are whole sentences, one per variant, handed over in the
 // interface's language (uiString): a kind or an owner glued in as a word would
@@ -1414,6 +1414,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
     financedOwners.has(projectOwnerOf(project,playerCountry))?"":project.targetDate || estimateProjectFinish(project, { world: engineWorld, projects, host: playerCountry, date: gameDate }),
   ])), [visible, engineWorld, projects, playerCountry, gameDate, financedOwners]);
 
+  const sharedSession = useSyncExternalStore(subscribeSharedGameRole, isSharedMultiplayerSession, () => false);
   const toggleTag = useCallback((tag) => {
     setActiveTags((current) => (current.includes(tag) ? current.filter((entry) => entry !== tag) : [...current, tag]));
   }, []);
@@ -1605,7 +1606,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
       >
       <div style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", flexDirection: "column", gap: "0.5rem", padding: "0.6rem 1rem 0.7rem" }}>
         <NewProject owner={playerCountry} fundingMode={means.mode} displayCurrency={displayCurrency} writeOps={writeOps} onStarted={() => setShowClosed(false)} />
-        {!inSharedGame() && means.mode!=="nonmonetary" && playerCountry && <div style={{display:"flex",alignItems:"center",gap:"0.5rem",flexWrap:"wrap"}}>
+        {!sharedSession && means.mode !== "nonmonetary" && playerCountry && <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
           <button type="button" onClick={()=>setFinanceOpen(true)} style={{...selectStyle,cursor:"pointer",fontWeight:700}}>{uiString("Financing")}</button>
           <span style={{fontSize:"0.68rem",color:"rgba(255,255,255,0.55)"}}>{uiString("Agreements, disbursements and finite project funds")}</span>
           {financeOpen&&<ProjectFinancePanel displayCurrency={displayCurrency} onClose={()=>setFinanceOpen(false)}/>}

@@ -15,9 +15,10 @@ import { normalizePublicDraft } from "../../runtime/publicCommunications.js";
 import { buildInstitutionDrafts } from "./advisorInstitutionDrafts.js";
 import { stripAdvisorActionHistoryAnnotations } from "../AI/advisorActionHistory.js";
 
-// A ```chart fence that never closed (the reply ran out) is not matched by
-// extractFencedJson and would print its JSON into the bubble.
+// A ```chart or ```publicstatement fence that never closed (the reply ran out)
+// is not matched by extractFencedJson and would print its JSON into the bubble.
 const UNCLOSED_CHART = /```chart[\s\S]*$/;
+const UNCLOSED_PUBLIC_STATEMENT = /(?:^|\r?\n)[ \t]{0,3}```publicstatement[ \t]*(?:\r?\n[\s\S]*|$)/;
 
 // (A plan written in prose under English "Action:" and "Lead:" headings used
 // to be taken for an Action the advisor forgot to submit, with a button to ask
@@ -75,10 +76,17 @@ export const parseAdvisorReply = (rawText, { allowedUnitTypes = null, streaming 
     ? validateChartConfig(chartJson)
     : { config: null, problem: chartReason ? `the chart block was ${chartReason}` : unclosedChart ? "the chart block was cut off before it closed" : "" };
   const { rest: afterActions, json: actionsRaw, problems: actionBlockProblems } = extractActionBlocks(afterChart, { streaming });
-  const { rest: afterPublic, json: publicRaw, reason: publicReason } = extractFencedJson(afterActions, "publicstatement", { streaming: true });
-  const publicDrafts = Array.isArray(publicRaw) && publicRaw.length<=4 ? publicRaw.map(normalizePublicDraft) : [];
-  const publicProblems = blockProblems(publicRaw,publicReason);
-  if(Array.isArray(publicRaw) && (publicRaw.length>4 || publicDrafts.some(d=>!d)))publicProblems.push("A public statement draft was invalid or exceeded the draft limit.");
+  const { rest: publicRest, json: publicRaw, reason: publicReason } = extractFencedJson(afterActions, "publicstatement", { streaming });
+  const unclosedPublic = !publicRaw && !publicReason && UNCLOSED_PUBLIC_STATEMENT.test(publicRest);
+  const afterPublic = unclosedPublic ? publicRest.replace(UNCLOSED_PUBLIC_STATEMENT, "") : publicRest;
+  const publicDrafts = Array.isArray(publicRaw) && publicRaw.length <= 4 ? publicRaw.map(normalizePublicDraft) : [];
+  const publicProblems = blockProblems(publicRaw, publicReason);
+  if (unclosedPublic && !streaming) {
+    publicProblems.push("The public statement block was cut off before it closed.");
+  }
+  if (Array.isArray(publicRaw) && (publicRaw.length > 4 || publicDrafts.some((draft) => !draft))) {
+    publicProblems.push("A public statement draft was invalid or exceeded the draft limit.");
+  }
   const { rest: afterDrafts, json: draftsRaw, reason: draftsReason } = extractFencedJson(afterPublic, "senddraft", { streaming });
   const { rest: afterInstitutionDrafts, json: institutionDraftsRaw, reason: institutionDraftsReason } = extractFencedJson(afterDrafts, "institutiondraft", { streaming });
   const { rest: afterDeploy, json: deployRaw, reason: deployReason } = extractFencedJson(afterInstitutionDrafts, "deploy", { streaming });

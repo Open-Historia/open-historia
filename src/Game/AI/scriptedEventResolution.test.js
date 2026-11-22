@@ -350,3 +350,25 @@ test("N031 exact owner identities work on legacy custom maps; dissolved and ambi
  const ambiguous={...world,polityOverrides:{...world.polityOverrides,A:{name:"Shared name",status:"active"},B:{name:"Shared name",status:"active"}}};
  assert.equal(evaluateScriptedEventCondition({...condition,polityId:"Shared name"},ambiguous,{playerPolities:["France"]}).matched,false);
 });
+
+test("N031 a known dissolved human seat in MP does not break player-control checks for surviving polities", () => {
+  const mpWorld = {
+    polityOverrides: {
+      GER: { code: "GER", name: "German Empire", status: "active" },
+      FRA: { code: "FRA", name: "France", status: "active" },
+      GONE: { code: "GONE", name: "Dissolved Seat", status: "dissolved" },
+    },
+  };
+  assert.equal(
+    evaluateScriptedEventCondition({ type: "polity_player_controlled", polityId: "FRA" }, mpWorld, { playerPolities: ["FRA", "GONE"] }).matched,
+    true,
+  );
+  assert.equal(
+    evaluateScriptedEventCondition({ type: "polity_not_player_controlled", polityId: "GER" }, mpWorld, { playerPolities: ["FRA", "GONE"] }).matched,
+    true,
+  );
+  assert.equal(
+    evaluateScriptedEventCondition({ type: "polity_player_controlled", polityId: "GER" }, mpWorld, { playerPolities: ["FRA", "GONE"] }).matched,
+    false,
+  );
+});

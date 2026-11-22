@@ -500,4 +500,4 @@
 .oh-public-statement-fields label { display: grid; gap: .25rem; font-size: .73rem; min-width: 0; }
 .oh-public-statement-fields :is(select,input,textarea) { width: 100%; }
 .oh-public-statement-fields textarea { min-height: 10rem; resize: vertical; line-height: 1.55; }
-.oh-public-statement-fields select option { background: var(--oh-ui-overlay-strong,#202023); color: white; }
+.oh-public-statement-fields select option { background: var(--oh-ui-overlay-strong, #202023); color: var(--oh-ui-text, inherit); }

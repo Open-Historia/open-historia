@@ -28,6 +28,7 @@ import { restoreCarvedEdited } from "./regionCarveHistory.js";
 import { splitRegionFeature } from "./regionScissors.js";
 import { toolForHotkey } from "./editorToolHotkeys.js";
 import { useBrowserOnline } from "../runtime/networkStatus.js";
+import { alertDialog, hasOpenUiDialog } from "../runtime/uiDialog.js";
 import VectorLayer from "ol/layer/Vector";
 import VectorImageLayer from "ol/layer/VectorImage";
 import WebGLVectorLayer from "ol/layer/WebGLVector";
@@ -1426,6 +1427,7 @@ const OlMap = ({
     };
 
     const onKeyDown = (e) => {
+      if (hasOpenUiDialog()) return;
       const ae = document.activeElement;
       const typing = ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName);
       // Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl+Y redo
@@ -1438,7 +1440,9 @@ const OlMap = ({
           // map-maker meant, and there is no way back to the half-drawn shape.
           if (activeDrawRef.current && placedPointsRef.current.length > 0) {
             activeDrawRef.current.removeLastPoint();
-            placedPointsRef.current.pop();
+            // Scissors syncs placedPointsRef directly from sketchGeom's change event;
+            // popping here as well would remove two points for one undo key.
+            if (activeToolRef.current !== "scissors") placedPointsRef.current.pop();
             return;
           }
           doUndo();
@@ -1502,8 +1506,8 @@ const OlMap = ({
         if (e.key === "Backspace" && placedPointsRef.current.length) {
           e.preventDefault();
           if (placedPointsRef.current.length > 1) {
+            // sketchGeom's change listener (syncSketchPoints) synchronously updates placedPointsRef.
             activeDrawRef.current.removeLastPoint();
-            placedPointsRef.current.pop();
           } else {
             activeDrawRef.current.abortDrawing();
             placedPointsRef.current = [];
@@ -2429,7 +2433,7 @@ const OlMap = ({
         if (feats.length < 2) return;
         const cmd = mergeRegionFeatures(regionSource, feats);
         if (!cmd) {
-          window.alert(scenarioModeRef.current
+          void alertDialog(scenarioModeRef.current
             ? "These regions could not be merged. Borders are repaired when the map is saved into its scenario, so save the map and then try again."
             : "These regions could not be merged. Borders are repaired when the map is exported, so export the map and then try again.");
           return;
@@ -3502,28 +3506,40 @@ const OlMap = ({
         features: new Collection(), // preview only; never a canonical region
         condition: (event) => {
           const oe = event.originalEvent;
-          if (oe && (oe.ctrlKey || oe.metaKey || oe.altKey || oe.shiftKey)) return false;
-          placedPointsRef.current.push(event.coordinate);
-          return true;
+          return !(oe && (oe.ctrlKey || oe.metaKey || oe.altKey || oe.shiftKey));
         },
       });
       activeDrawRef.current = sketch;
-      sketch.on("drawstart", () => {
-        placedPointsRef.current = placedPointsRef.current.slice(-1);
-      });
-      sketch.on("drawabort", () => { placedPointsRef.current = []; });
-      sketch.on("drawend", (event) => {
+      let sketchGeom = null;
+      const syncSketchPoints = () => {
+        const coords = sketchGeom?.getCoordinates?.() || [];
+        // OpenLayers LineString sketch includes the trailing pointer coordinate;
+        // committed vertices are coords.slice(0, -1) (at least 1 once drawstart fires).
+        placedPointsRef.current = coords.length > 1 ? coords.slice(0, -1) : coords.slice(0, 1);
+      };
+      const detachSketch = () => {
+        sketchGeom?.un("change", syncSketchPoints);
+        sketchGeom = null;
         placedPointsRef.current = [];
+      };
+      sketch.on("drawstart", (event) => {
+        sketchGeom = event.feature?.getGeometry?.() || null;
+        syncSketchPoints();
+        sketchGeom?.on("change", syncSketchPoints);
+      });
+      sketch.on("drawabort", detachSketch);
+      sketch.on("drawend", (event) => {
+        detachSketch();
         const ids = [...selectedIdsRef.current];
         if (ids.length !== 1) {
-          window.alert("Scissors needs exactly one selected region. Select a region first, then draw a line across both of its borders.");
+          void alertDialog("Scissors needs exactly one selected region. Select a region first, then draw a line across both of its borders.");
           return;
         }
         const target = source.getFeatureById(ids[0]);
         const coordinates = event.feature.getGeometry()?.getCoordinates();
         const step = splitRegionFeature(source, target, coordinates, () => newId("reg"));
         if (!step) {
-          window.alert("The cut did not divide the selected region into two valid pieces. Draw a continuous line across it, from outside one border to outside the other. Nothing was changed.");
+          void alertDialog("The cut did not divide the selected region into two valid pieces. Draw a continuous line across it, from outside one border to outside the other. Nothing was changed.");
           return;
         }
         onSelectionRef.current?.([step.retainedId, step.createdId]);

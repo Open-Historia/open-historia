@@ -47,7 +47,7 @@ import { commitInstitutionLifecycleCommand } from "../../runtime/institutionLife
 import { getLibraryState } from "../../runtime/library.js";
 import { campaignChanged } from "../../runtime/campaignGuard.js";
 import { TURN_RUNNING_NOTE, assertNoTurnRunning, isSimulationBusy } from "../AI/simulationStatus.js";
-import { inSharedGame, requestFromHost, sharedAdvisorRefusal, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame, isSharedMultiplayerSession, requestFromHost, sharedAdvisorRefusal, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 
 Chart.register(...registerables);
 
@@ -1145,6 +1145,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const [isResizing, setIsResizing] = useState(false);
     const [handleHover, setHandleHover] = useState(false);
     const isMobile = useIsMobile();
+    const sharedSession = useSyncExternalStore(subscribeSharedGameRole, isSharedMultiplayerSession, () => false);
     // On a touch screen the 🗑 sits a thumb's width from the ✕, and one stray
     // tap would wipe the whole conversation, so there the first tap only asks
     // (the way deleting a chat does, chat.jsx). A mouse keeps the one click.
@@ -2299,7 +2300,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         speakerNameFor={speakerNameFor}
         emptyMessage={selectedGroup ? "No group conversation yet. Ask the participants a question to start." : selectedContact && advisorRecipientType(selectedContact) !== ADVISOR_RECIPIENT_TYPES.MINISTER ? "No messages yet. Start your conversation." : "No messages yet. Ask your advisor something!"}
         canExecute={activeThreadId === CHIEF_ADVISOR_THREAD}
-        canReviewPublicStatements={!recipientLocked && permitsPublicDraft(activeThreadId, selectedContact,{meetingMode:Boolean(selectedGroup),sharedGame:inSharedGame()})}
+        canReviewPublicStatements={!recipientLocked && permitsPublicDraft(activeThreadId, selectedContact, { meetingMode: Boolean(selectedGroup), sharedGame: sharedSession })}
         threadId={activeThreadId}
         canDraft={Boolean(selectedGroup) || activeThreadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(selectedContact) === ADVISOR_RECIPIENT_TYPES.MINISTER}
         canReviewActions={!recipientLocked && (Boolean(selectedGroup) || activeThreadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(selectedContact) === ADVISOR_RECIPIENT_TYPES.MINISTER)}

@@ -23,6 +23,7 @@ import {
   WorkspaceActions, WorkspaceHeading, WorkspaceMore, WorkspaceSearch,
   WorkspaceSelect, WorkspaceStats, WorkspaceEmpty, workspaceMuted, workspaceCard,
 } from "./EditorWorkspaceControls.jsx";
+import { confirmDialog } from "../runtime/uiDialog.js";
 
 // "All cities…" asks first from this many new cities on.
 const LARGE_CITY_IMPORT = 1000;
@@ -59,7 +60,7 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
     .filter(Boolean))].sort(), [features]);
   const coordinatesOf = (f) => {
     if (!Array.isArray(f.coord) || f.coord.length < 2 || !f.coord.slice(0, 2).every((n) => Number.isFinite(Number(n)))) return "Coordinates not set";
-    return `${Number(f.coord[0]).toFixed(3)}?, ${Number(f.coord[1]).toFixed(3)}?`;
+    return `${Number(f.coord[0]).toFixed(3)}°, ${Number(f.coord[1]).toFixed(3)}°`;
   };
 
   const update = (id, patch) => setFeatures((list) => list.map((f) => (f.id === id ? { ...f, ...patch } : f)));
@@ -101,24 +102,42 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
     if (!tag || !selectedCount) return;
     setFeatures((list) => list.map((f) => (selectedSet.has(String(f.id)) ? { ...f, tags: (f.tags || []).filter((t) => t !== tag) } : f)));
   };
-  const deleteSelected = () => {
-    if (!selectedCount) return;
-    if (!window.confirm(`Delete ${selectedCount} selected feature${selectedCount === 1 ? "" : "s"}?`)) return;
-    pushUndoStep(removeRowsStep(features, setFeatures, (f) => selectedSet.has(String(f.id))));
-    setSelection?.([]);
+  const confirmingRef = useRef(false);
+  const liveFeaturesRef = useRef({ features, selectedSet });
+  liveFeaturesRef.current = { features, selectedSet };
+
+  const deleteSelected = async () => {
+    if (!selectedCount || confirmingRef.current) return;
+    confirmingRef.current = true;
+    try {
+      if (!(await confirmDialog(`Delete ${selectedCount} selected feature${selectedCount === 1 ? "" : "s"}?`, { danger: true, confirmLabel: "Delete" }))) return;
+      const latest = liveFeaturesRef.current;
+      if (!latest.selectedSet.size) return;
+      pushUndoStep(removeRowsStep(latest.features, setFeatures, (f) => latest.selectedSet.has(String(f.id))));
+      setSelection?.([]);
+    } finally {
+      confirmingRef.current = false;
+    }
   };
   // Every city, base, port and landmark at once. It still asks first, but it is
   // one undo step now: the autosave writes the empty list two seconds later,
   // and Ctrl+Z or Undo writes them all back.
-  const deleteAll = () => {
+  const deleteAll = async () => {
     const n = features.length;
-    if (!n) return;
+    if (!n || confirmingRef.current) return;
     const question = n === 1
       ? "Delete the one city or map feature on this map? Undo brings it back."
       : `Delete all ${n} cities and map features on this map? Undo brings them back.`;
-    if (!window.confirm(question)) return;
-    pushUndoStep(removeRowsStep(features, setFeatures, () => true));
-    setSelection?.([]);
+    confirmingRef.current = true;
+    try {
+      if (!(await confirmDialog(question, { danger: true, confirmLabel: "Delete all" }))) return;
+      const latestFeatures = liveFeaturesRef.current.features;
+      if (!latestFeatures.length) return;
+      pushUndoStep(removeRowsStep(latestFeatures, setFeatures, () => true));
+      setSelection?.([]);
+    } finally {
+      confirmingRef.current = false;
+    }
   };
 
   // The city seed, merged like a file import. It says what it added, and says
@@ -138,7 +157,7 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
         const mb = (estimateJsonBytes(cities) * (added / cities.length)) / 1e6;
         const megabytes = mb < 10 ? mb.toFixed(1) : String(Math.round(mb));
         const question = `Add ${added.toLocaleString()} cities to this map? That is about ${megabytes} MB more in the map, its saves and the scenario, and so many cities can make the Workshop and the game slow, especially on phones.`;
-        if (!window.confirm(question)) return;
+        if (!(await confirmDialog(question))) return;
       }
       setFeatures((list) => mergeImportedFeatures(list, cities).features);
       setImportNote(

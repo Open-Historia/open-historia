@@ -45,11 +45,12 @@ export default function EditorWorkspaceNav({
       {EDITOR_WORKSPACES.map((workspace, index) => {
         const active = activeWorkspaceId === workspace.id;
         const items = shownItems(workspace);
+        const showSectionHeader = workspace.section && workspace.section !== EDITOR_WORKSPACES[index - 1]?.section;
         return (
           <div key={workspace.id}>
-            {(index === 0 || index === 1 || index === 7) && (
+            {showSectionHeader && (
               <div style={{ ...sectionLabel, padding: "10px 5px 7px", fontSize: 10 }}>
-                {index === 0 ? "Your world" : index === 1 ? "Edit the scenario" : "Finish & play"}
+                {workspace.section}
               </div>
             )}
             <button

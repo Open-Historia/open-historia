@@ -55,7 +55,6 @@ const buttonStyle = {
 
 const selectStyle = {
   background: "var(--oh-grey-raised)",
-  colorScheme: "dark",
   border: "1px solid var(--oh-grey-border)",
   borderRadius: "10px",
   color: "var(--oh-grey-text)",

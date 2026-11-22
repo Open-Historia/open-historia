@@ -100,3 +100,65 @@ test("N031 capital uses stable original city after a rename and keeps retired ma
  assert.equal(result.cityRenames.munich,"Munich-Crown");
  assert.deepEqual(result.countryStats.Germany.capitalMap.retired,["berlin"]);
 });
+
+test("N031 capital relocation away from a globally non-unique capital name (e.g. London) succeeds and frontCities normalizes Dissolved case", () => {
+  const homonymGeo = {
+    type: "FeatureCollection",
+    features: [
+      point("London", -0.1275, 51.5072, "primary", 8000),
+      point("London", -81.2453, 42.9849, "", 400),
+      point("Manchester", -2.2426, 53.4808, "", 1500),
+    ],
+  };
+  const ukRegions = [
+    ["london_uk", "United Kingdom", -0.1275, 51.5072],
+    ["manchester_uk", "United Kingdom", -2.2426, 53.4808],
+    ["london_ca", "Canada", -81.2453, 42.9849],
+  ].map(([id, country, x, y]) => ({ id, country, geometry: polygon(x, y) }));
+  const ukWorld = normalizeWorldState({
+    customRegions: true,
+    customCities: true,
+    polityOverrides: {
+      "United Kingdom": { code: "United Kingdom", name: "United Kingdom", status: "active" },
+      Canada: { code: "Canada", name: "Canada", status: "active" },
+    },
+    regionOwnershipOverrides: { london_uk: "United Kingdom", manchester_uk: "United Kingdom", london_ca: "Canada" },
+    countryStats: { "United Kingdom": { capital: "London", government: "Monarchy", economy: { gdp: 500 } } },
+  });
+  const ukCtx = buildLookupContext({
+    world: ukWorld,
+    regions: ukRegions,
+    cities: homonymGeo.features.map((f) => ({
+      name: f.properties.city,
+      aliases: [],
+      coordinates: f.geometry.coordinates,
+      capital: f.properties.capital,
+      population: f.properties.population,
+    })),
+  });
+  const moveBeat = normalizeScriptedEvents([{
+    id: "uk-move",
+    date,
+    text: "Seat moves to Manchester.",
+    impactRows: [{ type: "relocate_capital", polity: "United Kingdom", cityId: capitalCityId("Manchester", [-2.2426, 53.4808]), cityName: "Manchester" }],
+  }])[0];
+  const reqs = prepareNativeScriptedOutcomes([moveBeat], ukWorld, { regionCatalog: ukRegions, cityContext: ukCtx });
+  assert.equal(reqs.length, 1);
+  assert.deepEqual(reqs[0].retired, ["London"]);
+
+  const dissolvedWorld = {
+    ...ukWorld,
+    polityOverrides: {
+      ...ukWorld.polityOverrides,
+      "United Kingdom": { ...ukWorld.polityOverrides["United Kingdom"], status: "Dissolved" },
+    },
+    countryStats: {
+      "United Kingdom": {
+        capital: "Manchester",
+        capitalMap: { current: { id: capitalCityId("Manchester", [-2.2426, 53.4808]), baseName: "Manchester", regionId: "manchester_uk" } },
+      },
+    },
+  };
+  const cities = frontCitiesOf(homonymGeo, dissolvedWorld, { gameDate: date });
+  assert.equal(cities.find((c) => c.name === "Manchester").capital, false);
+});

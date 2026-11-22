@@ -71,3 +71,10 @@ test("recovery refuses missing, truncated or altered data before any map replace
     payload:{...before,regions:null},reason:"import",save:async()=>({id:"x"}),load:async()=>before,
   }),/complete recoverable/);
 });
+
+test("recovery verification ignores undefined-valued keys stripped by JSON serialization", () => {
+  const before = original();
+  before.flags = { A: undefined };
+  const after = JSON.parse(JSON.stringify(before));
+  assert.equal(verifyRecoverySnapshot(before, after), true);
+});

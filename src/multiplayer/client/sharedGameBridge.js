@@ -7,6 +7,7 @@
 // when a shared game opens.
 
 import { remoteRuntimeActive } from "./remoteRuntime.js";
+import { hostingSharedGame } from "../../runtime/humanPolities.js";
 import { baseForRecord } from "./roundBase.js";
 import { playedCountriesOf, rosterOf, sameRoster } from "./seatRoster.js";
 
@@ -15,6 +16,12 @@ let role = ""; // "host" | "guest" | "" (no shared game)
 const roleListeners = new Set();
 
 export const inSharedGame = () => remoteRuntimeActive();
+
+// Canonical shared-multiplayer session predicate covering guests (remoteRuntimeActive),
+// registered lobby roles (host/guest), and the host's active engine window.
+export const isSharedMultiplayerSession = () => (
+  remoteRuntimeActive() || Boolean(role) || hostingSharedGame()
+);
 
 // Said on the window when a round the host resolved has reached this page: its
 // events are in the page's documents, none of them shown yet. The time controls

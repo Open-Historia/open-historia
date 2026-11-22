@@ -11,6 +11,7 @@ import {
   WorkspaceActions, WorkspaceEmpty, WorkspaceHeading, WorkspaceMore, WorkspaceSearch,
   WorkspaceSelect, WorkspaceStats, workspaceCard, workspaceMuted, workspaceRow,
 } from "./EditorWorkspaceControls.jsx";
+import { confirmDialog } from "../runtime/uiDialog.js";
 
 const clean = (v) => String(v ?? "").trim();
 const ordered = (values) => [...values].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
@@ -67,10 +68,10 @@ const RegionsPanel = ({ api, polities = {}, types = [], groups = {}, selection =
     if (!event.shiftKey) anchor.current = id;
     if (!additive && !event.shiftKey) api?.zoomToRegion?.(id);
   };
-  const apply = (patch, label) => {
+  const apply = async (patch, label) => {
     const ids = selectedRows.map((r) => r.id);
     if (!ids.length || !api?.setRegionAttrs) return;
-    if (ids.length > 1 && !window.confirm(`Change ${label} for ${ids.length.toLocaleString()} selected regions? This modifies their starting map state.`)) return;
+    if (ids.length > 1 && !(await confirmDialog(`Change ${label} for ${ids.length.toLocaleString()} selected regions? This modifies their starting map state.`))) return;
     api.setRegionAttrs(ids, patch);
     setNote(`Updated ${label} for ${ids.length.toLocaleString()} region${ids.length === 1 ? "" : "s"}. Undo restores the previous values.`);
   };

@@ -2,7 +2,7 @@
  * Open Historia Map Editor V2 — configure a whole country before registration.
  * The draft stays local. Every live map/document write occurs on final Create.
  */
-import { useId, useRef, useState } from "react";
+import { useId, useState } from "react";
 import Panel from "./Panel.jsx";
 import MilitaryFields from "./MilitaryFields.jsx";
 import { ColorField, rgbToHex } from "./fields.jsx";
@@ -13,6 +13,7 @@ import { TAG_SUGGESTIONS, MAX_TAGS } from "../runtime/countryTags.js";
 import { PUPPET_KIND_OPTIONS, PUPPET_SECRECY_OPTIONS } from "./scenarioPuppets.js";
 import { emptyCountryDraft, planCountryDraft } from "./countryCreationDraft.js";
 import StartingRelationsFields from "./StartingRelationsFields.jsx";
+import { confirmDialog } from "../runtime/uiDialog.js";
 
 const TABS = [
   { id: "identity", label: "Identity" },
@@ -30,14 +31,14 @@ const label = { display: "grid", gap: 5, fontSize: 12, fontWeight: 650 };
 const hint = { color: "var(--oh-ui-muted, rgba(255,255,255,0.67))", fontSize: 11, lineHeight: 1.5 };
 const nameOf = (value) => String(value ?? "").trim();
 
-function NameListEditor({ title, items = [], onChange, placeholder, suggestions, maxCount }) {
-  const [candidate, setCandidate] = useState("");
-  const inputRef = useRef(null);
+function NameListEditor({ title, items = [], onChange, placeholder, suggestions, maxCount, candidate: controlledCandidate, onCandidateChange }) {
+  const [uncontrolledCandidate, setUncontrolledCandidate] = useState("");
+  const candidate = controlledCandidate !== undefined ? controlledCandidate : uncontrolledCandidate;
+  const setCandidate = onCandidateChange || setUncontrolledCandidate;
   const suggestionId = useId();
   const add = () => {
-    const text = nameOf(inputRef.current?.value ?? candidate);
+    const text = nameOf(candidate);
     if (!text || (maxCount && items.length >= maxCount)) return;
-    if (inputRef.current) inputRef.current.value = "";
     onChange([...items, text]);
     setCandidate("");
   };
@@ -64,13 +65,11 @@ function NameListEditor({ title, items = [], onChange, placeholder, suggestions,
       )}
       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
         <input
-          ref={inputRef}
           aria-label={title}
           value={candidate}
           list={suggestions ? suggestionId : undefined}
           onChange={(event) => setCandidate(event.target.value)}
           onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); add(); } }}
-          onBlur={add}
           placeholder={placeholder}
           style={{ ...inputStyle, flex: 1, minWidth: 0 }}
         />
@@ -95,6 +94,7 @@ export default function CountryCreationForm({
   onCreate, onOpenFlagPicker, onCancel,
 }) {
   const [draft, setDraft] = useState(emptyCountryDraft);
+  const [pendingInputs, setPendingInputs] = useState({ aliases: "", formerNames: "", tags: "" });
   const [tab, setTab] = useState("identity");
   const [error, setError] = useState("");
   const patch = (key, value) => {
@@ -102,16 +102,17 @@ export default function CountryCreationForm({
     setError("");
   };
   const plan = planCountryDraft({ draft, polities, occupiedKeys, puppets, polityChoices });
-  const cancel = () => {
+  const cancel = async () => {
     const touched = draft.name.trim() || draft.aliases.length || draft.formerNames.length ||
       draft.note.trim() || draft.population.trim() || draft.military || draft.color || draft.flag ||
-      draft.tags.length || draft.overlord || draft.assignSelectedRegions || draft.startingRelations.length;
-    if (touched && !window.confirm("Discard this unfinished polity? No polity has been created.")) return;
+      draft.tags.length || draft.overlord || draft.assignSelectedRegions || draft.startingRelations.length ||
+      pendingInputs.aliases.trim() || pendingInputs.formerNames.trim() || pendingInputs.tags.trim();
+    if (touched && !(await confirmDialog("Discard this unfinished polity? No polity has been created."))) return;
     onCancel?.();
   };
-  const create = () => {
+  const create = async () => {
     if (!plan.ok) { setError(plan.reason); return; }
-    const result = onCreate?.(draft);
+    const result = await onCreate?.(draft);
     if (result && result.ok === false) setError(result.reason);
   };
   const index = TABS.findIndex((item) => item.id === tab);
@@ -150,9 +151,13 @@ export default function CountryCreationForm({
           </label>
           <span style={hint}>This becomes the polity's registered name. Renaming later will not automatically create an alternative name.</span>
           <NameListEditor title="Alternative names" items={draft.aliases}
+            candidate={pendingInputs.aliases}
+            onCandidateChange={(value) => setPendingInputs((prev) => ({ ...prev, aliases: value }))}
             onChange={(next) => patch("aliases", next)} placeholder="Another name for the same polity" />
           <span style={hint}>Alternative names help the game recognize the same polity. They do not change its government, history or ideology.</span>
           <NameListEditor title="Former names" items={draft.formerNames}
+            candidate={pendingInputs.formerNames}
+            onCandidateChange={(value) => setPendingInputs((prev) => ({ ...prev, formerNames: value }))}
             onChange={(next) => patch("formerNames", next)} placeholder="Older name, if applicable" />
           <span style={hint}>Only add former names supported by the scenario you're building. The editor does not invent historical transitions.</span>
           <label style={label}>
@@ -195,6 +200,8 @@ export default function CountryCreationForm({
           </div>
           <span style={hint}>Uploading a new flag also stores it in My flags, even if you cancel this polity setup.</span>
           <NameListEditor title={`Polity traits (max ${MAX_TAGS})`} items={draft.tags}
+            candidate={pendingInputs.tags}
+            onCandidateChange={(value) => setPendingInputs((prev) => ({ ...prev, tags: value }))}
             onChange={(next) => patch("tags", next)} maxCount={MAX_TAGS}
             placeholder="e.g. democratic" suggestions={TAG_SUGGESTIONS} />
           <span style={hint}>These tags describe the polity's starting character. Its government and political actors are configured in the Scenario Editor.</span>
@@ -269,7 +276,7 @@ export default function CountryCreationForm({
                 <span>Give this new polity the {selectionCount.toLocaleString()} regions currently selected on the map.</span>
               </label>
             ) : <span style={hint}>No regions selected. The new polity can start without land. Assign or paint its territory afterwards.</span>}
-            <span style={hint}>Territory assignment may change other polities' borders and cannot always be undone with the map Undo button. It needs separate confirmation.</span>
+            <span style={hint}>Territory assignment may change other polities' borders and requires confirmation. Creating the polity and assigning its territory becomes one map Undo step.</span>
           </div>
         </section>
       )}

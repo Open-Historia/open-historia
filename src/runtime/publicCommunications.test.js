@@ -137,3 +137,49 @@ test("N035 uses one authority boundary for domestic minister drafts, not chief-o
  for(const options of [{sharedGame:true},{meetingMode:true},{discussionOnly:true}])assert.equal(permitsPublicDraft(contact.id,contact,options),false);
  assert.equal(permitsPublicDraft("chief",contact),false);
 });
+
+test("assertPublicStatementsRetained tolerates non-array input and unclosed publicstatement fence reports problem when not streaming", () => {
+  assert.doesNotThrow(() => assertPublicStatementsRetained(null, []));
+  assert.doesNotThrow(() => assertPublicStatementsRetained(undefined, undefined));
+  const published = publish();
+  assert.doesNotThrow(() => assertPublicStatementsRetained(published.events, [], { allowedRemovedIds: [published.events[0].id] }));
+
+  const unclosed = "Draft below.\n\n```publicstatement\n[{\"title\":\"Cut off\"";
+  const finished = parseAdvisorReply(unclosed, { streaming: false });
+  assert.equal(finished.publicDrafts, null);
+  assert.equal(finished.text, "Draft below.");
+  assert.ok(finished.publicProblems.some((p) => /cut off/i.test(p)));
+  const midStream = parseAdvisorReply(unclosed, { streaming: true });
+  assert.equal(midStream.publicProblems.length, 0);
+
+  // Prose mentioning the fence token inline (not as an opening fence line) stays intact.
+  const prose = "Use ```publicstatement blocks only when proposing a speech.";
+  assert.equal(parseAdvisorReply(prose, { streaming: false }).text, prose);
+
+  // Build >16 posts (using valid Rostra p<N> IDs) so only genuine relevance matches can promote an old post above the 16-post recency cap.
+  const oldRailway = { id: "p1", kind: "voice", author: "A", country: "Bulgaria", text: "Railways expand fast across the frontier", date: "1912-01-01", round: 1 };
+  const oldCjk = { id: "p2", kind: "voice", author: "B", country: "Japan", text: "東京の鉄道計画が承認された", date: "1912-01-02", round: 1 };
+  const filler = Array.from({ length: 18 }, (_, index) => ({
+    id: `p${index + 10}`,
+    kind: "voice",
+    author: `Speaker ${index}`,
+    country: "Iran",
+    text: `Harvest ledger entry number ${index}`,
+    date: game.gameDate,
+    round: 9,
+  }));
+  const bigFeed = [oldRailway, oldCjk, ...filler];
+
+  // Querying a JSON key ("date") must NOT boost irrelevant old posts ahead of recent posts.
+  const dateCtx = advisorRostraContext({ feed: bigFeed, round: 9, query: "date", enabled: true });
+  assert.doesNotMatch(dateCtx, /"id":"p1"/);
+  assert.doesNotMatch(dateCtx, /"id":"p2"/);
+
+  // Singular/plural prefix matching promotes the old railway post; CJK substring & unspaced sentence queries promote the old Tokyo post.
+  const railCtx = advisorRostraContext({ feed: bigFeed, round: 9, query: "railway", enabled: true });
+  assert.match(railCtx, /"id":"p1"/);
+  const cjkCtx = advisorRostraContext({ feed: bigFeed, round: 9, query: "東京", enabled: true });
+  assert.match(cjkCtx, /"id":"p2"/);
+  const cjkSentenceCtx = advisorRostraContext({ feed: bigFeed, round: 9, query: "東京の鉄道計画について教えて", enabled: true });
+  assert.match(cjkSentenceCtx, /"id":"p2"/);
+});

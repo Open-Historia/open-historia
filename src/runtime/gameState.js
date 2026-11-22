@@ -5016,7 +5016,7 @@ const buildCanonicalTurnPayload = ({
     ? dedupeEventLog(eventLog, { keyOf: eventCanonicalKey })
     : dedupeEventLog(eventLog);
   assertInteractiveTranscriptsRetained(eventLog, normalizedEvents);
-  assertPublicStatementsRetained(events, normalizedEvents);
+  assertPublicStatementsRetained(eventLog, normalizedEvents);
   enqueueEventStrings(normalizedEvents);
 
   return {

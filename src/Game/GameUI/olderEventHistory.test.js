@@ -101,3 +101,32 @@ test("N030: grouped completed pages do not re-stage or intervene across independ
   assert.match(source, /const needsStaging = !latestTurnRecord\?\.sceneAppendCount && revealNeedsStaging/);
   assert.match(source, /canIntervene={!latestTurnRecord\?\.sceneAppendCount && canInterveneTurn/);
 });
+
+test("N030: grouping a same-day scene onto a preceding jump preserves the jump mode, summary, plannedActions, and receipt", () => {
+  const jump = {
+    mode: "jump",
+    round: 5,
+    fromDate: "1912-01-01",
+    toDate: "1912-01-31",
+    summary: "Winter mobilization",
+    plannedActions: [{ id: "a1", text: "Mobilize" }],
+    receipt: { accepted: 2 },
+    eventIds: ["e1"],
+  };
+  const scene = {
+    mode: "interactive",
+    round: 6,
+    fromDate: "1912-01-31",
+    toDate: "1912-01-31",
+    summary: "Cabinet meeting",
+    plannedActions: [],
+    eventIds: ["scene1"],
+  };
+  const grouped = projectTimelineHistory([scene, jump]);
+  assert.equal(grouped.length, 1);
+  assert.equal(grouped[0].mode, "jump");
+  assert.equal(grouped[0].summary, "Winter mobilization");
+  assert.deepEqual(grouped[0].plannedActions, jump.plannedActions);
+  assert.deepEqual(grouped[0].receipt, jump.receipt);
+  assert.deepEqual(grouped[0].eventIds, ["e1", "scene1"]);
+});

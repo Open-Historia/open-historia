@@ -70,7 +70,13 @@ test("GDP drift and identical Stats refresh preserve exact loan stock and residu
   world.countryStats[owner]=mergeFinanceAwareCountryStat(world,owner,{economy:{publicDebt:90}});
   assert.equal(world.projectFinanceDebt[0].otherMinor,Math.round(90*world.countryStats[owner].economy.gdp)-principal);
   assert.equal(world.countryStats[owner].economy.publicDebt,90);
-  assert.throws(()=>applyCountryStatPatchToWorld(world,owner,{economy:{publicDebt:0}}),/below recorded/);
+  // An external estimate below recorded native principal floors residual other-debt
+  // to 0 instead of crashing the turn, preserving exact native loan principal.
+  const floored=applyCountryStatPatchToWorld(world,owner,{economy:{publicDebt:0}});
+  assert.equal(world.projectFinanceDebt[0].otherMinor,0);
+  assert.equal(floored.economy.publicDebt,principal/floored.economy.gdp);
+  // Restore higher aggregate debt before testing GDP-only refresh below.
+  world.countryStats[owner]=mergeFinanceAwareCountryStat(world,owner,{economy:{publicDebt:90}});
   const old=world.projectFinanceDebt[0].otherMinor;
   world.countryStats[owner]={...world.countryStats[owner],economy:{...world.countryStats[owner].economy,gdp:3_000_000_000}};
   refreshFinanceDebtRatios(world);
@@ -113,4 +119,91 @@ test("unallocated cash, explicit allocation/release and principal return use exi
   assert.equal(outstanding(returned,g.gameDate).outstandingMinor,90_000_000);
   assert.equal(returned.projectFinanceDebt[0].otherMinor,w.projectFinanceDebt[0].otherMinor);
   assert.equal(returned.countryStats[owner].economy.publicDebt,87-10_000_000/sheet.economy.gdp);
+});
+
+test("booking an earlier-dated agreement or draw after a time-skip tick never throws out-of-order receipt", () => {
+  const w = funded();
+  const afterSkip = advanceProjectsInWorld({
+    baseWorld: w,
+    world: w,
+    fromDate: game.gameDate,
+    toDate: "1912-02-20",
+    host: owner,
+    round: 10,
+  }).world;
+  const olderEvent = {
+    id: "earlier-signed",
+    title: "Earlier loan agreement",
+    date: "1912-02-12",
+    description: "An agreement from during the period.",
+    playerRelated: true,
+    agency: { principal: owner },
+  };
+  const nextGame = { ...game, gameDate: "1912-02-20", round: 10 };
+  const booked = book(afterSkip, {
+    ...receipt,
+    ...source(olderEvent),
+    maturity: "1913-02-20",
+  }, nextGame, [event, later, olderEvent]);
+  const newFacility = booked.projectFinance.receipts.find((r) => r.sourceEventId === olderEvent.id);
+  assert.ok(newFacility);
+  assert.equal(newFacility.date, "1912-02-20");
+  const drawn = book(booked, {
+    type: "draw",
+    ...source(olderEvent),
+    facilityId: newFacility.facilityId,
+    projectId: rail,
+    supplierId: null,
+    originalMinor: 7_000_000_000,
+    amountMinor: 100_000_000,
+    debtTreatment: "additional",
+  }, nextGame, [event, later, olderEvent]);
+  assert.equal(projectFinanceSnapshot(drawn.projectFinance, "1912-02-20").length, 2);
+});
+
+test("large economies above $90T aggregate debt reconcile without Number.MAX_SAFE_INTEGER overflow", () => {
+  const hugeWorld = normalizeWorldState({
+    polityOverrides: { [owner]: { code: owner, name: owner }, [lender]: { code: lender, name: lender } },
+    countryStats: { [owner]: { stability: 50, economy: { gdp: 50_000_000_000_000, gdpGrowth: 0, publicDebt: 250, budgetBalance: 0 } } },
+    projects: fixture().projects,
+  });
+  const signed = book(hugeWorld, receipt);
+  const drawn = book(signed, draw(signed, { debtTreatment: "alreadyIncluded" }));
+  assert.equal(typeof drawn.projectFinanceDebt[0].otherMinor, "string");
+  const reloaded = normalizeWorldState(JSON.parse(JSON.stringify(drawn)));
+  assert.equal(reloaded.countryStats[owner].economy.publicDebt, 250);
+  const patched = applyCountryStatPatchToWorld(reloaded, owner, { economy: { publicDebt: 260 } });
+  assert.ok(Math.abs(patched.economy.publicDebt - 260) < 1e-6);
+});
+
+test("stock-map polities and active institutions can be selected as lenders and partial rename stays safe", () => {
+  const stockWorld = normalizeWorldState({
+    polityOverrides: { [owner]: { code: owner, name: owner } },
+    countryStats: { [owner]: sheet },
+    institutions: { byId: { imf: { id: "imf", name: "International Monetary Fund", status: "active" } } },
+    projects: fixture().projects,
+  });
+  const stockBooked = book(stockWorld, { ...receipt, lenderId: "France" });
+  assert.equal(stockBooked.projectFinance.receipts[0].lenderId, "France");
+  const instBooked = book(stockWorld, { ...receipt, lenderKind: "institution", lenderId: "imf" });
+  assert.equal(instBooked.projectFinance.receipts[0].lenderKind, "institution");
+  assert.equal(instBooked.projectFinance.receipts[0].lenderId, "imf");
+  const partialWorld = { ...stockBooked };
+  delete partialWorld.projectFinanceDebt;
+  assert.doesNotThrow(() => renamePolityInWorld(partialWorld, owner, "Bulgarian Kingdom"));
+});
+
+test("custom-map polities present only in regionOwnershipOverrides are selectable and accepted as lenders", async () => {
+  const { financeLenderOptions } = await import("./projectFinanceWorld.js");
+  const customWorld = normalizeWorldState({
+    customRegions: true,
+    polityOverrides: { [owner]: { code: owner, name: owner, status: "active" } },
+    regionOwnershipOverrides: { r1: owner, r2: "LandOnlyRepublic" },
+    countryStats: { [owner]: sheet },
+    projects: fixture().projects,
+  });
+  const options = financeLenderOptions(customWorld, owner);
+  assert.equal(options.polities.some((row) => row.id === "LandOnlyRepublic"), true);
+  const booked = book(customWorld, { ...receipt, lenderId: "LandOnlyRepublic" });
+  assert.equal(booked.projectFinance.receipts[0].lenderId, "LandOnlyRepublic");
 });

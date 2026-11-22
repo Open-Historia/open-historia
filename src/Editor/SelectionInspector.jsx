@@ -33,6 +33,7 @@ import { militaryScaleOf } from "./militaryForm.js";
 import { MAX_REACH } from "./fitToImage.js";
 import { nameKey } from "../../server/nameKey.js";
 import { planCountryCreation } from "./countryCreationPlan.js";
+import { alertDialog } from "../runtime/uiDialog.js";
 
 const commonOr = (arr, blank = "") => {
   if (!arr.length) return blank;
@@ -167,7 +168,7 @@ const FitToBackground = ({ api, selection, regionEpoch }) => {
 // (warGeographyDoc.js), offered for a selection that is all water.
 // militaryDefaults: what an empty military field stands for in this scenario
 // (militaryForm.js militaryDefaultsFor), or null for a map opened on its own.
-const SelectionInspector = ({ api, selection, types, colors, colorOverrides, setColorOverride, flags, setFlag, onOpenFlagPicker, tags, setTags, setSelection, polities = {}, upsertPolity, regionEpoch = 0, onOpenPolities, groups = {}, onOpenGroups, onCopyToClipboard = null, freezingRegions = [], onSetFreezing = null, militaryDefaults = null }) => {
+const SelectionInspector = ({ api, selection, types, colors, colorOverrides, setColorOverride, flags, setFlag, onOpenFlagPicker, tags, setTags, setSelection, polities = {}, upsertPolity, commitCountryDraft = null, regionEpoch = 0, onOpenPolities, groups = {}, onOpenGroups, onCopyToClipboard = null, freezingRegions = [], onSetFreezing = null, militaryDefaults = null }) => {
   const summaries = useMemo(
     () => (api ? selection.map((id) => api.getRegionSummary(id)).filter(Boolean) : []),
     [api, selection, regionEpoch],
@@ -254,10 +255,24 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
     if (key === null) {
       const plan = planCountryCreation({ name: draftText, polities, occupiedKeys: countryNames });
       if (!plan.ok) {
-        window.alert(plan.reason);
+        void alertDialog(plan.reason);
         return;
       }
-      upsertPolity?.(plan.key, { name: plan.key, code: plan.key, aliases: [], status: "active", note: "" });
+      const record = { name: plan.key, code: plan.key, aliases: [], status: "active", note: "" };
+      if (typeof commitCountryDraft === "function") {
+        const result = commitCountryDraft(
+          { ok: true, key: plan.key, record, assignSelectedRegions: selection.length > 0 },
+          selection,
+        );
+        if (result?.ok === false) {
+          void alertDialog(result.reason || "Could not create polity.");
+          return;
+        }
+        setOwnerDraft(null);
+        setForm((f) => ({ ...f, owner: plan.key }));
+        return;
+      }
+      upsertPolity?.(plan.key, record);
       setOwner(plan.key);
       return;
     }

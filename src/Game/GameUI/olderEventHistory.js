@@ -50,7 +50,9 @@ export const projectTimelineHistory = (history) => {
             && Number.isInteger(previousRound) && previousRound > 0 && round === previousRound + 1
             && (["jump", "auto", "interactive"].includes(earlier.mode))) {
             pages[pages.length - 1] = {
-                ...entry,
+                ...earlier,
+                date: entry?.date || earlier.date,
+                toDate: entry?.toDate || earlier.toDate,
                 round: earlier.round,
                 latestCommitRound: round,
                 sceneAppendCount: (earlier.sceneAppendCount || 0) + 1,

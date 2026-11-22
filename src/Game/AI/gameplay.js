@@ -635,6 +635,7 @@ import {
   commitScriptedEventPlan,
   normalizeScriptedEventState,
   planScriptedEvents,
+  replanAfterSkippedScriptedBeats,
 } from "./scriptedEventResolution.js";
 import {
   buildScriptedImpactsInstruction,
@@ -646,6 +647,7 @@ import {
 import {
   hasNativeScriptedOutcomes,
   hasNativeCapitalOutcomes,
+  partitionPreparedNativeScriptedOutcomes,
   prepareNativeScriptedOutcomes,
   bindNativeScriptedOutcomes,
   verifyNativeScriptedRecords,
@@ -9431,7 +9433,10 @@ const applySimulationResult = async ({
       ...(Array.isArray(result.seatAdvice)
         ? { seatAdvice: mergeSeatAdvice(baseWorld?.seatAdvice, result.seatAdvice, { people: humanCountriesOf(baseGame), round: nextGame.round }) }
         : null),
-      ...(nextPublicStatementCursor(priorEvents,baseWorld,result.mode,nextGame.round)!==undefined?{publicStatementCursor:nextPublicStatementCursor(priorEvents,baseWorld,result.mode,nextGame.round)}:{}),
+      ...(() => {
+        const cursor = nextPublicStatementCursor(priorEvents, baseWorld, result.mode, nextGame.round);
+        return cursor !== undefined ? { publicStatementCursor: cursor } : {};
+      })(),
       lastJumpMode: normalizeString(result.mode),
       lastJumpSummary: normalizeString(result.summary),
       lastJumpTargetDate: nextGame.gameDate,
@@ -17507,7 +17512,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       );
       // A retry of the player's failed events (retryHeldPlayerEvents) writes no
       // scripted beat: the period's were decided by the answer it adds to.
-      const scriptedPlan = context.amend
+      let scriptedPlan = context.amend
         ? { eligible: [], pendingState: state.scriptedEventPending }
         : planScriptedEvents(authoredScriptedBeats, {
           world: ledgerWorld,
@@ -17525,17 +17530,83 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // that day, and left out when found: a telling in another language was
       // never found, and a different event that shared a few names dropped the
       // beat and its author's impacts with it.
-      const scriptedBeats = scriptedPlan.eligible;
+      const initialScriptedBeats = scriptedPlan.eligible;
+      const initialNativeOutcomes = hasNativeScriptedOutcomes(initialScriptedBeats);
+      const scriptedRegionCatalog = initialNativeOutcomes
+        ? filterToRenderedRegions(await loadRegionCatalog().catch(() => []), ledgerWorld) : [];
+      const scriptedCityContext = hasNativeCapitalOutcomes(initialScriptedBeats)
+        ? await lazyLookupContext({ ...bundle, world: ledgerWorld })() : null;
+      const markInapplicableScriptedBeats = (skippedEntries, { throughDate = "" } = {}) => {
+        const throughKey = throughDate ? dateKey(throughDate) : null;
+        const activeSkipped = throughKey === null
+          ? skippedEntries
+          : skippedEntries.filter((entry) => {
+            const k = dateKey(entry?.beat?.date);
+            return k === null || k <= throughKey;
+          });
+        if (!activeSkipped.length) return;
+        const skippedMap = new Map(activeSkipped.map((entry) => [entry.beat.id, entry.reason]));
+        for (const entry of activeSkipped) {
+          console.warn(`[OH scripted outcomes] Skipping inapplicable beat "${entry.beat.title || entry.beat.id}" (${entry.beat.date}): ${entry.reason}`);
+        }
+        if (Array.isArray(scriptedPlan.resolutions)) {
+          scriptedPlan.resolutions = scriptedPlan.resolutions.map((resolution) => (
+            skippedMap.has(resolution?.event?.id)
+              ? { ...resolution, outcome: "skipped", reason: skippedMap.get(resolution.event.id) }
+              : resolution
+          ));
+        }
+        if (state.scriptedEventPending && typeof state.scriptedEventPending === "object") {
+          for (const [beatId, reason] of skippedMap.entries()) {
+            if (state.scriptedEventPending[beatId]) {
+              state.scriptedEventPending[beatId] = { ...state.scriptedEventPending[beatId], outcome: "skipped", reason };
+            }
+          }
+        }
+      };
+      let scriptedBeats = initialScriptedBeats;
+      let fixedNativeRequirements = [];
+      let preSkippedNativeBeats = [];
+      let reconciledPrePlan = null;
+      if (initialNativeOutcomes) {
+        // Partition against ledgerWorld before prompting in BOTH jump and auto modes so
+        // the AI is never prompted to narrate an already-inapplicable native beat,
+        // fallback is not needlessly blocked, and same-segment scripted_event_fired
+        // chains re-evaluate cleanly without mutating state before acceptance.
+        const partitioned = partitionPreparedNativeScriptedOutcomes(initialScriptedBeats, ledgerWorld, {
+          regionCatalog: scriptedRegionCatalog,
+          cityContext: scriptedCityContext,
+        });
+        fixedNativeRequirements = partitioned.requirements;
+        scriptedBeats = partitioned.eligibleBeats;
+        preSkippedNativeBeats = partitioned.skippedBeats;
+        if (preSkippedNativeBeats.length && !context.amend) {
+          reconciledPrePlan = replanAfterSkippedScriptedBeats(
+            authoredScriptedBeats,
+            scriptedPlan,
+            preSkippedNativeBeats,
+            {
+              world: ledgerWorld,
+              resolvedState: state.scriptedEventState,
+              playerPolities: humanCountriesOf(bundle.game),
+            },
+          );
+          if (mode !== "auto") {
+            scriptedPlan = reconciledPrePlan;
+          }
+          const reconciledPartition = partitionPreparedNativeScriptedOutcomes(reconciledPrePlan.eligible, ledgerWorld, {
+            regionCatalog: scriptedRegionCatalog,
+            cityContext: scriptedCityContext,
+          });
+          fixedNativeRequirements = reconciledPartition.requirements;
+          scriptedBeats = reconciledPartition.eligibleBeats;
+          preSkippedNativeBeats = [...preSkippedNativeBeats, ...reconciledPartition.skippedBeats];
+        }
+      }
       const scriptedPoliticalRequirements = scriptedPoliticalImpactRequirements(scriptedBeats);
       const scriptedPoliticalInstruction = buildScriptedPoliticalImpactInstruction(scriptedPoliticalRequirements, { world: ledgerWorld });
       const authoredNativeOutcomes = hasNativeScriptedOutcomes(scriptedBeats);
       state.structuralScriptedFallbackBlocked = scriptedPoliticalRequirements.length > 0 || authoredNativeOutcomes;
-      const scriptedRegionCatalog = authoredNativeOutcomes
-        ? filterToRenderedRegions(await loadRegionCatalog().catch(() => []), ledgerWorld) : [];
-      const scriptedCityContext = hasNativeCapitalOutcomes(scriptedBeats)
-        ? await lazyLookupContext({...bundle,world:ledgerWorld})() : null;
-      const fixedNativeRequirements = authoredNativeOutcomes && mode !== "auto"
-        ? prepareNativeScriptedOutcomes(scriptedBeats, ledgerWorld, {regionCatalog:scriptedRegionCatalog,cityContext:scriptedCityContext}) : [];
       const [pacedMin, pacedMax] = segmentCount > 1
         ? segmentEventRange(spanDays, plannedActionShare, { pace: direction?.eventPace, totalDays: safeDays })
         : segmentEventRange(safeDays, plannedActionCount, { pace: direction?.eventPace });
@@ -17624,6 +17695,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // into the turn's receipt. A rejected attempt's drops never reach the record.
       let segmentDraft = null;
       let segmentNativeOutcomes = [];
+      let acceptedSkippedNativeBeats = preSkippedNativeBeats;
       const segmentComplaints = [];
 
       // A folded skip's own additions (see "The folded time skip" above). The
@@ -17761,6 +17833,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // look "first" and leak strict feedback out as the fallback reason).
           const strict = !finalAttempt;
           let boundNativeOutcomes = [];
+          let attemptSkippedNativeBeats = preSkippedNativeBeats;
           // A retry's events are new events in a period whose first answer used
           // the same temporary ids (segment-1-event-1) and maybe the same ids of
           // the model's own: each gets a prefix of its own, before anything is
@@ -17858,7 +17931,24 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // the events that tell them are marked, and the tempo leaves them be.
           if (scriptedBeats.length) {
             const stopKey = mode === "auto" ? dateKey(candidate?.stopDate) : null;
-            const due = stopKey === null ? scriptedBeats : scriptedBeats.filter((beat) => dateKey(beat.date) <= stopKey);
+            const candidateDue = stopKey === null ? scriptedBeats : scriptedBeats.filter((beat) => dateKey(beat.date) <= stopKey);
+            let due = candidateDue;
+            let requirements = fixedNativeRequirements;
+            if (authoredNativeOutcomes && mode === "auto") {
+              try {
+                // Partition before inserting scripted events or binding political
+                // claims so inapplicable beats are never force-inserted into
+                // candidate.events without their native effects, and defer state
+                // mutation until after this segment is accepted.
+                const partitioned = partitionPreparedNativeScriptedOutcomes(candidateDue, ledgerWorld, {
+                  regionCatalog: scriptedRegionCatalog,
+                  cityContext: scriptedCityContext,
+                });
+                requirements = partitioned.requirements;
+                due = partitioned.eligibleBeats;
+                attemptSkippedNativeBeats = [...preSkippedNativeBeats, ...partitioned.skippedBeats];
+              } catch (error) { return error.message; }
+            }
             const scripted = ensureScriptedEventsWithImpacts(candidate?.events, due, { language: scriptedLanguage });
             if (scripted.inserted.length) {
               candidate.events = scripted.events;
@@ -17880,9 +17970,6 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             bindScriptedPoliticalClaims(scriptedEventsCarryingImpacts(candidate.events), scriptedPoliticalImpactRequirements(due));
             if (authoredNativeOutcomes) {
               try {
-                const requirements = mode === "auto"
-                  ? prepareNativeScriptedOutcomes(due, ledgerWorld, {regionCatalog:scriptedRegionCatalog,cityContext:scriptedCityContext})
-                  : fixedNativeRequirements;
                 boundNativeOutcomes = bindNativeScriptedOutcomes(candidate, due, requirements, ledgerWorld);
                 sortTimelineEventsChronologically(candidate);
               } catch (error) { return error.message; }
@@ -17957,7 +18044,10 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             gameCountry: bundle.game.country,
             board: normalizeArray(bundle.world?.projects),
           });
-          if (!storylineError) segmentNativeOutcomes = boundNativeOutcomes;
+          if (!storylineError) {
+            segmentNativeOutcomes = boundNativeOutcomes;
+            acceptedSkippedNativeBeats = attemptSkippedNativeBeats;
+          }
           return storylineError;
         }, {
           onAccepted: (draft) => { segmentDraft = draft; },
@@ -18003,6 +18093,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // (The skip asked again keeps its request: requestBudget.js keepForRefusedSkip.)
           keepForRefusedSkip(state.requests?.budget);
           segmentDraft = null;
+          segmentNativeOutcomes = [];
+          acceptedSkippedNativeBeats = preSkippedNativeBeats;
           segmentComplaints.length = 0;
           statuses.length = 0;
           answer = await askSegment(false);
@@ -18051,6 +18143,33 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // accepted. A held/rejected attempt persists nothing; its ephemeral plan
       // remains on `state` so Retry sees the same Chance roll and condition result.
       const scriptedStopDate = normalizeString(payload?.stopDate) || segmentTarget;
+      markInapplicableScriptedBeats(acceptedSkippedNativeBeats, { throughDate: scriptedStopDate });
+      if (mode === "auto" && acceptedSkippedNativeBeats.length) {
+        const throughKey = dateKey(scriptedStopDate);
+        const skippedThroughStop = throughKey === null
+          ? acceptedSkippedNativeBeats
+          : acceptedSkippedNativeBeats.filter((entry) => {
+            const k = dateKey(entry?.beat?.date);
+            return k === null || k <= throughKey;
+          });
+        if (skippedThroughStop.length && !context.amend) {
+          const sameAsPreSkipped = reconciledPrePlan
+            && skippedThroughStop.length === preSkippedNativeBeats.length
+            && skippedThroughStop.every((entry, idx) => entry?.beat?.id === preSkippedNativeBeats[idx]?.beat?.id);
+          scriptedPlan = sameAsPreSkipped
+            ? reconciledPrePlan
+            : replanAfterSkippedScriptedBeats(
+              authoredScriptedBeats,
+              scriptedPlan,
+              skippedThroughStop,
+              {
+                world: ledgerWorld,
+                resolvedState: state.scriptedEventState,
+                playerPolities: humanCountriesOf(bundle.game),
+              },
+            );
+        }
+      }
       const scriptedCommit = commitScriptedEventPlan(state.scriptedEventState, scriptedPlan, {
         throughDate: scriptedStopDate,
       });

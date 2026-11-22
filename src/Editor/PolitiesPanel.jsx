@@ -25,6 +25,7 @@ import CountryDetailsNavigation from "./CountryDetailsNavigation.jsx";
 import { rateMilitaryFigures } from "../Game/AI/militaryRating.js";
 import { militaryScaleOf } from "./militaryForm.js";
 import { rosterRowKey } from "./polityRoster.js";
+import { confirmDialog } from "../runtime/uiDialog.js";
 
 const clean = (value) => String(value ?? "").trim();
 
@@ -174,12 +175,13 @@ const PolitiesPanel = ({
 
   useEffect(() => {
     // A composite Undo can remove or rename the currently focused country.
-    // Do not keep editing a phantom country whose stable key no longer exists.
-    if (selectedKey && !rows.some((row) => row.key === selectedKey)) {
+    // Check against unfiltered polityChoices so typing a search query never
+    // deselects the currently focused country.
+    if (selectedKey && !polityChoices.some((row) => row.key === selectedKey)) {
       setSelectedKey("");
       setCountryListOpen(true);
     }
-  }, [rows, selectedKey]);
+  }, [polityChoices, selectedKey]);
 
   const current = selectedKey
     ? rows.find((row) => row.key === selectedKey) || {
@@ -219,11 +221,20 @@ const PolitiesPanel = ({
     setTransferFrom("");
   }, [current?.key, current?.name]);
 
+  const confirmingRef = useRef(false);
+  const livePolitiesRef = useRef({
+    polities, usage, puppets, polityChoices, relations, relationEdits, selection, api, commitCountryDraft,
+  });
+  livePolitiesRef.current = {
+    polities, usage, puppets, polityChoices, relations, relationEdits, selection, api, commitCountryDraft,
+  };
+
   // The country-creation form is an entirely local draft. Revalidate on the
   // final click against CURRENT canonical identities, not an earlier preview.
   // No map or scenario mutation is attempted before validation and consent.
-  const createPolity = (draft) => {
-    const plan = planCountryDraft({
+  const createPolity = async (draft) => {
+    if (confirmingRef.current) return { ok: false, reason: "Finish the open confirmation dialog first." };
+    let plan = planCountryDraft({
       draft, polities, occupiedKeys: [...usage.keys()], puppets, polityChoices,
     });
     if (!plan.ok) return plan;
@@ -242,17 +253,44 @@ const PolitiesPanel = ({
       const oldOwnerText = owners.length
         ? ` This changes the current ownership of regions belonging to: ${owners.join(", ")}.`
         : "";
-      const ok = window.confirm(
-        `Create "${plan.key}" and assign ${selection.length.toLocaleString()} selected regions?` +
-        oldOwnerText +
-        "\n\nCreating the country and assigning its territory becomes ONE Undo step.",
-      );
+      confirmingRef.current = true;
+      let ok = false;
+      try {
+        ok = await confirmDialog(
+          `Create "${plan.key}" and assign ${selection.length.toLocaleString()} selected regions?` +
+          oldOwnerText +
+          "\n\nCreating the country and assigning its territory becomes ONE Undo step.",
+        );
+      } finally {
+        confirmingRef.current = false;
+      }
       if (!ok) return { ok: false, reason: "Creation cancelled. The unfinished polity has not been added." };
+    }
+
+    // Revalidate against live state after any async confirmation so concurrent
+    // edits (e.g. puppets or selection) are never overwritten by a stale plan.
+    const live = livePolitiesRef.current;
+    plan = planCountryDraft({
+      draft,
+      polities: live.polities,
+      occupiedKeys: [...live.usage.keys()],
+      puppets: live.puppets,
+      polityChoices: live.polityChoices,
+    });
+    if (!plan.ok) return plan;
+    const liveRelations = applyStartingRelationEdits(
+      live.relations,
+      [...live.relationEdits, ...plan.relationEdits],
+      [...live.polityChoices, { key: plan.key }],
+    );
+    if (!liveRelations.ok) return liveRelations;
+    if (plan.assignSelectedRegions && (!live.selection.length || typeof live.api?.setRegionAttrs !== "function")) {
+      return { ok: false, reason: "Select regions on the map before assigning starting territory." };
     }
 
     // All canonical document metadata and selected region ownership are
     // committed together, then registered as one native Undo/Redo command.
-    const created = commitCountryDraft(plan, plan.assignSelectedRegions ? selection : []);
+    const created = live.commitCountryDraft(plan, plan.assignSelectedRegions ? live.selection : []);
     if (!created?.ok) return { ok: false, reason: created?.reason || "Country creation was refused." };
     setRefreshNonce((count) => count + 1);
     setSelectedKey(plan.key);
@@ -280,7 +318,8 @@ const PolitiesPanel = ({
     });
   };
 
-  const removeManyFromMap = () => {
+  const removeManyFromMap = async () => {
+    if (confirmingRef.current) return;
     const targets = selectedBulkRows;
     if (!targets.length) return;
     const keys = targets.map((row) => row.key);
@@ -290,18 +329,24 @@ const PolitiesPanel = ({
       regionCount ? `${regionCount.toLocaleString()} owned region(s) become unowned` : "",
       claimCount ? `${claimCount.toLocaleString()} territorial claim(s) are removed` : "",
     ].filter(Boolean).join(" and ");
-    const ok = window.confirm(
-      `Delete ${targets.length.toLocaleString()} selected countries?` +
-      `${consequences ? `\n\n${consequences}.` : ""}` +
-      "\n\nTheir country records, colours, flags and tags will also be deleted.",
-    );
-    if (!ok) return;
-    api?.removeOwners?.(keys);
-    if (removePolities) removePolities(keys);
-    else keys.forEach((key) => removePolity?.(key));
-    if (keys.includes(selectedKey)) setSelectedKey("");
-    setBulkSelected(new Set());
-    setRefreshNonce((n) => n + 1);
+    confirmingRef.current = true;
+    try {
+      const ok = await confirmDialog(
+        `Delete ${targets.length.toLocaleString()} selected countries?` +
+        `${consequences ? `\n\n${consequences}.` : ""}` +
+        "\n\nTheir country records, colours, flags and tags will also be deleted.",
+        { danger: true, confirmLabel: "Delete" },
+      );
+      if (!ok) return;
+      api?.removeOwners?.(keys);
+      if (removePolities) removePolities(keys);
+      else keys.forEach((key) => removePolity?.(key));
+      setSelectedKey((prev) => (keys.includes(prev) ? "" : prev));
+      setBulkSelected(new Set());
+      setRefreshNonce((n) => n + 1);
+    } finally {
+      confirmingRef.current = false;
+    }
   };
 
   // Removing a polity is a map operation: its regions become unowned, the
@@ -310,19 +355,27 @@ const PolitiesPanel = ({
   // keyed to it, so the polity came straight back. The confirm counts come from
   // the usage scan the list already holds: no map serialisation, and the
   // selection is left alone until the author says yes.
-  const removeFromMap = () => {
-    if (!current?.key) return;
+  const removeFromMap = async () => {
+    if (confirmingRef.current || !current?.key) return;
     const key = current.key;
     const summary = [
       current.regionCount ? `${current.regionCount} region(s) become unowned` : "",
       current.claimantCount ? `${current.claimantCount} claim(s) are dropped` : "",
     ].filter(Boolean).join(" and ");
-    if (!window.confirm(`Remove “${current.name}” from the map?${summary ? ` ${summary};` : ""} its colour, flag and tags go with it.`)) return;
-    api?.removeOwners?.([key]);
-    removePolity?.(key);
-    setBulkSelected((previous) => { const next = new Set(previous); next.delete(key); return next; });
-    setSelectedKey("");
-    setRefreshNonce((n) => n + 1);
+    confirmingRef.current = true;
+    try {
+      if (!(await confirmDialog(
+        `Remove “${current.name}” from the map?${summary ? ` ${summary};` : ""} its colour, flag and tags go with it.`,
+        { danger: true, confirmLabel: "Remove" },
+      ))) return;
+      api?.removeOwners?.([key]);
+      removePolity?.(key);
+      setBulkSelected((previous) => { const next = new Set(previous); next.delete(key); return next; });
+      setSelectedKey("");
+      setRefreshNonce((n) => n + 1);
+    } finally {
+      confirmingRef.current = false;
+    }
   };
 
   const assignSelection = () => {
@@ -331,24 +384,29 @@ const PolitiesPanel = ({
     setRefreshNonce((n) => n + 1);
   };
 
-  const transferAll = () => {
-    if (!current?.key || !transferFrom || transferFrom === current.key) return;
+  const transferAll = async () => {
+    if (confirmingRef.current || !current?.key || !transferFrom || transferFrom === current.key) return;
     const regionCount = usage.get(transferFrom)?.regionCount || 0;
     if (!regionCount) return;
     const sourceName = clean(polities?.[transferFrom]?.name) || transferFrom;
-    const ok = window.confirm(
-      `Transfer all ${regionCount.toLocaleString()} regions from "${sourceName}" to "${current.name}"?\n\n` +
-      `"${sourceName}" will have no territory, but its country record will remain available to edit.\n\n` +
-      "This change may not be reversible using the map Undo button.",
-    );
-    if (!ok) return;
-    const ids = api?.selectOwner?.(transferFrom, { zoom: false }) || [];
-    if (!ids.length) return;
-    api?.setRegionAttrs?.(ids, { owner: current.key });
-    setRefreshNonce((n) => n + 1);
-    // Keep an explicit source polity record if one exists. Scenario authors may
-    // want a landless government/exile/remnant; deletion must be deliberate.
-    setTransferFrom("");
+    confirmingRef.current = true;
+    try {
+      const ok = await confirmDialog(
+        `Transfer all ${regionCount.toLocaleString()} regions from "${sourceName}" to "${current.name}"?\n\n` +
+        `"${sourceName}" will have no territory, but its country record will remain available to edit.\n\n` +
+        "Undo restores the previous region ownership.",
+      );
+      if (!ok) return;
+      const ids = api?.selectOwner?.(transferFrom, { zoom: false }) || [];
+      if (!ids.length) return;
+      api?.setRegionAttrs?.(ids, { owner: current.key });
+      setRefreshNonce((n) => n + 1);
+      // Keep an explicit source polity record if one exists. Scenario authors may
+      // want a landless government/exile/remnant; deletion must be deliberate.
+      setTransferFrom("");
+    } finally {
+      confirmingRef.current = false;
+    }
   };
 
   const readRosterFile = async (file) => {
@@ -406,36 +464,42 @@ const PolitiesPanel = ({
     }
   };
 
-  const applyRoster = () => {
-    if (!rosterPreview?.rows?.length || !importPolityRoster) return;
-    const count = rosterPreview.rows.length;
-    const ok = window.confirm(
-      `Import / merge ${count.toLocaleString()} polity records?\n\n` +
-      "Stable keys already present will be updated in place. Territory ownership is NOT changed.",
-    );
-    if (!ok) return;
+  const applyRoster = async () => {
+    if (confirmingRef.current || !rosterPreview?.rows?.length || !importPolityRoster) return;
+    const rowsToImport = rosterPreview.rows;
+    const count = rowsToImport.length;
+    confirmingRef.current = true;
+    try {
+      const ok = await confirmDialog(
+        `Import / merge ${count.toLocaleString()} polity records?\n\n` +
+        "Stable keys already present will be updated in place. Territory ownership is NOT changed.",
+      );
+      if (!ok) return;
 
-    const summary = importPolityRoster(rosterPreview.rows);
-    if (!summary?.count) {
-      setRosterMessage("The roster contained no usable polity records.", "error");
-      return;
+      const summary = importPolityRoster(rowsToImport);
+      if (!summary?.count) {
+        setRosterMessage("The roster contained no usable polity records.", "error");
+        return;
+      }
+
+      setRefreshNonce((n) => n + 1);
+      setSelectedKey(summary.firstKey || "");
+      setRosterMessage(
+        `Imported ${summary.count.toLocaleString()} polities: ` +
+        `${summary.created.toLocaleString()} new, ${summary.updated.toLocaleString()} updated` +
+        `${summary.colors ? ` · ${summary.colors.toLocaleString()} colours` : ""}` +
+        `${summary.tags ? ` · ${summary.tags.toLocaleString()} tag sets` : ""}` +
+        `${summary.flags ? ` · ${summary.flags.toLocaleString()} flags` : ""}.`,
+        "ok",
+      );
+      setRosterPreview(null);
+    } finally {
+      confirmingRef.current = false;
     }
-
-    setRefreshNonce((n) => n + 1);
-    setSelectedKey(summary.firstKey || "");
-    setRosterMessage(
-      `Imported ${summary.count.toLocaleString()} polities: ` +
-      `${summary.created.toLocaleString()} new, ${summary.updated.toLocaleString()} updated` +
-      `${summary.colors ? ` · ${summary.colors.toLocaleString()} colours` : ""}` +
-      `${summary.tags ? ` · ${summary.tags.toLocaleString()} tag sets` : ""}` +
-      `${summary.flags ? ` · ${summary.flags.toLocaleString()} flags` : ""}.`,
-      "ok",
-    );
-    setRosterPreview(null);
   };
 
-  const fillMissingStandardFlags = () => {
-    if (!importPolityRoster) return;
+  const fillMissingStandardFlags = async () => {
+    if (confirmingRef.current || !importPolityRoster) return;
 
     const keys = new Set([...Object.keys(polities || {}), ...usage.keys()]);
     const importRows = [];
@@ -484,21 +548,26 @@ const PolitiesPanel = ({
       return;
     }
 
-    const ok = window.confirm(
-      `Store ${importRows.length.toLocaleString()} built-in standard flags in this scenario?\n\n` +
-      "Only polities that currently have NO scenario flag are included. Existing custom/historical flags will not be overwritten.",
-    );
-    if (!ok) return;
+    confirmingRef.current = true;
+    try {
+      const ok = await confirmDialog(
+        `Store ${importRows.length.toLocaleString()} built-in standard flags in this scenario?\n\n` +
+        "Only polities that currently have NO scenario flag are included. Existing custom/historical flags will not be overwritten.",
+      );
+      if (!ok) return;
 
-    const summary = importPolityRoster(importRows);
-    setRefreshNonce((n) => n + 1);
-    setRosterMessage(
-      `Added ${Number(summary?.flags || importRows.length).toLocaleString()} standard flags to the scenario` +
-      (alreadyFlagged ? ` · ${alreadyFlagged.toLocaleString()} existing flags preserved` : "") +
-      (unresolved ? ` · ${unresolved.toLocaleString()} unresolved/ambiguous polities skipped` : "") +
-      ".",
-      "ok",
-    );
+      const summary = importPolityRoster(importRows);
+      setRefreshNonce((n) => n + 1);
+      setRosterMessage(
+        `Added ${Number(summary?.flags || importRows.length).toLocaleString()} standard flags to the scenario` +
+        (alreadyFlagged ? ` · ${alreadyFlagged.toLocaleString()} existing flags preserved` : "") +
+        (unresolved ? ` · ${unresolved.toLocaleString()} unresolved/ambiguous polities skipped` : "") +
+        ".",
+        "ok",
+      );
+    } finally {
+      confirmingRef.current = false;
+    }
   };
 
   if (creating) {

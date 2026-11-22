@@ -81,10 +81,19 @@ export const validateStartingRelationEdit = (edit, keys) => {
   return { ok: true, edit: checked };
 };
 
+let nextRelationEditSeq = 1;
+const attachEditId = (row, existingId = "") => {
+  if (!isRow(row)) return row;
+  const id = existingId || (typeof row._editId === "string" && row._editId) || `rel-edit-${nextRelationEditSeq++}`;
+  const out = { ...row };
+  Object.defineProperty(out, "_editId", { value: id, enumerable: false, configurable: true });
+  return out;
+};
+
 export const mergeStartingRelationEdit = (previous, edit) => {
   const rows = Array.isArray(previous) ? previous : [];
   const pair = relationPairKey(edit.a, edit.b);
-  return [...rows.filter((row) => relationPairKey(row.a, row.b) !== pair), edit];
+  return [...rows.filter((row) => relationPairKey(row.a, row.b) !== pair), attachEditId(edit)];
 };
 
 export const applyStartingRelationEdits = (source, changes, choices) => {
@@ -153,13 +162,15 @@ export const planStartingRelationDraft = (entries, newPolityKey, choices) => {
   return { ok: true, edits };
 };
 
-export const rekeyStartingRelations = (rows, from, to) => (Array.isArray(rows) ? rows.map((row) => (
-  !isRow(row) ? row : {
+export const rekeyStartingRelations = (rows, from, to) => (Array.isArray(rows) ? rows.map((row) => {
+  if (!isRow(row)) return row;
+  const next = {
     ...row,
     a: folded(row.a) === folded(from) ? to : row.a,
     b: folded(row.b) === folded(from) ? to : row.b,
-  }
-)) : []);
+  };
+  return typeof row._editId === "string" && row._editId ? attachEditId(next, row._editId) : next;
+}) : []);
 
 export const withoutStartingRelations = (rows, removed, choices = []) => {
   const keys = new Set((Array.isArray(removed) ? removed : [removed]).map(folded));
@@ -184,16 +195,51 @@ export const settleStartingRelationEdits = (document, savedEdits) => {
   const choices = Object.entries(document?.polities || {}).map(([key, record]) => ({
     ...(isRow(record) ? record : {}), key,
   }));
-  const applied = applyStartingRelationEdits(document?.relations, saved, choices);
+  const known = knownPolityKeys(choices);
+  const pending = Array.isArray(document?.relationEdits) ? document.relationEdits : [];
+  const pendingById = new Map(pending.filter((entry) => entry?._editId).map((entry) => [entry._editId, entry]));
+  const renames = Array.isArray(document?.polityRenames) ? document.polityRenames : [];
+  const resolveEndpoint = (raw) => {
+    let value = clean(raw);
+    if (!known.has(value)) {
+      // Workshop renames strip formerNames/old aliases and record { from, to }
+      // in document.polityRenames; replay them when an in-flight endpoint no
+      // longer matches a current polity key.
+      for (const rename of renames) {
+        if (rename?.from && rename?.to && folded(value) === folded(rename.from)) {
+          value = clean(rename.to);
+        }
+      }
+    }
+    const resolved = endpointOf(value, choices);
+    return resolved.candidates.length === 1 ? resolved.key : value;
+  };
+  // If a polity was renamed while the scenario write was in flight, prefer the
+  // already-rekeyed pending edit with the same _editId, otherwise replay
+  // document.polityRenames and fall back to polity aliases/formerNames.
+  const rebasedSaved = saved.map((entry) => {
+    if (!isRow(entry)) return entry;
+    const matchedPending = entry._editId ? pendingById.get(entry._editId) : null;
+    if (matchedPending && known.has(clean(matchedPending.a)) && known.has(clean(matchedPending.b))) {
+      const a = clean(matchedPending.a);
+      const b = clean(matchedPending.b);
+      return a === entry.a && b === entry.b ? entry : attachEditId({ ...entry, a, b }, entry._editId);
+    }
+    const a = resolveEndpoint(entry.a);
+    const b = resolveEndpoint(entry.b);
+    return a === entry.a && b === entry.b ? entry : attachEditId({ ...entry, a, b }, entry._editId);
+  });
+  const applied = applyStartingRelationEdits(document?.relations, rebasedSaved, choices);
   if (!applied.ok) return applied;
   const writtenObjects = new Set(saved);
+  const writtenIds = new Set(saved.map((entry) => entry?._editId).filter(Boolean));
   return {
     ok: true,
     document: {
       ...document,
       relations: applied.relations,
-      relationEdits: (Array.isArray(document.relationEdits) ? document.relationEdits : [])
-        .filter((entry) => !writtenObjects.has(entry)),
+      relationEdits: pending
+        .filter((entry) => !writtenObjects.has(entry) && !(entry?._editId && writtenIds.has(entry._editId))),
     },
   };
 };

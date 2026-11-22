@@ -12,6 +12,7 @@ import Icon from "./Icon.jsx";
 import { pillButton } from "./editorStyles.js";
 import { describeClipboard, formatCopiedDay } from "./regionClipboard.js";
 import { WorkspaceEmpty, WorkspaceHeading, WorkspaceStats, workspaceCard, workspaceMuted } from "./EditorWorkspaceControls.jsx";
+import { confirmDialog } from "../runtime/uiDialog.js";
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -38,7 +39,7 @@ const ClipboardPanel = ({ clipboard, selectionCount = 0, result = null, simplify
         summary ? (
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12 }}>
             <span style={{ color: "rgba(255,255,255,0.5)" }}>{plural(summary.count, "region")} from {summary.source}</span>
-            <button type="button" onClick={() => { if (window.confirm("Clear the copied regions from the cross-map clipboard? This does not delete map regions.")) onClear?.(); }} style={{ ...pillButton(false), color: "#f87171" }}>Clear clipboard</button>
+            <button type="button" onClick={async () => { if (await confirmDialog("Clear the copied regions from the cross-map clipboard? This does not delete map regions.", { danger: true, confirmLabel: "Clear" })) onClear?.(); }} style={{ ...pillButton(false), color: "#f87171" }}>Clear clipboard</button>
           </div>
         ) : null
       }

@@ -171,10 +171,35 @@ export const evaluateScriptedEventCondition = (conditionInput, world = {}, { scr
   case "polity_player_controlled":
   case "polity_not_player_controlled": {
     const target = resolveScriptedPolityIdentity(world, condition.polityId);
-    const seats = Array.isArray(playerPolities) ? playerPolities.map(id => resolveScriptedPolityIdentity(world,id)) : [];
-    if (!target || !seats.length || seats.some(id => !id)) return { matched:false, reason:"player or target polity identity unavailable" };
-    const controlled = seats.includes(target);
-    return { matched:type === "polity_player_controlled" ? controlled : !controlled, reason:"" };
+    const rawSeats = Array.isArray(playerPolities) ? playerPolities : [];
+    if (!target || !rawSeats.length) {
+      return { matched: false, reason: "player or target polity identity unavailable" };
+    }
+    const activeSeats = [];
+    for (const rawSeat of rawSeats) {
+      const active = resolveScriptedPolityIdentity(world, rawSeat);
+      if (active) {
+        activeSeats.push(active);
+        continue;
+      }
+      // Distinguish a known dissolved human seat (which no longer controls any
+      // country and must not break evaluation for surviving countries in MP)
+      // from an unknown or ambiguous identity (which fails closed).
+      const dissolvedCheck = resolvePolityIdentity(rawSeat, world, {
+        allowUnknown: false,
+        requireActive: false,
+        allowStockBase: !world?.customRegions,
+      });
+      const isKnownDissolved = Boolean(
+        dissolvedCheck.resolved
+        && lower(world?.polityOverrides?.[dissolvedCheck.resolved]?.status) === "dissolved",
+      );
+      if (!isKnownDissolved) {
+        return { matched: false, reason: "player or target polity identity unavailable" };
+      }
+    }
+    const controlled = activeSeats.includes(target);
+    return { matched: type === "polity_player_controlled" ? controlled : !controlled, reason: "" };
   }
   case "political_actor_exists": {
     if (!text(condition.polityId)) return { matched: false, reason: "missing polity id" };
@@ -464,6 +489,70 @@ export const planScriptedEvents = (eventsInput, {
   }
 
   return { eligible, resolutions, pendingState: pending };
+};
+
+const referencedScriptedEventIds = (event) => {
+  const conditions = array(event?.trigger?.conditions);
+  const refs = [];
+  for (const cond of conditions) {
+    const type = lower(cond?.type);
+    if (type === "scripted_event_fired" || type === "scripted_event_skipped") {
+      const targetId = text(cond?.eventId);
+      if (targetId) refs.push(targetId);
+    }
+  }
+  return refs;
+};
+
+// When native outcome validation skips one or more beats in the current segment
+// due to world-state drift, re-evaluate any same-segment beats whose conditions
+// depend on scripted_event_fired / scripted_event_skipped for those beats while
+// preserving all unrelated cached pending rolls.
+export const replanAfterSkippedScriptedBeats = (eventsInput, plan, skippedEntries, {
+  world = {},
+  resolvedState = {},
+  playerPolities = null,
+  random = Math.random,
+} = {}) => {
+  const skipped = array(skippedEntries);
+  if (!skipped.length) return plan;
+  const skippedMap = new Map(
+    skipped
+      .map((entry) => [text(entry?.beat?.id), text(entry?.reason)])
+      .filter(([id]) => Boolean(id)),
+  );
+  if (!skippedMap.size) return plan;
+
+  const events = array(eventsInput);
+  const nextPending = { ...record(plan?.pendingState) };
+  for (const [beatId, reason] of skippedMap.entries()) {
+    nextPending[beatId] = { ...record(nextPending[beatId]), outcome: "skipped", reason };
+  }
+
+  // Propagate through multi-hop chains so dependent beats re-evaluate against
+  // the skipped outcome without rerolling independent Chance beats.
+  const dirty = new Set(skippedMap.keys());
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const event of events) {
+      const id = text(event?.id);
+      if (!id || dirty.has(id)) continue;
+      if (referencedScriptedEventIds(event).some((refId) => dirty.has(refId))) {
+        delete nextPending[id];
+        dirty.add(id);
+        changed = true;
+      }
+    }
+  }
+
+  return planScriptedEvents(events, {
+    world,
+    resolvedState,
+    pendingState: nextPending,
+    playerPolities,
+    random,
+  });
 };
 
 export const commitScriptedEventPlan = (resolvedState, plan, { throughDate = "" } = {}) => {

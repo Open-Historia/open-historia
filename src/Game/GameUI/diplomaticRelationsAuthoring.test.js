@@ -36,6 +36,6 @@ test("N022 scenario Politics manager loads latest scenario and writes only relat
  assert.match(library,/editorSection === "politics" && kind === "scenario"[\s\S]*?<DiplomaticRelationsAuthoringPanel/);
  assert.match(panel,/Manage Diplomatic Relations/);assert.match(panel,/Search relationships/);assert.match(panel,/Filter by polity/);
  assert.match(panel,/loadScenarioDetails\(scenarioId\)/);
- assert.match(panel,/worldPatch:\{relations:plan\.relations\}/);
+  assert.match(panel, /worldPatch:\s*\{\s*relations:\s*plan\.relations\s*\}/);
  assert.match(panel,/planReviewedStartingRelationEdit/);
 });

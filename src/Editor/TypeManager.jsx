@@ -16,13 +16,14 @@
 // so. The official editor's Show To Default Prompt has no reader in the game,
 // so it is not offered here; a type keeps whatever value it had.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Panel from "./Panel.jsx";
 import Icon from "./Icon.jsx";
 import { pillButton } from "./editorStyles.js";
 import { Row, NumberField, TextField, ColorField, Toggle } from "./fields.jsx";
 import { isWaterType, MAX_REGION_TYPES } from "../runtime/regionTypes.js";
 import { canCreateRegionType, filterRegionTypes, regionTypeDeletionReason, uniqueRegionTypeId } from "./regionTypeManagement.js";
+import { confirmDialog } from "../runtime/uiDialog.js";
 import { WorkspaceEmpty, WorkspaceHeading, WorkspaceSearch, WorkspaceSelect, WorkspaceStats, WorkspaceTabs, workspaceCard, workspaceMuted } from "./EditorWorkspaceControls.jsx";
 
 const newType = (id) => ({
@@ -71,14 +72,27 @@ const TypeManager = ({ types, setTypes, usage = {}, onClose }) => {
     setDraftName(""); setQuery(""); setScope("all");
     setNotice("Created a new region type. Assign it to regions separately.");
   };
-  const remove = (id) => {
+  const confirmingRef = useRef(false);
+  const liveTypesRef = useRef({ types, usage });
+  liveTypesRef.current = { types, usage };
+
+  const remove = async (id) => {
+    if (confirmingRef.current) return;
     const reason = regionTypeDeletionReason(types, usage, id);
     if (reason) { setNotice(reason); return; }
     const name = types.find((t) => t.id === id)?.name || id;
-    if (!window.confirm("Delete unused region type " + name + "? This does not delete regions.")) return;
-    setTypes((list) => list.filter((t) => t.id !== id));
-    setExpanded(new Set());
-    setNotice("Deleted unused type " + name + ".");
+    confirmingRef.current = true;
+    try {
+      if (!(await confirmDialog(`Delete unused region type ${name}? This does not delete regions.`, { danger: true, confirmLabel: "Delete" }))) return;
+      const latest = liveTypesRef.current;
+      const latestReason = regionTypeDeletionReason(latest.types, latest.usage, id);
+      if (latestReason) { setNotice(latestReason); return; }
+      setTypes((list) => list.filter((t) => t.id !== id));
+      setExpanded(new Set());
+      setNotice("Deleted unused type " + name + ".");
+    } finally {
+      confirmingRef.current = false;
+    }
   };
   const toggleExpand = (id) => {
     setExpanded((s) => s.has(id) ? new Set() : new Set([id]));
@@ -167,6 +181,12 @@ const TypeManager = ({ types, setTypes, usage = {}, onClose }) => {
                     {t.overrideColor && <ColorField value={t.overrideColor} onChange={(v) => update(t.id, { overrideColor: v })} />}
                   </span>
                 </Row>
+                <Row label="Zoom Min / Max" title="Type is hidden outside this zoom range">
+                  <span style={{ display: "flex", gap: 4 }}>
+                    <NumberField value={t.zoomSettings?.[0]?.minZoom ?? 0} step={1} min={0} max={24} width={52} onChange={(v) => updateZoom(t.id, { minZoom: v })} />
+                    <NumberField value={t.zoomSettings?.[0]?.maxZoom ?? 24} step={1} min={0} max={24} width={52} onChange={(v) => updateZoom(t.id, { maxZoom: v })} />
+                  </span>
+                </Row>
                 </>}
                 {tab === "gameplay" && <>
                 <WorkspaceHeading title="Native gameplay rules" detail="Movement, accessibility and map-water behavior."/>
@@ -186,23 +206,23 @@ const TypeManager = ({ types, setTypes, usage = {}, onClose }) => {
                   <Toggle value={t.includedInLabels} onChange={(v) => update(t.id, { includedInLabels: v })} />
                 </Row>
                 </>}
-                {tab === "appearance" && <>
-                <Row label="Zoom Min / Max" title="Type is hidden outside this zoom range">
-                  <span style={{ display: "flex", gap: 4 }}>
-                    <NumberField value={t.zoomSettings?.[0]?.minZoom ?? 0} step={1} min={0} max={24} width={52} onChange={(v) => updateZoom(t.id, { minZoom: v })} />
-                    <NumberField value={t.zoomSettings?.[0]?.maxZoom ?? 24} step={1} min={0} max={24} width={52} onChange={(v) => updateZoom(t.id, { maxZoom: v })} />
-                  </span>
-                </Row>
-                </>}
-                {regionTypeDeletionReason(types, usage, t.id) && <div style={workspaceMuted}>
-                  {regionTypeDeletionReason(types, usage, t.id)}
-                </div>}
-                <button type="button" onClick={() => remove(t.id)}
-                  disabled={Boolean(regionTypeDeletionReason(types, usage, t.id))}
-                  title={regionTypeDeletionReason(types, usage, t.id) || "Delete unused type"}
-                  style={{ ...pillButton(false), color: "#f87171", marginTop: 4, display: "flex", alignItems: "center", gap: 5, justifyContent: "center", opacity: regionTypeDeletionReason(types, usage, t.id) ? .45 : 1 }}>
-                  <Icon name="trash" size={13} /> Delete unused type
-                </button>
+                {(() => {
+                  const deletionReason = regionTypeDeletionReason(types, usage, t.id);
+                  return (
+                    <>
+                      {deletionReason && <div style={workspaceMuted}>{deletionReason}</div>}
+                      <button
+                        type="button"
+                        onClick={() => remove(t.id)}
+                        disabled={Boolean(deletionReason)}
+                        title={deletionReason || "Delete unused type"}
+                        style={{ ...pillButton(false), color: "#f87171", marginTop: 4, display: "flex", alignItems: "center", gap: 5, justifyContent: "center", opacity: deletionReason ? 0.45 : 1 }}
+                      >
+                        <Icon name="trash" size={13} /> Delete unused type
+                      </button>
+                    </>
+                  );
+                })()}
               </div>
             )}
           </div>

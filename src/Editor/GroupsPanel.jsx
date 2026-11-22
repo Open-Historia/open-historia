@@ -2,7 +2,7 @@
  * Open Historia Map Editor - non-sovereign group management workspace.
  * Native world.groups / groupAreas remain distinct from sovereign ownership.
  */
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Panel from "./Panel.jsx";
 import { inputStyle, labelDim, pillButton } from "./editorStyles.js";
 import { groupRowsForWorkspace } from "./editorWorkspaceFilters.js";
@@ -20,6 +20,7 @@ import { groupEraseSteps, groupRenameSteps } from "./documentUndo.js";
 import MilitaryFields from "./MilitaryFields.jsx";
 import { rateMilitaryFigures } from "../Game/AI/militaryRating.js";
 import { militaryScaleOf } from "./militaryForm.js";
+import { confirmDialog } from "../runtime/uiDialog.js";
 
 const TABS = [
   { id: "overview", label: "Overview" },
@@ -85,7 +86,12 @@ const GroupsPanel = ({
     }));
   };
 
-  const create = () => {
+  const confirmingRef = useRef(false);
+  const liveGroupStateRef = useRef({ allNames, groups, recordCount, selection, api });
+  liveGroupStateRef.current = { allNames, groups, recordCount, selection, api };
+
+  const create = async () => {
+    if (confirmingRef.current) return;
     const name = normalizeGroupName(newName);
     if (!name) { setNote("Enter a group name."); return; }
     const collision = findGroupKey(Object.fromEntries([...allNames].map((key) => [key, recordOf(key)])), name);
@@ -94,16 +100,63 @@ const GroupsPanel = ({
     if (assignSelection && selection.length && !api?.setRegionAttrs) {
       setNote("The map selection cannot be assigned here."); return;
     }
-    if (assignSelection && selection.length && !window.confirm(
-      `Create "${name}" and give it control of ${selection.length} selected regions? Existing group control on those regions will be replaced. Political ownership is unchanged.`,
-    )) return;
+    if (assignSelection && selection.length) {
+      confirmingRef.current = true;
+      let confirmed = false;
+      try {
+        confirmed = await confirmDialog(
+          `Create "${name}" and give it control of ${selection.length} selected regions? Existing group control on those regions will be replaced. Political ownership is unchanged.`,
+        );
+      } finally {
+        confirmingRef.current = false;
+      }
+      if (!confirmed) return;
+    }
+    const live = liveGroupStateRef.current;
+    const latestRecordOf = (key) => live.groups?.[key] ?? { name: key, description: "", color: defaultGroupColor(key) };
+    const liveCollision = findGroupKey(Object.fromEntries([...live.allNames].map((key) => [key, latestRecordOf(key)])), name);
+    if (liveCollision) {
+      const collision = liveCollision;
+      setNote(`The name or historical alias already belongs to ${collision}.`);
+      return;
+    }
+    if (live.recordCount >= MAX_GROUPS) { setNote(`This scenario already has the maximum of ${MAX_GROUPS} groups.`); return; }
+    const targetSelection = assignSelection ? live.selection : [];
+    const liveApi = live.api;
+    if (targetSelection.length && !liveApi?.setRegionAttrs) {
+      setNote("The map selection cannot be assigned here."); return;
+    }
     const color = normalizeGroupColor(newColor) || defaultGroupColor(name);
     const description = normalizeGroupDescription(newDescription);
-    setGroups((registry) => ({ ...registry, [name]: { name, description, color } }));
-    if (assignSelection && selection.length) api?.setRegionAttrs(selection, { group: name });
+    const createdRecord = { name, description, color };
+    const assignedCount = targetSelection.length;
+    const applyGroup = () => setGroups((registry) => ({ ...registry, [name]: createdRecord }));
+    const removeGroup = () => setGroups((registry) => {
+      const next = { ...(registry || {}) };
+      delete next[name];
+      return next;
+    });
+
+    if (liveApi?.pushStep) {
+      const regionStep = assignedCount ? liveApi.setRegionAttrs(targetSelection, { group: name }, { deferHistory: true }) : null;
+      applyGroup();
+      liveApi.pushStep({
+        undo: () => {
+          regionStep?.undo();
+          removeGroup();
+        },
+        redo: () => {
+          applyGroup();
+          regionStep?.redo();
+        },
+      });
+    } else {
+      applyGroup();
+      if (assignedCount) liveApi?.setRegionAttrs(targetSelection, { group: name });
+    }
     setNewName(""); setNewDescription(""); setAssignSelection(false); setCreating(false);
     open(name);
-    setNote(`Created ${name}${assignSelection && selection.length ? ` with ${selection.length} controlled regions` : ""}.`);
+    setNote(`Created ${name}${assignedCount ? ` with ${assignedCount} controlled regions` : ""}.`);
   };
 
   const rename = () => {
@@ -129,11 +182,11 @@ const GroupsPanel = ({
     setNote(`Dissolved ${name}; its territorial control was removed without transferring sovereignty.`);
   };
 
-  const changedAreas = (ids, nextGroup, actionLabel) => {
+  const changedAreas = async (ids, nextGroup, actionLabel) => {
     if (!ids.length || !api?.setRegionAttrs) return;
-    if (ids.length > 1 && !window.confirm(
+    if (ids.length > 1 && !(await confirmDialog(
       `${actionLabel} for ${ids.length} selected regions? This changes group control, not polity ownership.`,
-    )) return;
+    ))) return;
     api.setRegionAttrs(ids, { group: nextGroup });
     setNote(`${actionLabel}: ${ids.length} region${ids.length === 1 ? "" : "s"}. Undo restores previous control.`);
   };

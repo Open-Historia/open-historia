@@ -35,7 +35,7 @@ const panelStyle = authoringCardStyle;
 
 const buttonStyle = authoringButtonStyle;
 
-const inputStyle = { ...authoringInputStyle, colorScheme: "dark" };
+const inputStyle = { ...authoringInputStyle };
 
 const optionStyle = authoringOptionStyle;
 

@@ -5,6 +5,7 @@
  */
 import { governmentFieldsForPolity } from "./governmentIdentity.js";
 import { inputStyle } from "./editorStyles.js";
+import { alertDialog } from "../runtime/uiDialog.js";
 
 export default function GovernmentIdentityFields({
   polity, actors = {}, edits = [], renames = [], onSave,
@@ -19,7 +20,7 @@ export default function GovernmentIdentityFields({
       // fabricate an unspecified form merely because a field is visible.
       onSave?.(polity, { [field]: next || null });
     } catch (e) {
-      window.alert(e?.message || String(e));
+      void alertDialog(e?.message || String(e));
     }
   };
   return (
