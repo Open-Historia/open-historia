@@ -224,9 +224,11 @@ const PolitiesPanel = ({
   const confirmingRef = useRef(false);
   const livePolitiesRef = useRef({
     polities, usage, puppets, polityChoices, relations, relationEdits, selection, api, commitCountryDraft,
+    removePolity, removePolities,
   });
   livePolitiesRef.current = {
     polities, usage, puppets, polityChoices, relations, relationEdits, selection, api, commitCountryDraft,
+    removePolity, removePolities,
   };
 
   // The country-creation form is an entirely local draft. Revalidate on the
@@ -338,9 +340,10 @@ const PolitiesPanel = ({
         { danger: true, confirmLabel: "Delete" },
       );
       if (!ok) return;
-      api?.removeOwners?.(keys);
-      if (removePolities) removePolities(keys);
-      else keys.forEach((key) => removePolity?.(key));
+      const live = livePolitiesRef.current;
+      live.api?.removeOwners?.(keys);
+      if (live.removePolities) live.removePolities(keys);
+      else keys.forEach((key) => live.removePolity?.(key));
       setSelectedKey((prev) => (keys.includes(prev) ? "" : prev));
       setBulkSelected(new Set());
       setRefreshNonce((n) => n + 1);
@@ -368,10 +371,11 @@ const PolitiesPanel = ({
         `Remove “${current.name}” from the map?${summary ? ` ${summary};` : ""} its colour, flag and tags go with it.`,
         { danger: true, confirmLabel: "Remove" },
       ))) return;
-      api?.removeOwners?.([key]);
-      removePolity?.(key);
+      const live = livePolitiesRef.current;
+      live.api?.removeOwners?.([key]);
+      live.removePolity?.(key);
       setBulkSelected((previous) => { const next = new Set(previous); next.delete(key); return next; });
-      setSelectedKey("");
+      setSelectedKey((prev) => (prev === key ? "" : prev));
       setRefreshNonce((n) => n + 1);
     } finally {
       confirmingRef.current = false;
@@ -386,9 +390,11 @@ const PolitiesPanel = ({
 
   const transferAll = async () => {
     if (confirmingRef.current || !current?.key || !transferFrom || transferFrom === current.key) return;
-    const regionCount = usage.get(transferFrom)?.regionCount || 0;
+    const targetKey = current.key;
+    const sourceKey = transferFrom;
+    const regionCount = usage.get(sourceKey)?.regionCount || 0;
     if (!regionCount) return;
-    const sourceName = clean(polities?.[transferFrom]?.name) || transferFrom;
+    const sourceName = clean(polities?.[sourceKey]?.name) || sourceKey;
     confirmingRef.current = true;
     try {
       const ok = await confirmDialog(
@@ -397,9 +403,10 @@ const PolitiesPanel = ({
         "Undo restores the previous region ownership.",
       );
       if (!ok) return;
-      const ids = api?.selectOwner?.(transferFrom, { zoom: false }) || [];
+      const live = livePolitiesRef.current;
+      const ids = live.api?.selectOwner?.(sourceKey, { zoom: false }) || [];
       if (!ids.length) return;
-      api?.setRegionAttrs?.(ids, { owner: current.key });
+      live.api?.setRegionAttrs?.(ids, { owner: targetKey });
       setRefreshNonce((n) => n + 1);
       // Keep an explicit source polity record if one exists. Scenario authors may
       // want a landless government/exile/remnant; deletion must be deliberate.

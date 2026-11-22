@@ -112,9 +112,11 @@ export const PublicStatementCard = ({ draft: original, threadId, replyId, index,
     setStatus("");
   };
 
+  const editBackupRef = useRef(null);
+
   const authorize = async (checked) => {
     setReview(null);
-    if (!checked || !valid || workingRef.current) return;
+    if (!checked || !valid || !game || workingRef.current) return;
     workingRef.current = true;
     setBusy(true);
     setStatus("");
@@ -179,7 +181,7 @@ export const PublicStatementCard = ({ draft: original, threadId, replyId, index,
   };
 
   const cancelOrWithdraw = async () => {
-    if (workingRef.current || !cancellable) return;
+    if (workingRef.current || !cancellable || !game) return;
     if (approved && !withdrawArmed) {
       setWithdrawArmed(true);
       return;
@@ -251,8 +253,8 @@ export const PublicStatementCard = ({ draft: original, threadId, replyId, index,
             <textarea aria-label={uiString("Statement")} maxLength={PUBLICATION_MAX_BODY} disabled={busy} value={draft.body} onChange={(event) => updateDraft({ ...draft, body: event.target.value })} />
           </label>
           <div className="oh-public-statement-meta">{draft.body.length} / {PUBLICATION_MAX_BODY}</div>
-          <button type="button" disabled={!valid || busy} onClick={() => { setReview(null); setEditing(false); }}>Review statement</button>
-          <button type="button" disabled={busy} onClick={() => { setEditing(false); setReview(null); }}>Back to draft</button>
+          <button type="button" disabled={!valid || busy} onClick={() => { editBackupRef.current = null; setReview(null); setEditing(false); }}>Review statement</button>
+          <button type="button" disabled={busy} onClick={() => { if (editBackupRef.current) { revisionRef.current += 1; setDraft(editBackupRef.current); editBackupRef.current = null; } setEditing(false); setReview(null); setStatus(""); }}>Back to draft</button>
         </div>
       ) : (
         <>
@@ -275,7 +277,7 @@ export const PublicStatementCard = ({ draft: original, threadId, replyId, index,
                 <span>I authorize publication of this exact wording to the selected public audience.</span>
               </label>
               <div className="oh-public-statement-buttons">
-                <button type="button" disabled={busy} onClick={() => { setReview(null); setEditing(true); }}>Edit statement</button>
+                <button type="button" disabled={busy} onClick={() => { editBackupRef.current = draft; setReview(null); setEditing(true); }}>Edit statement</button>
                 <button type="button" className="oh-public-statement-publish" disabled={!review || !valid || busy} onClick={() => void publish()}>
                   {busy ? "Working..." : "Publish address"}
                 </button>

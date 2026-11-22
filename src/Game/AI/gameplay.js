@@ -17534,8 +17534,14 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       const initialNativeOutcomes = hasNativeScriptedOutcomes(initialScriptedBeats);
       const scriptedRegionCatalog = initialNativeOutcomes
         ? filterToRenderedRegions(await loadRegionCatalog().catch(() => []), ledgerWorld) : [];
-      const scriptedCityContext = hasNativeCapitalOutcomes(initialScriptedBeats)
-        ? await lazyLookupContext({ ...bundle, world: ledgerWorld })() : null;
+      let scriptedCityContext = null;
+      const ensureScriptedCityContext = async (beats) => {
+        if (!scriptedCityContext && hasNativeCapitalOutcomes(beats)) {
+          scriptedCityContext = await lazyLookupContext({ ...bundle, world: ledgerWorld })();
+        }
+        return scriptedCityContext;
+      };
+      await ensureScriptedCityContext(initialScriptedBeats);
       const markInapplicableScriptedBeats = (skippedEntries, { throughDate = "" } = {}) => {
         const throughKey = throughDate ? dateKey(throughDate) : null;
         const activeSkipped = throughKey === null
@@ -17569,38 +17575,45 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       let preSkippedNativeBeats = [];
       let reconciledPrePlan = null;
       if (initialNativeOutcomes) {
-        // Partition against ledgerWorld before prompting in BOTH jump and auto modes so
-        // the AI is never prompted to narrate an already-inapplicable native beat,
-        // fallback is not needlessly blocked, and same-segment scripted_event_fired
-        // chains re-evaluate cleanly without mutating state before acceptance.
-        const partitioned = partitionPreparedNativeScriptedOutcomes(initialScriptedBeats, ledgerWorld, {
-          regionCatalog: scriptedRegionCatalog,
-          cityContext: scriptedCityContext,
-        });
-        fixedNativeRequirements = partitioned.requirements;
-        scriptedBeats = partitioned.eligibleBeats;
-        preSkippedNativeBeats = partitioned.skippedBeats;
-        if (preSkippedNativeBeats.length && !context.amend) {
-          reconciledPrePlan = replanAfterSkippedScriptedBeats(
+        // Run a bounded fixpoint over partitionPreparedNativeScriptedOutcomes and
+        // replanAfterSkippedScriptedBeats in BOTH jump and auto modes so:
+        // 1) the AI is never prompted to narrate an inapplicable native beat,
+        // 2) multi-hop scripted_event_fired/skipped chains and newly unlocked
+        //    relocate_capital beats settle completely before prompting, and
+        // 3) reconciledPrePlan.resolutions already marks every skipped beat skipped.
+        let workingPlan = scriptedPlan;
+        const seenSkippedIds = new Set();
+        const maxPasses = Math.max(1, authoredScriptedBeats.length + 1);
+        for (let pass = 0; pass < maxPasses; pass += 1) {
+          await ensureScriptedCityContext(workingPlan.eligible);
+          const partitioned = partitionPreparedNativeScriptedOutcomes(workingPlan.eligible, ledgerWorld, {
+            regionCatalog: scriptedRegionCatalog,
+            cityContext: scriptedCityContext,
+          });
+          fixedNativeRequirements = partitioned.requirements;
+          scriptedBeats = partitioned.eligibleBeats;
+          const newlySkipped = partitioned.skippedBeats.filter((entry) => !seenSkippedIds.has(entry.beat.id));
+          if (!newlySkipped.length) break;
+          for (const entry of newlySkipped) {
+            seenSkippedIds.add(entry.beat.id);
+            preSkippedNativeBeats.push(entry);
+          }
+          if (context.amend) break;
+          workingPlan = replanAfterSkippedScriptedBeats(
             authoredScriptedBeats,
-            scriptedPlan,
-            preSkippedNativeBeats,
+            workingPlan,
+            newlySkipped,
             {
               world: ledgerWorld,
               resolvedState: state.scriptedEventState,
               playerPolities: humanCountriesOf(bundle.game),
             },
           );
-          if (mode !== "auto") {
-            scriptedPlan = reconciledPrePlan;
-          }
-          const reconciledPartition = partitionPreparedNativeScriptedOutcomes(reconciledPrePlan.eligible, ledgerWorld, {
-            regionCatalog: scriptedRegionCatalog,
-            cityContext: scriptedCityContext,
-          });
-          fixedNativeRequirements = reconciledPartition.requirements;
-          scriptedBeats = reconciledPartition.eligibleBeats;
-          preSkippedNativeBeats = [...preSkippedNativeBeats, ...reconciledPartition.skippedBeats];
+          reconciledPrePlan = workingPlan;
+        }
+        if (reconciledPrePlan && mode !== "auto") {
+          scriptedPlan = reconciledPrePlan;
+          state.scriptedEventPending = scriptedPlan.pendingState;
         }
       }
       const scriptedPoliticalRequirements = scriptedPoliticalImpactRequirements(scriptedBeats);
@@ -18143,7 +18156,6 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // accepted. A held/rejected attempt persists nothing; its ephemeral plan
       // remains on `state` so Retry sees the same Chance roll and condition result.
       const scriptedStopDate = normalizeString(payload?.stopDate) || segmentTarget;
-      markInapplicableScriptedBeats(acceptedSkippedNativeBeats, { throughDate: scriptedStopDate });
       if (mode === "auto" && acceptedSkippedNativeBeats.length) {
         const throughKey = dateKey(scriptedStopDate);
         const skippedThroughStop = throughKey === null
@@ -18166,10 +18178,14 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
                 world: ledgerWorld,
                 resolvedState: state.scriptedEventState,
                 playerPolities: humanCountriesOf(bundle.game),
+                preservedPending: reconciledPrePlan?.pendingState,
               },
             );
         }
       }
+      // Always apply skip marks onto the final selected scriptedPlan so
+      // reconciledPrePlan assignment above can never overwrite them.
+      markInapplicableScriptedBeats(acceptedSkippedNativeBeats, { throughDate: scriptedStopDate });
       const scriptedCommit = commitScriptedEventPlan(state.scriptedEventState, scriptedPlan, {
         throughDate: scriptedStopDate,
       });

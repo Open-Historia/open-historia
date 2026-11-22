@@ -9,6 +9,7 @@ import { flagImageUrlFromGid } from "../runtime/countryFlags.js";
 import { acceptFor } from "../runtime/fileAccept.js";
 import { resolveStockCountryCode } from "../runtime/polityIdentity.js";
 import { latestPopulation, populationByYearField } from "../runtime/cityPopulation.js";
+import { confirmDialog } from "../runtime/uiDialog.js";
 
 const WORLD = { west: -180, east: 180, north: 85.05112878, south: -85.05112878 };
 
@@ -1002,11 +1003,12 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
     if (!api || !validFeatureCollection(result) || !result.features.length || busy) return;
     const count = result.features.length;
     const cityCount = importCities && Array.isArray(result.importCityRows) ? result.importCityRows.length : 0;
-    const ok = window.confirm(
+    const ok = await confirmDialog(
       `Replace the current region geometry with ${count.toLocaleString()} imported regions?` +
       (cityCount ? `\nAlso import ${cityCount.toLocaleString()} city marker${cityCount === 1 ? "" : "s"}${replaceExistingCities ? " (replacing existing city markers)" : " (merging with existing city markers)"}.` : "") +
       "\n\nA complete separate Saved maps recovery document will be created and read back before replacement. " +
       "If the checkpoint cannot be verified, the import is blocked. Whole-map replacement is not kept in Undo.",
+      { danger: true, confirmLabel: "Replace map" },
     );
     if (!ok) return;
 

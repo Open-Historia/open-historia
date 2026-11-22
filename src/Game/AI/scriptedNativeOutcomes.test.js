@@ -188,3 +188,47 @@ test("N031 replanAfterSkippedScriptedBeats re-evaluates same-segment scripted_ev
   assert.equal(committed.state["fallback-after-skip"].outcome, "fired");
   assert.equal(committed.state["coin-flip"].outcome, "fired");
 });
+
+test("N031 replanAfterSkippedScriptedBeats preserves cached Chance/weighted rolls on auto early-stop when dependencies match", async () => {
+  const { replanAfterSkippedScriptedBeats } = await import("./scriptedEventResolution.js");
+  const { partitionPreparedNativeScriptedOutcomes } = await import("./scriptedNativeOutcomes.js");
+  const live = pipeline([beat("existing-war", [declaration])]).world;
+
+  // Two drifted beats on different dates, plus a Chance beat gated on the first one.
+  const driftedEarly = beat("drifted-early", [declaration], { date: "1914-03-10" });
+  const dependentChance = beat("chance-after-early", [], {
+    date: "1914-03-15",
+    trigger: {
+      mode: "rules",
+      operator: "all",
+      percent: 50,
+      conditions: [{ type: "scripted_event_skipped", eventId: "drifted-early" }],
+    },
+  });
+  const driftedLate = beat("drifted-late", [declaration], { date: "1914-03-25" });
+
+  const events = [driftedEarly, dependentChance, driftedLate];
+  const initialPlan = planScriptedEvents(events, { world: live, random: () => 0.1 });
+  const prePartition = partitionPreparedNativeScriptedOutcomes(initialPlan.eligible, live, { regionCatalog });
+  assert.equal(prePartition.skippedBeats.length, 2);
+
+  // Pre-prompt fixpoint replanning unlocks dependentChance with random=0.1 -> fired.
+  const preReconciled = replanAfterSkippedScriptedBeats(events, initialPlan, prePartition.skippedBeats, {
+    world: live,
+    random: () => 0.1,
+  });
+  assert.deepEqual(preReconciled.eligible.map((e) => e.id), ["chance-after-early"]);
+
+  // Auto mode stops at 1914-03-20 (between driftedEarly and driftedLate).
+  // Re-running with random=0.99 and preservedPending MUST NOT re-roll dependentChance!
+  const earlyCommitPlan = replanAfterSkippedScriptedBeats(events, initialPlan, [prePartition.skippedBeats[0]], {
+    world: live,
+    random: () => 0.99,
+    preservedPending: preReconciled.pendingState,
+  });
+  assert.equal(earlyCommitPlan.eligible.some((e) => e.id === "chance-after-early"), true);
+  const committed = commitScriptedEventPlan({}, earlyCommitPlan, { throughDate: "1914-03-20" });
+  assert.equal(committed.state["drifted-early"].outcome, "skipped");
+  assert.equal(committed.state["chance-after-early"].outcome, "fired");
+  assert.equal(committed.state["drifted-late"], undefined);
+});

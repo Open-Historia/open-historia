@@ -278,7 +278,7 @@ export const splitGeometryByLine = (geometry, rawPoints) => {
       || (extentsOverlap(compExtent, cutBox) && polylineTouchesPolygon(points, polyCoords));
     const clipped = clipPolygonByHalves(polyCoords, halves);
     if (!clipped) {
-      if (components.length === 1) return null;
+      if (touched) return null;
       tiedUntouchedParts.push(polyCoords);
       continue;
     }

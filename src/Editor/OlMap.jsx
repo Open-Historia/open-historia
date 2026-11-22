@@ -1328,7 +1328,7 @@ const OlMap = ({
           // save's border cleanup (repairTopologyEverywhere) is the only thing
           // that repairs those: a scenario's Save buttons, or the standalone
           // editor's exports. The Merge button says the same.
-          window.alert(scenarioModeRef.current
+          void alertDialog(scenarioModeRef.current
             ? "The border between these two regions could not be removed. Borders are repaired when the map is saved into its scenario, so save the map and then try again."
             : "The border between these two regions could not be removed. Borders are repaired when the map is exported, so export the map and then try again.");
           return;

@@ -136,6 +136,7 @@ test("Review & Save routes buttons to the native save and apply actions", () => 
   const nav = src("./EditorWorkspaceNav.jsx");
   assert.match(map, /onReviewSave=\{scenarioMode \? \(\) => persistScenario/);
   assert.match(map, /onReviewPlay=\{scenarioMode \? \(\) => persistScenario/);
+  assert.match(map, /reviewBusy=\{scenarioMode \? \(Boolean\(scenarioAction\) \|\| !hydrated\) : !api\}/);
   assert.match(sidebar, /onReviewSave=\{onReviewSave\}/);
   assert.match(sidebar, /onReviewPlay=\{onReviewPlay\}/);
   assert.match(nav, /onClick=\{onReviewSave\}/);

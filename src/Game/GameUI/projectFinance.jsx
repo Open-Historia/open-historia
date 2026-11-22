@@ -108,23 +108,26 @@ export const ProjectFinancePanel = ({ displayCurrency, onClose }) => {
   const [aiBusy, setAiBusy] = useState(false);
   const [stale, setStale] = useState(false);
 
+  const refreshSeqRef = useRef(0);
   const refresh = async () => {
+    const seq = ++refreshSeqRef.current;
     setBusy(true);
     setStatus("");
     setStale(false);
     setConfirmed(false);
     try {
       const data = await captureFinanceReview();
-      if (mountedRef.current) setReview(data);
+      if (!mountedRef.current || seq !== refreshSeqRef.current) return false;
+      setReview(data);
       return true;
     } catch (error) {
-      if (mountedRef.current) {
+      if (mountedRef.current && seq === refreshSeqRef.current) {
         setReview(null);
         setStatus(error?.message || "Unable to load financing record.");
       }
       return false;
     } finally {
-      if (mountedRef.current) setBusy(false);
+      if (mountedRef.current && seq === refreshSeqRef.current) setBusy(false);
     }
   };
 
@@ -158,10 +161,22 @@ export const ProjectFinancePanel = ({ displayCurrency, onClose }) => {
     };
   }, [onClose]);
 
-  const facilities = useMemo(
-    () => (review ? projectFinanceSnapshot(review.world.projectFinance, review.game.gameDate).filter((entry) => entry.terms.borrower === review.actor) : []),
-    [review],
-  );
+  const { facilities, snapshotError } = useMemo(() => {
+    if (!review) return { facilities: [], snapshotError: "" };
+    try {
+      return {
+        facilities: projectFinanceSnapshot(review.world.projectFinance, review.game.gameDate)
+          .filter((entry) => entry.terms.borrower === review.actor),
+        snapshotError: "",
+      };
+    } catch (error) {
+      return { facilities: [], snapshotError: error?.message || "Unable to read financing ledger." };
+    }
+  }, [review]);
+
+  useEffect(() => {
+    if (snapshotError) setStatus(snapshotError);
+  }, [snapshotError]);
 
   const projects = useMemo(
     () => (review
@@ -336,9 +351,12 @@ export const ProjectFinancePanel = ({ displayCurrency, onClose }) => {
         };
       } else {
         if (!activeFacility) throw new Error("Select a facility.");
+        const uniqueId = typeof globalThis.crypto?.randomUUID === "function"
+          ? globalThis.crypto.randomUUID()
+          : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
         command = {
           ...command,
-          id: `finance:${crypto.randomUUID()}`,
+          id: `finance:${uniqueId}`,
           facilityId,
           bucketId: form.bucketId,
           amountMinor: parseMinorInput(form.amount),

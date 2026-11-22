@@ -620,8 +620,8 @@ const WarMapPanel = ({
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {list.length === 0 && <div style={{ ...hint, padding: "4px 2px" }}>{EMPTY_LABELS[tab]}</div>}
             {visible.map((row) => (
-              <div key={row.id} style={{ border: "1px solid rgba(255,255,255,0.09)", borderRadius: 8, display: "flex", alignItems: "center", gap: 6, padding: "6px 8px" }}>
-                <button type="button" onClick={() => onPick(tab, row.id)} style={{ background: "transparent", border: "none", color: "white", cursor: "pointer", flex: 1, minWidth: 0, textAlign: "left", padding: 0, display: "flex", alignItems: "center", gap: 8 }}>
+              <div key={row.id} style={{ border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.09))", borderRadius: 8, display: "flex", alignItems: "center", gap: 6, padding: "6px 8px" }}>
+                <button type="button" onClick={() => onPick(tab, row.id)} style={{ background: "transparent", border: "none", color: "var(--oh-ui-text, white)", cursor: "pointer", flex: 1, minWidth: 0, textAlign: "left", padding: 0, display: "flex", alignItems: "center", gap: 8 }}>
                   {tab === "climate" && <Swatch color={row.color || "#7f8c99"} />}
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <span style={{ display: "block", fontSize: 13, fontWeight: 600, overflowWrap: "anywhere" }}>{row.name || "Unnamed"}</span>
@@ -647,7 +647,7 @@ const WarMapPanel = ({
           )}
           {tab === "climate" && (
             <>
-              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.75)" }}>
+              <div style={{ fontSize: 12, color: "var(--oh-ui-muted, rgba(255,255,255,0.75))" }}>
                 {freezingCount === 0 ? "No water region can freeze yet." : freezingCount === 1 ? "1 water region can freeze." : `${freezingCount} water regions can freeze.`}
               </div>
               <div style={hint}>Mark lakes and seas in the region panel (Can freeze). They freeze in a season whose effects say Water freezes.</div>

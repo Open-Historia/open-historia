@@ -183,11 +183,22 @@ const GroupsPanel = ({
   };
 
   const changedAreas = async (ids, nextGroup, actionLabel) => {
-    if (!ids.length || !api?.setRegionAttrs) return;
-    if (ids.length > 1 && !(await confirmDialog(
-      `${actionLabel} for ${ids.length} selected regions? This changes group control, not polity ownership.`,
-    ))) return;
-    api.setRegionAttrs(ids, { group: nextGroup });
+    if (confirmingRef.current || !ids.length || !api?.setRegionAttrs) return;
+    if (ids.length > 1) {
+      confirmingRef.current = true;
+      let ok = false;
+      try {
+        ok = await confirmDialog(
+          `${actionLabel} for ${ids.length} selected regions? This changes group control, not polity ownership.`,
+        );
+      } finally {
+        confirmingRef.current = false;
+      }
+      if (!ok) return;
+    }
+    const liveApi = liveGroupStateRef.current.api;
+    if (!liveApi?.setRegionAttrs) return;
+    liveApi.setRegionAttrs(ids, { group: nextGroup });
     setNote(`${actionLabel}: ${ids.length} region${ids.length === 1 ? "" : "s"}. Undo restores previous control.`);
   };
 

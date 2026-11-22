@@ -56,6 +56,7 @@ import StatsSheetEditor, { normalizeStatsEditorValue } from "./StatsSheetEditor.
 import InstitutionAuthoringPanel from "./InstitutionAuthoringPanel.jsx";
 import DiplomaticRelationsAuthoringPanel from "./DiplomaticRelationsAuthoringPanel.jsx";
 import { authoringCardStyle } from "./scenarioAuthoringStyles.js";
+import { confirmDialog } from "../../runtime/uiDialog.js";
 import PrehistoryPanel from "./PrehistoryPanel.jsx";
 import ScenarioFrontsPanel from "./ScenarioFrontsPanel.jsx";
 import ScenarioWarSettings from "./ScenarioWarSettings.jsx";
@@ -4332,9 +4333,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         formDiffers(editorState, buildScenarioEditorState(editorDetails))
         || formDiffers(editorStats, editorStatsSavedRef.current)
       );
-      if (sourceEditorHasUnsavedForm && !window.confirm(
+      if (sourceEditorHasUnsavedForm && !(await confirmDialog(
         "Your existing scenario editor form has unsaved changes that cannot be copied into the new scenario. Continue without those form edits?",
-      )) {
+      ))) {
         throw new Error("New scenario creation cancelled. The original scenario was not changed.");
       }
       return createFreshScenarioFromGeneratedMap({

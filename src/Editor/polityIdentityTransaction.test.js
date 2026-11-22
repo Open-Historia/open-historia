@@ -92,4 +92,12 @@ test("revertMapPolityCreation restores displaced puppet rows without clobbering 
   assert.equal(undone.puppets.some((row) => row.puppet === "A" && row.overlord === "B"), true);
   assert.equal(undone.puppets.some((row) => row.puppet === "D" && row.overlord === "B" && row.loyalty === 90), true);
   assert.equal(undone.puppets.some((row) => row.overlord === "C" || row.puppet === "C"), false);
+
+  // If C's starting relations were settled into doc.relations before Undo, revert removes them too.
+  const withSettledRelation = {
+    ...editedAfter,
+    relations: [...editedAfter.relations, { a: "C", b: "B", score: 20 }],
+  };
+  const undoneAfterSave = revertMapPolityCreation(withSettledRelation, "C", before);
+  assert.equal(undoneAfterSave.relations.some((row) => row.a === "C" || row.b === "C"), false);
 });

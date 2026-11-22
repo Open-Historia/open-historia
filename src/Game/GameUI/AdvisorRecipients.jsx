@@ -2,14 +2,14 @@ import React, { useState } from "react";
 import { ADVISOR_PERSONALITY_MAX_CHARS, ADVISOR_RECIPIENT_TYPES, ADVISOR_RECIPIENT_TYPE_LABELS, CHIEF_ADVISOR_THREAD, advisorRecipientType, characterMayReadSimulationRules, CHARACTER_SIMULATION_RULES_MAX_CHARS } from "../../runtime/advisorThreads.js";
 
 const field = {
-  background: "#112131", border: "1px solid rgba(133, 191, 219, .28)",
-  borderRadius: 5, boxSizing: "border-box", color: "#f0f6fa",
+  background: "var(--oh-grey-raised, #112131)", border: "1px solid var(--oh-grey-border, rgba(133, 191, 219, .28))",
+  borderRadius: 5, boxSizing: "border-box", color: "var(--oh-grey-text, #f0f6fa)",
   fontFamily: "inherit", fontSize: "0.76rem", padding: "0.45rem", width: "100%",
 };
-const subtle = { color: "#97acbd", fontSize: "0.68rem" };
+const subtle = { color: "var(--oh-grey-muted, #97acbd)", fontSize: "0.68rem" };
 const button = {
-  background: "#203648", border: "1px solid rgba(133, 191, 219, .2)",
-  borderRadius: 5, color: "#d8e5ee", cursor: "pointer",
+  background: "var(--oh-grey-raised, #203648)", border: "1px solid var(--oh-grey-border, rgba(133, 191, 219, .2))",
+  borderRadius: 5, color: "var(--oh-grey-text, #d8e5ee)", cursor: "pointer",
   fontFamily: "inherit", fontSize: "0.72rem", padding: "0.4rem 0.55rem",
 };
 const blank = () => ({ name: "", title: "", personality: "", recipientType: ADVISOR_RECIPIENT_TYPES.MINISTER, binding: null, officeKey: "", canReadSimulationRules:false });

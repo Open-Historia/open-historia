@@ -160,6 +160,10 @@ test("same-day scene and delayed eligibility never pay previous days; a funded p
   assert.equal(noGdp.projects[0].spent,0);
   assert.equal(noGdp.projects[1].spent,525_000);
   assert.throws(()=>tick(f,undefined,undefined,board(),{projectFundingMode:"nonmonetary"}),/not available/);
+  // An initialized empty ledger ({ version: 1, receipts: [] }) in non-monetary mode must not crash project ticks.
+  const nonMonetaryEmpty = tick({ version: 1, receipts: [] }, "1912-02-15", "1912-02-22", board(), { projectFundingMode: "nonmonetary" });
+  assert.equal(nonMonetaryEmpty.finance, undefined);
+  assert.equal(nonMonetaryEmpty.days, 7);
 });
 test("repayment draws only on the recurring allowance even without any running project",()=>{
   const f=append(append(undefined,terms({maturity:"1912-02-16"})),draw({eligibleFrom:"1912-02-16"}));

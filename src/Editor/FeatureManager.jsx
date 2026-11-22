@@ -206,7 +206,7 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
       width={490}
       footer={
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12 }}>
-          <span style={{ color: "rgba(255,255,255,0.5)" }}>{features.length} features total</span>
+          <span style={{ color: "var(--oh-ui-muted, rgba(255,255,255,0.5))" }}>{features.length} features total</span>
           {features.length > 0 && (
             <button onClick={deleteAll} style={{ ...pillButton(false), color: "#f87171" }}>
               Delete All
@@ -330,16 +330,16 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
         {visible.map((f, index) => {
           const open = expanded === f.id;
           return (
-            <div key={f.id} style={{ border: selectedSet.has(String(f.id)) ? "1px solid rgba(250,204,21,0.6)" : "1px solid rgba(255,255,255,0.09)", borderRadius: 8 }}>
+            <div key={f.id} style={{ border: selectedSet.has(String(f.id)) ? "1px solid rgba(250,204,21,0.6)" : "1px solid var(--oh-ui-line, rgba(255,255,255,0.09))", borderRadius: 8 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px" }}>
                 <input type="checkbox" checked={selectedSet.has(String(f.id))} onChange={() => {}} onClick={(e) => toggleSelected(f.id, index, e.shiftKey)} aria-label={`Select ${f.name}`} style={{ cursor: "pointer", margin: 0 }} />
-                <button onClick={() => setExpanded(open ? null : f.id)} style={{ background: "transparent", border: "none", color: "white", cursor: "pointer", flex: 1, textAlign: "left" }}>
+                <button onClick={() => setExpanded(open ? null : f.id)} style={{ background: "transparent", border: "none", color: "var(--oh-ui-text, white)", cursor: "pointer", flex: 1, textAlign: "left" }}>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{f.name}</div>
-                  <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.5)" }}>
+                  <div style={{ fontSize: 10.5, color: "var(--oh-ui-muted, rgba(255,255,255,0.5))" }}>
                     {isCityFeature(f) ? "City / settlement" : f.kind || "Map feature"} · {f.owner || f.country || "Unassigned"} · {coordinatesOf(f)}
                   </div>
                 </button>
-                <button onClick={() => api?.locateFeature(f.coord)} title="Locate" style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.7)", cursor: "pointer" }}>
+                <button onClick={() => api?.locateFeature(f.coord)} title="Locate" style={{ background: "transparent", border: "none", color: "var(--oh-ui-muted, rgba(255,255,255,0.7))", cursor: "pointer" }}>
                   <Icon name="fit" size={14} />
                 </button>
                 <button onClick={() => remove(f.id)} title="Delete" style={{ background: "transparent", border: "none", color: "#f87171", cursor: "pointer" }}>

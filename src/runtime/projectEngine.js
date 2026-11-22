@@ -585,8 +585,9 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
     : project));
   const outcomes = [];
   const nonmonetary = projectFundingMode(world) === "nonmonetary";
-  if (finance !== undefined && nonmonetary) throw new Error("Project Finance is not available in non-monetary scenarios.");
-  const financeClock = finance === undefined ? null : openProjectFinanceClock(finance,{fromDate,toDate});
+  const hasFinanceReceipts = Boolean(finance?.receipts?.length);
+  if (hasFinanceReceipts && nonmonetary) throw new Error("Project Finance is not available in non-monetary scenarios.");
+  const financeClock = finance === undefined || nonmonetary ? null : openProjectFinanceClock(finance, { fromDate, toDate });
   const financeOwners = new Set(financeClock?.borrowers ?? []);
   if (start === null || end === null || end <= start) return { projects: board, outcomes, days: 0, ...(financeClock?{finance:financeClock.finish()}: {}) };
   const days = end - start;

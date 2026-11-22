@@ -507,12 +507,14 @@ const referencedScriptedEventIds = (event) => {
 // When native outcome validation skips one or more beats in the current segment
 // due to world-state drift, re-evaluate any same-segment beats whose conditions
 // depend on scripted_event_fired / scripted_event_skipped for those beats while
-// preserving all unrelated cached pending rolls.
+// preserving all unrelated cached pending rolls (and reusing cached dependent
+// rolls from `preservedPending` whenever their referenced outcomes match).
 export const replanAfterSkippedScriptedBeats = (eventsInput, plan, skippedEntries, {
   world = {},
   resolvedState = {},
   playerPolities = null,
   random = Math.random,
+  preservedPending = null,
 } = {}) => {
   const skipped = array(skippedEntries);
   if (!skipped.length) return plan;
@@ -524,6 +526,7 @@ export const replanAfterSkippedScriptedBeats = (eventsInput, plan, skippedEntrie
   if (!skippedMap.size) return plan;
 
   const events = array(eventsInput);
+  const preserved = record(preservedPending);
   const nextPending = { ...record(plan?.pendingState) };
   for (const [beatId, reason] of skippedMap.entries()) {
     nextPending[beatId] = { ...record(nextPending[beatId]), outcome: "skipped", reason };
@@ -538,8 +541,21 @@ export const replanAfterSkippedScriptedBeats = (eventsInput, plan, skippedEntrie
     for (const event of events) {
       const id = text(event?.id);
       if (!id || dirty.has(id)) continue;
-      if (referencedScriptedEventIds(event).some((refId) => dirty.has(refId))) {
-        delete nextPending[id];
+      const refs = referencedScriptedEventIds(event);
+      if (refs.some((refId) => dirty.has(refId))) {
+        const preservedEntry = preserved[id];
+        const depsMatchPreserved = Boolean(preservedEntry)
+          && ["fired", "skipped"].includes(lower(preservedEntry.outcome))
+          && refs.every((refId) => {
+            const currentOutcome = lower(nextPending[refId]?.outcome || resolvedState?.[refId]?.outcome);
+            const preservedOutcome = lower(preserved[refId]?.outcome || resolvedState?.[refId]?.outcome);
+            return currentOutcome && currentOutcome === preservedOutcome;
+          });
+        if (depsMatchPreserved) {
+          nextPending[id] = { ...preservedEntry };
+        } else {
+          delete nextPending[id];
+        }
         dirty.add(id);
         changed = true;
       }

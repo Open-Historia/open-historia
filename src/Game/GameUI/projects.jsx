@@ -1408,7 +1408,18 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   // going (projectEngine.js), worked out here from the world as it stands.
   const engineWorld = useMemo(() => ({ countryStats, projects, projectFundingMode }), [countryStats, projects, projectFundingMode]);
   const means = useMemo(() => ownerMeans(engineWorld, playerCountry, projects, playerCountry), [engineWorld, playerCountry, projects]);
-  const financedOwners=useMemo(()=>new Set(financing?.receipts?.length?projectFinanceSnapshot(financing,financing.receipts.at(-1).date).filter(f=>f.outstandingMinor||f.interestDueMinor||f.buckets.some(b=>b.projectId&&b.remainingMinor)).map(f=>f.terms.borrower):[]),[financing]);
+  const financedOwners = useMemo(() => {
+    if (!financing?.receipts?.length) return new Set();
+    try {
+      return new Set(
+        projectFinanceSnapshot(financing, financing.receipts.at(-1).date)
+          .filter((f) => f.outstandingMinor || f.interestDueMinor || f.buckets.some((b) => b.projectId && b.remainingMinor))
+          .map((f) => f.terms.borrower),
+      );
+    } catch {
+      return new Set();
+    }
+  }, [financing]);
   const finishes = useMemo(() => new Map(visible.map((project) => [
     project.id,
     financedOwners.has(projectOwnerOf(project,playerCountry))?"":project.targetDate || estimateProjectFinish(project, { world: engineWorld, projects, host: playerCountry, date: gameDate }),

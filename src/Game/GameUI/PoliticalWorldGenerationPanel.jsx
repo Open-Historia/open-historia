@@ -1554,7 +1554,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       {busy && progressInfo?.v2 && (
         <div style={{ background: "var(--oh-grey-raised)", border: "1px solid var(--oh-grey-border)", borderRadius: 12, marginTop: "0.7rem", padding: "0.65rem" }}>
           <div style={{ alignItems: "center", display: "flex", fontSize: "0.7rem", gap: "0.6rem", justifyContent: "space-between" }}>
-            <span style={{ color: "rgba(255,255,255,0.76)", fontWeight: 700 }}>
+            <span style={{ color: "var(--oh-grey-text)", fontWeight: 700 }}>
               {progressReadyPolities} of {progressInfo.totalPolities ?? polityCount} polities ready
             </span>
             <span style={{ color: "var(--oh-grey-muted)" }}>
@@ -1572,7 +1572,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       {busy && progressTotal > 0 && !progressInfo?.v2 && (
         <div style={{ background: "var(--oh-grey-raised)", border: "1px solid var(--oh-grey-border)", borderRadius: 12, marginTop: "0.7rem", padding: "0.65rem" }}>
           <div style={{ alignItems: "center", display: "flex", fontSize: "0.7rem", gap: "0.6rem", justifyContent: "space-between" }}>
-            <span style={{ color: "rgba(255,255,255,0.76)", fontWeight: 700 }}>
+            <span style={{ color: "var(--oh-grey-text)", fontWeight: 700 }}>
               {progressResolved} / {progressTotal} polities resolved
             </span>
             <span style={{ color: "var(--oh-grey-muted)" }}>{progressPercent}%</span>

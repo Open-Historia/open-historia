@@ -73,41 +73,67 @@ const PolityInput = ({ ariaLabel, listId, options, styles, value, onChange }) =>
   />
 );
 
-const CapitalCityInput=({value,cityName,options,loading,failed,styles,onChange})=>{
- const [query,setQuery]=useState("");
- const matches=options.filter(c=>c.name.toLowerCase().includes(query.toLowerCase())).slice(0,80);
- const selected=options.find(c=>c.id===value);
- const shown=selected&&!matches.some(c=>c.id===selected.id)?[selected,...matches]:matches;
- return <div style={{display:"grid",gap:4}}>
-  <input aria-label="Search map cities" placeholder="Search map cities" style={styles.inputStyle} value={query} onChange={e=>setQuery(e.target.value)}/>
-  <select aria-label="New capital" style={{...styles.inputStyle,width:"100%"}} value={value||""} disabled={loading||failed} onChange={e=>{const c=options.find(city=>city.id===e.target.value);onChange({cityId:c?.id||"",cityName:c?.name||""});}}>
-   <option value="">{loading?"Loading cities...":failed?"Scenario city layer required":"Choose a city"}</option>
-   {value&&!selected&&<option value={value}>{cityName||value} (unresolved)</option>}
-   {shown.map(city=><option key={city.id} value={city.id} style={optionStyle}>{city.name} ({city.coordinates.map(n=>n.toFixed(2)).join(", ")})</option>)}
-  </select>
-  <span style={{fontSize:"0.62rem",color:"rgba(255,255,255,0.55)"}}>Uses the scenario map's city identity. Duplicate original names are not selectable.</span>
- </div>;
+const CapitalCityInput = ({ value, cityName, options, loading, failed, styles, onChange }) => {
+  const [query, setQuery] = useState("");
+  const matches = options.filter((c) => c.name.toLowerCase().includes(query.toLowerCase())).slice(0, 80);
+  const selected = options.find((c) => c.id === value);
+  const shown = selected && !matches.some((c) => c.id === selected.id) ? [selected, ...matches] : matches;
+  return (
+    <div style={{ display: "grid", gap: 4 }}>
+      <input
+        aria-label="Search map cities"
+        placeholder="Search map cities"
+        style={styles.inputStyle}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      <select
+        aria-label="New capital"
+        style={{ ...styles.inputStyle, width: "100%" }}
+        value={value || ""}
+        disabled={loading || failed}
+        onChange={(e) => {
+          const c = options.find((city) => city.id === e.target.value);
+          onChange({ cityId: c?.id || "", cityName: c?.name || "" });
+        }}
+      >
+        <option value="">{loading ? "Loading cities..." : failed ? "Scenario city layer required" : "Choose a city"}</option>
+        {value && !selected && <option value={value}>{cityName || value} (unresolved)</option>}
+        {shown.map((city) => (
+          <option key={city.id} value={city.id} style={optionStyle}>
+            {city.name} ({city.coordinates.map((n) => n.toFixed(2)).join(", ")})
+          </option>
+        ))}
+      </select>
+      <span style={{ fontSize: "0.62rem", color: "var(--oh-grey-muted, rgba(255,255,255,0.55))" }}>
+        Uses the scenario map&apos;s city identity. Duplicate original names are not selectable.
+      </span>
+    </div>
+  );
 };
-const ScriptedImpactsEditor = ({ idPrefix, rows: rowsInput, polityOptions = [], citySource={}, styles, onChange, onPickRegions }) => {
+
+const ScriptedImpactsEditor = ({ idPrefix, rows: rowsInput, polityOptions = [], citySource = {}, styles, onChange, onPickRegions }) => {
   const rows = array(rowsInput);
-  const needsCities=rows.some(row=>row.type==="relocate_capital");
-  const {scenarioId="",renames}=citySource;
-  const [cities,setCities]=useState({options:[],loading:false,failed:false});
-  useEffect(()=>{
-    if(!needsCities)return;
-    let cancelled=false;
-    (async()=>{
-      setCities({options:[],loading:true,failed:false});
-      try{
+  const needsCities = rows.some((row) => row.type === "relocate_capital");
+  const { scenarioId = "", renames } = citySource;
+  const [cities, setCities] = useState({ options: [], loading: false, failed: false });
+  useEffect(() => {
+    if (!needsCities) return undefined;
+    let cancelled = false;
+    (async () => {
+      setCities({ options: [], loading: true, failed: false });
+      try {
         // Only the scenario-owned city layer is an authoritative runtime city
         // catalog. The global town seed includes cities not on this map.
-        const data=scenarioId?await downloadScenarioJsonAsset(scenarioId,"citiesGeojson"):null;
-        if(!data)throw new Error("City map unavailable");
-        if(!cancelled)setCities({options:capitalCityOptions(data,renames),loading:false,failed:false});
-      }catch{if(!cancelled)setCities({options:[],loading:false,failed:true});}
+        const data = scenarioId ? await downloadScenarioJsonAsset(scenarioId, "citiesGeojson") : null;
+        if (!data) throw new Error("City map unavailable");
+        if (!cancelled) setCities({ options: capitalCityOptions(data, renames), loading: false, failed: false });
+      } catch {
+        if (!cancelled) setCities({ options: [], loading: false, failed: true });
+      }
     })();
-    return ()=>{cancelled=true;};
-  },[needsCities,scenarioId,renames]);
+    return () => { cancelled = true; };
+  }, [needsCities, scenarioId, renames]);
   const problems = scriptedImpactProblems(rows);
   const listId = `${idPrefix}-impact-polities`;
   const patchRow = (index, patch) => onChange(rows.map((row, at) => (at === index ? { ...row, ...patch } : row)));
@@ -214,13 +240,19 @@ const ScriptedImpactsEditor = ({ idPrefix, rows: rowsInput, polityOptions = [], 
               </div>
             )}
             {definition.type === "relocate_capital" && (
-              <div style={{color:"rgba(255,255,255,0.62)",fontSize:"0.67rem",marginTop:"0.25rem"}}>Moves the canonical capital and its map marker, not territory. The city must be held by the selected country when the event fires.</div>
+              <div style={{ color: "var(--oh-grey-muted, rgba(255,255,255,0.62))", fontSize: "0.67rem", marginTop: "0.25rem" }}>
+                Moves the canonical capital and its map marker, not territory. The city must be held by the selected country when the event fires.
+              </div>
             )}
             {definition.type === "start_war" && (
-              <div style={{color:"rgba(255,255,255,0.62)",fontSize:"0.67rem",marginTop:"0.25rem"}}>Creates an actual war between these two countries. No allies or territory changes are added by this impact. Use player-control conditions to protect player choices.</div>
+              <div style={{ color: "var(--oh-grey-muted, rgba(255,255,255,0.62))", fontSize: "0.67rem", marginTop: "0.25rem" }}>
+                Creates an actual war between these two countries. No allies or territory changes are added by this impact. Use player-control conditions to protect player choices.
+              </div>
             )}
             {definition.type === "install_puppet" && (
-              <div style={{color:"rgba(255,255,255,0.62)",fontSize:"0.67rem",marginTop:"0.25rem"}}>Creates a native subordination arrangement. Both countries must exist and the subordinate must retain land.</div>
+              <div style={{ color: "var(--oh-grey-muted, rgba(255,255,255,0.62))", fontSize: "0.67rem", marginTop: "0.25rem" }}>
+                Creates a native subordination arrangement. Both countries must exist and the subordinate must retain land.
+              </div>
             )}
             {repeated.length > 0 && (
               <div style={{ color: "#fbbf24", fontSize: "0.62rem", lineHeight: 1.35, marginTop: "0.25rem" }}>

@@ -204,6 +204,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // the save sends of them, beside the renames it already logs, is
   // removalsForScenario above.
   const polityAuthoringOpsRef = useRef([]);
+  const scenarioSaveSeqRef = useRef(0);
   // The question a save asks first (BorderCleanupChoice): quick clean or deep
   // clean. Up while `cleanChoice` is set; the ref holds what its answer goes to.
   const [cleanChoice, setCleanChoice] = useState(null);
@@ -514,7 +515,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const scenarioMapList = scenarioMaps(d.doc?.metadata, { scenarioName: d.name });
   const applyMaps = (result) => {
     if (result.refused) {
-      window.alert(result.refused);
+      void alertDialog(result.refused);
       return false;
     }
     const before = d.doc?.metadata?.customBackground ?? null;
@@ -553,17 +554,17 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       }
       return applyMaps(result);
     } catch (e) {
-      window.alert(`Could not add that map: ${e?.message || e}`);
+      await alertDialog(`Could not add that map: ${e?.message || e}`);
       return false;
     }
   };
   // A built-in world map as the starting map of a scenario with a map of its
   // own is asked first: it is most often a slip.
-  const makeStarting = (map) => {
+  const makeStarting = async (map) => {
     const current = scenarioMapList.find((entry) => entry.starting);
     if (map.kind === "builtin" && current && current.kind !== "builtin"
-      && !window.confirm(`${current.name} won't be the starting map any more: players will start on ${map.name}, a map of the real world. ${current.name} stays in this scenario's maps.`)) return;
-    applyMaps(makeStartingMap(d.doc?.metadata, map.key, { scenarioName: d.name }));
+      && !(await confirmDialog(`${current.name} won't be the starting map any more: players will start on ${map.name}, a map of the real world. ${current.name} stays in this scenario's maps.`))) return;
+    applyMaps(makeStartingMap(dRef.current.doc?.metadata, map.key, { scenarioName: dRef.current.name }));
   };
   const removeFromMaps = (key) => applyMaps(removeMap(d.doc?.metadata, key));
   const showDetailedOver = (key, overKey) => applyMaps(setShownOver(d.doc?.metadata, key, overKey, { scenarioName: d.name }));
@@ -1015,6 +1016,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       let settlementCompleted = false;
       const finishAcceptedScenarioSave = async (applied) => {
         canonicalSaved = true;
+        scenarioSaveSeqRef.current += 1;
         if (applied?.politicalActors) setSavedPoliticalActors(applied.politicalActors);
         // All canonical writes have landed. Resolve only these accepted authoring
         // operations against the latest React document before the next game can
@@ -1172,6 +1174,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         regionStep = api.setRegionAttrs(ids, { owner: plan.key }, { deferHistory: true });
         if (!regionStep) throw new Error("The native map rejected the country assignment.");
       }
+      const createdAtSaveSeq = scenarioSaveSeqRef.current;
       d.setDoc(next);
       d.setSaveStatus("dirty");
       api.pushStep({
@@ -1180,12 +1183,23 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           regionStep?.undo();
           d.setDoc(reverse);
           d.setSaveStatus("dirty");
+          // If the polity was already persisted to the scenario before Undo,
+          // queue an explicit removal op so the next save cleans up scenario ledgers.
+          if (scenarioMode && scenarioSaveSeqRef.current > createdAtSaveSeq) {
+            polityAuthoringOpsRef.current.push({ op: "remove", key: plan.key });
+            setScenarioDirty(true);
+          }
         },
         redo: () => {
           const forward = planMapPolityCreation(dRef.current.doc, plan);
           regionStep?.redo();
           d.setDoc(forward);
           d.setSaveStatus("dirty");
+          const ops = polityAuthoringOpsRef.current;
+          const last = ops[ops.length - 1];
+          if (last?.op === "remove" && samePolityName(last.key, plan.key)) {
+            ops.pop();
+          }
         },
       });
       return { ok: true };
@@ -1311,8 +1325,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // player chooses to stay, and Back then leaves the Workshop open.
   const requestClose = async ({ confirmed = false } = {}) => {
     if (scenarioMode && scenarioDirty && !confirmed) {
-      const ok = window.confirm(
+      const ok = await confirmDialog(
         "This scenario has Workshop changes that have not been saved into the scenario yet. Close without applying them?",
+        { danger: true, confirmLabel: "Close anyway" },
       );
       if (!ok) return false;
     }
@@ -1324,7 +1339,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     const ok = await settleUnsavedWork({
       status: dRef.current.saveStatus,
       save: saveNow,
-      confirm: (question) => window.confirm(question),
+      confirm: (question) => confirmDialog(question, { danger: true, confirmLabel: "Discard changes" }),
       question: "This map has changes that could not be saved. Close it and lose them?",
     });
     if (ok) onClose();
@@ -1353,7 +1368,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     const ok = await settleUnsavedWork({
       status: dRef.current.saveStatus,
       save: saveNow,
-      confirm: (text) => window.confirm(text),
+      confirm: (text) => confirmDialog(text, { danger: true, confirmLabel: "Continue" }),
       question,
     });
     if (ok) await runSaveRef.current.idle();
@@ -1401,7 +1416,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       background = rebuildPersistedBackground(opened.doc.metadata.customBackground);
     } catch (e) {
       console.warn("[editor] open failed:", e);
-      window.alert(`Could not open this map: ${e?.message || e}. Your current map is unchanged.`);
+      await alertDialog(`Could not open this map: ${e?.message || e}. Your current map is unchanged.`);
       return;
     }
     if (d.editCount() !== editsSettled && !(await settleBeforeReplacing(question))) return;
@@ -1409,7 +1424,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       api?.loadRegions(opened.regions);
     } catch (e) {
       console.warn("[editor] open failed:", e);
-      window.alert(`Could not open this map: ${e?.message || e}. Your current map is unchanged.`);
+      await alertDialog(`Could not open this map: ${e?.message || e}. Your current map is unchanged.`);
       return;
     }
     d.setDoc(opened.doc);
@@ -1853,7 +1868,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       </button>
     </div>
   ) : d.activeTool === "modify" ? (
-    <div style={{ color: d.selection.length ? "rgba(255,255,255,0.7)" : "#fbbf24" }}>
+    <div style={{ color: d.selection.length ? "var(--oh-ui-muted, rgba(255,255,255,0.7))" : "#fbbf24" }}>
       <b>Manual vertex override:</b>{" "}
       {d.selection.length === 0
         ? "select the regions to edit first"
@@ -1862,20 +1877,20 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           : `${d.selection.length} selected regions · drag a vertex · drag an edge to insert · Alt-click a vertex to remove · snap magnet enabled · Ctrl/Cmd+Z undo`}
     </div>
   ) : d.activeTool === "border" ? (
-    <div style={{ color: d.selection.length === 2 ? "rgba(255,255,255,0.74)" : "#fbbf24" }}>
+    <div style={{ color: d.selection.length === 2 ? "var(--oh-ui-muted, rgba(255,255,255,0.74))" : "#fbbf24" }}>
       <b>Shared border precision:</b>{" "}
       {d.selection.length === 2
         ? "drag a border vertex or edge on either selected region; the released point is welded into BOTH regions · cyan halo = shared-border magnet · Alt-click removes the corresponding shared vertex · a 100 m topology check runs after each edit · Ctrl/Cmd+Z undo"
         : `select exactly 2 neighbouring regions first (${d.selection.length} selected)`}
     </div>
   ) : isWarTool(d.activeTool) ? (
-    <div style={{ color: "rgba(255,255,255,0.7)" }}>{WAR_TOOL_HINTS[d.activeTool]}</div>
+    <div style={{ color: "var(--oh-ui-muted, rgba(255,255,255,0.7))" }}>{WAR_TOOL_HINTS[d.activeTool]}</div>
   ) : d.activeTool === "select" ? (
-    <div style={{ color: "rgba(255,255,255,0.7)" }}>Click a region to select it, Shift-click to add more, and double-click to select its whole polity.</div>
+    <div style={{ color: "var(--oh-ui-muted, rgba(255,255,255,0.7))" }}>Click a region to select it, Shift-click to add more, and double-click to select its whole polity.</div>
   ) : d.activeTool === "region-box" ? (
-    <div style={{ color: "rgba(255,255,255,0.7)" }}>Drag a rectangle to select every region touched; hold Shift to add to your current selection. Press M for Rectangle or L for Lasso.</div>
+    <div style={{ color: "var(--oh-ui-muted, rgba(255,255,255,0.7))" }}>Drag a rectangle to select every region touched; hold Shift to add to your current selection. Press M for Rectangle or L for Lasso.</div>
   ) : d.activeTool === "move" ? (
-    <div style={{ color: "rgba(255,255,255,0.7)" }}>Drag a selected region to move all selected regions together as one Undo step. Drag an unselected region to move it alone; this may create border gaps against unmoved neighbours.</div>
+    <div style={{ color: "var(--oh-ui-muted, rgba(255,255,255,0.7))" }}>Drag a selected region to move all selected regions together as one Undo step. Drag an unselected region to move it alone; this may create border gaps against unmoved neighbours.</div>
   ) : null;
 
   return (
@@ -1886,7 +1901,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         background: "var(--oh-ui-bg, #111113)",
         overflow: "hidden",
         fontFamily: "sans-serif",
-        color: "white",
+        color: "var(--oh-ui-text, white)",
         "--editor-dock-left": `${dockLeft}px`,
         "--editor-dock-right": `${dockRight}px`,
         "--editor-top": "12px",
@@ -2427,7 +2442,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         actions={scenarioActions}
         onReviewSave={scenarioMode ? () => persistScenario({ play: false, closeAfter: false }) : () => { void saveNow(); }}
         onReviewPlay={scenarioMode ? () => persistScenario({ play: true }) : null}
-        reviewBusy={Boolean(scenarioAction) || !hydrated}
+        reviewBusy={scenarioMode ? (Boolean(scenarioAction) || !hydrated) : !api}
         reviewScenarioMode={scenarioMode}
         isMobile={isMobile}
         mobileOpen={sidebarOpen}

@@ -68,12 +68,29 @@ const RegionsPanel = ({ api, polities = {}, types = [], groups = {}, selection =
     if (!event.shiftKey) anchor.current = id;
     if (!additive && !event.shiftKey) api?.zoomToRegion?.(id);
   };
+  const confirmingRef = useRef(false);
+  const liveRegionsRef = useRef({ api, selectedRows });
+  liveRegionsRef.current = { api, selectedRows };
+
   const apply = async (patch, label) => {
+    if (confirmingRef.current) return;
     const ids = selectedRows.map((r) => r.id);
     if (!ids.length || !api?.setRegionAttrs) return;
-    if (ids.length > 1 && !(await confirmDialog(`Change ${label} for ${ids.length.toLocaleString()} selected regions? This modifies their starting map state.`))) return;
-    api.setRegionAttrs(ids, patch);
-    setNote(`Updated ${label} for ${ids.length.toLocaleString()} region${ids.length === 1 ? "" : "s"}. Undo restores the previous values.`);
+    if (ids.length > 1) {
+      confirmingRef.current = true;
+      let ok = false;
+      try {
+        ok = await confirmDialog(`Change ${label} for ${ids.length.toLocaleString()} selected regions? This modifies their starting map state.`);
+      } finally {
+        confirmingRef.current = false;
+      }
+      if (!ok) return;
+    }
+    const live = liveRegionsRef.current;
+    const liveIds = live.selectedRows.map((r) => r.id);
+    if (!liveIds.length || !live.api?.setRegionAttrs) return;
+    live.api.setRegionAttrs(liveIds, patch);
+    setNote(`Updated ${label} for ${liveIds.length.toLocaleString()} region${liveIds.length === 1 ? "" : "s"}. Undo restores the previous values.`);
   };
   const options = (keys, labelFor) => keys.map((key) => ({ value: key, label: labelFor(key) }));
   const ownershipOptions = [{ value: "", label: "Unowned / no polity" }, ...options(ownerKeys, (key) => polityDisplayName(polities, key))];

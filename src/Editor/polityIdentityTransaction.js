@@ -99,6 +99,7 @@ export const revertMapPolityCreation = (document, key, original) => {
     ...document,
     polities,
     puppets: restoredPuppets,
+    relations: Array.isArray(document.relations) ? withoutStartingRelations(document.relations, target) : document.relations,
     relationEdits: withoutStartingRelations(document.relationEdits, target),
     actorGovernmentEdits: removeGovernmentEdits(document.actorGovernmentEdits, target),
   };

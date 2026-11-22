@@ -58,5 +58,5 @@ export const isUnsavedStatus = (status) => status === "dirty" || status === "sav
 export const settleUnsavedWork = async ({ status, save, confirm, question }) => {
   if (!isUnsavedStatus(status)) return true;
   if (await save()) return true;
-  return Boolean(confirm(question));
+  return Boolean(await confirm(question));
 };
