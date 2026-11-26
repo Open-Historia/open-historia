@@ -7,6 +7,13 @@
 // shock wave that spreads over the ground and a glow that lingers, for bombs a
 // scatter of bursts.
 //
+// A BEAM (an orbital beam) flies no way at all. It gathers at a point high
+// over the side it was fired from, then comes down onto the place in a moment
+// and holds there: a white core in a wide cold glow, a fire spreading under it
+// and a wave going out over the ground, then a scorch that glows on after it
+// is gone. One that is deflected stops above the place, on a shield that
+// ripples where it meets it, and nothing under it burns.
+//
 // ONE THAT IS INTERCEPTED NEVER ARRIVES. What brings it down is seen leaving
 // the ground on the defenders' side and climbing to meet it; where they meet
 // the missile or the aircraft blows up in the air, and what is left of it
@@ -27,7 +34,7 @@
 // Pure, and nothing here is left to chance twice: the same strike is the same
 // spectacle every time it is played.
 
-import { fliesAsAircraft, isNuclear } from "../../runtime/strikes.js";
+import { fliesAsAircraft, isBeam, isNuclear } from "../../runtime/strikes.js";
 import { mapKm, mapOffset } from "../../../server/mapDistance.js";
 import { currentMapMeasure } from "../../runtime/mapMeasure.js";
 
@@ -91,6 +98,38 @@ const DEBRIS_KM = { missile: 40, aircraft: 14 };
 const DEBRIS_PX = 46;
 // How long a strike is played after its last unit is done, when any was shot down.
 const AFTER_INTERCEPTION = 2.6;
+// A beam: the most drawn of a strike of many, how high it comes from on a
+// globe (km), how far to the side of the place it comes from (km, and at least
+// this many px of the screen, so it is seen as a beam and not a dot), and how
+// far apart the beams of one strike come down (km). Its times (s): gathering,
+// coming down, held, fading out, and between one beam of a strike and the next.
+// Then what it does where it comes down: the fire under it, the wave over the
+// ground and the scorch it leaves (km, the least px, how long each is seen, s),
+// and how wide the beam is drawn (px).
+export const BEAMS_SHOWN_MOST = 6;
+export const BEAM = Object.freeze({
+  orbitKm: 900,
+  slantKm: 240,
+  slantPx: 90,
+  spreadKm: 7,
+  gathers: 0.8,
+  drops: 0.18,
+  holds: 1.6,
+  fades: 0.55,
+  gap: 0.42,
+  fire: 16,
+  firePx: 7,
+  wave: 85,
+  wavePx: 26,
+  waveFor: 1.9,
+  scorch: 11,
+  scorchPx: 5,
+  scorchFor: 6.5,
+  corePx: 3.4,
+  glowPx: 15,
+});
+// Where along its way a deflected beam is stopped: above the place, on the shield over it.
+const BEAM_STOPPED_AT = 0.84;
 // An aircraft's shadow lies this much of its height away, and no farther than this on the screen (px).
 const SHADOW_OF_HEIGHT = 0.6;
 const SHADOW_PX_MOST = 14;
@@ -112,6 +151,10 @@ const COLOURS = {
   // What is sent up to bring a missile or an aircraft down: cold, where the attack is fire-coloured.
   interceptor: [0.86, 0.98, 1],
   interceptorGlow: [0.08, 0.5, 0.98],
+  // A beam: a white core in a cold glow, and the scorch it leaves.
+  beam: [0.97, 1, 1],
+  beamGlow: [0.32, 0.88, 1],
+  scorch: [1, 0.46, 0.14],
 };
 
 const clamp = (value, least, most) => Math.min(most, Math.max(least, value));
@@ -235,6 +278,7 @@ const fallen = (shown, down) => {
 export const planStrike = (strike, { from, to, flat = false, kmPerPixel = 0 } = {}) => {
   if (!strike || !Array.isArray(from) || !Array.isArray(to) || ![from[0], from[1], to[0], to[1]].every(Number.isFinite)) return null;
   const km = Math.max(1, rangeKm(from, to));
+  if (isBeam(strike.weapon)) return planBeam(strike, { from, to, km, flat, kmPerPixel });
   const aircraft = fliesAsAircraft(strike.weapon);
   const nuclear = isNuclear(strike.weapon);
   const most = aircraft ? AIRCRAFT_SHOWN_MOST : MISSILES_SHOWN_MOST;
@@ -323,6 +367,62 @@ export const planStrike = (strike, { from, to, flat = false, kmPerPixel = 0 } = 
     hits: through.length > 0,
     // (Long enough for the last blast to be seen out, and for what was shot down to have fallen.)
     lasts: last + Math.max(through.length > 0 ? (nuclear ? NUCLEAR.glowFor : 1.8) : 1.2, down > 0 ? AFTER_INTERCEPTION : 0),
+  };
+};
+
+// A beam laid out: each of those shown comes down a straight way from high
+// over the side it was fired from (on a flat map, from that side) onto a place
+// a little off the one aimed at, one after another. Each unit's `flight` is the
+// time from its first glow to the end of its hold; `down`, for one that is
+// deflected, is where along its way the shield stops it.
+const planBeam = (strike, { from, to, km, flat, kmPerPixel }) => {
+  const count = Math.max(1, Math.round(Number(strike.count) || 1));
+  const shown = Math.min(BEAMS_SHOWN_MOST, count);
+  const wanted = Math.max(0, Math.min(count, Math.round(Number(strike.down) || 0)));
+  const down = wanted >= count ? shown : wanted === 0 ? 0 : clamp(Math.round((wanted * shown) / count), 1, Math.max(1, shown - 1));
+  const lost = fallen(shown, down);
+  const looked = Number.isFinite(kmPerPixel) && kmPerPixel > 0 ? kmPerPixel : 0;
+  // (From the side it was fired from; straight down from the north when it was fired from where it lands.)
+  const side = km > 1 ? bearingOf(to, from) : 0;
+  const slant = Math.max(BEAM.slantKm, BEAM.slantPx * looked);
+  const flight = BEAM.gathers + BEAM.drops + BEAM.holds;
+  const high = flat ? 0 : BEAM.orbitKm;
+  const units = [];
+  for (let index = 0; index < shown; index += 1) {
+    const lands = placeFrom(to, chance(strike.id, index, "bearing") * 360, BEAM.spreadKm * Math.sqrt(chance(strike.id, index, "off")) * (shown > 1 ? 1 : 0));
+    const top = placeFrom(lands, side + (chance(strike.id, index, "slant") - 0.5) * 24, slant);
+    units.push({
+      index,
+      start: index * BEAM.gap,
+      flight,
+      down: lost.has(index) ? BEAM_STOPPED_AT : null,
+      interceptor: null,
+      way: bentWay(top, lands, 0),
+      height: (at) => high * (1 - clamp(at, 0, 1)),
+      lands,
+    });
+  }
+  const through = units.filter((entry) => entry.down === null);
+  const last = units.reduce((latest, entry) => Math.max(latest, entry.start + entry.flight + BEAM.fades), 0);
+  return {
+    id: strike.id,
+    weapon: strike.weapon,
+    nuclear: false,
+    aircraft: false,
+    beam: true,
+    flat: flat === true,
+    from: [from[0], from[1]],
+    to: [to[0], to[1]],
+    km,
+    count,
+    shown,
+    down,
+    gapKm: 0,
+    units,
+    bomber: -1,
+    hits: through.length > 0,
+    // (Long enough for the last scorch to cool, or for the last ripple on a shield to die away.)
+    lasts: last + (through.length > 0 ? BEAM.scorchFor : 1.2),
   };
 };
 
@@ -469,6 +569,7 @@ export const strikeItemsAt = (plan, seconds, { kmPerPixel = 0 } = {}) => {
   const items = { ribbons: [], points: [], discs: [] };
   if (!plan || !(seconds >= 0) || seconds > plan.lasts) return items;
   const scale = Number.isFinite(kmPerPixel) && kmPerPixel > 0 ? kmPerPixel : 0;
+  if (plan.beam) return beamItemsAt(items, plan, seconds, scale);
   // How large an aircraft is drawn: smaller where they have had to be drawn close together.
   const planeSize = scale > 0 ? clamp((plan.gapKm / scale) * 0.85, AIRCRAFT_PX[0], AIRCRAFT_PX[1]) : AIRCRAFT_PX[1];
   for (const entry of plan.units) {
@@ -551,6 +652,81 @@ export const strikeItemsAt = (plan, seconds, { kmPerPixel = 0 } = {}) => {
       const at = placeFrom(entry.lands, chance(plan.id, entry.index, `bomb${bomb}`) * 360, 4 + 14 * chance(plan.id, entry.index, `far${bomb}`));
       if (fell < 1) falling(items, place(from), at, fell, 4.5);
       else burst(items, at, (fell - 1) * BOMB_FALLS, scale);
+    }
+  }
+  return items;
+};
+
+// What is seen of a beam (planBeam) `seconds` after it began.
+const beamItemsAt = (items, plan, seconds, scale) => {
+  const atLeast = (km, pixels) => Math.max(km, pixels * scale);
+  for (const entry of plan.units) {
+    const since = seconds - entry.start;
+    if (since < 0) continue;
+    const place = (at) => {
+      const [lng, lat] = entry.way(at);
+      return [lng, lat, entry.height(at)];
+    };
+    const top = place(0);
+    const ends = entry.down ?? 1;
+    const fired = since - BEAM.gathers;
+    const held = fired - BEAM.drops;
+    // How bright it is: full while it is held, then fading out.
+    const bright = fired < 0 ? 0 : 1 - clamp((held - BEAM.holds) / BEAM.fades, 0, 1);
+    // (A flicker of its own, the same every time it is played.)
+    const flicker = 0.9 + 0.1 * Math.sin(since * 47 + entry.index * 1.7);
+    // It gathers where it comes from, and burns there while it is held.
+    if (bright > 0 || fired < 0) {
+      const gathered = fired < 0 ? easeOut(since / BEAM.gathers) : 1;
+      const left = fired < 0 ? 1 : bright;
+      items.points.push({ at: top, size: (8 + 26 * gathered) * flicker, shape: 0, colour: COLOURS.beamGlow, alpha: 0.7 * left, what: "beam" });
+      items.points.push({ at: top, size: 4 + 9 * gathered, shape: 2, colour: COLOURS.beam, alpha: left, what: "beam" });
+    }
+    if (fired < 0) {
+      // While it gathers, a faint line shows where it will come down.
+      const points = [];
+      for (let step = 0; step <= 12; step += 1) points.push(place((ends * step) / 12));
+      items.ribbons.push({ points, width: 1, colour: COLOURS.beamGlow, from: 0.05, to: 0.35 * easeOut(since / BEAM.gathers), what: "beam" });
+      continue;
+    }
+    // It comes down in a moment and holds.
+    if (bright > 0) {
+      const reach = ends * easeOut(fired / BEAM.drops);
+      const points = [];
+      for (let step = 0; step <= 16; step += 1) points.push(place((reach * step) / 16));
+      // On a globe its shadow lies on the ground under it.
+      if (!plan.flat) items.ribbons.push({ points: points.map(([lng, lat]) => [lng, lat, 0]), width: 2, colour: COLOURS.shadow, from: 0.1, to: 0.3 * bright, what: "beam" });
+      items.ribbons.push({ points, width: BEAM.glowPx * flicker, colour: COLOURS.beamGlow, from: 0.3 * bright, to: 0.5 * bright, what: "beam" });
+      items.ribbons.push({ points, width: BEAM.corePx, colour: COLOURS.beam, from: 0.85 * bright, to: bright, what: "beam" });
+    }
+    if (held < 0) continue;
+    if (entry.down !== null) {
+      // Deflected: a shield ripples where it is met, and nothing under it burns.
+      const met = place(entry.down);
+      if (bright > 0) items.points.push({ at: met, size: (18 + 10 * Math.sin(held * 9)) * flicker, shape: 2, colour: COLOURS.beam, alpha: 0.9 * bright, what: "beam" });
+      const pulses = 3;
+      for (let pulse = 0; pulse < pulses; pulse += 1) {
+        const ring = held - pulse * ((BEAM.holds + BEAM.fades) / pulses);
+        if (ring < 0 || ring > 1.2) continue;
+        items.points.push({ at: met, size: 24 + 80 * easeOut(ring / 1.2), shape: 3, colour: COLOURS.interceptor, alpha: 0.85 * (1 - ring / 1.2), what: "shield" });
+      }
+      continue;
+    }
+    // It comes down: a flash, a fire held under it, a wave over the ground, and a scorch that cools.
+    const at = entry.way(1);
+    if (held < 0.6) items.points.push({ at: [at[0], at[1], 3], size: 28 + 46 * easeOut(held / 0.25), shape: 2, colour: COLOURS.beam, alpha: 1 - held / 0.6 });
+    if (bright > 0) {
+      items.discs.push({ centre: at, km: atLeast(BEAM.fire, BEAM.firePx) * (0.3 + 0.7 * easeOut(held / 0.5)) * flicker, colour: COLOURS.beam, alpha: 0.55 * bright });
+      items.discs.push({ centre: at, km: atLeast(BEAM.fire, BEAM.firePx) * 1.6 * easeOut(held / 0.9), colour: COLOURS.fire, alpha: 0.5 * bright });
+    }
+    if (held < BEAM.waveFor) {
+      const gone = held / BEAM.waveFor;
+      waveRing(items, at, Math.max(1, atLeast(BEAM.wave, BEAM.wavePx) * easeOut(gone)), 2.6, (1 - gone) * (1 - gone));
+    }
+    const cooling = held - BEAM.holds;
+    if (held < BEAM.holds + BEAM.fades + BEAM.scorchFor) {
+      const left = cooling < 0 ? 1 : 1 - clamp(cooling / (BEAM.fades + BEAM.scorchFor), 0, 1);
+      items.discs.push({ centre: at, km: atLeast(BEAM.scorch, BEAM.scorchPx), colour: COLOURS.scorch, alpha: 0.6 * left * Math.min(1, held / 0.4) });
     }
   }
   return items;

@@ -12,6 +12,7 @@ import { buildWorldGrid, distanceTo, kmBetween, seasOf } from "./fronts/worldGri
 import { syntheticMap } from "./fronts/syntheticMap.js";
 import {
   AIRCRAFT_WEAPONS,
+  BEAM_WEAPONS,
   NUCLEAR_WEAPONS,
   SEA_LAUNCH_KM,
   STRIKES_KEPT_MOST,
@@ -20,6 +21,7 @@ import {
   STRIKE_WEAPONS,
   findStrikePlace,
   fliesAsAircraft,
+  isBeam,
   isNuclear,
   normalizeStrike,
   normalizeStrikes,
@@ -33,12 +35,17 @@ import {
 
 const strike = (extra = {}) => ({ id: "strike:2024-03-01:0", eventId: "e1", date: "2024-02-20", owner: "Aland", weapon: "silo missile", count: 3, down: 1, from: { name: "structure: Silo North", lng: 21.5, lat: 51.25 }, to: { name: "city: Brod", lng: 30.5, lat: 51.5 }, ...extra });
 
-test("the weapons a strike is made with: three are nuclear, two fly as aircraft", () => {
-  assert.deepEqual([...STRIKE_WEAPONS], ["silo missile", "submarine missile", "missile strike", "nuclear bomber", "bombing run"]);
+test("the weapons a strike is made with: three are nuclear, two fly as aircraft, one comes down as a beam", () => {
+  assert.deepEqual([...STRIKE_WEAPONS], ["silo missile", "submarine missile", "missile strike", "nuclear bomber", "bombing run", "orbital beam"]);
   assert.deepEqual(STRIKE_WEAPONS.filter(isNuclear), [...NUCLEAR_WEAPONS]);
   assert.deepEqual([...NUCLEAR_WEAPONS], ["silo missile", "submarine missile", "nuclear bomber"]);
   assert.deepEqual(STRIKE_WEAPONS.filter(fliesAsAircraft), [...AIRCRAFT_WEAPONS]);
   assert.deepEqual([...AIRCRAFT_WEAPONS], ["nuclear bomber", "bombing run"]);
+  assert.deepEqual(STRIKE_WEAPONS.filter(isBeam), [...BEAM_WEAPONS]);
+  assert.deepEqual([...BEAM_WEAPONS], ["orbital beam"]);
+  assert.equal(isNuclear("orbital beam") || fliesAsAircraft("orbital beam"), false);
+  assert.equal(normalizeStrike(strike({ weapon: "orbital beam" })).weapon, "orbital beam");
+  assert.equal(normalizeStrike(strike({ weapon: "death ray" })), null);
 });
 
 test("a strike is kept as what it is: who, with what, how many, how many shot down, and its two places", () => {
@@ -154,6 +161,8 @@ test("a strike nobody gave a launching place sets off from what its owner has fo
   // With no strategic site, a missile sets off from any military one; with nothing of its owner's, from nowhere the turn knows.
   assert.equal(pick("silo missile", { markers: markers.filter((marker) => !marker.strategic) }), "Alba Air Base");
   assert.equal(pick("missile strike"), "Silo East");
+  // A beam, like any other weapon, from the military site nearest its target.
+  assert.equal(pick("orbital beam"), "Silo East");
   assert.equal(pickStrikeOrigin({ weapon: "silo missile", owner: "Carpathia", to, markers, units }), null);
   assert.equal(pickStrikeOrigin({ weapon: "submarine missile", owner: "Aland", to, markers: [], units: [] }), null);
 });

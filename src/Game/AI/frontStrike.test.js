@@ -254,7 +254,7 @@ test("what the turn's own lists do not have is asked of the game's reader of pla
 test("the story is told how a strike is written, on its event, in every skip", () => {
   const levers = read("./gameplay.js");
   assert.match(levers, /• strikes: a missile launch or a bombing run the event tells of, one line each: side~weapon~from~target~count~shot down\./);
-  assert.match(levers, /silo missile \| submarine missile \| nuclear bomber \(these three are nuclear\) \| missile strike \| bombing run/);
+  assert.match(levers, /silo missile \| submarine missile \| nuclear bomber \(these three are nuclear\) \| missile strike \| bombing run \| orbital beam \(an ion cannon, a laser or any other beam from orbit\)/);
   assert.match(levers, /It is drawn on the map and changes nothing itself/);
   for (const block of [buildFrontsBlock({}), buildFrontsBlock({ period: { fromDate: "2024-03-01", toDate: "2024-03-11", battlefields: [], news: [], voyages: [{ k: "sailed", d: "2024-03-02", owner: "Aland", kind: "convoy", n: 4, to: "Brod" }], transports: [] } })]) {
     assert.match(block, /A missile launch or a bombing run is not a front order: it goes in the impacts\.strikes of the event that tells of it/);

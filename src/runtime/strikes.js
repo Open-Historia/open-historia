@@ -2,8 +2,9 @@
 // When an event says a nuclear missile was launched, or bombers were sent
 // over a city, the map shows it: the missile leaves its silo (or the sea, from
 // a submarine) and flies its arc to the place it hits, where a blast spreads;
-// the aircraft fly there and bomb it. Some of them may be shot down on the
-// way, and are seen to be.
+// the aircraft fly there and bomb it; a beam comes down out of orbit onto it.
+// Some of them may be shot down on the way (a beam: turned aside above the
+// place it was aimed at), and are seen to be.
 //
 // A strike is what the story wrote of one, kept in the world as `strikes`:
 //
@@ -11,9 +12,9 @@
 //     from: { name, lng, lat }, to: { name, lng, lat } }
 //
 //   weapon   "silo missile" | "submarine missile" | "missile strike"
-//            | "nuclear bomber" | "bombing run"
-//   count    how many missiles or aircraft
-//   down     how many of them were intercepted before they got there
+//            | "nuclear bomber" | "bombing run" | "orbital beam"
+//   count    how many missiles, aircraft or beams
+//   down     how many of them were intercepted (a beam: deflected) before they got there
 //   spreadKm how wide the bombs of a bombing run scatter round the place, in km, where
 //            it was set (a war room strike's radius: fronts/airStrike.js airStrikeVisuals); else as always
 //
@@ -26,10 +27,11 @@
 
 import { isStrategicMarker, markerFamilyOf } from "./markerFamily.js";
 
-export const STRIKE_WEAPONS = Object.freeze(["silo missile", "submarine missile", "missile strike", "nuclear bomber", "bombing run"]);
-// Which of them are nuclear, which fly as aircraft, and which as missiles.
+export const STRIKE_WEAPONS = Object.freeze(["silo missile", "submarine missile", "missile strike", "nuclear bomber", "bombing run", "orbital beam"]);
+// Which of them are nuclear, which fly as aircraft, which come down as a beam, and which as missiles.
 export const NUCLEAR_WEAPONS = Object.freeze(["silo missile", "submarine missile", "nuclear bomber"]);
 export const AIRCRAFT_WEAPONS = Object.freeze(["nuclear bomber", "bombing run"]);
+export const BEAM_WEAPONS = Object.freeze(["orbital beam"]);
 // The most a strike is said to be of, the most strikes a turn adds, and the most the world keeps.
 export const STRIKE_COUNT_MOST = 500;
 export const STRIKES_PER_TURN_MOST = 16;
@@ -46,6 +48,7 @@ const numberOf = (value) => (value === null || value === undefined || value === 
 
 export const isNuclear = (weapon) => NUCLEAR_WEAPONS.includes(weapon);
 export const fliesAsAircraft = (weapon) => AIRCRAFT_WEAPONS.includes(weapon);
+export const isBeam = (weapon) => BEAM_WEAPONS.includes(weapon);
 
 // A place as a strike keeps it: its name as it was written, and where it is
 // when that is known.
