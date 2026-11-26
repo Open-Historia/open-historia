@@ -18,7 +18,8 @@ import { UNIT_TYPES, findUnitType, mayFieldUnitType, normalizeUnitTypes, unitFig
 import { AIR_ROLES as UNIT_AIR_ROLES, OPERATION_APPROACHES } from "./fronts/constants.js";
 import { normalizeClimateZones, normalizeFortifications, normalizeFreezingRegions, normalizeTerrainAreas, normalizeZoneWeather } from "./warGeography.js";
 import { normalizeMilitaryShift, normalizeMilitaryStats, shiftedMilitary } from "./militaryStats.js";
-import { MAX_GROUPS, applyGroupOps, canRenameGroup, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
+import { MAX_GROUPS, applyGroupOps, canRenameGroup, defaultGroupColor, findGroupKey, liveGroupKey, normalizeDefunctGroups, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
+import { readNameRef } from "../Game/AI/nameRefs.js";
 import { GROUP_DEAL_TYPES, groupPartyKey } from "./groupParties.js";
 import { normalizeAgreementEffects } from "./agreementEffects.js";
 import { enqueueEventStrings } from "./translator.js";
@@ -291,6 +292,9 @@ export const WORLD_DEFAULTS = {
   // group per region), drawn outlined and tinted over the countries' colours.
   groups: {},
   groupAreas: {},
+  // The groups that ended, kept for history (groups.js normalizeDefunctGroups,
+  // dissolveGroup below): never listed, drawn or offered as a party again.
+  defunctGroups: {},
   regionOwnershipOverrides: {},
   // Legal sovereignty where it differs from the polity administering a region
   // (an occupation). Sparse: normal territory has no row. Written by legal
@@ -4333,6 +4337,7 @@ export const normalizeWorldState = (world) => {
   // claimant list is the region's state and wins.
   const groups = normalizeGroups(nextWorld.groups);
   const groupAreas = normalizeGroupAreas(nextWorld.groupAreas, groups);
+  const defunctGroups = normalizeDefunctGroups(nextWorld.defunctGroups, groups);
 
   const settledRegionClaims = [...new Set(
     normalizeArray(nextWorld.settledRegionClaims).map((regionId) => normalizeOptionalString(regionId)),
@@ -4469,6 +4474,7 @@ export const normalizeWorldState = (world) => {
     settledRegionClaims,
     groups,
     groupAreas,
+    defunctGroups,
     regionOwnershipOverrides,
     regionSovereigntyOverrides,
     simulationHistory: normalizeArray(nextWorld.simulationHistory)
@@ -5994,6 +6000,9 @@ const applyPolityAndTerritoryImpacts = ({
 // as the comment above the event loop says. Changes `world` (and `colors`)
 // in place; true when it was dissolved.
 export const dissolvePolity = (world, code, { heir = "", heirOf = null, date = "", eventId = "", regionTransfers = [], resolveOwner = (name) => name, colors = null } = {}) => {
+  // A group ends by its own door, which refuses a group that is also a polity
+  // (the player's, or a seat's): one actor under one name, never half ended.
+  if (liveGroupKey(world, code)) return Boolean(dissolveGroup(world, code, { heir, date, eventId }));
   const eventDate = date;
   const settlement = dissolvedPolityLand(world, code, { heir, heirOf });
   if (settlement.refused) {
@@ -6062,6 +6071,177 @@ export const dissolvePolity = (world, code, { heir = "", heirOf = null, date = "
   if (colors && typeof colors === "object") delete colors[code];
   console.info(`[polity lifecycle] dissolved "${code}".`);
   return true;
+};
+
+// ---- a group ends -------------------------------------------------------------
+//
+// "I won the Cartel War (Group vs Group) as CJNG against Sinaloa, however
+// Sinaloa can still be interacted with after death, their soldiers remain on
+// the map" (a player, 2026-11-26). A group's end deleted its record and its
+// area and nothing else: its units stayed on the map, its war stayed active, its
+// relations, offers, spies, projects and structures stayed, and once its record
+// was gone its name read as a COUNTRY's everywhere a group is told from one (a
+// front's captures founded a phantom polity under it). Every way a group ends
+// now comes through this one door: a time skip's or the Game Master's groupOps
+// dissolve, the cheats' Delete, a polity dissolve that names a group, a war
+// ending that says it was dissolved, and the repair of a save written before
+// (settleEndedGroups). It leaves nothing behind:
+//   - its record moves to world.defunctGroups with the date and the event, so
+//     old events still read and its name is still a group's;
+//   - its area goes; its units leave the map with their orders (or pass to
+//     `heir`), and its structures become `heir`'s or nobody's;
+//   - it leaves every war it fought (a war with nobody left on a side ends,
+//     the sides kept so the record says who fought; the front engine closes its
+//     battlefields), its calls to arms, peace and treaty offers lapse, its
+//     relations go, its agreements end (their effects with them), its spies
+//     and the spies on it are recalled, its open projects are cancelled, and
+//     its transports go.
+// A group that is also a polity (the player leading one, a seat's group in a
+// shared game: groups.js playerGroupKey) is never ended here: losing its whole
+// area is a release, and it goes on with none.
+// Changes `world` in place; returns the group's key, or "" when nothing ended.
+export const dissolveGroup = (world, name, { heir = "", date = "", eventId = "" } = {}) => {
+  const key = liveGroupKey(world, name);
+  if (!key) return "";
+  if (Object.keys(world.polityOverrides ?? {}).some((polity) => samePolityName(polity, key))) {
+    console.info(`[groups] "${key}" is a polity as well as a group; it is not dissolved (a release takes its area).`);
+    return "";
+  }
+  const endedDate = canonicalizeDateString(date);
+  const applied = applyGroupOps(world, [{ op: "dissolve", name: key }], { date: endedDate, eventId });
+  world.groups = applied.groups;
+  world.groupAreas = applied.groupAreas;
+  world.defunctGroups = applied.defunctGroups;
+  // A party names it by its exact name, or tagged as a group ("group: X"),
+  // never as another kind (nameRefs.js).
+  const isIt = (party) => {
+    if (typeof party !== "string") return false;
+    const ref = readNameRef(party);
+    return (!ref.kind || ref.kind === "group") && samePolity(ref.name, key);
+  };
+  const successor = normalizeOptionalString(heir) && !samePolity(heir, key) ? normalizeOptionalString(heir) : "";
+  const stamp = (row, field = "lastUpdatedDate") => (endedDate ? { [field]: endedDate } : {});
+
+  // Its agreements end, and with them every effect they carry (agreementEffects.js
+  // reads agreements in force only). A bare name that is also a polity's is the
+  // polity's: only "group: X" is the group's then.
+  const hasCollidingPolity = Boolean(resolvePolityIdentity(key, world, {
+    allowUnknown: false,
+    requireActive: false,
+    allowStockBase: true,
+    identityIndex: diplomaticIdentityIndexOf(world),
+  })?.resolved);
+  const groupTag = `group: ${key}`.toLocaleLowerCase();
+  world.agreements = normalizeArray(world.agreements).map((agreement) => {
+    if (!agreement || typeof agreement !== "object") return agreement;
+    if (!["active", "suspended"].includes(String(agreement.status || "active").toLowerCase())) return agreement;
+    const involves = normalizeArray(agreement.parties).some((party) => {
+      const folded = String(party ?? "").trim().toLocaleLowerCase();
+      return folded === groupTag || (!hasCollidingPolity && folded === key.toLocaleLowerCase());
+    });
+    if (!involves) return agreement;
+    return { ...agreement, status: "ended", endedDate: endedDate || normalizeOptionalString(agreement.endedDate), ...stamp(agreement) };
+  });
+  // Its wars, as a dissolved polity's (dissolvePolity).
+  world.wars = normalizeArray(world.wars).map((war) => {
+    if (!war || typeof war !== "object" || war.status === "ended") return war;
+    const sideA = normalizeArray(war.sideA).filter((party) => !isIt(party));
+    const sideB = normalizeArray(war.sideB).filter((party) => !isIt(party));
+    if (sideA.length === normalizeArray(war.sideA).length && sideB.length === normalizeArray(war.sideB).length) return war;
+    const lastUpdatedDate = endedDate || war.lastUpdatedDate;
+    if (!sideA.length || !sideB.length) return { ...war, status: "ended", endedDate: endedDate || war.lastUpdatedDate, lastUpdatedDate };
+    return { ...war, sideA, sideB, lastUpdatedDate };
+  });
+  world.relations = normalizeArray(world.relations).filter((row) => !isIt(row?.a) && !isIt(row?.b));
+  const lapse = (rows, names) => normalizeArray(rows).map((row) => (row && typeof row === "object" && row.status === "open" && names(row).some(isIt)
+    ? { ...row, status: "lapsed" }
+    : row));
+  world.callsToArms = lapse(world.callsToArms, (call) => [call.ally, call.defender, ...normalizeArray(call.attackers)]);
+  world.peaceOffers = lapse(world.peaceOffers, (offer) => [offer.from, offer.to]);
+  world.treatyOffers = lapse(world.treatyOffers, (offer) => [offer.from, offer.to]);
+  // Its units, and their standing orders, leave the map with it, or pass to its heir.
+  world.units = successor
+    ? normalizeArray(world.units).map((unit) => (isIt(unit?.ownerCode) ? { ...unit, ownerCode: successor } : unit))
+    : normalizeArray(world.units).filter((unit) => !isIt(unit?.ownerCode));
+  const unitIds = new Set(world.units.map((unit) => unit?.id));
+  world.pendingUnitOrders = normalizeArray(world.pendingUnitOrders).filter((order) => unitIds.has(order?.unitId));
+  world.markers = normalizeArray(world.markers).map((marker) => (isIt(marker?.ownerCode) ? { ...marker, ownerCode: successor } : marker));
+  world.transports = normalizeArray(world.transports).filter((row) => !isIt(row?.owner));
+  world.spies = normalizeArray(world.spies).map((spy) => (spy && typeof spy === "object" && ["active", "turned", "discovered"].includes(spy.status || "active") && (isIt(spy.owner) || isIt(spy.target))
+    ? { ...spy, status: "recalled" }
+    : spy));
+  world.projects = normalizeArray(world.projects).map((project) => (project && typeof project === "object" && isIt(project.ownerCode) && PROJECT_OPEN_STATUSES.has(normalizeOptionalString(project.status) || "active")
+    ? { ...project, status: "cancelled" }
+    : project));
+  for (const field of POLITY_LIFECYCLE_STORES) {
+    if (world[field] && typeof world[field] === "object" && !Array.isArray(world[field])) {
+      for (const stored of Object.keys(world[field])) if (isIt(stored)) delete world[field][stored];
+    }
+  }
+  console.info(`[groups] dissolved "${key}".`);
+  return key;
+};
+
+// The groups a time skip's warEndings say were dissolved in their defeat
+// (runtime/warEndings.js readWarEndings: [{ dissolved }]), each through the door.
+// { world, results: [{ name, ended }] }; `world` is a normalized copy.
+export const dissolveDefeatedGroups = (world, read = [], { date = "" } = {}) => {
+  const next = normalizeWorldState(cloneValue(world));
+  const results = [];
+  for (const entry of normalizeArray(read)) {
+    const name = normalizeOptionalString(entry?.dissolved);
+    if (!name || !liveGroupKey(next, name)) continue;
+    const ended = dissolveGroup(next, name, { date });
+    results.push({ name: ended || name, ended: Boolean(ended) });
+  }
+  return { world: results.some((row) => row.ended) ? normalizeWorldState(next) : world, results };
+};
+
+// A save written before dissolveGroup: a group a dissolve deleted outright, its
+// units, war, relations and the rest still in the world. The ended groups are
+// read from the recorded events' own groupOps (a dissolve after which no create
+// or take named it again), never from what any text says, and each one the
+// world still carries is put through the door. The world as it was when none is.
+//   events   every event of the campaign, in any order (they are sorted by date)
+export const settleEndedGroups = (world, events = []) => {
+  if (!world || typeof world !== "object") return world;
+  const last = new Map();
+  const dated = normalizeArray(events)
+    .map((event, index) => ({ event, index, date: normalizeOptionalString(event?.date) }))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.index - b.index);
+  for (const { event } of dated) {
+    for (const raw of normalizeArray(event?.impacts?.groupOps)) {
+      const op = normalizeGroupOp(raw);
+      if (!op) continue;
+      last.set(op.name.toLocaleLowerCase(), { op: op.op, name: op.name, date: normalizeOptionalString(event?.date), eventId: normalizeOptionalString(event?.id) });
+    }
+  }
+  const ended = [...last.values()].filter((entry) => entry.op === "dissolve"
+    && !liveGroupKey(world, entry.name)
+    && !Object.keys(world.polityOverrides ?? {}).some((polity) => samePolityName(polity, entry.name)));
+  if (!ended.length) return world;
+  const isNamed = (name) => (party) => typeof party === "string" && samePolity(readNameRef(party).name, name);
+  const left = ended.filter(({ name }) => {
+    const named = isNamed(name);
+    return normalizeArray(world.units).some((unit) => named(unit?.ownerCode))
+      || normalizeArray(world.wars).some((war) => war?.status !== "ended" && [...normalizeArray(war?.sideA), ...normalizeArray(war?.sideB)].some(named))
+      || normalizeArray(world.relations).some((row) => named(row?.a) || named(row?.b))
+      || normalizeArray(world.markers).some((marker) => named(marker?.ownerCode))
+      || !findGroupKey(world.defunctGroups ?? {}, name);
+  });
+  if (!left.length) return world;
+  const next = { ...world, groups: { ...(world.groups ?? {}) }, defunctGroups: { ...(world.defunctGroups ?? {}) } };
+  for (const { name, date, eventId } of left) {
+    // Back in the registry for the one moment the door needs it: as it was
+    // recorded when it ended, or by its name alone where nothing of it was kept.
+    const kept = findGroupKey(next.defunctGroups, name);
+    const record = kept ? next.defunctGroups[kept] : { name, description: "", color: defaultGroupColor(name) };
+    if (kept) delete next.defunctGroups[kept];
+    const { dissolvedDate, sourceEventIds: _ids, ...group } = record;
+    next.groups[record.name] = group;
+    dissolveGroup(next, record.name, { date: dissolvedDate || date, eventId });
+  }
+  return next;
 };
 
 // `boardOnlyEventIds` names events that are not on the timeline — carriers for a
@@ -6283,42 +6463,35 @@ export const applyEventImpactsToWorld = ({
         const { newName: _newName, ...rest } = op;
         groupOps.push({ ...rest, name });
       }
-      const applied = applyGroupOps(nextWorld, groupOps);
-      nextWorld.groups = applied.groups;
-      nextWorld.groupAreas = applied.groupAreas;
-      for (const change of applied.changes) {
+      // In the order written, each dissolve through the one door (dissolveGroup).
+      const changes = [];
+      const pending = [];
+      const flush = () => {
+        if (!pending.length) return;
+        const applied = applyGroupOps(nextWorld, pending.splice(0), { date: normalizeOptionalString(event?.date), eventId: normalizeOptionalString(event?.id) });
+        nextWorld.groups = applied.groups;
+        nextWorld.groupAreas = applied.groupAreas;
+        nextWorld.defunctGroups = applied.defunctGroups;
+        changes.push(...applied.changes);
+      };
+      for (const op of groupOps) {
+        if (op.op !== "dissolve") {
+          pending.push(op);
+          continue;
+        }
+        flush();
+        const ended = dissolveGroup(nextWorld, op.name, { date: normalizeOptionalString(event?.date), eventId: normalizeOptionalString(event?.id) });
+        if (ended) changes.push({ op: "dissolved", name: ended });
+      }
+      flush();
+      for (const change of changes) {
         // A group that fights on a battlefield is named there as a side's member.
         if (change.op === "rename") {
           nextWorld.battlefields = renameInBattlefields(nextWorld.battlefields, change.from, change.name);
           nextWorld.transports = renameInTransports(nextWorld.transports, change.from, change.name);
         }
-        // A dissolved group cannot keep running recurring agreements with no UI to end them.
-        if (change.op === "dissolve" && Array.isArray(nextWorld.agreements) && nextWorld.agreements.length) {
-          const hasCollidingPolity = Boolean(resolvePolityIdentity(change.name, nextWorld, {
-            allowUnknown: false,
-            requireActive: false,
-            allowStockBase: true,
-            identityIndex: diplomaticIdentityIndexOf(nextWorld),
-          })?.resolved);
-          const groupTag = `group: ${change.name}`.toLocaleLowerCase();
-          const bareName = String(change.name ?? "").trim().toLocaleLowerCase();
-          nextWorld.agreements = nextWorld.agreements.map((agreement) => {
-            if (!["active", "suspended"].includes(String(agreement?.status || "active").toLowerCase())) return agreement;
-            const parties = Array.isArray(agreement?.parties) ? agreement.parties : [];
-            const involvesGroup = parties.some((party) => {
-              const folded = String(party ?? "").trim().toLocaleLowerCase();
-              return folded === groupTag || (!hasCollidingPolity && folded === bareName);
-            });
-            if (!involvesGroup) return agreement;
-            return {
-              ...agreement,
-              status: "ended",
-              endedDate: normalizeOptionalString(event?.date) || normalizeOptionalString(agreement?.endedDate),
-              lastUpdatedDate: normalizeOptionalString(event?.date) || normalizeOptionalString(agreement?.lastUpdatedDate),
-            };
-          });
-        }
-        if (change.op === "refused") console.warn(`[groups] "${change.name}" was not created on event "${event.title}": the ${MAX_GROUPS}-group limit is reached.`);
+        if (change.op === "refused" && change.reason === "dissolved") console.info(`[groups] "${change.name}" has ended; event "${event.title}" did not bring it back (only a create does).`);
+        if (change.op === "refused" && change.reason !== "dissolved") console.warn(`[groups] "${change.name}" was not created on event "${event.title}": the ${MAX_GROUPS}-group limit is reached.`);
       }
     }
 
