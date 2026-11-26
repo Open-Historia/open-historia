@@ -108,12 +108,12 @@ test("air units off: a strike's weapons are missiles only", () => {
   const replaced = levers
     .replace("a missile launch or a bombing run the event tells of", "a missile launch the event tells of")
     .replace(" | nuclear bomber (these three are nuclear)", " (these two are nuclear)")
-    .replace(" | bombing run.", ".")
-    .replace("how many missiles or aircraft", "how many missiles");
+    .replace(" | bombing run | orbital beam", " | orbital beam")
+    .replace("how many missiles, aircraft or beams", "how many missiles or beams");
   assert.notEqual(replaced, levers);
-  assert.match(replaced, /weapon: silo missile \| submarine missile \(these two are nuclear\) \| missile strike\. from:/);
+  assert.match(replaced, /weapon: silo missile \| submarine missile \(these two are nuclear\) \| missile strike \| orbital beam \(an ion cannon, a laser or any other beam from orbit\)\. from:/);
   assert.doesNotMatch(replaced, /bomber|bombing run|aircraft/);
-  for (const piece of ["a missile launch or a bombing run the event tells of", " | nuclear bomber (these three are nuclear)", " | bombing run.", "how many missiles or aircraft"]) {
+  for (const piece of ["a missile launch or a bombing run the event tells of", " | nuclear bomber (these three are nuclear)", " | bombing run | orbital beam", "how many missiles, aircraft or beams"]) {
     assert.ok(gameplay.includes(`.replace("${piece}"`), `jumpLevers replaces ${piece}`);
   }
 });

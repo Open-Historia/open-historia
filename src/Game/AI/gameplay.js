@@ -3117,8 +3117,8 @@ const jumpLevers = () => {
   return airOn() ? grouped : grouped
     .replace("a missile launch or a bombing run the event tells of", "a missile launch the event tells of")
     .replace(" | nuclear bomber (these three are nuclear)", " (these two are nuclear)")
-    .replace(" | bombing run.", ".")
-    .replace("how many missiles or aircraft", "how many missiles");
+    .replace(" | bombing run | orbital beam", " | orbital beam")
+    .replace("how many missiles, aircraft or beams", "how many missiles or beams");
 };
 let gameMasterPromptNoGroups = null;
 const gameMasterPromptWithoutGroups = () => {
