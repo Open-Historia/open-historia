@@ -54,6 +54,28 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Five player reports (2026-11-26): a goal cut off at three lines; a played group's paid projects stalled for good
+    // because its economy had never been read; a structure shown while a skip streamed, then gone from the turn it wrote;
+    // a finished project's effects passed over in silence, on a narrow guess at the sheet's figures; a defeated group
+    // still on the map.
+    id: "2026-11-player-reports-fixed",
+    kind: "minor",
+    date: "2026-11-26",
+    channel: "beta",
+    banners: [
+      {
+        title: "Fixes from your reports",
+        items: [
+          "A long standing goal and its progress reading now scroll in their card instead of being cut off.",
+          "Projects of a country or group whose economy has not been assessed yet work at their planned pace instead of stalling for want of funds.",
+          "Project effects can move any figure on the sheet, and a finished project lists what each effect did, or why it could not.",
+          "Structures built in a time skip no longer vanish from the map when one detail of how they were written is off.",
+          "A group that is defeated or dissolved is gone everywhere: its forces, its area, its wars and its talks.",
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-project-currency-clarity",
     kind: "minor",
     date: "2026-11-20",
