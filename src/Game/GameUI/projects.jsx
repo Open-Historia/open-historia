@@ -53,6 +53,8 @@ import { ProjectFinancePanel } from "./projectFinance.jsx";
 import { projectFinanceSnapshot } from "../../runtime/projectFinance.js";
 import { projectOwnerOf, DAYS_PER_MONTH, dailyCostOf, estimateProjectFinish, ownerMeans, statMeasure } from "../../runtime/projectEngine.js";
 import { DEFAULT_STAT_INDEX_ROWS } from "../../runtime/statIndexDefinitions.js";
+import { loadStatSheetDefinition } from "../../runtime/statsSheet.js";
+import { statPathsOf } from "../../runtime/statPaths.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { uiString } from "../../runtime/translator.js";
 import { TAG_SEARCH_FROM, searchTags, stepTagFocus, tickedFirst } from "./projectTagMenu.js";
@@ -282,7 +284,24 @@ const STAT_LABELS = {
   "economy.publicDebt": "Public debt",
   "population.total": "Population",
 };
+// The scenario's own names for its figures: a sheet of its own keeps them
+// under customStats, and "customStats.internalSecurity" is "Internal security"
+// (names, never keys). Read once a scenario, by the panel (useSheetLabels).
+let sheetLabels = new Map();
+const useSheetLabels = () => {
+  const [, setRead] = useState(0);
+  useEffect(() => {
+    let live = true;
+    loadStatSheetDefinition().then((definition) => {
+      if (!live) return;
+      sheetLabels = new Map(statPathsOf({ definition }).filter((entry) => entry.label !== entry.path).map((entry) => [entry.path, entry.label]));
+      setRead((count) => count + 1);
+    }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+};
 const statLabel = (path) => {
+  if (String(path ?? "").startsWith("customStats.") && sheetLabels.has(path)) return sheetLabels.get(path);
   if (STAT_LABELS[path]) return uiString(STAT_LABELS[path]);
   const [head, key] = String(path ?? "").split(".");
   if (head === "indices") return uiString(DEFAULT_STAT_INDEX_ROWS.find((row) => row.key === key)?.label || key);
@@ -1451,6 +1470,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   // going (projectEngine.js), worked out here from the world as it stands.
   const engineWorld = useMemo(() => ({ countryStats, projects, projectFundingMode }), [countryStats, projects, projectFundingMode]);
   const means = useMemo(() => ownerMeans(engineWorld, playerCountry, projects, playerCountry), [engineWorld, playerCountry, projects]);
+  useSheetLabels();
   const financedOwners = useMemo(() => {
     if (!financing?.receipts?.length) return new Set();
     try {
