@@ -47,6 +47,8 @@ import {
   projectFundingMode,
   resolveFunding,
   roundProgress,
+  normalizeEffectResults,
+  normalizeProjectEffects,
   sheetOf,
   statMeasure,
   statValueOf,
@@ -2158,6 +2160,10 @@ export const normalizeProjectEntry = (entry, index = 0, { ownerScope = "" } = {}
     // The one-way latch that makes a completion's effects land exactly ONCE
     // (applyProjectOutcomesToWorld): the date they were applied.
     effectsAppliedAt: normalizeOptionalString(entry.effectsAppliedAt),
+    // What each of its effects came to (projectEngine.js normalizeEffectResult),
+    // and the stat effects still waiting for a country's figures to be read.
+    ...(Array.isArray(entry.effectResults) && entry.effectResults.length ? { effectResults: normalizeEffectResults(entry.effectResults) } : {}),
+    ...(Array.isArray(entry.effectsWaiting) && entry.effectsWaiting.length ? { effectsWaiting: normalizeProjectEffects(entry.effectsWaiting, { scale: "once" }) } : {}),
     lastUpdate: normalizeTextLike(entry.lastUpdate),
     // A project from before the engine whose completion changes the map or a
     // polity (normalizeProjectOnComplete); null for the great majority.
@@ -6628,8 +6634,14 @@ export const statEffectPatch = (sheet, effect, scale, share = 1) => {
 // What a project's completion (or, for a programme that runs on, its being set
 // up) and its monthly yields do to the world, from a tick's outcomes. Each
 // completion's effects land exactly once (effectsAppliedAt, and the legacy
-// onCompleteAppliedAt); a stat or relation the world has nothing to move (no
-// sheet for that country) is passed over, never invented.
+// onCompleteAppliedAt), and each ends with a result the project keeps
+// (effectResults; projectEngine.js normalizeEffectResult): applied, refused for
+// a reason, or, for a stat of a country whose figures have not been read yet,
+// waiting (effectsWaiting), carried out by the first call that finds its sheet.
+// Nothing is invented and nothing is passed over in silence: an effect used to
+// vanish where the sheet had no such figure or no sheet existed ("Project was
+// completed and the listed changes didn't happen", a player, 2026-11-26).
+// `refused` lists what was not carried out, as `applied` lists what was.
 //
 // Territory is not applied here: it has to be found on the map by name and
 // enacted through the event path with everything else that moves a border. It
@@ -6638,6 +6650,7 @@ export const statEffectPatch = (sheet, effect, scale, share = 1) => {
 export const applyProjectOutcomesToWorld = ({ world, outcomes = [], date = "", round = 0, host = "" } = {}) => {
   const nextWorld = normalizeWorldState(world);
   const applied = [];
+  const refused = [];
   const territory = [];
   const findProject = (outcome) => {
     const projectId = normalizeOptionalString(outcome?.projectId);
@@ -6662,30 +6675,41 @@ export const applyProjectOutcomesToWorld = ({ world, outcomes = [], date = "", r
   const resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
   const relationOf = (a, b) => nextWorld.relations.findIndex((entry) => (samePolityName(entry.a, a) && samePolityName(entry.b, b)) || (samePolityName(entry.a, b) && samePolityName(entry.b, a)));
 
+  // A country the world knows: a sheet, a map owner, an override, a group.
+  const knownCountry = (name) => Boolean(normalizeOptionalString(name)) && (
+    Object.keys(nextWorld.countryStats ?? {}).some((key) => samePolityName(key, name))
+    || Object.keys(nextWorld.polityOverrides ?? {}).some((key) => samePolityName(key, name))
+    || Object.values(nextWorld.regionOwnershipOverrides ?? {}).some((owner) => samePolityName(owner, name))
+    || Object.keys(nextWorld.groups ?? {}).some((key) => samePolityName(key, name))
+    || samePolityName(name, host));
+  // { change } done, or { reason } (EFFECT_REFUSALS; "wait" for a sheet not read yet).
   const applyStat = (owner, effect, scale, share, carry = null) => {
     const country = resolveOwner(effect.country || owner) || effect.country || owner;
     const sheetKey = Object.keys(nextWorld.countryStats ?? {}).find((name) => samePolityName(name, country));
-    if (!sheetKey) return 0;
+    if (!sheetKey) return { reason: knownCountry(country) ? "wait" : "noCountry" };
     let wanted = effect.change * share;
     // Whole points of a fractional monthly yield, the rest banked.
     if (carry && statMeasure(effect.stat) !== "percentGdp" && statMeasure(effect.stat) !== "percentPopulation") {
       const banked = (Number(carry[effect.stat]) || 0) + wanted;
       wanted = Math.trunc(banked);
       carry[effect.stat] = Math.round((banked - wanted) * 1000) / 1000;
-      if (!wanted) return 0;
+      if (!wanted) return { change: 0 };
     }
-    const result = statEffectPatch(nextWorld.countryStats[sheetKey], { ...effect, change: wanted }, scale, 1);
-    if (!result) return 0;
+    const sheet = nextWorld.countryStats[sheetKey];
+    if (!Number.isFinite(statValueOf(sheet, effect.stat))) return { reason: "noFigure" };
+    const result = statEffectPatch(sheet, { ...effect, change: wanted }, scale, 1);
+    if (!result) return { reason: "noChange" };
     applyCountryStatPatchToWorld(nextWorld, sheetKey, result.patch);
-    return result.applied;
+    return { change: result.applied };
   };
   const applyRelation = (owner, effect, scale, share) => {
     const other = resolveOwner(effect.country) || effect.country;
     const mine = resolveOwner(owner) || owner;
-    if (!other || !mine || samePolityName(other, mine)) return 0;
+    if (!other || !mine) return { reason: "noCountry" };
+    if (samePolityName(other, mine)) return { reason: "sameCountry" };
     const change = Math.max(-RELATION_BOUNDS[scale], Math.min(RELATION_BOUNDS[scale], effect.change * share));
     const rounded = Math.round(change);
-    if (!rounded) return 0;
+    if (!rounded) return { reason: "noChange" };
     const index = relationOf(mine, other);
     if (index === -1) {
       nextWorld.relations = [...nextWorld.relations, { a: mine, b: other, score: rounded, lastUpdatedDate: date, updatedRound: round, createdRound: round }];
@@ -6695,8 +6719,36 @@ export const applyProjectOutcomesToWorld = ({ world, outcomes = [], date = "", r
         ? { ...row, score: Math.max(-100, Math.min(100, Number(entry.score || 0) + rounded)), status: "", lastUpdatedDate: date || row.lastUpdatedDate, updatedRound: round || row.updatedRound }
         : row));
     }
-    return rounded;
+    return { change: rounded };
   };
+  const projectAt = (index) => nextWorld.projects[index];
+  const setProject = (index, patch) => {
+    nextWorld.projects = nextWorld.projects.map((entry, i) => (i === index ? { ...entry, ...patch } : entry));
+  };
+
+  // Effects that waited for a country's figures: carried out by the first call
+  // that finds them read.
+  nextWorld.projects.forEach((project, index) => {
+    const waiting = normalizeArray(project?.effectsWaiting);
+    if (!waiting.length) return;
+    const owner = normalizeOptionalString(project.ownerCode) || normalizeOptionalString(host);
+    const still = [];
+    const results = normalizeArray(project.effectResults).filter((row) => row?.status !== "waiting");
+    for (const effect of waiting) {
+      const done = applyStat(owner, effect, "once", 1);
+      if (done.reason === "wait") {
+        still.push(effect);
+        results.push({ status: "waiting", effect });
+      } else if (done.reason) {
+        results.push({ status: "refused", effect, reason: done.reason, date });
+        refused.push({ project: project.name, owner, date, effect, reason: done.reason });
+      } else {
+        results.push({ status: "applied", effect, change: done.change, date });
+        applied.push({ project: project.name, owner, date, effect: { ...effect, change: done.change } });
+      }
+    }
+    setProject(index, { effectsWaiting: still, effectResults: results });
+  });
 
   for (const outcome of normalizeArray(outcomes)) {
     const index = findProject(outcome);
@@ -6709,8 +6761,8 @@ export const applyProjectOutcomesToWorld = ({ world, outcomes = [], date = "", r
       for (const effect of normalizeArray(project.plan?.yields)) {
         const share = Math.max(0, Math.min(1, Number(outcome.share) || 0));
         const done = effect.type === "stat" ? applyStat(owner, effect, "month", share, carry)
-          : effect.type === "relation" ? applyRelation(owner, effect, "month", share) : 0;
-        if (done) applied.push({ project: project.name, owner, date: outcome.date, effect: { ...effect, change: done }, monthly: true });
+          : effect.type === "relation" ? applyRelation(owner, effect, "month", share) : { change: 0 };
+        if (done.change) applied.push({ project: project.name, owner, date: outcome.date, effect: { ...effect, change: done.change }, monthly: true });
       }
       nextWorld.projects = nextWorld.projects.map((entry, i) => (i === index ? { ...entry, [YIELD_CARRY_KEY]: carry } : entry));
       continue;
@@ -6721,18 +6773,34 @@ export const applyProjectOutcomesToWorld = ({ world, outcomes = [], date = "", r
     const structures = [];
     const regionTransfers = [];
     const regionClaims = [];
+    const results = [];
+    const waiting = [];
+    const when = outcome.date || date;
+    const settle = (effect, done) => {
+      if (done.reason === "wait") {
+        waiting.push(effect);
+        results.push({ status: "waiting", effect });
+      } else if (done.reason) {
+        results.push({ status: "refused", effect, reason: done.reason, date: when });
+        refused.push({ project: project.name, owner, date: when, effect, reason: done.reason });
+      } else {
+        results.push({ status: "applied", effect, ...(Number.isFinite(done.change) ? { change: done.change } : {}), date: when });
+        applied.push({ project: project.name, owner, date: when, effect: Number.isFinite(done.change) ? { ...effect, change: done.change } : effect });
+      }
+    };
     for (const effect of normalizeArray(project.plan?.effects)) {
       if (effect.type === "stat") {
-        const done = applyStat(owner, effect, "once", 1);
-        if (done) applied.push({ project: project.name, owner, date: outcome.date, effect: { ...effect, change: done } });
+        settle(effect, applyStat(owner, effect, "once", 1));
       } else if (effect.type === "relation") {
-        const done = applyRelation(owner, effect, "once", 1);
-        if (done) applied.push({ project: project.name, owner, date: outcome.date, effect: { ...effect, change: done } });
+        settle(effect, applyRelation(owner, effect, "once", 1));
       } else if (effect.type === "structure") {
         const at = Number.isFinite(effect.lng) && Number.isFinite(effect.lat) ? { lng: effect.lng, lat: effect.lat } : project.focus;
-        if (!at) continue;
+        if (!at) {
+          settle(effect, { reason: "noPlace" });
+          continue;
+        }
         structures.push({ op: "build", marker: { name: effect.name, kind: effect.kind, ownerCode: owner, lng: at.lng, lat: at.lat, foundedAt: outcome.date, note: project.summary } });
-        applied.push({ project: project.name, owner, date: outcome.date, effect });
+        settle(effect, {});
       } else if (effect.type === "unitType") {
         const types = normalizeArray(nextWorld.unitTypes);
         const existing = types.findIndex((type) => samePolityName(type?.name, effect.name));
@@ -6745,11 +6813,14 @@ export const applyProjectOutcomesToWorld = ({ world, outcomes = [], date = "", r
         } else {
           nextWorld.unitTypes = normalizeUnitTypes([...types, { name: effect.name, base: effect.base, attack: effect.attack, toughness: effect.toughness, speed: effect.speed, icon: effect.icon ?? "", note: effect.note ?? "", owners: [owner] }]);
         }
-        applied.push({ project: project.name, owner, date: outcome.date, effect });
+        settle(effect, {});
       } else if (effect.type === "territory") {
         const region = `region: ${effect.region}`;
         if (effect.claim) regionClaims.push({ regionId: region, claimantCode: effect.country, note: project.name });
         else regionTransfers.push({ regionId: region, toCode: effect.country, note: project.name });
+        // Settled with the turn's map (gameplay.js settleProjectTerritoryWorld),
+        // which holds the turn rather than lose it.
+        results.push({ status: "applied", effect, date: when });
       }
     }
     if (structures.length) nextWorld.markers = applyMarkerOps(nextWorld.markers, structures, { gameDate: outcome.date });
@@ -6765,10 +6836,13 @@ export const applyProjectOutcomesToWorld = ({ world, outcomes = [], date = "", r
         polityChanges: normalizeArray(legacy?.polityChanges),
       });
     }
-    nextWorld.projects = nextWorld.projects.map((entry, i) => (i === index
-      ? { ...entry, effectsAppliedAt: outcome.date || date, ...(legacy ? { onCompleteAppliedAt: outcome.date || date } : {}) }
-      : entry));
+    setProject(index, {
+      effectsAppliedAt: outcome.date || date,
+      ...(legacy ? { onCompleteAppliedAt: outcome.date || date } : {}),
+      ...(results.length ? { effectResults: [...normalizeArray(projectAt(index).effectResults), ...results] } : {}),
+      ...(waiting.length ? { effectsWaiting: [...normalizeArray(projectAt(index).effectsWaiting), ...waiting] } : {}),
+    });
   }
 
-  return { world: normalizeWorldState(nextWorld), applied, territory };
+  return { world: normalizeWorldState(nextWorld), applied, refused, territory };
 };

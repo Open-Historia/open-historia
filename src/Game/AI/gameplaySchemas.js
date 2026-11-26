@@ -4556,8 +4556,8 @@ export const STATS_BACKEND_SCHEMA = Object.freeze({
   type: "object",
   description: "Hidden engine figures the player never sees: what this polity's armies are raised from and paid with. Worked out first; the scenario's own values then say the same thing.",
   properties: {
-    population: { type: "number", description: "Its people, as a plain count." },
-    gdp: { type: "number", description: "The size of its economy in a year, in one unit used for every polity of this world (any unit, as long as it is the same for all)." },
+    population: { type: "number", description: "Its people, as a plain count; 0 for a polity with no people of its own." },
+    gdp: { type: "number", description: "The size of its economy in a year, in the one unit used for every polity of this world (constant 2026 US dollars as a plain count where none is known yet)." },
     budgetBalance: { type: "number", description: "Its treasury's balance for the year as a percentage of that economy: above 0 a surplus, below 0 a deficit." },
     publicDebt: { type: "number", description: "What its treasury owes, as a percentage of that economy." },
   },

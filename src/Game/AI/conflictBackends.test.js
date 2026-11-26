@@ -37,7 +37,7 @@ test("the request asks for the four figures of every country at once, in one uni
   assert.ok(userMessage.includes('ALREADY KNOWN (for the unit and the scale; do not return these):\n- France: {"population":39600000,"gdp":138000000000,"budgetBalance":-1,"publicDebt":66}'));
   assert.ok(userMessage.includes("ERA & WORLD RULES:\nThe Great War"));
   // With nothing known it is told to choose one unit; and never more than the most at once.
-  assert.ok(conflictBackendsRequest({ countries: [{ name: "X" }] }).userMessage.includes("No polity's figures are known yet: choose one unit for gdp and use it for all of these."));
+  assert.ok(conflictBackendsRequest({ countries: [{ name: "X" }] }).userMessage.includes("No polity's figures are known yet: write gdp in constant 2026 US dollars as a plain count (not thousands, millions or billions) for all of these."));
   assert.equal(conflictBackendsRequest({ countries: Array.from({ length: 20 }, (_, index) => ({ name: `Country ${index}` })) }).asked.length, CONFLICT_BACKENDS_MOST);
   assert.equal(CONFLICT_BACKENDS_MOST, 8);
   // Nothing in it is an id.

@@ -33,6 +33,7 @@ import { militaryLookup } from "../../runtime/militaryStats.js";
 import { applyCountryCapabilityPatchToWorld, validateCountryCapabilityPatch } from "../../runtime/countryCapabilities.js";
 import { MILITARY_CHANGE_RULE, describeMilitaryStanding } from "../../runtime/militaryStanding.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
+import { describeStatPaths, statPathEnum, withStatPathEnum } from "../../runtime/statPaths.js";
 import { STATS_BACKEND_FIELD, conflictSheetTargets, hasStatsBackend, readableFigure, statsBackendInstruction, statsBackendOf, statsBackendPatch, statsBackendTurnRule } from "../../runtime/statsBackend.js";
 import { CONFLICT_BACKENDS_MOST, conflictBackendsRequest, readConflictBackends } from "./conflictBackends.js";
 import { compactStatSheet, describeStatsRefreshEvidence, deviceStorage, lastStatsRefreshDate, pickStatsRefreshCountries, readStatsRefreshMonths, readStatsRefreshUpdates, rememberStatsRefreshDate, statsRefreshPatch, statsRefreshRequest, statsRefreshRunDue } from "./statsRefresh.js";
@@ -8942,6 +8943,13 @@ const runProjectsEngine = async ({ baseWorld, world, colors, fromDate, toDate, h
       effects: released.applied.map((entry) => `${entry.owner} · ${entry.project}: ${entry.effect.type} ${entry.effect.stat ?? entry.effect.name ?? entry.effect.country ?? ""} ${entry.effect.change ?? ""}`),
     }, { verbose: true });
   }
+  // What a completion could not do is never silent: the log says it, as the
+  // project card does (projects.jsx EffectResults).
+  if (released.refused.length) {
+    logDebugEvent("turn", `Projects engine: ${released.refused.length} effect(s) of a finished project not carried out.`, {
+      refused: released.refused.map((entry) => `${entry.owner} · ${entry.project}: ${entry.effect.type} ${entry.effect.stat ?? entry.effect.name ?? entry.effect.country ?? ""} (${entry.reason})`),
+    }, { problem: true });
+  }
   return { world: nextWorld, colors: nextColors, renamedPolities };
 };
 
@@ -13171,7 +13179,8 @@ export const generateRostraPosts = async ({ signal } = {}) => {
 // project budget (projectEngine.js), how fast it can work, the figures a plan
 // may move (as their stat paths, with their values now), and the unit types it
 // knows of.
-const projectMeansText = (world, owner) => {
+//   definition   the scenario's stat sheet (its figures are the paths an effect may name)
+const projectMeansText = (world, owner, definition = null) => {
   const sheet = sheetOf(world, owner) ?? {};
   const means = ownerMeans(world, owner, world.projects, owner);
   const lines = [`${owner}.`];
@@ -13183,18 +13192,14 @@ const projectMeansText = (world, owner) => {
   } else if (gdp > 0) {
     lines.push(`Canonical GDP ${readableFigure(gdp)} USD a year. Project budget ${readableFigure(means.budget)} USD a month, of which its running projects take ${readableFigure(means.committed)} USD; one project may cost at most ${readableFigure(means.budget * COST_SHARE_OF_BUDGET_MOST)} USD a month. All these amounts use constant 2026 USD accounting, not domestic currency.`);
   } else {
-    lines.push("No native GDP baseline is assessed: paid Projects cannot claim funding. Give any proposed monthlyCost in constant 2026 USD, not an invented domestic-currency amount or a promise of available money.");
+    lines.push("Its economy is not assessed yet: its projects work at their planned pace and nothing is paid until its economy is read. Give monthlyCost in constant 2026 USD, what the effort would really cost, not an invented domestic-currency amount.");
   }
   lines.push(`How fast it can work, from its economy and stability: ${means.capacity} (1 is an ordinary state).`);
-  const figures = [];
-  if (Number.isFinite(Number(sheet?.stability))) figures.push(`stability ${sheet.stability}`);
-  for (const [key, value] of Object.entries(sheet?.indices ?? {})) figures.push(`indices.${key} ${value}`);
-  for (const [key, value] of Object.entries(sheet?.military ?? {})) if (["quality", "technology", "land", "sea", "air", "spending"].includes(key)) figures.push(`military.${key} ${value}`);
-  for (const key of ["gdpGrowth", "inflation", "unemployment", "budgetBalance", "publicDebt"]) {
-    if (Number.isFinite(Number(sheet?.economy?.[key]))) figures.push(`economy.${key} ${sheet.economy[key]}`);
-  }
-  for (const [key, value] of Object.entries(sheet?.customStats ?? {})) figures.push(`customStats.${key} ${value}`);
-  lines.push(figures.length ? `Its figures now: ${figures.join(", ")}.` : "Its sheet has no figures yet: a stat effect on it changes nothing.");
+  // Every figure of its sheet, by the path an effect names it (runtime/statPaths.js).
+  const figures = describeStatPaths({ definition, sheet: sheetOf(world, owner) });
+  lines.push(figures
+    ? `Its figures now, each one a stat effect may move: ${figures}.`
+    : `Its figures have not been read yet; a stat effect on one of them (${statPathEnum({ definition }).join(", ")}) is carried out once they are.`);
   const types = normalizeArray(world.unitTypes).map((type) => normalizeString(type?.name)).filter(Boolean);
   if (types.length) lines.push(`Unit types this world has: ${types.join(", ")}.`);
   return lines.join("\n");
@@ -13220,13 +13225,19 @@ export const planProject = async ({ name = "", goal = "", signal = null } = {}) 
   const world = normalizeWorldState(bundle.world);
   const owner = projectsHost(bundle.game);
   const variables = await buildTemplateVariables(bundle, { taskKey: "projectPlan" });
+  // The figures a stat effect may name are its sheet's own, sent as the
+  // schema's enum (runtime/statPaths.js): a path the sheet does not have cannot
+  // be written, where it used to be written and then passed over on completion.
+  const definition = await loadStatSheetDefinition().catch(() => null);
+  const statPaths = statPathEnum({ definition, sheet: sheetOf(world, owner) });
   const { payload } = await runJsonTask("projectPlan", {
     signal,
+    ...(statPaths.length ? { toolTransform: (tool) => withStatPathEnum(tool, statPaths) } : {}),
     userMessage: `Plan this project.\nName: ${wanted}\nWhat it is for: ${normalizeString(goal) || "as its name says"}`,
     variables: {
       ...variables,
       projectPlanRules: PROJECT_PLAN_RULES,
-      projectMeans: projectMeansText(world, owner),
+      projectMeans: projectMeansText(world, owner, definition),
       projectsSummary: buildProjectsSummaryText(world, bundle.game, { compact: true }),
     },
     validatePayload: (candidate) => (normalizeProjectPlan(candidate) ? "" : "durationDays and monthlyCost are required."),
@@ -14844,7 +14855,15 @@ const generateScenarioCustomStatSheet = async ({
     customStatEvidenceIds: evidence.evidenceIds,
   };
 
-  if (!decision.regenerate && !rateIntelligence) {
+  // A sheet with no hidden backend under it (a polity whose economy the game has
+  // never read, or whose backend an older build threw away for having no people:
+  // statsBackend.js readStatsBackend) is asked for that backend whatever its own
+  // values need, in this same one request, and only until it has one. Without it
+  // the polity has no economy the game can read: its projects had no budget and
+  // stalled for good (a player's Modern Day 2026 save, 2026-11-26), and its war
+  // had nothing to raise or pay troops from.
+  const needsBackend = !statsBackendOf(previous);
+  if (!decision.regenerate && !rateIntelligence && !needsBackend) {
     // Existing saves have no custom fingerprint. Seal the current evidence
     // without silently revisiting three years of already-assessed history.
     if (decision.migrate && statCode) {
@@ -14887,7 +14906,11 @@ ${describeFreshCustomStatEvidence(evidence.freshEvents)}
 Reassess existing values only as a response to newly changed canonical evidence. Historical crises already incorporated in the previous sheet are NOT new events. Preserve any index for which no relevant new evidence justifies a difference. Changes can be positive or negative; do not assume ongoing decline.`
         : "",
       // The layer under the scenario's own sheet (runtime/statsBackend.js).
-      statsBackendInstruction(statsBackendOf(previous)),
+      statsBackendInstruction(statsBackendOf(previous), Object.entries(worldAtStart?.countryStats || {})
+        .filter(([name]) => name !== statCode)
+        .map(([name, sheet]) => ({ name, backend: statsBackendOf(sheet) }))
+        .filter((entry) => entry.backend?.gdp > 0)
+        .sort((a, b) => b.backend.gdp - a.backend.gdp)),
       rateIntelligence ? intelligenceRatingInstruction(target, currentDate) : "",
     ].filter(Boolean).join("\n\n"),
     variables: rateIntelligence ? { ...variables, statsRateIntelligence: true } : variables,
@@ -14906,15 +14929,19 @@ Reassess existing values only as a response to newly changed canonical evidence.
   }
 
   // (A backend the answer left out, or wrote unusably, leaves the one the sheet had.)
+  // A sheet that had none takes the one written even when its own values were
+  // not reassessed; its continuity then stays the one it had, since nothing of
+  // what it shows was looked at again.
+  const sealed = needsBackend && !decision.regenerate && previous?.continuity ? previous.continuity : continuity;
   const sheet = mergeCountryStatPatch(previous, {
     customStats,
-    ...(decision.regenerate ? statsBackendPatch(payload?.[STATS_BACKEND_FIELD]) : {}),
-  }, { continuity });
+    ...(decision.regenerate || needsBackend ? statsBackendPatch(payload?.[STATS_BACKEND_FIELD]) : {}),
+  }, { continuity: sealed });
 
   if (!statCode || !sheet) return sheet;
-  if (commit) return commit({ code: statCode, sheet, continuity });
+  if (commit) return commit({ code: statCode, sheet, continuity: sealed });
 
-  return statsWrite(campaign, signal, { inOrder: "stat-sheet" }, ({ inEntry, fence }) => persistStatSheet({ code: statCode, sheet, continuity, date: currentDate, round: currentRound, signal, source: "scenario-custom-stats", inEntry, fence }));
+  return statsWrite(campaign, signal, { inOrder: "stat-sheet" }, ({ inEntry, fence }) => persistStatSheet({ code: statCode, sheet, continuity: sealed, date: currentDate, round: currentRound, signal, source: "scenario-custom-stats", inEntry, fence }));
 };
 
 // Structured national stat sheet for the Stats tab, grounded in the same
