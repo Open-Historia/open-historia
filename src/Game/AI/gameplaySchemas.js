@@ -4730,8 +4730,42 @@ const valueType = (value) => {
 const propertyPath = (path, key) =>
   /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? `${path}.${key}` : `${path}[${JSON.stringify(key)}]`;
 
+// The property an anyOf's branches are told apart by: one every branch is an
+// object with, as a one-word enum ("op": build, update, rename …; two shapes of
+// one op may share its word). "" when the branches are not told apart that way.
+const discriminatorOf = (branches) => {
+  if (branches.length < 2 || !branches.every((branch) => branch?.type === "object" && branch.properties)) return "";
+  const [first, ...rest] = branches;
+  for (const [key, property] of Object.entries(first.properties)) {
+    const words = [property, ...rest.map((branch) => branch.properties[key])].map((schema) => (Array.isArray(schema?.enum) && schema.enum.length === 1 ? schema.enum[0] : undefined));
+    if (words.every((word) => word !== undefined) && new Set(words).size > 1) return key;
+  }
+  return "";
+};
+// How deep an error's path goes ("$.a.b[0].c" is 4): the deepest of several
+// errors is the one that says where the fault is.
+const errorDepth = (error) => (String(error).match(/^\$[^\s]*/)?.[0].match(/\.[A-Za-z_$][A-Za-z0-9_$]*|\[[^\]]*\]/g) ?? []).length;
+
 const validateAgainstSchema = (schema, value, path) => {
   if (Array.isArray(schema.anyOf)) {
+    // An op that says which it is (its "op") is checked against that branch
+    // alone, and its fault is reported where it sits: "…markerOps[0].marker.status
+    // must be one of …", not "…markerOps[0] did not match any allowed schema".
+    // Schema salvage removes the smallest thing at the place an error names
+    // (schemaSalvage.js), so the vaguer error cost a whole structure over one
+    // optional field: a build shown on the map while a skip streamed in was gone
+    // from the turn it wrote ("buildings appear and then disappear", a player,
+    // 2026-11-26).
+    // Where two shapes of one op share its word (a build written nested or
+    // flat), the fault reported is the deepest one: the shape the op was written in.
+    const key = discriminatorOf(schema.anyOf);
+    const said = key && value && typeof value === "object" && !Array.isArray(value) ? value[key] : undefined;
+    const branches = said === undefined ? [] : schema.anyOf.filter((candidate) => candidate.properties[key].enum[0] === said);
+    if (branches.length) {
+      const found = branches.map((candidate) => validateAgainstSchema(candidate, value, path));
+      if (found.some((error) => !error)) return "";
+      return found.reduce((best, error) => (errorDepth(error) > errorDepth(best) ? error : best));
+    }
     const errors = schema.anyOf.map((candidate) => validateAgainstSchema(candidate, value, path));
     if (errors.some((error) => !error)) return "";
     return `${path} did not match any allowed schema: ${errors.join(" ")}`;
