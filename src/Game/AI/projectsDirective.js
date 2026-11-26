@@ -1,5 +1,6 @@
 /*! Open Historia — what a time skip is told of the Projects & Operations board © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// Import-free on purpose: runs under node --test without a build.
+// Light on purpose: runs under node --test without a build (its one import,
+// runtime/statPaths.js, is pure).
 //
 // The engine runs every project (runtime/projectEngine.js): each day its
 // owner's budget pays for it and the work moves at the pace its plan, its
@@ -14,6 +15,8 @@
 // Appended at call time rather than written into defaultPrompts.json because
 // every game carries its own frozen copy of the task prompts; a directive added
 // here is the only way it reaches campaigns that already exist.
+
+import { STAT_PATH_GRAMMAR } from "../../runtime/statPaths.js";
 
 export const JUMP_PROJECTS_DIRECTIVE_HEADER = "[Projects & Operations]";
 
@@ -30,14 +33,16 @@ const BOARD_ENTRY_NOT_STORYLINE =
 
 // What an effect may be: numbers on the game's own systems, each capped by the
 // engine (projectEngine.js normalizeProjectEffect).
+// Which figures is the model's to choose, all of them; the engine holds only
+// each change's size, by the kind of figure (runtime/statPaths.js).
 export const PROJECT_EFFECTS_RULE =
-  "Effects are numbers on the game's own systems, and the engine caps each one: "
-  + "stat (the owner's figure unless country names another: stability, indices.<key>, military.<quality|technology|land|sea|air|spending>, "
-  + "economy.<gdp|gdpGrowth|inflation|unemployment|budgetBalance|publicDebt>, population.total, customStats.<key>; "
-  + "change in points on a 0-100 scale, in per cent for economy.gdp and population.total, in percentage points for the economy's rates); "
+  "Effects are numbers on the game's own systems, and the engine caps the size of each: "
+  + `stat (the owner's figure unless country names another; ANY figure of the sheet, by its path: ${STAT_PATH_GRAMMAR}, as its figures are listed; `
+  + "change in points on a 0-100 scale, in per cent for economy.gdp and population.total, in percentage points for the economy's rates, a share of the value for a large custom figure); "
   + "relation (country, change in points); structure (name, kind, lng, lat); unitType (name, base, attack/toughness/speed against an ordinary unit's 1); "
-  + "territory (region by its map name, country, claim). Fit them to what the project is: a research programme moves technology, "
-  + "a dam the economy, a campaign of influence a relation, a naval base a structure and the sea arm. A programme that runs on (ongoing) "
+  + "territory (region by its map name, country, claim). Give it every effect it would really have, on whichever figures those are, not only the most obvious one: "
+  + "a sustainability programme may move energy autonomy, the economy, stability and reputation alike; a research programme technology and the economy; "
+  + "a campaign of influence a relation and reputation; a naval base a structure and the sea arm. A programme that runs on (ongoing) "
   + "may have yields too: a small stat or relation change every month it is paid for.";
 
 // How the board is kept, which no turn changes: a time skip states it once,

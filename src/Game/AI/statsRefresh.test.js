@@ -181,7 +181,7 @@ test("it writes through the stat sheet's own write, the one the Stats pane's Ref
   const generate = gameplay.slice(gameplay.indexOf("export const generateCountryStatSheet"), gameplay.indexOf("export const refinePlayerAction"));
   assert.match(generate, /persisted = await persistStatSheet\(\{/, "the standard sheet's Refresh");
   const custom = gameplay.slice(gameplay.indexOf("const generateScenarioCustomStatSheet"), gameplay.indexOf("export const generateCountryStatSheet"));
-  assert.match(custom, /=> persistStatSheet\(\{ code: statCode, sheet, continuity,/, "a scenario's own sheet's Refresh");
+  assert.match(custom, /=> persistStatSheet\(\{ code: statCode, sheet, continuity: sealed,/, "a scenario's own sheet's Refresh");
   assert.match(custom, /customStatEvidenceOf\(/, "and the same test of what changed");
 });
 

@@ -13,12 +13,12 @@ const project = (monthlyCost = 12_000, more = {}) => ({
 const advance = (world, board = [project()]) =>
   tickProjects({ projects: board, world, host: "Old Kingdom", fromDate: "1475-01-01", toDate: "1475-01-31", round: 2 });
 
-test("without an explicit mode, GDP-proxy projects cannot claim unknown funds", () => {
+test("without an explicit mode, GDP-proxy projects of an unassessed economy work at their planned pace and claim no funds", () => {
   const world = normalizeWorldState({ countryStats: {} });
   assert.equal(world.projectFundingMode, "gdp-proxy");
   const result = advance(world);
   assert.equal(result.projects[0].spent, 0);
-  assert.equal(result.projects[0].progress, 0);
+  assert.ok(result.projects[0].progress > 0);
 });
 
 test("scenario-authored non-monetary mode progresses with no GDP and records no fictional money", () => {
@@ -46,10 +46,10 @@ test("explicit mode outranks GDP presence; no hidden treasury deduction occurs",
   assert.equal(world.countryStats["Old Kingdom"].economy.gdp, 1_000_000);
 });
 
-test("an unknown mode cannot bypass the GDP-proxy funding guard", () => {
+test("an unknown mode is read as GDP-proxy and books nothing for an unassessed economy", () => {
   const world = normalizeWorldState({ projectFundingMode: "infinite-money", countryStats: {} });
   assert.equal(world.projectFundingMode, "gdp-proxy");
-  assert.equal(advance(world).projects[0].progress, 0);
+  assert.equal(advance(world).projects[0].spent, 0);
 });
 
 test("non-monetary mode resumes previously stalled work without inventing a payment", () => {

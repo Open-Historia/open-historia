@@ -439,6 +439,48 @@ const PlanFacts = ({ plan, owner, costShown = false, displayCurrency }) => {
   );
 };
 
+// What a finished project's effects came to (gameState.js
+// applyProjectOutcomesToWorld): carried out, waiting for a country's figures to
+// be read, or not carried out and why. Never left unsaid: "Project was completed
+// and the listed changes didn't happen" (a player, 2026-11-26).
+const EFFECT_REFUSAL_TEXT = {
+  noFigure: "its sheet has no such figure",
+  noSheet: "no figures are kept for that country",
+  sameCountry: "a country has no relations with itself",
+  noPlace: "it had no place on the map",
+  noChange: "too small to change anything",
+  noCountry: "no such country",
+};
+const EffectResults = ({ results, owner }) => {
+  const list = Array.isArray(results) ? results : [];
+  if (!list.length) return null;
+  return (
+    <div style={{ marginTop: "0.5rem" }}>
+      <span style={smallLabel}>{uiString("What it did")}</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem", marginTop: "0.2rem" }}>
+        {list.map((row, index) => {
+          const shown = row.status === "applied" && Number.isFinite(row.change) ? { ...row.effect, change: row.change } : row.effect;
+          const text = describeEffectForPlayer(shown, owner);
+          const mark = row.status === "applied" ? "✓" : row.status === "waiting" ? "…" : "✕";
+          const color = row.status === "applied" ? ACCENT : row.status === "waiting" ? "rgba(255,255,255,0.45)" : "#f87171";
+          const why = row.status === "waiting"
+            ? uiString("waits until those figures are read")
+            : row.status === "refused" ? uiString(EFFECT_REFUSAL_TEXT[row.reason] || "not carried out") : "";
+          return (
+            <div key={`${index}-${text}`} data-effect-result={row.status} style={{ display: "flex", fontSize: "0.7rem", gap: "0.4rem" }}>
+              <span aria-hidden="true" style={{ color, flexShrink: 0 }}>{mark}</span>
+              <span style={{ color: row.status === "applied" ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.55)", flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
+                <span data-no-translate>{text}</span>
+                {why && <span>{` — ${why}`}</span>}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const Milestones = ({ plan }) => {
   const list = plan?.milestones ?? [];
   if (!list.length) return null;
@@ -593,6 +635,7 @@ const ProjectCard = memo(({ project, fundingMode, displayCurrency, eventTitles, 
       )}
 
       {project.plan && <PlanFacts costShown displayCurrency={displayCurrency} owner={ownerKey} plan={project.plan} />}
+      <EffectResults owner={ownerKey} results={project.effectResults} />
       {project.plan && <Milestones plan={project.plan} />}
 
       {project.lastUpdate && (
@@ -1607,7 +1650,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
           {means.mode === "nonmonetary" ? (
             <span>{uiString("Non-monetary project funding: time and capacity only; no GDP or cash payments required")}</span>
           ) : means.budget === null ? (
-            <span style={{ color: "#fbbf24" }}>{uiString("No native GDP baseline: paid projects cannot receive funding until assessed")}</span>
+            <span style={{ color: "#fbbf24" }}>{uiString("Economy not assessed yet: projects work at their planned pace, and nothing is paid until it is")}</span>
           ) : (
             <>
               <span>{uiString("Estimated project allowance: {{amount}} per month", { amount: formatMoney(means.budget, displayCurrency) })}</span>

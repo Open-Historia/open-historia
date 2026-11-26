@@ -1,0 +1,610 @@
+{
+ "source": "A player save, Modern Day - 2026 (hub scenario with its own stat sheet), played as the group Nemo; trimmed to what the 2026-11-26 report tests read.",
+ "game": {
+  "country": "Nemo",
+  "gameDate": "2028-07-01",
+  "round": 14
+ },
+ "projectFundingMode": "gdp-proxy",
+ "statSheet": {
+  "version": 2,
+  "sections": [
+   {
+    "key": "national",
+    "label": "National",
+    "stats": [
+     {
+      "key": "nationalStability",
+      "label": "National stability",
+      "kind": "index",
+      "icon": "⚖",
+      "color": "#22c55e",
+      "prefix": "",
+      "suffix": "",
+      "decimals": 0,
+      "compact": false,
+      "minimum": 0,
+      "maximum": 100
+     },
+     {
+      "key": "intelligenceService",
+      "label": "Intelligence service",
+      "kind": "index",
+      "icon": "♟",
+      "color": "#a78bfa",
+      "prefix": "",
+      "suffix": "",
+      "decimals": 0,
+      "compact": false,
+      "minimum": 0,
+      "maximum": 100
+     },
+     {
+      "key": "militaryForces",
+      "label": "Military forces",
+      "kind": "index",
+      "icon": "⚔️",
+      "color": "#85323b",
+      "prefix": "",
+      "suffix": "",
+      "decimals": 0,
+      "compact": false,
+      "minimum": 0,
+      "maximum": 100
+     }
+    ]
+   },
+   {
+    "key": "strategic",
+    "label": "Strategic indices",
+    "stats": [
+     {
+      "key": "sovereignty",
+      "label": "Sovereignty",
+      "kind": "index",
+      "icon": "⚑",
+      "color": "#8b5cf6",
+      "prefix": "",
+      "suffix": "",
+      "decimals": 0,
+      "compact": false,
+      "minimum": 0,
+      "maximum": 100
+     },
+     {
+      "key": "foodAutonomy",
+      "label": "Food autonomy",
+      "kind": "index",
+      "icon": "🌾",
+      "color": "#22c55e",
+      "prefix": "",
+      "suffix": "",
+      "decimals": 0,
+      "compact": false,
+      "minimum": 0,
+      "maximum": 100
+     },
+     {
+      "key": "energyAutonomy",
+      "label": "Energy autonomy",
+      "kind": "index",
+      "icon": "⚡",
+      "color": "#eab308",
+      "prefix": "",
+      "suffix": "",
+      "decimals": 0,
+      "compact": false,
+      "minimum": 0,
+      "maximum": 100
+     },
+     {
+      "key": "economicIndependence",
+      "label": "Economic independence",
+      "kind": "index",
+      "icon": "🏦",
+      "color": "#06b6d4",
+      "prefix": "",
+      "suffix": "",
+      "decimals": 0,
+      "compact": false,
+      "minimum": 0,
+      "maximum": 100
+     },
+     {
+      "key": "internalSecurity",
+      "label": "Internal security",
+      "kind": "index",
+      "icon": "🛡",
+      "color": "#f43f5e",
+      "prefix": "",
+      "suffix": "",
+      "decimals": 0,
+      "compact": false,
+      "minimum": 0,
+      "maximum": 100
+     },
+     {
+      "key": "internationalReputation",
+      "label": "International reputation",
+      "kind": "index",
+      "icon": "🤝",
+      "color": "#3b82f6",
+      "prefix": "",
+      "suffix": "",
+      "decimals": 0,
+      "compact": false,
+      "minimum": 0,
+      "maximum": 100
+     }
+    ]
+   },
+   {
+    "key": "population",
+    "label": "Population",
+    "stats": [
+     {
+      "key": "totalPopulation",
+      "label": "Total population",
+      "kind": "number",
+      "icon": "♟",
+      "color": "#94a3b8",
+      "prefix": "",
+      "suffix": "people",
+      "decimals": 0,
+      "compact": true,
+      "minimum": 0
+     },
+     {
+      "key": "populationGrowthRate",
+      "label": "Population growth rate",
+      "kind": "percentage",
+      "icon": "↓↑",
+      "color": "#66626f",
+      "prefix": "",
+      "suffix": "%",
+      "decimals": 1,
+      "compact": false,
+      "minimum": -50,
+      "maximum": 10000
+     }
+    ]
+   },
+   {
+    "key": "economy",
+    "label": "Economy",
+    "stats": [
+     {
+      "key": "gdp",
+      "label": "GDP",
+      "kind": "currency",
+      "icon": "💶",
+      "color": "#34d399",
+      "prefix": "€",
+      "suffix": "",
+      "decimals": 1,
+      "compact": true,
+      "minimum": 0
+     },
+     {
+      "key": "gdpGrowthPerMonth",
+      "label": "GDP growth per month",
+      "kind": "percentage",
+      "icon": "◆",
+      "color": "#368145",
+      "prefix": "",
+      "suffix": "%",
+      "decimals": 1,
+      "compact": false,
+      "minimum": -100000,
+      "maximum": 100000
+     },
+     {
+      "key": "gdpPerCapita",
+      "label": "GDP/capita",
+      "kind": "currency",
+      "icon": "◫",
+      "color": "#e5e7eb",
+      "prefix": "€",
+      "suffix": "",
+      "decimals": 0,
+      "compact": true,
+      "minimum": 0
+     },
+     {
+      "key": "inflation",
+      "label": "Inflation",
+      "kind": "percentage",
+      "icon": "↗",
+      "color": "#34d399",
+      "prefix": "",
+      "suffix": "%",
+      "decimals": 1,
+      "compact": false,
+      "minimum": 0,
+      "maximum": 10000
+     },
+     {
+      "key": "unemployment",
+      "label": "Unemployment",
+      "kind": "percentage",
+      "icon": "♟",
+      "color": "#34d399",
+      "prefix": "",
+      "suffix": "%",
+      "decimals": 1,
+      "compact": false,
+      "minimum": 0,
+      "maximum": 100
+     },
+     {
+      "key": "publicDebt",
+      "label": "Public debt",
+      "kind": "percentage",
+      "icon": "▥",
+      "color": "#34d399",
+      "prefix": "",
+      "suffix": "%",
+      "decimals": 1,
+      "compact": false,
+      "minimum": 0,
+      "maximum": 1000
+     },
+     {
+      "key": "budgetBalance",
+      "label": "Budget balance",
+      "kind": "percentage",
+      "icon": "±",
+      "color": "#34d399",
+      "prefix": "",
+      "suffix": "%",
+      "decimals": 1,
+      "compact": false,
+      "minimum": -1000,
+      "maximum": 1000
+     },
+     {
+      "key": "agricultureShare",
+      "label": "Agriculture",
+      "kind": "percentage",
+      "icon": "🌾",
+      "color": "#22c55e",
+      "prefix": "",
+      "suffix": "%",
+      "decimals": 0,
+      "compact": false,
+      "minimum": 0,
+      "maximum": 100
+     },
+     {
+      "key": "industryShare",
+      "label": "Industry",
+      "kind": "percentage",
+      "icon": "🏭",
+      "color": "#3b82f6",
+      "prefix": "",
+      "suffix": "%",
+      "decimals": 0,
+      "compact": false,
+      "minimum": 0,
+      "maximum": 100
+     },
+     {
+      "key": "servicesShare",
+      "label": "Services",
+      "kind": "percentage",
+      "icon": "◆",
+      "color": "#8b5cf6",
+      "prefix": "",
+      "suffix": "%",
+      "decimals": 0,
+      "compact": false,
+      "minimum": 0,
+      "maximum": 100
+     }
+    ]
+   }
+  ]
+ },
+ "countryStats": {
+  "Nemo": {
+   "customStats": {
+    "nationalStability": 90,
+    "intelligenceService": 88,
+    "militaryForces": 4,
+    "sovereignty": 70,
+    "foodAutonomy": 96,
+    "energyAutonomy": 61,
+    "economicIndependence": 58,
+    "internalSecurity": 94,
+    "internationalReputation": 4,
+    "totalPopulation": 0,
+    "populationGrowthRate": 0,
+    "gdp": 940000000,
+    "gdpGrowthPerMonth": 1.6,
+    "gdpPerCapita": 0,
+    "inflation": 0,
+    "unemployment": 0,
+    "publicDebt": 0,
+    "budgetBalance": 14,
+    "agricultureShare": 0,
+    "industryShare": 2,
+    "servicesShare": 98
+   },
+   "continuity": {
+    "assessedDate": "2027-10-01",
+    "assessedRound": 11
+   }
+  },
+  "United States of America": {
+   "population": {
+    "total": 337384374
+   },
+   "economy": {
+    "gdp": 28835
+   }
+  }
+ },
+ "groups": {
+  "Nemo": {
+   "name": "Nemo"
+  }
+ },
+ "projects": [
+  {
+   "id": "legacy-project-u-jh0096kc9x",
+   "name": "Project Midas - One Trillion in Assets",
+   "kind": "operation",
+   "ownerCode": "",
+   "status": "active",
+   "stallReason": "",
+   "funding": "normal",
+   "progress": 15.863,
+   "plan": {
+    "durationDays": 3650,
+    "monthlyCost": 0,
+    "milestones": [
+     {
+      "id": "m1",
+      "title": "Seed capital: one billion banked across lanes",
+      "atProgress": 8,
+      "reachedAt": "2027-08-20",
+      "reached": true
+     },
+     {
+      "id": "m2",
+      "title": "Market-operations fund past ten billion in assets",
+      "atProgress": 24,
+      "reachedAt": ""
+     },
+     {
+      "id": "m3",
+      "title": "Crypto treasury and equity holdings pass one hundred billion combined",
+      "atProgress": 48,
+      "reachedAt": ""
+     },
+     {
+      "id": "m4",
+      "title": "Infrastructure and IP estate passes four hundred billion",
+      "atProgress": 72,
+      "reachedAt": ""
+     },
+     {
+      "id": "m5",
+      "title": "One trillion under control across separated identities",
+      "atProgress": 96,
+      "reachedAt": ""
+     }
+    ],
+    "effects": []
+   },
+   "startedAt": "2026-10-01",
+   "spent": 0,
+   "paidShare": 1,
+   "starvedDays": 0
+  },
+  {
+   "id": "legacy-project-u-7cdwrcrfxd",
+   "name": "Project Daylight - Everyday Payment Chain",
+   "kind": "project",
+   "ownerCode": "",
+   "status": "stalled",
+   "stallReason": "funds",
+   "funding": "normal",
+   "progress": 0,
+   "plan": {
+    "durationDays": 840,
+    "monthlyCost": 380000,
+    "milestones": [
+     {
+      "id": "m1",
+      "title": "Consensus and threat model frozen (bonded BFT finality, no PoW)",
+      "atProgress": 18,
+      "reachedAt": ""
+     },
+     {
+      "id": "m2",
+      "title": "Rust node builds; single-region testnet with test vectors",
+      "atProgress": 42,
+      "reachedAt": ""
+     },
+     {
+      "id": "m3",
+      "title": "Optional shielding: hash commitments and batched mixing, third-party audit filed",
+      "atProgress": 66,
+      "reachedAt": ""
+     },
+     {
+      "id": "m4",
+      "title": "Public source release under anonymous handle with published fuzzing and audit record",
+      "atProgress": 86,
+      "reachedAt": ""
+     },
+     {
+      "id": "m5",
+      "title": "Launch with honest value expectations stated and Hollow never named in docs",
+      "atProgress": 99,
+      "reachedAt": ""
+     }
+    ],
+    "effects": []
+   },
+   "startedAt": "2027-04-01",
+   "spent": 0,
+   "paidShare": 0,
+   "starvedDays": 30
+  },
+  {
+   "id": "legacy-project-u-tnajaotpfo",
+   "name": "Foundation Open Corpus Programme",
+   "kind": "project",
+   "ownerCode": "",
+   "status": "stalled",
+   "stallReason": "funds",
+   "funding": "low",
+   "progress": 0,
+   "plan": {
+    "durationDays": 840,
+    "monthlyCost": 250000,
+    "milestones": [
+     {
+      "id": "m1",
+      "title": "Published toolchain adopted by third parties",
+      "atProgress": 18,
+      "reachedAt": ""
+     },
+     {
+      "id": "m2",
+      "title": "Provenance ledger complete for the permissive component set",
+      "atProgress": 42,
+      "reachedAt": ""
+     },
+     {
+      "id": "m3",
+      "title": "First corpus release with contamination report",
+      "atProgress": 68,
+      "reachedAt": ""
+     },
+     {
+      "id": "m4",
+      "title": "Second release with labelled synthetic generation and open eval harness",
+      "atProgress": 90,
+      "reachedAt": ""
+     }
+    ],
+    "effects": [
+     {
+      "type": "relation",
+      "country": "Republic of India",
+      "change": 4
+     },
+     {
+      "type": "relation",
+      "country": "Federative Republic of Brazil",
+      "change": 3
+     },
+     {
+      "type": "relation",
+      "country": "Republic of South Africa",
+      "change": 3
+     }
+    ]
+   },
+   "startedAt": "2027-10-01",
+   "spent": 0,
+   "paidShare": 0,
+   "starvedDays": 30
+  },
+  {
+   "id": "legacy-project-u-11cpouw6apy",
+   "name": "UN Veto Override Programme - Track One and Assembly Fallback",
+   "kind": "operation",
+   "ownerCode": "",
+   "status": "stalled",
+   "stallReason": "funds",
+   "funding": "low",
+   "progress": 0,
+   "plan": {
+    "durationDays": 2190,
+    "monthlyCost": 600000,
+    "milestones": [
+     {
+      "id": "m1",
+      "title": "Charter-law secretariat and independent commission seated under a separate grantee",
+      "atProgress": 10,
+      "reachedAt": ""
+     },
+     {
+      "id": "m2",
+      "title": "Veto-restraint code drafted and signed by 40+ states as a political commitment",
+      "atProgress": 30,
+      "reachedAt": ""
+     },
+     {
+      "id": "m3",
+      "title": "Standing-assembly procedural precedent adopted on the General Assembly agenda",
+      "atProgress": 52,
+      "reachedAt": ""
+     },
+     {
+      "id": "m4",
+      "title": "Article 108 amendment resolution tabled with a co-sponsorship bloc and ratification track",
+      "atProgress": 74,
+      "reachedAt": ""
+     },
+     {
+      "id": "m5",
+      "title": "Amendment vote recorded; Assembly charter drafted and opened for signature as the fallback",
+      "atProgress": 94,
+      "reachedAt": ""
+     }
+    ],
+    "effects": [
+     {
+      "type": "relation",
+      "country": "Republic of India",
+      "change": 6
+     },
+     {
+      "type": "relation",
+      "country": "Federative Republic of Brazil",
+      "change": 5
+     },
+     {
+      "type": "relation",
+      "country": "Republic of South Africa",
+      "change": 5
+     },
+     {
+      "type": "relation",
+      "country": "Federal Republic of Germany",
+      "change": 3
+     },
+     {
+      "type": "relation",
+      "country": "Japanese State",
+      "change": 3
+     },
+     {
+      "type": "relation",
+      "country": "Russian Federation",
+      "change": -6
+     },
+     {
+      "type": "relation",
+      "country": "People's Republic of China",
+      "change": -5
+     },
+     {
+      "type": "relation",
+      "country": "United States of America",
+      "change": -4
+     }
+    ]
+   },
+   "startedAt": "2027-10-01",
+   "spent": 0,
+   "paidShare": 0,
+   "starvedDays": 30
+  }
+ ]
+}

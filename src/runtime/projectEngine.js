@@ -269,6 +269,47 @@ export const normalizeProjectEffect = (value, { scale = "once" } = {}) => {
   return null;
 };
 
+// ---- what a completion did ------------------------------------------------------
+//
+// "Project was completed and the listed changes didn't happen" (a player,
+// 2026-11-26). A completion's effects were carried out where they could be and
+// passed over, without a word, where they could not: a figure the sheet does not
+// have, a country whose figures had never been read, a structure with no place.
+// Each effect now ends with a result the project keeps and the player is shown:
+//   applied   carried out; `change` is what was actually moved (the bound may
+//             have held it)
+//   waiting   a stat of a country whose figures have not been read yet: carried
+//             out as soon as they are (gameState.js applyProjectOutcomesToWorld)
+//   refused   not carried out, for `reason`, one of EFFECT_REFUSALS
+export const EFFECT_RESULT_STATUSES = Object.freeze(["applied", "waiting", "refused"]);
+//   noFigure    the sheet has no such figure to move
+//   noSheet     the country has no sheet and is not one the game reads figures for
+//   sameCountry a relation of a country with itself
+//   noPlace     a structure with no place to stand (no coordinates, no focus)
+//   noChange    held to nothing by its bound
+//   noCountry   it names a country the world does not have
+export const EFFECT_REFUSALS = Object.freeze(["noFigure", "noSheet", "sameCountry", "noPlace", "noChange", "noCountry"]);
+export const EFFECT_RESULTS_KEPT = 16;
+
+// One effect's result as a project keeps it; null for none.
+export const normalizeEffectResult = (value) => {
+  if (!isRecord(value)) return null;
+  const status = asText(value.status, 12);
+  if (!EFFECT_RESULT_STATUSES.includes(status)) return null;
+  const effect = isRecord(value.effect) ? value.effect : null;
+  if (!effect || !EFFECT_TYPES.includes(asText(effect.type, 20))) return null;
+  const change = finite(value.change);
+  const reason = asText(value.reason, 20);
+  return {
+    status,
+    effect,
+    ...(status === "applied" && Number.isFinite(change) ? { change: round2(change) } : {}),
+    ...(status === "refused" && EFFECT_REFUSALS.includes(reason) ? { reason } : {}),
+    ...(normalizeGameDate(value.date) ? { date: normalizeGameDate(value.date) } : {}),
+  };
+};
+export const normalizeEffectResults = (list) => asArray(list).map(normalizeEffectResult).filter(Boolean).slice(-EFFECT_RESULTS_KEPT);
+
 // A list of effects as a plan keeps it: each bounded, a stat or a relation said
 // twice summed and bounded again, at most `most` of them, at most
 // STRUCTURES_MOST structures, one unit type and TERRITORY_MOST regions.
@@ -372,8 +413,9 @@ export const sheetOf = (world, owner) => {
 };
 
 // What an owner has for its projects per month in the native GDP unit.
-// Null means UNASSESSED, never zero GDP or unlimited money; funded work
-// cannot claim payments until the authoritative economic baseline exists.
+// Null means UNASSESSED, never zero GDP or unlimited money: no payment is
+// booked against it, and its projects work at their planned pace until its
+// economy is read (tickProjects).
 export const monthlyProjectBudget = (sheet) => {
   const gdp = finite(sheet?.economy?.gdp);
   if (!(gdp > 0)) return null;
@@ -630,12 +672,25 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
   const dueThisPeriod = new Map();
   const note = (map, index, amount) => map.set(index, (map.get(index) ?? 0) + amount);
 
+  // The projects worked without money changing hands this period: every one in
+  // a non-monetary scenario, and those of an owner whose economy is not assessed.
+  const unbooked = new Set();
   for (let day = 1; day <= days; day += 1) {
     const date = addGameDays(fromDate, day);
     for (const { owner, daily, capacity, indexes } of owners.values()) {
-      // Unknown GDP is not proof of unlimited public funds. With no assessed
-      // allowance only work explicitly costing zero may advance.
-      let pool = nonmonetary ? Infinity : daily === null ? 0 : daily;
+      // An owner whose economy is not assessed yet (no GDP on its sheet, or none
+      // that can be read) works its projects at their planned pace, as the
+      // engine was designed ("where its economy is not known its projects are
+      // paid in full"), and books NOTHING: no payment is invented from an
+      // unknown economy and no GDP is made up. Its sheet's next reading gives it
+      // a budget (statsBackend.js, gameplay.js generateScenarioCustomStatSheet),
+      // and from then on it pays like everyone else. It used to be held at 0, so
+      // a country whose figures had never been read (a played group, a scenario
+      // with a sheet of its own whose hidden economy had been dropped) had every
+      // paid project stall for want of funds, for good (a player's Modern Day
+      // 2026 save, 2026-11-26: three projects at 0% for fifteen months).
+      const free = nonmonetary || daily === null;
+      let pool = free ? Infinity : daily;
       const working = indexes.filter((index) => {
         const project = board[index];
         return isOpen(project) && asText(project.status) === "active";
@@ -653,8 +708,9 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
       for (const index of working) {
         const project = board[index];
         const due = dailyCostOf(project);
-        const share = shareOf.get(index) ?? 1;
-        const paid = nonmonetary ? 0 : due * share;
+        const share = free ? 1 : shareOf.get(index) ?? 1;
+        const paid = free ? 0 : due * share;
+        if (free) unbooked.add(index);
         project.spent = round2((Number(project.spent) || 0) + paid);
         note(paidThisPeriod, index, paid);
         note(dueThisPeriod, index, due);
@@ -667,7 +723,8 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
         if (asText(project.status) !== "stalled" || asText(project.stallReason) !== "funds") continue;
         const due = dailyCostOf(project);
         if (due > 0 && pool < due * RESUME_SHARE) continue;
-        const paid = nonmonetary ? 0 : Math.min(due, pool);
+        const paid = free ? 0 : Math.min(due, pool);
+        if (free) unbooked.add(index);
         pool = Math.max(0, pool - paid);
         project.status = "active";
         project.stallReason = "";
@@ -676,7 +733,7 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
         project.spent = round2((Number(project.spent) || 0) + paid);
         note(paidThisPeriod, index, paid);
         note(dueThisPeriod, index, due);
-        advanceOne(project, { date, share: nonmonetary ? 1 : due > 0 ? paid / due : 1, capacity, owner, outcomes, due });
+        advanceOne(project, { date, share: free ? 1 : due > 0 ? paid / due : 1, capacity, owner, outcomes, due });
       }
     }
   }
@@ -689,7 +746,7 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
   // board ("underfunded"), and when it should be done at the rate it ended on.
   for (const [index, due] of dueThisPeriod) {
     const project = board[index];
-    project.paidShare = nonmonetary ? 1 : due > 0 ? round2(within((paidThisPeriod.get(index) ?? 0) / due, 0, 1)) : 1;
+    project.paidShare = unbooked.has(index) ? 1 : due > 0 ? round2(within((paidThisPeriod.get(index) ?? 0) / due, 0, 1)) : 1;
   }
   for (const { capacity, indexes } of owners.values()) {
     for (const index of indexes) {
@@ -780,7 +837,10 @@ export const ownerMeans = (world, owner, projects = [], host = "") => {
     mode,
     budget: mode === "nonmonetary" ? null : budget,
     committed: mode === "nonmonetary" ? 0 : committed,
-    covered: mode === "nonmonetary" || committed <= 0 ? 1 : budget === null ? 0 : within(budget / committed, 0, 1),
+    // Not assessed: its projects work at their planned pace (tickProjects), so
+    // all of it is covered, and `assessed` says why.
+    covered: mode === "nonmonetary" || committed <= 0 || budget === null ? 1 : within(budget / committed, 0, 1),
+    assessed: mode === "nonmonetary" || budget !== null,
     capacity: capacityOf(sheet),
   };
 };

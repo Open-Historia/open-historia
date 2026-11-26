@@ -1,6 +1,6 @@
 // Run: node --test src/Game/AI/projectsDirective.test.js
 //
-// Runs without node_modules: projectsDirective.js is import-free.
+// Runs without node_modules: projectsDirective.js imports only pure modules.
 //
 // The promise: the engine runs the board (runtime/projectEngine.js), and a time
 // skip is told what it decided for the period, to tell on its dates; what is
