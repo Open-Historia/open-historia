@@ -25,12 +25,15 @@ test("a returning beta player sees Map Editor V2 at login, but a previous dismis
   assert.ok(previous,"keep historical notices");
   const due=pendingUpdates({seen:previous.id,keeps:true});
   const newerId = "2026-11-interactive-event-history";
-  assert.deepEqual(due.map(entry=>entry.id),[newerId,UPDATE_ID,"2026-11-project-currency-clarity","2026-11-gm-one-change"]);
+  // The newest minor notice (2026-11-26) is due first by date, and paged after the majors.
+  const newestMinor = "2026-11-player-reports-fixed";
+  assert.deepEqual(due.map(entry=>entry.id),[newestMinor,newerId,UPDATE_ID,"2026-11-project-currency-clarity"]);
   assert.deepEqual(noticePages(due).slice(0,7).map(page=>page.update.id),[...Array(4).fill(newerId),...Array(3).fill(UPDATE_ID)],"both staged major notices appear before the minor upstream notices");
-  assert.deepEqual(pendingUpdates({seen:UPDATE_ID,keeps:true}).map(entry=>entry.id),[newerId]);
-  assert.deepEqual(pendingUpdates({seen:newerId,keeps:true}),[]);
+  assert.deepEqual(pendingUpdates({seen:UPDATE_ID,keeps:true}).map(entry=>entry.id),[newestMinor,newerId]);
+  assert.deepEqual(pendingUpdates({seen:newerId,keeps:true}).map(entry=>entry.id),[newestMinor]);
+  assert.deepEqual(pendingUpdates({seen:newestMinor,keeps:true}),[]);
   assert.equal(previewedUpdates("?updateNotice="+UPDATE_ID)[0].id,UPDATE_ID);
-  assert.equal(previewedUpdates("?updateNotice=latest")[0].id,newerId);
+  assert.equal(previewedUpdates("?updateNotice=latest")[0].id,newestMinor);
 });
 
 
