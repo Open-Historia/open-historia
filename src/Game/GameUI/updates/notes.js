@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Orbital beams: runtime/strikes.js "orbital beam" (BEAM_WEAPONS), drawn by Map/strikeScene.js planBeam/beamItemsAt; the story is
+    // told it in Game/AI/gameplay.js, and writes it by its name like every other weapon.
+    id: "2026-11-orbital-beams",
+    kind: "minor",
+    date: "2026-11-26",
+    channel: "beta",
+    banners: [
+      {
+        title: "Beams from orbit on the map",
+        items: [
+          "An ion cannon, an orbital laser or any other beam from the sky is now played on the map when an event tells of one.",
+          "The beam gathers high above, comes down onto its target and burns there, leaving a scorch that glows on after it.",
+          "A beam that is deflected stops on a shield above its target, which ripples where it meets it.",
+        ],
+      },
+    ],
+  },
+  {
     "id": "2026-11-interactive-event-history",
     "kind": "major",
     "date": "2026-11-21",

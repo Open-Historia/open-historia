@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { MAP_LAYER_ORDER } from "./mapLayerOrder.js";
 import { STRIKE_LAYER_ID, WORLD_COPIES_MOST, buildStrikeVertices, worldCopies } from "./strikeCustomLayer.js";
 import { findPlaceEntry, strikeEnds } from "./strikePlaces.js";
-import { AIRCRAFT_HEIGHT_KM, AIRCRAFT_SHOWN_MOST, APOGEE_SHARE, INTERCEPTOR_HEAD_PX, MISSILES_SHOWN_MOST, placeFrom, planStrike, rangeKm, ringOf, strikeItemsAt, strikeLasts } from "./strikeScene.js";
+import { AIRCRAFT_HEIGHT_KM, AIRCRAFT_SHOWN_MOST, APOGEE_SHARE, BEAM, BEAMS_SHOWN_MOST, INTERCEPTOR_HEAD_PX, MISSILES_SHOWN_MOST, placeFrom, planStrike, rangeKm, ringOf, strikeItemsAt, strikeLasts } from "./strikeScene.js";
 import { forgetStrikeRequests, getStrikeRequest, replayStrikes, showStrikesOfEvent, subscribeStrikeRequests } from "./strikeStore.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -509,4 +509,61 @@ test("the strikes are wired to the map and to the Events panel", () => {
   assert.match(panel, /Watch it on the map/);
   // A place a distance from another is that far from it.
   assert.ok(Math.abs(rangeKm(placeFrom(LONDON, 77, 500), LONDON) - 500) < 0.5);
+});
+
+test("an orbital beam gathers high over the side it was fired from, comes down onto the place, burns it and leaves a scorch", () => {
+  const laid = plan({ weapon: "orbital beam" }, { from: MOSCOW, to: KYIV });
+  assert.deepEqual([laid.beam, laid.nuclear, laid.aircraft, laid.shown, laid.down, laid.hits], [true, false, false, 1, 0, true]);
+  const [one] = laid.units;
+  // It comes down straight onto the place, from high up and from the side it was fired from.
+  assert.ok(rangeKm(one.way(1), KYIV) < 0.5);
+  assert.equal(one.height(0), BEAM.orbitKm);
+  assert.equal(one.height(1), 0);
+  assert.ok(rangeKm(one.way(0), MOSCOW) < rangeKm(KYIV, MOSCOW), "from Moscow's side");
+  assert.ok(Math.abs(rangeKm(one.way(0), KYIV) - BEAM.slantKm) < 2);
+  const beams = (seconds) => strikeItemsAt(laid, seconds).ribbons.filter((ribbon) => ribbon.what === "beam");
+  // While it gathers: only a faint line where it will come down, and nothing burns.
+  const gathering = strikeItemsAt(laid, BEAM.gathers * 0.5);
+  assert.equal(gathering.discs.length, 0);
+  assert.ok(beams(BEAM.gathers * 0.5).every((ribbon) => ribbon.width <= 1 && ribbon.to < 0.4));
+  // Held: a wide glow and a white core reach the ground, and a fire burns under it.
+  const heldAt = BEAM.gathers + BEAM.drops + BEAM.holds * 0.5;
+  const held = beams(heldAt);
+  assert.ok(held.some((ribbon) => ribbon.width >= BEAM.glowPx * 0.85) && held.some((ribbon) => ribbon.width === BEAM.corePx));
+  const core = held.find((ribbon) => ribbon.width === BEAM.corePx);
+  assert.equal(core.points.at(-1)[2], 0);
+  assert.ok(strikeItemsAt(laid, heldAt).discs.length >= 2);
+  // Gone: no beam, but the scorch still glows; and then nothing at all.
+  const after = BEAM.gathers + BEAM.drops + BEAM.holds + BEAM.fades + 1;
+  assert.equal(beams(after).filter((ribbon) => ribbon.width === BEAM.corePx).length, 0);
+  assert.ok(strikeItemsAt(laid, after).discs.length >= 1);
+  assert.equal(laid.lasts, BEAM.gathers + BEAM.drops + BEAM.holds + BEAM.fades + BEAM.scorchFor);
+  assert.deepEqual(strikeItemsAt(laid, laid.lasts + 0.1), { ribbons: [], points: [], discs: [] });
+  // On a globe it comes from orbit; on a flat map from the side, at the height of the ground.
+  const flat = planStrike(strike({ weapon: "orbital beam" }), { from: MOSCOW, to: KYIV, flat: true });
+  assert.equal(flat.units[0].height(0), 0);
+  // Seen from far out, it still comes from far enough to the side to be seen as a beam.
+  const far = planStrike(strike({ weapon: "orbital beam" }), { from: MOSCOW, to: KYIV, kmPerPixel: 8 });
+  assert.ok(rangeKm(far.units[0].way(0), KYIV) > BEAM.slantKm * 2);
+  // Fired at where it is fired from (a test range), it still comes down.
+  const home = planStrike(strike({ weapon: "orbital beam" }), { from: KYIV, to: KYIV });
+  assert.ok(rangeKm(home.units[0].way(1), KYIV) < 0.5 && home.hits);
+});
+
+test("a strike of many beams is a few, one after another, and one deflected stops on a shield above the place", () => {
+  const many = plan({ weapon: "orbital beam", count: 40 }, { from: MOSCOW, to: KYIV });
+  assert.equal(many.shown, BEAMS_SHOWN_MOST);
+  assert.ok(many.units.every((unit, index) => unit.start === index * BEAM.gap));
+  assert.ok(many.units.every((unit) => rangeKm(unit.way(1), KYIV) <= BEAM.spreadKm + 0.5));
+  const stopped = plan({ weapon: "orbital beam", count: 2, down: 2 }, { from: MOSCOW, to: KYIV });
+  assert.equal(stopped.hits, false);
+  for (let seconds = 0; seconds <= stopped.lasts; seconds += 0.1) {
+    const items = strikeItemsAt(stopped, seconds);
+    // Nothing under it burns, and the beam never reaches the ground.
+    assert.equal(items.discs.length, 0);
+    for (const ribbon of items.ribbons.filter((entry) => entry.what === "beam" && entry.colour !== undefined && entry.points[0][2] > 0)) assert.ok(ribbon.points.at(-1)[2] > 0);
+  }
+  const unit = stopped.units[0];
+  const met = BEAM.gathers + BEAM.drops + 0.3;
+  assert.ok(strikeItemsAt(stopped, unit.start + met).points.some((point) => point.what === "shield" && point.shape === 3));
 });
