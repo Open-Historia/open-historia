@@ -38,7 +38,10 @@ export const normalizeWarOutcome = (value) => {
   return { lost, dissolved, ...(date ? { date } : {}) };
 };
 
-const dissolvedPolity = (world, name) => fold(world?.polityOverrides?.[clean(name)]?.status) === "dissolved";
+// A dissolved polity, or a group that has ended (gameState.js dissolveGroup), by its exact name.
+const dissolvedPolity = (world, name) => fold(world?.polityOverrides?.[clean(name)]?.status) === "dissolved"
+  || (!Object.keys(world?.groups ?? {}).some((key) => fold(key) === fold(name))
+    && Object.keys(world?.defunctGroups ?? {}).some((key) => fold(key) === fold(name)));
 
 // The ended wars the skip is asked about: no outcome yet, and on each side a
 // polity still standing (a war whose whole side is gone has nobody left to

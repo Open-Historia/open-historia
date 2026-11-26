@@ -468,6 +468,8 @@ import {
   PROJECT_OPS,
   projectOpKind,
   dissolvePolity,
+  dissolveDefeatedGroups,
+  settleEndedGroups,
 } from "../../runtime/gameState.js";
 import { advancePoliticalBackgroundSimulation, describePoliticalBackgroundResult } from "../../runtime/politicalBackground.js";
 import { refreshPowerStatusForTurn } from "../../runtime/powerStatus.js";
@@ -1344,19 +1346,36 @@ const settleWarEndings = async (world, baseWorld, answer, { date = "" } = {}) =>
   if (!entries.length || !answer) return world;
   const catalog = await loadRegionCatalog().catch(() => []);
   const knownPolity = knownPolitiesOf(world, catalog);
-  const read = readWarEndings(answer, entries, { knownPolity });
+  // A group's land is never a group's to take (groups.js: a group owns none), so
+  // no group is named an heir to a dissolved state's land.
+  const isLiveGroupName = (name) => Boolean(groupPartyKey(world, name));
+  const read = readWarEndings(answer, entries, { knownPolity: (name) => (isLiveGroupName(name) ? "" : knownPolity(name)) });
   if (!read.length) return world;
   let next = { ...world, wars: recordWarEndings(world?.wars, read, { date }) };
   logDebugEvent("turn", `Wars' outcomes recorded: ${read.map((entry) => `${entry.warId}: ${entry.lost.length ? `${entry.lost.join(", ")} lost` : "neither side lost"}${entry.dissolved ? `, ${entry.dissolved} dissolved` : ""}`).join("; ")}.`, read);
+  // A group told dissolved in its defeat ends through the one door every group
+  // ends by (gameState.js dissolveGroup): its units, area, wars, relations and
+  // deals go with it. A group that is also a polity (the player's, a seat's) is
+  // refused there, as everywhere. A group is no polity on the map, so the
+  // polities' door below never saw it, and a beaten group stayed on the map.
+  const groupsToEnd = read.filter((entry) => entry.dissolved && isLiveGroupName(entry.dissolved));
+  if (groupsToEnd.length) {
+    const settled = dissolveDefeatedGroups(next, groupsToEnd, { date });
+    next = settled.world;
+    for (const { name, ended } of settled.results) {
+      logDebugEvent("turn", ended ? `${name} was dissolved after its defeat.` : `${name} was told dissolved, and its dissolution was refused.`);
+    }
+  }
   const gone = (name) => normalizeString(next?.polityOverrides?.[name]?.status).toLowerCase() === "dissolved";
-  const toEnd = read.filter((entry) => entry.dissolved && knownPolity(entry.dissolved) && !gone(knownPolity(entry.dissolved)));
+  const toEnd = read.filter((entry) => entry.dissolved && !isLiveGroupName(entry.dissolved) && !groupsToEnd.includes(entry)
+    && knownPolity(entry.dissolved) && !gone(knownPolity(entry.dissolved)));
   if (!toEnd.length) return next;
   next = normalizeWorldState(structuredClone(next));
   for (const entry of toEnd) {
     const code = knownPolity(entry.dissolved);
     if (gone(code)) continue;
     const heirs = (entry.landTo.length ? entry.landTo : entry.won.map(knownPolity))
-      .filter((name) => name && !gone(name) && name.toLowerCase() !== code.toLowerCase());
+      .filter((name) => name && !gone(name) && name.toLowerCase() !== code.toLowerCase() && !groupPartyKey(next, name));
     if (!heirs.length) {
       logDebugEvent("turn", `${code} was told dissolved, but no power on the map took its land: it stands.`);
       continue;
@@ -9442,7 +9461,10 @@ const applySimulationResult = async ({
   });
   // `let`: a Project the board pass completes can recolour a polity too.
   let nextColors = impactMerge.colors;
-  let impactedWorld = impactMerge.world;
+  // A save from before every group ended through one door: a group an earlier
+  // event dissolved whose units, war or relations the world still carries ends
+  // now, read from the campaign's own events (gameState.js settleEndedGroups).
+  let impactedWorld = settleEndedGroups(impactMerge.world, [...normalizeArray(baseEvents), ...normalizeArray(freshEvents)]);
   // EXPERIMENT, in the lab: where the lab's own staff leads the land war (frontsGate.js strategyNetOn), the
   // countries nobody plays have an engineer too (runtime/fronts/engineer.js): one outmatched on a battlefield has
   // a fortified line built behind its front, by the very op a person's war room sends, on its own ground only.

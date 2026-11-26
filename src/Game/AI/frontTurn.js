@@ -324,7 +324,11 @@ export const frontWorldReaders = (world, { baseOwners = null, groups = true } = 
   const control = isRecord(world?.regionOwnershipOverrides) ? world.regionOwnershipOverrides : {};
   const sovereignty = isRecord(world?.regionSovereigntyOverrides) ? world.regionSovereigntyOverrides : {};
   const groupAreas = groups && isRecord(world?.groupAreas) ? world.groupAreas : {};
-  const groupNames = new Set(Object.keys(groups && isRecord(world?.groups) ? world.groups : {}).map(fold));
+  // (An ended group's name too: it is never read as a country's, groups.js defunctGroups.)
+  const groupNames = new Set([
+    ...Object.keys(groups && isRecord(world?.groups) ? world.groups : {}),
+    ...Object.keys(groups && isRecord(world?.defunctGroups) ? world.defunctGroups : {}),
+  ].map(fold));
   const base = baseOwners instanceof Map ? baseOwners : new Map();
   const controllerOf = (id) => clean(Object.hasOwn(control, id) ? control[id] : base.get(id));
   const sovereignOf = (id) => clean(Object.hasOwn(sovereignty, id) ? sovereignty[id] : "") || controllerOf(id);
