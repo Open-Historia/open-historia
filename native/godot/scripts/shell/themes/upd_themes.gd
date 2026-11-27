@@ -14,9 +14,10 @@ const ProjectsTheme := preload("res://scripts/shell/themes/theme_projects.gd")
 const DiplomaticAtlas := preload("res://scripts/shell/themes/theme_diplomatic_atlas.gd")
 const CampaignRecords := preload("res://scripts/shell/themes/theme_campaign_records.gd")
 const SharedWorlds := preload("res://scripts/shell/themes/theme_shared_worlds.gd")
+const MapEditorV2 := preload("res://scripts/shell/themes/theme_map_editor_v2.gd")
 
 const BackChannels := preload("res://scripts/shell/themes/theme_back_channels.gd")
-const REGISTERED := ["sharedWorlds", "backChannels", "campaignRecords", "diplomaticAtlas", "projects", "aiOverhaul", "themes", "rostra", "airRaid", "espionage2", "swarms", "warsAndFronts2", "seasonsAndWeather", "music", "chronicle"]
+const REGISTERED := ["sharedWorlds", "backChannels", "mapEditorV2", "campaignRecords", "diplomaticAtlas", "projects", "aiOverhaul", "themes", "rostra", "airRaid", "espionage2", "swarms", "warsAndFronts2", "seasonsAndWeather", "music", "chronicle"]
 
 
 static func px(value: float) -> float:
@@ -42,6 +43,8 @@ static func page(banner: Dictionary, update: Dictionary, ctx: Dictionary) -> Con
 			return SharedWorlds.page(banner, update, ctx)
 		"backChannels":
 			return BackChannels.page(banner, update, ctx)
+		"mapEditorV2":
+			return MapEditorV2.page(banner, update, ctx)
 		"campaignRecords":
 			return CampaignRecords.page(banner, update, ctx)
 		"diplomaticAtlas":
@@ -84,6 +87,8 @@ static func chrome(banner: Dictionary, update: Dictionary) -> Dictionary:
 			return SharedWorlds.chrome(banner)
 		"backChannels":
 			return BackChannels.chrome()
+		"mapEditorV2":
+			return MapEditorV2.chrome()
 		"campaignRecords":
 			return CampaignRecords.chrome()
 		"diplomaticAtlas":
