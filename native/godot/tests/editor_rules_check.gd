@@ -515,6 +515,7 @@ func _impacts(editor: EditorScriptedEvents) -> void:
 	await _press(_named(host, "RemoveImpact", 1) as Button, "Remove the second impact")
 	rows = _first_event().get("impactRows", [])
 	_check(rows.size() == 1, "Remove drops the row")
+	await _native_impacts(editor)
 	var instruction: TextEdit = null
 	var nodes: Array = []
 	_collect(host, nodes)
@@ -534,6 +535,84 @@ func _impacts(editor: EditorScriptedEvents) -> void:
 	_check(inserted, "Pick regions writes the names where the cursor was: %s" % str(_first_event().get("text", "")))
 	if instruction:
 		_check(instruction.text.ends_with(" Sachsen"), "the instruction box shows the inserted names")
+
+
+func _impact_type_select() -> OptionButton:
+	var nodes: Array = []
+	_collect(host, nodes)
+	var found: Array = []
+	for node in nodes:
+		if node is OptionButton and (node as OptionButton).tooltip_text == "Impact type" and (node as Control).is_visible_in_tree():
+			found.append(node)
+	return found[1] if found.size() > 1 else null
+
+
+func _second_impact_row() -> Node:
+	var pick: Node = _impact_type_select()
+	if pick == null:
+		return null
+	return pick.get_parent().get_parent().get_parent()
+
+
+func _choose_impact_type(label: String) -> void:
+	var pick := _impact_type_select()
+	if pick == null:
+		return
+	for index in range(pick.item_count):
+		if pick.get_item_text(index) == label:
+			pick.select(index)
+			pick.item_selected.emit(index)
+	await _wait(0.6)
+
+
+func _native_impacts(editor: EditorScriptedEvents) -> void:
+	await _press(_named(host, "AddImpact") as Button, "+ Add impact for the native outcomes")
+	await _choose_impact_type("Start a war")
+	var row: Dictionary = (_first_event().get("impactRows", []) as Array)[1]
+	_check(str(row.get("type", "")) == "start_war", "a row can start an actual war")
+	var words := _texts_of(_second_impact_row())
+	_check(words.has("Declaring country") and words.has("Opposing country") and words.has("War name (optional)"), "a war asks for the declaring and opposing countries and an optional name")
+	_check(words.has("Creates an actual war between these two countries. No allies or territory changes are added by this impact. Use player-control conditions to protect player choices."), "the war row says what it does")
+	var needed_ok := await _until(func() -> bool:
+		var label := _named(_second_impact_row(), "ImpactNeeded") as Label
+		return label != null and label.visible and label.text.begins_with("Required or invalid: ") and label.text.ends_with(". An incomplete native outcome blocks the scripted event's turn."), 10.0)
+	_check(needed_ok, "an incomplete native outcome says it blocks the event's turn")
+	await _shoot("rules-3f-impact-war")
+	await _choose_impact_type("Make a polity subordinate")
+	row = (_first_event().get("impactRows", []) as Array)[1]
+	_check(str(row.get("type", "")) == "install_puppet" and str(row.get("kind", "")) == "client" and str(row.get("loyalty", "")) == "50" and str(row.get("secrecy", "")) == "open", "a subordinate arrangement starts as a public client state at loyalty 50")
+	words = _texts_of(_second_impact_row())
+	_check(words.has("Subordinate country") and words.has("Overlord") and words.has("Relationship") and words.has("Client state") and words.has("Public"), "it asks for the subordinate, the overlord, the relationship and its visibility")
+	await _shoot("rules-3g-impact-subordinate")
+	await _choose_impact_type("Change a polity capital")
+	await _until(func() -> bool: return not bool(editor._cities.get("loading", true)), 30.0)
+	await _wait(0.3)
+	words = _texts_of(_second_impact_row())
+	_check(words.has("New capital") and words.has("Search map cities") and words.has("Uses the scenario map's city identity. Duplicate original names are not selectable."), "a capital move picks a city of the scenario's map")
+	var cities: Array = editor._cities.get("options", [])
+	_check(not cities.is_empty() or bool(editor._cities.get("failed", false)), "the scenario's cities load, or the row says the city layer is required (%d cities)" % cities.size())
+	await _shoot("rules-3h-impact-capital")
+	await _press(_named(host, "RemoveImpact", 1) as Button, "Remove the native outcome row")
+	_check((_first_event().get("impactRows", []) as Array).size() == 1, "the native outcome row is removed again")
+
+
+func _texts_of(node: Node) -> Array:
+	var nodes: Array = []
+	_collect(node, nodes)
+	var out: Array = []
+	for item in nodes:
+		if item is Label:
+			out.append((item as Label).text)
+		elif item is Button and not (item is OptionButton):
+			out.append((item as Button).text)
+		elif item is OptionButton:
+			out.append((item as OptionButton).tooltip_text)
+			for index in range((item as OptionButton).item_count):
+				out.append((item as OptionButton).get_item_text(index))
+		elif item is LineEdit:
+			out.append((item as LineEdit).placeholder_text)
+			out.append((item as LineEdit).tooltip_text)
+	return out
 
 
 func _stats(value: Dictionary) -> void:

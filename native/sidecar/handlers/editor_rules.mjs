@@ -86,6 +86,17 @@ export const register = (ctx) => {
         institutions: authoring.scriptedEventInstitutionOptions(world ?? {}),
       });
     },
+    "editor.rules.capitalCities": async ({ scenarioId = "", renames = null } = {}) => {
+      const id = String(scenarioId ?? "").trim();
+      try {
+        const data = id ? await engine.library.downloadScenarioJsonAsset(id, "citiesGeojson") : null;
+        if (!data) return { cities: [], failed: true };
+        const names = renames && typeof renames === "object" && !Array.isArray(renames) ? renames : undefined;
+        return plain({ cities: engine.capitalSeats.capitalCityOptions(data, names), failed: false });
+      } catch {
+        return { cities: [], failed: true };
+      }
+    },
     "editor.rules.impacts": async ({ rows = [] } = {}) => {
       const api = impacts();
       const list = Array.isArray(rows) ? rows : [];

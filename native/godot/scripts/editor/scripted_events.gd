@@ -33,7 +33,14 @@ const SECTION_BG := Color(1, 1, 1, 0.025)
 const SECTION_BORDER := Color(1, 1, 1, 0.07)
 const ENTITY_TIP := "Type to search by name. An exact canonical ID may also be entered for an advanced/future reference."
 const PICK_REGIONS_TIP := "Pick regions on a map of this scenario and insert their names, spelled as the map spells them, where the cursor is"
-const POLITY_FIELDS := ["to", "from", "actor", "claimant", "polity"]
+const POLITY_FIELDS := ["to", "from", "actor", "claimant", "polity", "overlord", "opponent"]
+const NATIVE_IMPACTS := ["start_war", "install_puppet", "relocate_capital"]
+const IMPACT_CHOICES := {"kind": [["client", "Client state"], ["protectorate", "Protectorate"], ["satellite", "Puppet state"]], "secrecy": [["open", "Public"], ["covert", "Covert"]]}
+const IMPACT_NOTES := {
+	"relocate_capital": "Moves the canonical capital and its map marker, not territory. The city must be held by the selected country when the event fires.",
+	"start_war": "Creates an actual war between these two countries. No allies or territory changes are added by this impact. Use player-control conditions to protect player choices.",
+	"install_puppet": "Creates a native subordination arrangement. Both countries must exist and the subordinate must retain land.",
+}
 const IMPACT_ROW_BG := Color(0, 0, 0, 0.14)
 const IMPACT_ROW_BORDER := Color(1, 1, 1, 0.055)
 
@@ -44,6 +51,8 @@ var _scenario_value: Array = []
 var _is_game := false
 var _overridden := true
 var _world: Dictionary = {}
+var _cities := {"options": [], "loading": false, "failed": false, "key": ""}
+var _city_queries := {}
 var _options := {"polities": [], "institutions": [], "memberStatuses": [], "puppetKinds": []}
 var _summary: Control
 var _manager: Control
@@ -306,7 +315,21 @@ static func impact_field_label(type: String, field: String) -> String:
 		"color":
 			return "Colour"
 		"actor":
-			return "Attacker"
+			return "Declaring country" if type == "start_war" else "Attacker"
+		"opponent":
+			return "Opposing country"
+		"cityId":
+			return "New capital"
+		"warTitle":
+			return "War name (optional)"
+		"overlord":
+			return "Overlord"
+		"kind":
+			return "Relationship"
+		"loyalty":
+			return "Loyalty (0-100)"
+		"secrecy":
+			return "Visibility"
 		"leader":
 			return "New leader"
 		"government":
@@ -326,7 +349,7 @@ static func impact_field_label(type: String, field: String) -> String:
 				return "Only this claimant (optional)"
 			return "Claimant"
 		"polity":
-			return "Country"
+			return "Subordinate country" if type == "install_puppet" else "Country"
 		"name":
 			return "New name" if type == "rename" else "New country's name"
 	return field
@@ -1847,6 +1870,10 @@ func _set_impact_type(value: String, key: String, outcome_index: int, row_index:
 			next["regions"] = list_of(current.get("regions"))
 		elif current.has(field):
 			next[field] = current[field]
+	if next["type"] == "install_puppet":
+		for pair in [["kind", "client"], ["loyalty", "50"], ["secrecy", "open"]]:
+			if clean(next.get(pair[0])).is_empty():
+				next[pair[0]] = pair[1]
 	rows[row_index] = next
 	_set_impact_rows(key, outcome_index, rows, true)
 
@@ -1907,6 +1934,16 @@ func _impact_row(key: String, outcome_index: int, row_index: int, row: Dictionar
 			pick_row.add_child(names)
 			cell.add_child(pick_row)
 			_flex_child(cell, 256.0, 2.0)
+		elif field == "cityId":
+			cell.add_child(_city_input(row, key, outcome_index, row_index))
+			_flex_child(cell, 256.0, 2.0)
+		elif IMPACT_CHOICES.has(field):
+			var choices: Array = [["", "Select impact value"]]
+			choices.append_array(IMPACT_CHOICES[field])
+			var choose := EditorKit.select(choices, clean(row.get(field)), _on_impact_choice.bind(key, outcome_index, row_index, str(field)))
+			choose.tooltip_text = label
+			cell.add_child(choose)
+			_flex_child(cell, 160.0, 1.0)
 		elif field == "color":
 			var shade := EditorKit.color_button(clean(row.get("color")) if not clean(row.get("color")).is_empty() else "#808080", _on_impact_colour.bind(key, outcome_index, row_index))
 			shade.tooltip_text = label
@@ -1942,6 +1979,10 @@ func _impact_row(key: String, outcome_index: int, row_index: int, row: Dictionar
 	needed.name = "ImpactNeeded"
 	needed.visible = false
 	column.add_child(needed)
+	if IMPACT_NOTES.has(type):
+		var note := UI.wrapped(str(IMPACT_NOTES[type]), 11, Color(1, 1, 1, 0.62))
+		note.name = "ImpactNote"
+		column.add_child(note)
 	var repeated := UI.wrapped("", 10, AMBER)
 	repeated.name = "ImpactRepeated"
 	repeated.visible = false
@@ -1960,13 +2001,113 @@ func _refresh_impact_row(needed: Label, repeated: Label, key: String, outcome_in
 	var missing: PackedStringArray = []
 	for field in list_of(problem.get("missing")):
 		missing.append(impact_field_label(type, str(field)))
-	needed.text = "Still needed: %s. This impact is left out until it is complete." % ", ".join(missing)
+	if NATIVE_IMPACTS.has(type):
+		needed.text = "Required or invalid: %s. An incomplete native outcome blocks the scripted event's turn." % ", ".join(missing)
+	else:
+		needed.text = "Still needed: %s. This impact is left out until it is complete." % ", ".join(missing)
 	needed.visible = not missing.is_empty()
 	var twice: PackedStringArray = []
 	for region in list_of(problem.get("repeated")):
 		twice.append(str(region))
 	repeated.text = "Already chosen in another impact: %s" % ", ".join(twice)
 	repeated.visible = not twice.is_empty()
+
+
+func _on_impact_choice(value: String, key: String, outcome_index: int, row_index: int, field: String) -> void:
+	_patch_impact_row(key, outcome_index, row_index, {field: value})
+
+
+func _city_key() -> String:
+	return "%s|%s" % [clean(_scenario_id), JSON.stringify(_world.get("cityRenames", {}))]
+
+
+func _load_cities() -> void:
+	var wanted := _city_key()
+	if str(_cities.get("key", "")) == wanted and (bool(_cities.get("loading", false)) or not (_cities.get("options", []) as Array).is_empty() or bool(_cities.get("failed", false))):
+		return
+	_cities = {"options": [], "loading": true, "failed": false, "key": wanted}
+	var reply: Dictionary = await _engine.request("editor.rules.capitalCities", {"scenarioId": clean(_scenario_id), "renames": _world.get("cityRenames", {})})
+	if str(_cities.get("key", "")) != wanted:
+		return
+	var options: Array = (reply.get("result", {}) as Dictionary).get("cities", []) if reply.get("ok", false) and typeof(reply.get("result")) == TYPE_DICTIONARY else []
+	var failed: bool = not bool(reply.get("ok", false)) or bool((reply.get("result", {}) as Dictionary).get("failed", false))
+	_cities = {"options": options, "loading": false, "failed": failed, "key": wanted}
+	_refill_cities_in(self)
+
+
+func _city_input(row: Dictionary, key: String, outcome_index: int, row_index: int) -> Control:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	var query_key := "%s:%d:%d" % [key, outcome_index, row_index]
+	var search := EditorKit.line(str(_city_queries.get(query_key, "")), "Search map cities", Callable())
+	search.tooltip_text = "Search map cities"
+	box.add_child(search)
+	var choose := OptionButton.new()
+	choose.tooltip_text = "New capital"
+	choose.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	choose.add_to_group("oh_capital_city_input")
+	choose.set_meta("row", row)
+	choose.set_meta("query_key", query_key)
+	box.add_child(choose)
+	var hint := UI.wrapped("Uses the scenario map's city identity. Duplicate original names are not selectable.", 10, Color(1, 1, 1, 0.55))
+	box.add_child(hint)
+	var refill := func() -> void:
+		_fill_city_select(choose, row, str(_city_queries.get(query_key, "")))
+	search.text_changed.connect(func(text: String) -> void:
+		_city_queries[query_key] = text
+		refill.call())
+	choose.item_selected.connect(_on_city_chosen.bind(choose, key, outcome_index, row_index))
+	_fill_city_select(choose, row, str(_city_queries.get(query_key, "")))
+	choose.set_meta("refill", refill)
+	_load_cities.call_deferred()
+	return box
+
+
+func _fill_city_select(choose: OptionButton, row: Dictionary, query: String) -> void:
+	if not is_instance_valid(choose):
+		return
+	choose.clear()
+	var loading := bool(_cities.get("loading", false))
+	var failed := bool(_cities.get("failed", false))
+	var options: Array = _cities.get("options", [])
+	var value := clean(row.get("cityId"))
+	choose.add_item("Loading cities..." if loading else ("Scenario city layer required" if failed else "Choose a city"))
+	choose.set_item_metadata(0, {"id": "", "name": ""})
+	choose.disabled = loading or failed
+	var needle := query.strip_edges().to_lower()
+	var matches: Array = []
+	var selected: Dictionary = {}
+	for entry in options:
+		var city: Dictionary = entry
+		if str(city.get("id", "")) == value:
+			selected = city
+		if needle.is_empty() or str(city.get("name", "")).to_lower().contains(needle):
+			if matches.size() < 80:
+				matches.append(city)
+	if not value.is_empty() and selected.is_empty():
+		choose.add_item("%s (unresolved)" % (clean(row.get("cityName")) if not clean(row.get("cityName")).is_empty() else value))
+		choose.set_item_metadata(choose.item_count - 1, {"id": value, "name": clean(row.get("cityName"))})
+		choose.select(choose.item_count - 1)
+	if not selected.is_empty() and not matches.has(selected):
+		matches.push_front(selected)
+	for city in matches:
+		var spot: Array = city.get("coordinates", [0, 0])
+		choose.add_item("%s (%.2f, %.2f)" % [str(city.get("name", "")), float(spot[0]) if spot.size() > 0 else 0.0, float(spot[1]) if spot.size() > 1 else 0.0])
+		choose.set_item_metadata(choose.item_count - 1, {"id": str(city.get("id", "")), "name": str(city.get("name", ""))})
+		if str(city.get("id", "")) == value:
+			choose.select(choose.item_count - 1)
+
+
+func _refill_cities_in(node: Node) -> void:
+	for found in node.get_tree().get_nodes_in_group("oh_capital_city_input"):
+		var refill: Variant = (found as Node).get_meta("refill", null)
+		if refill is Callable and (refill as Callable).is_valid():
+			(refill as Callable).call()
+
+
+func _on_city_chosen(index: int, choose: OptionButton, key: String, outcome_index: int, row_index: int) -> void:
+	var picked: Dictionary = choose.get_item_metadata(index) if choose.get_item_metadata(index) is Dictionary else {}
+	_patch_impact_row(key, outcome_index, row_index, {"cityId": str(picked.get("id", "")), "cityName": str(picked.get("name", ""))})
 
 
 func _flex_child(control: Control, basis: float, grow: float) -> void:
