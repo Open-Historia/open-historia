@@ -26,6 +26,7 @@ const AMBER_BG := Color(120 / 255.0, 53 / 255.0, 15 / 255.0, 0.28)
 const AMBER_BORDER := Color(251 / 255.0, 191 / 255.0, 36 / 255.0, 0.35)
 const AMBER_INK := Color("#fde68a")
 const CONNECTOR := Color(1, 1, 1, 0.1)
+const InteractiveTranscriptScript := preload("res://scripts/ui/interactive_transcript.gd")
 const MONTHS := ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 
 var engine: EngineLink
@@ -57,6 +58,10 @@ var older := {}
 var offer: Variant = null
 var scene_in_progress := false
 var tag_order: Array = []
+var archive_open := false
+var archive_count := 0
+var archive := {"query": "", "category": "", "page": 0, "pages": 1, "events": []}
+var _archive_seq := 0
 var open_map_changes := {}
 var category := {"record": "", "tag": ""}
 var intervene := {"record": "", "state": "idle"}
@@ -427,6 +432,7 @@ func load_history(carry: Variant = null) -> void:
 	offer = result.get("offer")
 	scene_in_progress = bool(result.get("sceneInProgress", false))
 	tag_order = result.get("tagOrder", [])
+	archive_count = int(result.get("archiveCount", 0))
 	visible_count = max(1, int(result.get("revealed", 1)))
 	await _load_offer()
 	if turn_index > 0:
@@ -456,6 +462,8 @@ func set_panel(name: String, quiet := false) -> void:
 	if name != "history" and turn_index != 0:
 		turn_index = 0
 		older = {}
+	if name != "history":
+		archive_open = false
 	timeline.set_open(name == "skip")
 	events_panel.set_open(name == "history")
 	if not quiet:
@@ -1065,8 +1073,15 @@ func _display_record() -> Dictionary:
 	return latest
 
 
+func _revealed_total(record: Dictionary) -> int:
+	var total := (record.get("events", []) as Array).size()
+	if (not older.is_empty() or int(record.get("sceneAppendCount", 0)) > 0) and not skip_in_flight:
+		return total
+	return min(visible_count, total)
+
+
 func _filtered(record: Dictionary) -> Array:
-	var events: Array = record.get("events", [])
+	var events: Array = (record.get("events", []) as Array).slice(0, _revealed_total(record))
 	var tag := _category_tag(record)
 	if tag.is_empty():
 		return events
@@ -1078,10 +1093,7 @@ func _category_tag(record: Dictionary) -> String:
 
 
 func _shown_count(record: Dictionary) -> int:
-	var total := (_filtered(record)).size()
-	if not older.is_empty() and not skip_in_flight:
-		return total
-	return min(visible_count, total)
+	return (_filtered(record)).size()
 
 
 func _render_events() -> void:
@@ -1093,8 +1105,19 @@ func _render_events() -> void:
 	var record := _display_record()
 	var live: bool = record.get("live", false)
 	var past := turn_index > 0 and not live
+	if skip_in_flight:
+		archive_open = false
 	_render_subtitle(record, live)
 	var body := events_panel.body
+	if not live and (archive_count > 0 or archive_open):
+		var toggle := EventCards.ghost("Back to recent turns" if archive_open else "Browse earlier events", 34)
+		toggle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		toggle.pressed.connect(_toggle_archive)
+		body.add_child(toggle)
+	if archive_open:
+		_render_archive(body)
+		_scroll_events()
+		return
 	if past:
 		body.add_child(EventCards.text("This is an earlier turn, shown in full. The map shows the world as it is now.", 11.5, Color(1, 1, 1, 0.5)))
 	if restore_missing and older.is_empty():
@@ -1111,7 +1134,8 @@ func _render_events() -> void:
 	else:
 		var events := _filtered(record)
 		var all_events: Array = record.get("events", [])
-		var total := events.size()
+		var total := all_events.size()
+		var revealed := _revealed_total(record)
 		if all_events.is_empty():
 			if not live:
 				body.add_child(EventCards.empty_state("No world events were recorded for this time skip."))
@@ -1133,6 +1157,7 @@ func _render_events() -> void:
 				if not offer_id.is_empty() and str(event.get("id", "")) == offer_id:
 					footer = EventCards.offer_strip(func() -> void: open_interactive.emit(), _let_offer_pass)
 				var card := EventCards.card(event, {
+					"on_transcript": _open_transcript,
 					"map_open": open_map_changes.has(key),
 					"on_toggle_map": _toggle_map_changes,
 					"on_focus": _focus_bounds,
@@ -1145,9 +1170,9 @@ func _render_events() -> void:
 				if not _focus_event.is_empty() and str(event.get("id", "")) == _focus_event:
 					_events_scroll_anchor = card
 					_mark_card(card)
-			if shown < total:
-				_reveal_buttons(list, record, events, shown, total)
-			if not live and shown >= total:
+			if revealed < total:
+				_reveal_buttons(list, record, all_events, revealed, total)
+			if not live and revealed >= total:
 				var filed := EventCards.filed_section(record.get("filedEvents", []))
 				if filed:
 					list.add_child(filed)
@@ -1170,6 +1195,10 @@ func _render_subtitle(record: Dictionary, live: bool) -> void:
 	for child in slot.get_children():
 		slot.remove_child(child)
 		child.queue_free()
+	if archive_open:
+		slot.visible = false
+		events_panel.set_subtitle("Earlier recorded events")
+		return
 	var count := int(status.get("keptTurns", latest_count))
 	if not live and count > 1 and not record.is_empty():
 		events_panel.set_subtitle("")
@@ -1220,7 +1249,140 @@ func _picker_button(glyph: String, tip: String, enabled: bool) -> Button:
 	return node
 
 
+func _toggle_archive() -> void:
+	archive_open = not archive_open
+	archive = {"query": "", "category": "", "page": 0, "pages": 1, "events": []}
+	if archive_open:
+		await _load_archive()
+	_render_events()
+	_after_reveal_change()
+
+
+func _load_archive(focus := "") -> void:
+	_archive_seq += 1
+	var seq := _archive_seq
+	var reply := await engine.request("turn.archive", {"query": str(archive["query"]), "category": str(archive["category"]), "page": int(archive["page"]), "focus": focus})
+	if seq != _archive_seq or not reply.get("ok", false) or typeof(reply.get("result")) != TYPE_DICTIONARY:
+		return
+	var result: Dictionary = reply["result"]
+	archive["page"] = int(result.get("page", 0))
+	archive["pages"] = max(1, int(result.get("pages", 1)))
+	archive["events"] = result.get("events", [])
+	archive_count = int(result.get("total", archive_count))
+
+
+func _archive_input(control: Control) -> void:
+	var normal := UI.box(Color(1, 1, 1, 0.06), UiTheme.pick("line", Color(1, 1, 1, 0.16)), 10, 1, Vector4(12, 7, 12, 7))
+	for state in ["normal", "focus", "read_only"]:
+		control.add_theme_stylebox_override(state, normal)
+	control.add_theme_font_size_override("font_size", 12)
+	control.add_theme_color_override("font_color", UI.WHITE)
+	control.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.4))
+
+
+func _render_archive(body: Control) -> void:
+	var list := EventCards.column(10)
+	body.add_child(list)
+	list.add_child(EventCards.text("Earlier recorded events. Reading them does not change the world or restore an old turn.", 11.8, Color(1, 1, 1, 0.55)))
+	var search := LineEdit.new()
+	search.placeholder_text = "Search by title or date"
+	search.text = str(archive["query"])
+	search.custom_minimum_size.y = 34
+	search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_archive_input(search)
+	search.text_changed.connect(_archive_query)
+	list.add_child(search)
+	var picker := OptionButton.new()
+	picker.focus_mode = Control.FOCUS_NONE
+	picker.custom_minimum_size.y = 34
+	picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_archive_input(picker)
+	for state in ["hover", "pressed"]:
+		picker.add_theme_stylebox_override(state, UI.box(Color(1, 1, 1, 0.09), UiTheme.pick("line", Color(1, 1, 1, 0.2)), 10, 1, Vector4(12, 7, 12, 7)))
+	picker.add_item("All categories")
+	picker.set_item_metadata(0, "")
+	for value in tag_order:
+		picker.add_item(str(value))
+		picker.set_item_metadata(picker.item_count - 1, str(value))
+		if str(value) == str(archive["category"]):
+			picker.select(picker.item_count - 1)
+	picker.item_selected.connect(_archive_category.bind(picker))
+	list.add_child(picker)
+	var pager := HBoxContainer.new()
+	pager.add_theme_constant_override("separation", 6)
+	var page := int(archive["page"])
+	var pages := int(archive["pages"])
+	var newer := EventCards.ghost("Newer", 30)
+	newer.disabled = page <= 0
+	newer.modulate.a = 1.0 if page > 0 else 0.5
+	newer.pressed.connect(_archive_page.bind(-1))
+	pager.add_child(newer)
+	var count := UI.label("%d / %d" % [page + 1, pages], 11.5, Color(1, 1, 1, 0.8))
+	count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	count.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pager.add_child(count)
+	var later := EventCards.ghost("Older", 30)
+	later.disabled = page + 1 >= pages
+	later.modulate.a = 1.0 if page + 1 < pages else 0.5
+	later.pressed.connect(_archive_page.bind(1))
+	pager.add_child(later)
+	list.add_child(pager)
+	var events: Array = archive["events"]
+	if events.is_empty():
+		list.add_child(EventCards.text("No earlier recorded events match.", 12.2, Color(1, 1, 1, 0.7)))
+	for event in events:
+		var card := EventCards.card(event, {"on_focus": _focus_bounds, "on_transcript": _open_transcript})
+		list.add_child(card)
+		if not _focus_event.is_empty() and str(event.get("id", "")) == _focus_event:
+			_events_scroll_anchor = card
+			_mark_card(card)
+
+
+func _archive_query(text: String) -> void:
+	archive["query"] = text
+	archive["page"] = 0
+	await _load_archive()
+	_render_events()
+	var field := _find_archive_search()
+	if field:
+		field.grab_focus()
+		field.caret_column = field.text.length()
+
+
+func _find_archive_search() -> LineEdit:
+	for node in events_panel.body.find_children("*", "LineEdit", true, false):
+		return node as LineEdit
+	return null
+
+
+func _archive_category(index: int, picker: OptionButton) -> void:
+	archive["category"] = str(picker.get_item_metadata(index))
+	archive["page"] = 0
+	await _load_archive()
+	_render_events()
+
+
+func _archive_page(step: int) -> void:
+	archive["page"] = max(0, int(archive["page"]) + step)
+	await _load_archive()
+	_render_events()
+
+
+func _open_transcript(event: Dictionary) -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 100
+	var reader: Control = InteractiveTranscriptScript.new()
+	layer.add_child(reader)
+	get_tree().root.add_child(layer)
+	reader.call("show_event", event, _open_source_event)
+
+
+func _open_source_event(event_id: String) -> void:
+	show_event(event_id)
+
+
 func _show_turn(index: int) -> void:
+	archive_open = false
 	turn_index = index
 	await _load_older(index)
 	_render_events()
@@ -1258,7 +1420,7 @@ func _reveal_buttons(list: VBoxContainer, record: Dictionary, events: Array, sho
 	skip.modulate.a = 0.75
 	skip.pressed.connect(reveal_all)
 	list.add_child(skip)
-	var can := bool(status.get("canIntervene", false)) and int(status.get("undoCount", 0)) > 0 and not is_loading and not skip_in_flight and not is_retrying_held and older.is_empty()
+	var can := int(record.get("sceneAppendCount", 0)) == 0 and bool(status.get("canIntervene", false)) and int(status.get("undoCount", 0)) > 0 and not is_loading and not skip_in_flight and not is_retrying_held and older.is_empty()
 	if not can or not _category_tag(record).is_empty():
 		return
 	var state := str(intervene["state"]) if str(intervene["record"]) == str(record.get("id", "")) else "idle"
@@ -1317,8 +1479,9 @@ func _warning_box(warning: String, past: bool) -> Control:
 		row.add_child(report)
 	var can_rollback := int(status.get("undoCount", 0)) > 0 and not is_loading and not skip_in_flight and not is_retrying_held and older.is_empty()
 	if can_rollback or rollback_state == "working":
-		var rollback := EventCards.button("Rolling back…" if rollback_state == "working" else "↩ Rollback turn", Color(180 / 255.0, 83 / 255.0, 9 / 255.0, 0.22), Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.45), Color("#fcd9a8"), 8, 12, 600, Vector4(11, 6, 11, 6))
-		rollback.tooltip_text = "Undoes this turn and restores the world to how it was before the jump, so you can fix the provider settings and try again."
+		var appended := int(_display_record().get("sceneAppendCount", 0)) > 0
+		var rollback := EventCards.button("Rolling back…" if rollback_state == "working" else ("Undo scene completion" if appended else "↩ Rollback turn"), Color(180 / 255.0, 83 / 255.0, 9 / 255.0, 0.22), Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.45), Color("#fcd9a8"), 8, 12, 600, Vector4(11, 6, 11, 6))
+		rollback.tooltip_text = "Undo the latest scene completion, leaving the preceding turn intact." if appended else "Undoes this turn and restores the world to how it was before the jump, so you can fix the provider settings and try again."
 		if rollback_state == "working":
 			EventCards.set_busy(rollback, true, 0.7)
 		rollback.pressed.connect(func() -> void:
@@ -1394,7 +1557,7 @@ func _let_offer_pass() -> void:
 
 func reveal_next() -> void:
 	var record := _display_record()
-	var total := (_filtered(record)).size()
+	var total := (record.get("events", []) as Array).size()
 	if total <= 0:
 		visible_count = 1
 	else:
@@ -1407,7 +1570,7 @@ func reveal_next() -> void:
 
 func reveal_all() -> void:
 	var record := _display_record()
-	var total := (_filtered(record)).size()
+	var total := (record.get("events", []) as Array).size()
 	if total > 0:
 		visible_count = total
 		if not skip_in_flight:
@@ -1440,13 +1603,13 @@ func land_shared_round(view: Variant) -> void:
 
 
 func _follow_camera() -> void:
-	if open_panel != "history" or not older.is_empty() or not map_view:
+	if open_panel != "history" or archive_open or not older.is_empty() or not map_view:
 		return
 	var record := _display_record()
 	var events: Array = record.get("events", [])
 	if events.is_empty():
 		return
-	var event: Dictionary = events[min(max(visible_count, 1), events.size()) - 1]
+	var event: Dictionary = events[min(max(_revealed_total(record), 1), events.size()) - 1]
 	var id := str(event.get("id", ""))
 	if id == _camera_event:
 		return
@@ -1466,14 +1629,14 @@ func _stage_map() -> void:
 	_stage_seq += 1
 	var seq := _stage_seq
 	var args := {}
-	if open_panel == "history" and older.is_empty():
+	if open_panel == "history" and older.is_empty() and not archive_open:
 		if skip_in_flight:
 			var revealed := live_cards.slice(0, max(1, visible_count)).filter(func(event: Dictionary) -> bool: return typeof(event.get("filed")) != TYPE_DICTIONARY)
 			if not revealed.is_empty():
 				args = {"through": max(1, visible_count), "live": true}
 		else:
 			var total: int = (latest.get("events", []) as Array).size()
-			if total > 0 and visible_count < total:
+			if total > 0 and visible_count < total and int(latest.get("sceneAppendCount", 0)) == 0:
 				args = {"through": visible_count}
 	if args.is_empty():
 		if not _staged:
@@ -1776,9 +1939,21 @@ func show_event(event_id: String) -> void:
 	if event_id.is_empty() or (is_loading and not skip_in_flight):
 		return
 	var reply := await engine.request("turn.findEvent", {"eventId": event_id})
-	var index := int(reply.get("result", {}).get("index", -1)) if reply.get("ok", false) and typeof(reply.get("result")) == TYPE_DICTIONARY else -1
+	var found: Dictionary = reply.get("result", {}) if reply.get("ok", false) and typeof(reply.get("result")) == TYPE_DICTIONARY else {}
+	var index := int(found.get("index", -1))
 	if index < 0:
+		if skip_in_flight or not bool(found.get("archived", false)):
+			return
+		archive_open = true
+		archive = {"query": "", "category": "", "page": 0, "pages": 1, "events": []}
+		set_panel("history", true)
+		await _load_archive(event_id)
+		_focus_event = event_id
+		_render_events()
+		_focus_event = ""
+		_after_reveal_change()
 		return
+	archive_open = false
 	set_panel("history")
 	if skip_in_flight:
 		return

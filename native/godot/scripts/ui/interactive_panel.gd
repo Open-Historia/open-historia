@@ -4,10 +4,11 @@ extends Control
 signal opened
 signal closed
 signal open_timeline
+signal show_event(event_id: String)
 signal world_changed
 
 const YELLOW := Color("#facc15")
-const CAPTION := Color(1, 1, 1, 0.42)
+const CAPTION := Color(1, 1, 1, 0.60)
 
 var engine: EngineLink
 var show_timeline_link := true
@@ -33,7 +34,7 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	visible = false
 	var backdrop := ColorRect.new()
-	backdrop.color = Color(0, 0, 0, 0.55)
+	backdrop.color = Color(0, 0, 0, 0.63)
 	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(backdrop)
 	_card = PanelContainer.new()
@@ -73,10 +74,8 @@ func _ready() -> void:
 	bar.add_theme_stylebox_override("grabber", UI.box(Color(1, 1, 1, 0.16), Color(0, 0, 0, 0), 999, 0))
 	var margin := MarginContainer.new()
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for side: Array in [["margin_left", 18], ["margin_right", 18], ["margin_top", 16], ["margin_bottom", 18]]:
-		margin.add_theme_constant_override(side[0], side[1])
 	_body = VBoxContainer.new()
-	_body.add_theme_constant_override("separation", 14)
+	_body.add_theme_constant_override("separation", 17)
 	_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	margin.add_child(_body)
 	_scroll.add_child(margin)
@@ -148,8 +147,11 @@ func _input(event: InputEvent) -> void:
 
 func _layout() -> void:
 	var view := size if size.x > 0.0 else get_viewport_rect().size
-	var width := minf(640.0, view.x - 32.0)
-	var height := minf(736.0, view.y - 32.0)
+	var width := minf(768.0, view.x - 32.0)
+	var height := minf(832.0, view.y - 32.0)
+	var pad := roundi(clampf(view.x * 0.025, 16.0, 26.4))
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		_content_margin.add_theme_constant_override(side, pad)
 	var wanted := _header.get_combined_minimum_size().y + 1.0 + _content_margin.get_combined_minimum_size().y
 	height = minf(height, wanted)
 	_card.size = Vector2(width, height)
@@ -175,16 +177,17 @@ func _italic() -> Font:
 	return _italic_font
 
 
-func _caption(text: String, size := 11, color := CAPTION) -> Label:
+func _caption(text: String, size := 12, color := CAPTION) -> Label:
 	var node := UI.wrapped(text, size, color)
 	node.add_theme_constant_override("line_spacing", 3)
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return node
 
 
-func _scene_text(text: String, size := 14, color := UI.WHITE, weight := 400) -> Label:
+func _scene_text(text: String, size := 15, color := UI.WHITE, weight := 400, line := 1.7) -> Label:
 	var node := UI.wrapped(text, size, color, weight)
-	node.add_theme_constant_override("line_spacing", int(round(size * 0.45)))
+	node.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	node.add_theme_constant_override("line_spacing", int(round(size * (line - 1.0))))
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return node
 
@@ -286,7 +289,7 @@ func _render() -> void:
 		_render_scene(scene, idle)
 	elif typeof(offer) == TYPE_DICTIONARY:
 		_render_offer(offer, idle)
-	elif typeof(_finished) != TYPE_DICTIONARY:
+	elif typeof(_finished) != TYPE_DICTIONARY and _busy.is_empty():
 		_body.add_child(_caption("No interactive event is waiting. Now and then a time skip offers one of its events that concerns you to be played out; the event's card says so.", 13))
 	if not _busy.is_empty():
 		_body.add_child(UI.label(_busy, 12, YELLOW, 700))
@@ -319,6 +322,9 @@ func _finished_banner(finished: Dictionary) -> Control:
 	if show_timeline_link:
 		var link := _quiet("See it on the timeline", func() -> void:
 			open_timeline.emit()
+			var event_id := str(finished.get("eventId", ""))
+			if not event_id.is_empty():
+				show_event.emit(event_id)
 			close(), false)
 		link.add_theme_stylebox_override("normal", UI.box(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.12), 10, 1, Vector4(9.6, 4.8, 9.6, 4.8)))
 		link.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -331,7 +337,7 @@ func _render_scene(scene: Dictionary, idle: bool) -> void:
 	var head := VBoxContainer.new()
 	head.add_theme_constant_override("separation", 3)
 	var title := str(scene.get("title", ""))
-	head.add_child(_scene_text(title if not title.is_empty() else "Untitled scene", 17, UI.WHITE, 850))
+	head.add_child(_scene_text(title if not title.is_empty() else "Untitled scene", 21, UI.WHITE, 800, 1.35))
 	var premise := str(scene.get("premise", ""))
 	if not premise.is_empty():
 		var premise_label := _scene_text(premise, 12, Color(1, 1, 1, 0.55))
@@ -368,7 +374,10 @@ func _render_scene(scene: Dictionary, idle: bool) -> void:
 			column.add_child(top)
 			var summary := str(beat.get("summary", ""))
 			if not summary.is_empty():
-				column.add_child(_scene_text(summary, 13, Color(1, 1, 1, 0.72)))
+				var summary_gap := Control.new()
+				summary_gap.custom_minimum_size.y = 2.4
+				column.add_child(summary_gap)
+				column.add_child(_scene_text(summary, 14, Color(1, 1, 1, 0.72)))
 			card.add_child(column)
 			list.add_child(card)
 		_body.add_child(list)
@@ -447,21 +456,19 @@ func _render_offer(offer: Dictionary, idle: bool) -> void:
 	var head := VBoxContainer.new()
 	head.add_theme_constant_override("separation", 3)
 	head.add_child(_caption("The last time skip offers this moment to be played out"))
-	head.add_child(_scene_text(str(offer.get("title", "")), 17, UI.WHITE, 850))
+	var title_gap := Control.new()
+	title_gap.custom_minimum_size.y = 2.6
+	head.add_child(title_gap)
+	head.add_child(_scene_text(str(offer.get("title", "")), 21, UI.WHITE, 800, 1.35))
 	var date := str(offer.get("date", ""))
 	if not date.is_empty():
 		head.add_child(_caption(date))
 	var description := str(offer.get("description", ""))
 	if not description.is_empty():
 		var spacer := Control.new()
-		spacer.custom_minimum_size.y = 4
+		spacer.custom_minimum_size.y = 9.8
 		head.add_child(spacer)
-		var scroll := ScrollContainer.new()
-		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-		var text := _scene_text(description, 13, Color(1, 1, 1, 0.72))
-		scroll.add_child(text)
-		scroll.custom_minimum_size.y = minf(152.0, maxf(24.0, float(description.length()) / 78.0 * 21.0 + 22.0))
-		head.add_child(scroll)
+		head.add_child(_scene_text(description, 15, Color(1, 1, 1, 0.72)))
 	_body.add_child(head)
 	var label_row := HBoxContainer.new()
 	label_row.add_theme_constant_override("separation", 5)
@@ -474,13 +481,22 @@ func _render_offer(offer: Dictionary, idle: bool) -> void:
 	area.text = _angle
 	area.placeholder_text = "Who you are in the room, what you are after… Leave it empty and the scene is built on the event as it stands."
 	area.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
-	area.custom_minimum_size.y = 66
+	area.custom_minimum_size.y = 88
 	area.editable = idle
 	_input_box(area)
 	area.text_changed.connect(func() -> void: _angle = area.text)
 	_body.add_child(area)
 	if revealing:
-		_body.add_child(_caption("Finish revealing the last time skip first: a scene starts from what you have seen.", 11, Color("#fde68a")))
+		_body.add_child(_caption("Finish revealing the last time skip first: a scene starts from what you have seen.", 12, Color("#fde68a")))
+	var foot := VBoxContainer.new()
+	foot.add_theme_constant_override("separation", 0)
+	var foot_rule := ColorRect.new()
+	foot_rule.color = Color(1, 1, 1, 0.1)
+	foot_rule.custom_minimum_size.y = 1
+	foot.add_child(foot_rule)
+	var foot_gap := Control.new()
+	foot_gap.custom_minimum_size.y = 16
+	foot.add_child(foot_gap)
 	var row := HFlowContainer.new()
 	row.add_theme_constant_override("h_separation", 12)
 	row.add_theme_constant_override("v_separation", 8)
@@ -489,10 +505,13 @@ func _render_offer(offer: Dictionary, idle: bool) -> void:
 	pass_button.tooltip_text = "Let the moment pass as it happened — free"
 	row.add_child(pass_button)
 	var note := _caption("Playing it out is one AI request, and each move is one more. Ending it yourself is one more; a scene that reaches its own end is usually written up with its last move. Letting it pass costs nothing.")
-	note.custom_minimum_size.x = 260
 	note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(note)
-	_body.add_child(row)
+	foot.add_child(row)
+	var note_gap := Control.new()
+	note_gap.custom_minimum_size.y = 12
+	foot.add_child(note_gap)
+	foot.add_child(note)
+	_body.add_child(foot)
 
 
 func _run(label: String, method: String, args: Dictionary) -> Variant:

@@ -151,7 +151,7 @@ export const register = (ctx) => {
     "interactive.advance": async ({ text = "" } = {}) => {
       const before = await state();
       const result = await gameplay().advanceActiveInteractive(clean(text));
-      const finished = result && !result.interactive ? { title: finishedTitle(plain(result), before.scene?.title ?? "") } : null;
+      const finished = result && !result.interactive ? { title: finishedTitle(plain(result), before.scene?.title ?? ""), eventId: clean(result.resolvedSceneEventId) } : null;
       emit("interactive.changed", { finished: Boolean(finished) });
       return { finished, state: await state() };
     },
@@ -163,7 +163,7 @@ export const register = (ctx) => {
     "interactive.end": async () => {
       const before = await state();
       const result = await gameplay().endActiveInteractive();
-      const finished = result?.resolved ? { title: finishedTitle(plain(result), before.scene?.title ?? "") } : null;
+      const finished = result?.resolved ? { title: finishedTitle(plain(result), before.scene?.title ?? ""), eventId: clean(result.resolvedSceneEventId) } : null;
       emit("interactive.changed", { finished: Boolean(finished) });
       return { finished, state: await state() };
     },

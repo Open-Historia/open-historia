@@ -9,6 +9,7 @@ signal open_debug_console
 signal setting_changed(key: String, value: Variant)
 signal ai_setup_answered
 
+const CampaignLoreScript := preload("res://scripts/ui/campaign_lore.gd")
 const DISCORD_URL := "https://discord.gg/QaqAK7fQAg"
 const REDDIT_URL := "https://www.reddit.com/r/OpenHistoria"
 const GITHUB_URL := "https://github.com/Open-Historia/open-historia"
@@ -450,6 +451,8 @@ func _show_tab(key: String) -> void:
 			panel = _quick_panel("Game", "Campaign identity and management actions.")
 			panel.add_child(_context_card())
 			panel.add_child(_quick_action("Game Management", "Switch, duplicate, import or manage campaigns", "▦", "neutral", func() -> void: _run_and_close(open_library)))
+			if _shared_role.is_empty() and not str(context.get("gameId", "")).is_empty():
+				panel.add_child(_quick_action("Campaign Lore", "Read and export your campaign’s recorded history", "▤", "neutral", open_campaign_lore))
 		"settings":
 			panel = _quick_panel("Settings", "Jump straight into the options category you want.")
 			var grid := _grid()
@@ -509,6 +512,14 @@ func _show_tab(key: String) -> void:
 	_panel_holder.add_child(panel)
 	if _card.visible:
 		_fit_card.call_deferred()
+
+
+func open_campaign_lore() -> void:
+	var lore: Control = CampaignLoreScript.new()
+	lore.call("setup", engine, context)
+	get_parent().add_child(lore)
+	close()
+	lore.call("open")
 
 
 func _run_and_close(action: Signal) -> void:

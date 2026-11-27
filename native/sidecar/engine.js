@@ -421,3 +421,8 @@ export * as advisorActionCompleteness from "../../src/Game/GameUI/advisorActionC
 export * as interactiveCompletion from "../../src/Game/AI/interactiveCompletion.js";
 export { default as officialCountryAliases } from "../../src/runtime/generated/officialCountryAliases.js";
 export * as wsPresentation from "../../src/Game/Map/vnext/presentationPolicy.js";
+export * as campaignLore from "../../src/runtime/campaignLore.js";
+export * as campaignLoreRead from "../../src/runtime/campaignLoreRead.js";
+export * as campaignChronicle from "../../src/Game/AI/campaignChronicle.js";
+export * as olderEventHistory from "../../src/Game/GameUI/olderEventHistory.js";
+export * as interactiveTranscript from "../../src/runtime/interactiveTranscript.js";

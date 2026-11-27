@@ -296,6 +296,9 @@ static func card(event: Dictionary, options: Dictionary = {}) -> Control:
 		for report in documents:
 			papers.add_child(document(report))
 		content.add_child(papers)
+	var transcript: Variant = event.get("transcript")
+	if typeof(transcript) == TYPE_DICTIONARY:
+		content.add_child(transcript_launcher(event, options.get("on_transcript", Callable())))
 	var footer: Control = options.get("footer", null)
 	if footer:
 		content.add_child(footer)
@@ -303,6 +306,49 @@ static func card(event: Dictionary, options: Dictionary = {}) -> Control:
 	stack.add_child(body)
 	outer.add_child(stack)
 	return outer
+
+
+static func transcript_launcher(event: Dictionary, on_open: Callable) -> Control:
+	var transcript: Dictionary = event.get("transcript", {})
+	if not bool(transcript.get("available", false)):
+		return text("Interactive transcript unavailable for this event.", 11.8, Color(1, 1, 1, 0.6))
+	var launcher := Button.new()
+	launcher.focus_mode = Control.FOCUS_NONE
+	launcher.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	launcher.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	launcher.tooltip_text = "Interactive event transcript"
+	var normal := UI.box(Color(1, 1, 1, 0.05), Color(250 / 255.0, 204 / 255.0, 21 / 255.0, 0.28), 10, 1)
+	var hover := UI.box(Color(1, 1, 1, 0.09), Color(250 / 255.0, 204 / 255.0, 21 / 255.0, 0.45), 10, 1)
+	for state in ["normal", "focus", "disabled"]:
+		launcher.add_theme_stylebox_override(state, normal)
+	for state in ["hover", "pressed", "hover_pressed"]:
+		launcher.add_theme_stylebox_override(state, hover)
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_theme_constant_override("separation", 10)
+	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	row.offset_left = 14.4
+	row.offset_right = -14.4
+	row.offset_top = 8.8
+	row.offset_bottom = -8.8
+	var words := column(3)
+	words.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	words.add_child(text("Explore interactive event", 12, Color("#fde68a"), 800))
+	words.add_child(text("Read the scene and your decisions", 11.8, Color(1, 1, 1, 0.6)))
+	row.add_child(words)
+	var arrow := text("→", 16, Color("#fde68a"))
+	arrow.size_flags_horizontal = Control.SIZE_SHRINK_END
+	arrow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(arrow)
+	launcher.add_child(row)
+	for label in row.find_children("*", "Label", true, false):
+		(label as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	launcher.custom_minimum_size.y = 52
+	launcher.pressed.connect(func() -> void:
+		if on_open.is_valid():
+			on_open.call(event))
+	return launcher
 
 
 static func _map_changes(changes: Array, id: String) -> Control:

@@ -195,6 +195,7 @@ func _wire_overlays() -> void:
 	hud.map_mode_changed.connect(func(mode: String) -> void: _call(game_menu, "set_map_mode", [mode]))
 	hud.open_interactive.connect(func() -> void: _call(interactive, "open"))
 	_hook(interactive, "open_timeline", func() -> void: hud.set_active_panel("history"))
+	_hook(interactive, "show_event", func(event_id: String) -> void: hud.date_widget.show_event(event_id))
 	_hook(interactive, "world_changed", _world_changed)
 	_hook(cheats, "open_interactive", func() -> void: _call(interactive, "open"))
 	_hook(cheats, "world_changed", _world_changed)
