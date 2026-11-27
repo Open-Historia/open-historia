@@ -83,7 +83,7 @@ export const register = (ctx) => {
       const file = path.join(flagsDir, `${local[1].toLowerCase()}.svg`);
       return fs.existsSync(file) ? file : "";
     }
-    const data = /^data:image\/(png|svg\+xml|jpeg|jpg|webp)(;base64)?,(.*)$/is.exec(address);
+    const data = /^data:image\/(png|svg\+xml|jpeg|jpg|webp)(?:;(?!base64)[^;,]*)*(;base64)?,(.*)$/is.exec(address);
     if (!data) return "";
     const kind = data[1].toLowerCase();
     const extension = kind === "svg+xml" ? "svg" : kind === "jpg" ? "jpeg" : kind;
@@ -105,6 +105,8 @@ export const register = (ctx) => {
     } catch {
       return engine.flagImageUrlFromGid(code) ?? engine.flagImageUrlFromGid(name) ?? "";
     }
+    const groupKey = !code && name ? engine.groups.findGroupKey(world?.groups, name) : "";
+    if (groupKey) return engine.groupBanner.groupBannerDataUrl(world.groups[groupKey]?.color);
     const builtIn = engine.flagImageUrlFromGid(code) ?? engine.flagImageUrlFromGid(name);
     if (builtIn) return builtIn;
     const scenarioFlag = code && flags?.[code];
@@ -151,7 +153,109 @@ export const register = (ctx) => {
 
   const readGame = async () => {
     const game = await engine.readJson(engine.JSON_URLS.game, { defaultValue: {}, force: true }).catch(() => ({}));
-    return { player: clean(game?.country), gameDate: clean(game?.gameDate) };
+    return { player: clean(game?.country), gameDate: clean(game?.gameDate), currency: game?.economicDisplayCurrency };
+  };
+
+  const TREATY_REASON_TEXT = {
+    "not-open": "That treaty is no longer on the table.",
+    "not-yours": "That is not yours to answer.",
+    "at-war": "You are at war with each other now.",
+  };
+  const treatyReasonText = (reason) => TREATY_REASON_TEXT[reason] ?? (reason ? "That could not be done." : "");
+  const EFFECT_LIST_LABELS = { onSign: "On signing", perYear: "Every year", onEnd: "When it ends", onBreak: "If broken" };
+  const EFFECT_STAT_LABELS = {
+    stability: "Stability",
+    "economy.gdp": "GDP",
+    "economy.publicDebt": "Public debt",
+    "economy.budgetBalance": "Budget balance",
+    "economy.gdpGrowth": "GDP growth",
+    "economy.inflation": "Inflation",
+    "economy.unemployment": "Unemployment",
+    "population.total": "Population",
+    "military.quality": "Military quality",
+    "military.technology": "Military technology",
+    "military.land": "Land forces",
+    "military.sea": "Navy",
+    "military.air": "Air force",
+    "military.spending": "Military spending",
+  };
+  const EFFECT_STRENGTH_LABELS = { spending: "Forces' funds", technology: "Forces' arms", quality: "Forces' training", land: "Fighters", sea: "Boats", air: "Aircraft" };
+  const TREATY_STATUS_LABELS = { signed: "Signed", declined: "Refused", withdrawn: "Withdrawn", lapsed: "No longer on the table" };
+  const signedNumber = (value) => `${value > 0 ? "+" : ""}${Math.round(value * 100) / 100}`;
+  const treatyKind = (type) => engine.diplomaticViews.AGREEMENT_TYPE_LABELS[type] ?? engine.diplomaticViews.AGREEMENT_TYPE_LABELS.other;
+  const party = (value) => (fold(value) === "breaker" ? { w: "The one who breaks it" } : { n: clean(value) });
+  const effectLine = (effect, yearly, currency) => {
+    const econ = engine.econCurrency;
+    const money = (value) => {
+      const amount = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+      return econ.formatEconomicDisplayValue(amount, econ.normalizeEconomicDisplayCurrency(currency), { compact: true });
+    };
+    let parts = null;
+    if (effect.type === "stat") {
+      const percent = effect.stat === "economy.gdp" || effect.stat === "population.total";
+      parts = [party(effect.party), { t: ": " }, EFFECT_STAT_LABELS[effect.stat] ? { w: EFFECT_STAT_LABELS[effect.stat] } : { n: clean(effect.stat) }, { t: " " }, { x: `${signedNumber(effect.change)}${percent ? "%" : ""}` }];
+    } else if (effect.type === "relation") {
+      parts = [party(effect.party), { t: " \u2194 " }, party(effect.with), { t: ": " }, { w: "Relation" }, { t: " " }, { x: signedNumber(effect.change) }];
+    } else if (effect.type === "reputation") {
+      parts = [party(effect.party), { t: ": " }, { w: "Standing" }, { t: " " }, { x: signedNumber(effect.change) }];
+    } else if (effect.type === "payment") {
+      parts = [party(effect.from), { t: " \u2192 " }, party(effect.to), { t: ": " }, { x: money(effect.amount) }];
+    } else if (effect.type === "strength") {
+      parts = [party(effect.party), { t: ": " }, EFFECT_STRENGTH_LABELS[effect.figure] ? { w: EFFECT_STRENGTH_LABELS[effect.figure] } : { n: clean(effect.figure) }, { t: " " }, { x: signedNumber(effect.change) }];
+    } else if (effect.type === "area") {
+      parts = [party(effect.group), { t: " " }, { w: effect.op === "take" ? "takes" : "gives up" }, { t: " " }, { n: clean(effect.region) }];
+    } else if (effect.type === "war") {
+      parts = [{ w: effect.op === "end" ? "Their war ends" : "Their war goes to a ceasefire" }];
+    }
+    if (!parts) return null;
+    return yearly ? [...parts, { t: " " }, { w: "each year" }] : parts;
+  };
+  const effectView = (effects, currency) => {
+    const shown = engine.agreementEffects.normalizeAgreementEffects(effects);
+    if (!shown) return null;
+    return {
+      months: shown.months ? `${shown.months} mo` : "",
+      lists: engine.agreementEffects.AGREEMENT_EFFECT_LISTS.filter((key) => shown[key]?.length).map((key) => ({
+        heading: EFFECT_LIST_LABELS[key],
+        lines: shown[key].map((effect) => effectLine(effect, key === "perYear", currency)).filter(Boolean),
+      })),
+    };
+  };
+  const treatyView = (world, me, other, chatId, currency) => {
+    const pair = [fold(me), fold(other)].sort().join("|");
+    const drafts = list(world?.treatyOffers)
+      .filter((offer) => offer?.drafted)
+      .filter((offer) => [fold(offer?.from), fold(offer?.to)].sort().join("|") === pair)
+      .filter((offer) => offer.status === "open" || clean(offer.chatId) === chatId)
+      .slice(-3)
+      .map((offer) => {
+        const mine = same(offer.from, me);
+        const toMe = same(offer.to, me);
+        const open = offer.status === "open";
+        return {
+          id: clean(offer.id),
+          status: clean(offer.status),
+          open,
+          mine,
+          toMe,
+          heading: mine ? "Your proposal" : "Counter-offer",
+          party: mine ? clean(offer.to) : clean(offer.from),
+          state: open ? (mine ? "Waiting for their answer" : "") : TREATY_STATUS_LABELS[offer.status] ?? "",
+          proposal: String(offer.proposal ?? "").trim(),
+          kind: treatyKind(offer.type),
+          title: clean(offer.title),
+          parties: list(offer.parties).map(clean).filter(Boolean),
+          terms: String(offer.terms ?? "").trim(),
+          effects: effectView(offer.effects, currency),
+        };
+      });
+    const agreements = engine.groupParties.dealsBetween(world, me, other).map((agreement) => ({
+      id: clean(agreement.id),
+      kind: treatyKind(agreement.type),
+      title: clean(agreement.title),
+      effects: effectView(agreement.effects, currency),
+    }));
+    return { counterpart: other, drafts, agreements };
   };
 
   const unseenIds = async () => {
@@ -341,6 +445,10 @@ export const register = (ctx) => {
   engine.simulationStatus.subscribeChatGeneration((value) => emit("chat.generating", { generating: value === true }));
 
   const testRoutes = standIn ? {
+    "chat.test.group": async ({ name = "", color = "#b45309" } = {}) => {
+      await gs.mutateWorldState((world) => ({ ...world, groups: { ...(world?.groups || {}), [clean(name)]: { name: clean(name), color: clean(color), kind: "cartel" } } }));
+      return { ok: true };
+    },
     "chat.test.callAsked": async ({ callId = "", messageId = "" } = {}) => {
       await gs.mutateWorldState((world) => ({
         ...world,
@@ -382,6 +490,11 @@ export const register = (ctx) => {
       if (tool === "") {
         const who = /It is now (.+?)'s turn to respond/.exec(String(text))?.[1]?.trim();
         if (!who) return null;
+        const proposer = /^(.+?)'s last message is a formal treaty proposal/m.exec(String(text))?.[1]?.trim();
+        if (proposer && String(text).includes("[Treaty Proposal]")) {
+          const treaty = { answer: "counter", type: "trade_economic", parties: [proposer, who], title: "Port Access Agreement", terms: `${proposer} pays ${who} for port access for ten years.\n${who} keeps the harbour open to ${proposer}'s ships.`, effects: { months: 120, onSign: [{ type: "relation", party: proposer, with: who, change: 8 }], perYear: [{ type: "payment", from: proposer, to: who, amount: 2000000000 }, { type: "stat", party: who, stat: "economy.gdp", change: 0.4 }], onBreak: [{ type: "reputation", party: "breaker", change: -6 }] } };
+          return { text: `${who} would sign a version of this: the payment stands, but the term is ten years and the harbour stays ours.\n\nDIPLOMATIC_MEMORY:${who} countered ${proposer}'s port proposal with its own ten-year version.\nTREATY:${JSON.stringify(treaty)}` };
+        }
         return { text: `${who} welcomes the approach. We are ready to send a delegation to discuss closer trade and a joint statement on regional security.\n\nDIPLOMATIC_MEMORY:${who} welcomed the player's approach and offered a delegation on trade and security.\nREACTION:🤝` };
       }
       return null;
@@ -479,6 +592,24 @@ export const register = (ctx) => {
         })),
       };
     },
+    "chat.groups": async ({ player = "" } = {}) => {
+      let groupsOn = true;
+      try {
+        groupsOn = engine.chFeatures.getActiveFeatures()?.groups?.enabled !== false;
+      } catch {
+        groupsOn = true;
+      }
+      if (!groupsOn) return { groups: [] };
+      const world = await gs.readWorldStateView().catch(() => ({}));
+      return {
+        groups: engine.groupBanner.pickableGroupsOf(world, clean(player)).map((group) => ({
+          name: group.name,
+          code: "",
+          group: true,
+          flag: fileForImage(engine.groupBanner.groupBannerDataUrl(group.color)),
+        })),
+      };
+    },
     "chat.create": async ({ chat }) => {
       let ordinal = 0;
       const result = await mutate((chats) => {
@@ -550,10 +681,24 @@ export const register = (ctx) => {
       });
       return { text: note.text, label: note.label, date };
     },
-    "chat.reply": async ({ chatId = "", text = "", counterpart = "", countries = [], catchUp = "" }) => {
+    "chat.reply": async ({ chatId = "", text = "", counterpart = "", countries = [], catchUp = "", proposal = false }) => {
       log(`Player sent in chat #${chatId}; one-on-one counterpart: ${counterpart}.`, undefined, { verbose: true });
-      const answer = await engine.aiMain.sendDiplomaticMessage(text, counterpart, list(countries), { chatId, catchUp });
-      return { reply: String(answer?.reply ?? ""), reaction: answer?.reaction ?? null, memorySummary: answer?.memorySummary ?? "", peace: String(answer?.peace ?? "") };
+      const answer = await engine.aiMain.sendDiplomaticMessage(text, counterpart, list(countries), { chatId, catchUp, proposal: proposal === true });
+      return { reply: String(answer?.reply ?? ""), reaction: answer?.reaction ?? null, memorySummary: answer?.memorySummary ?? "", peace: String(answer?.peace ?? ""), treaty: String(answer?.treaty ?? "") };
+    },
+    "chat.treatyAnswer": async ({ speaker = "", line = "", chatId = "", proposal = "" } = {}) => {
+      if (!clean(speaker) || !clean(line)) return { outcome: "", reason: "unread" };
+      try {
+        const answer = await engine.gameplay.answerTreatyInChat({ speaker: clean(speaker), line: String(line), chatId: clean(chatId), proposal: String(proposal ?? "") });
+        return { outcome: clean(answer?.outcome), reason: clean(answer?.reason) };
+      } catch (error) {
+        log(`${clean(speaker)}'s word on a treaty could not be carried out.`, error);
+        return { outcome: "", reason: "failed" };
+      }
+    },
+    "chat.treaty": async ({ op = "", ref = "" } = {}) => {
+      const done = await engine.gameplay.playerTreaty({ op: clean(op), ref: clean(ref) }).catch(() => ({ ok: false, reason: "failed" }));
+      return { ok: done?.ok === true, said: done?.ok ? "" : treatyReasonText(done?.reason) };
     },
     "chat.peaceAnswer": async ({ speaker = "", line = "", chatId = "", messageId = "" } = {}) => {
       if (!clean(speaker) || !clean(line)) return { outcome: "", reason: "unread" };
@@ -565,7 +710,7 @@ export const register = (ctx) => {
         return { outcome: "", reason: "failed" };
       }
     },
-    "chat.peace": async ({ chatId = "", messageIds = [], counterpart = "", player = "" } = {}) => {
+    "chat.peace": async ({ chatId = "", messageIds = [], counterpart = "", player = "", shared = false } = {}) => {
       const peace = engine.ctPeaceTerms;
       const placement = engine.chPeacePlacement;
       const [world, game] = await Promise.all([
@@ -629,6 +774,7 @@ export const register = (ctx) => {
       return {
         offers: shown,
         calls,
+        treaty: shared !== true && enemy && me ? treatyView(world, me, enemy, clean(chatId), game?.currency) : null,
         war: war ? { id: clean(war.id), enemy } : null,
         canPropose: Boolean(war) && !myOpenTerms,
         territoryChoices: [

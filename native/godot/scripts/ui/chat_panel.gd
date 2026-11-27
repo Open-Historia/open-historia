@@ -1,6 +1,8 @@
 class_name ChatPanel
 extends PanelFrame
 
+const TreatyCards := preload("res://scripts/ui/treaty_cards.gd")
+
 signal open_requested
 signal unread_changed(count: int)
 signal generating_changed(generating: bool)
@@ -2239,6 +2241,20 @@ func _open_selector(mode := "start") -> void:
 				flags[entry_name] = {"flag": t(entry.get("flag", "")), "accent": ""}
 	if selector_open:
 		_modal.set_countries(_selector_countries(), false)
+	var talked := await engine.request("chat.groups", {"player": player})
+	if not talked.get("ok", false) or not selector_open:
+		return
+	var listed := a(d(talked.get("result", {})).get("groups", []))
+	for entry in listed:
+		var entry_name := t(d(entry).get("name", ""))
+		if not t(d(entry).get("flag", "")).is_empty():
+			flags[entry_name] = {"flag": t(d(entry).get("flag", "")), "accent": ""}
+	if selector_mode == "add" and conversation != null:
+		var members := {}
+		for member in conversation.countries():
+			members[t(d(member).get("name", "")).to_lower()] = true
+		listed = listed.filter(func(entry: Variant) -> bool: return not members.has(t(d(entry).get("name", "")).to_lower()))
+	_modal.set_groups(listed)
 
 
 func _add_label(count: int) -> String:
@@ -3378,6 +3394,18 @@ class Conversation extends VBoxContainer:
 	var _peace_loading := false
 	var _peace_again := false
 	var _peace_accepted: Dictionary = {}
+	var proposal_open := false
+	var proposal_text := ""
+	var proposal_said := ""
+	var treaty_busy: Dictionary = {}
+	var treaty_errors: Dictionary = {}
+	var end_armed := ""
+	var end_busy := ""
+	var end_error := ""
+	var _proposals: Dictionary = {}
+	var _proposal_signature := ""
+	var _proposal_holder: MarginContainer
+	var _propose_button: Button
 	var _last_thread_signature := ""
 	var _rendered_signature := ""
 	var _header: PanelContainer
@@ -3689,6 +3717,10 @@ class Conversation extends VBoxContainer:
 		_peace_holder.add_theme_constant_override("margin_bottom", 8)
 		_peace_holder.visible = false
 		column.add_child(_peace_holder)
+		_proposal_holder = MarginContainer.new()
+		_proposal_holder.add_theme_constant_override("margin_bottom", 8)
+		_proposal_holder.visible = false
+		column.add_child(_proposal_holder)
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
 		_peace_button = Button.new()
@@ -3730,6 +3762,10 @@ class Conversation extends VBoxContainer:
 			make_demand = not make_demand
 			update_composer())
 		row.add_child(_demand_button)
+		_propose_button = TreatyCards.propose_button()
+		_propose_button.visible = false
+		_propose_button.pressed.connect(_toggle_proposal)
+		row.add_child(_propose_button)
 		_composer = TextEdit.new()
 		_composer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_composer.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
@@ -3762,7 +3798,7 @@ class Conversation extends VBoxContainer:
 		_send.pressed.connect(submit_from_composer)
 		row.add_child(_send)
 		if UI.phone():
-			for button in [_peace_button, _vote_button, _demand_button]:
+			for button in [_peace_button, _vote_button, _demand_button, _propose_button]:
 				(button as Control).size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		column.add_child(row)
 		_hint = UI.label("Enter to send · Shift+Enter for a new line", 8 if embedded else 9, Color(1, 1, 1, 0.26))
@@ -3867,6 +3903,14 @@ class Conversation extends VBoxContainer:
 		peace_said = ""
 		peace_sending = false
 		_peace_accepted = {}
+		proposal_open = false
+		proposal_text = ""
+		proposal_said = ""
+		treaty_busy = {}
+		treaty_errors = {}
+		end_armed = ""
+		end_busy = ""
+		end_error = ""
 		editing_title = false
 		_composer.text = ""
 		fit_composer()
@@ -4106,6 +4150,7 @@ class Conversation extends VBoxContainer:
 		_composer_panel.visible = not terminal and not advisor and not loading
 		_update_tags()
 		_update_peace_composer()
+		_update_treaty_composer()
 		var council := is_council()
 		(_council_bar.get_parent() as Control).visible = council
 		_council_bar.visible = council
@@ -4407,7 +4452,8 @@ class Conversation extends VBoxContainer:
 		var replied_on := ChatPanel.t(asked.get("time", ""))
 		if replied_on.is_empty():
 			replied_on = panel.game_date
-		var reply := await panel.engine.request("chat.reply", {"chatId": id, "text": player_message, "counterpart": ChatPanel.t(country.get("name", "")), "countries": countries(), "catchUp": ChatPanel.t(asked.get("catchUp", ""))})
+		var proposal := _proposals.has(player_message)
+		var reply := await panel.engine.request("chat.reply", {"chatId": id, "text": player_message, "counterpart": ChatPanel.t(country.get("name", "")), "countries": countries(), "catchUp": ChatPanel.t(asked.get("catchUp", "")), "proposal": proposal})
 		if id != chat_id:
 			return
 		if reply.get("ok", false):
@@ -4439,6 +4485,16 @@ class Conversation extends VBoxContainer:
 					panel.world_changed.emit()
 				if id == chat_id:
 					refresh_peace()
+			if proposal:
+				_proposals.erase(player_message)
+			var treaty_line := ChatPanel.t(answer.get("treaty", ""))
+			if not treaty_line.is_empty() and not is_group():
+				var made := await panel.engine.request("chat.treatyAnswer", {"speaker": ChatPanel.t(country.get("name", "")), "line": treaty_line, "chatId": id, "proposal": player_message if proposal else ""})
+				if made.get("ok", false) and ChatPanel.t(ChatPanel.d(made.get("result", {})).get("outcome", "")) in ["signed", "broken"]:
+					panel.world_changed.emit()
+				if id == chat_id:
+					await refresh_peace()
+					_scroll_to_end()
 			if not is_group() and not they_are().is_empty():
 				var check_chat: Dictionary = chat.duplicate()
 				check_chat["messages"] = messages_ref
@@ -5150,7 +5206,7 @@ class Conversation extends VBoxContainer:
 			var others := panel.counterparts_of(countries())
 			if not others.is_empty():
 				counterpart = ChatPanel.t(ChatPanel.d(others[0]).get("name", ""))
-		var reply := await panel.engine.request("chat.peace", {"chatId": asked_for, "messageIds": ids, "counterpart": counterpart, "player": panel.player})
+		var reply := await panel.engine.request("chat.peace", {"chatId": asked_for, "messageIds": ids, "counterpart": counterpart, "player": panel.player, "shared": panel.shared_game})
 		_peace_loading = false
 		if asked_for == chat_id and reply.get("ok", false):
 			var next := ChatPanel.d(reply.get("result", {}))
@@ -5223,6 +5279,116 @@ class Conversation extends VBoxContainer:
 			column.add_child(buttons)
 		card.add_child(column)
 		return card
+
+
+	func treaty_info() -> Dictionary:
+		if is_group() or is_advisor_desk() or panel.shared_game:
+			return {}
+		return ChatPanel.d(peace_info.get("treaty", {}))
+
+
+	func treaty_counterpart() -> String:
+		return ChatPanel.t(treaty_info().get("counterpart", ""))
+
+
+	func _toggle_proposal() -> void:
+		proposal_open = not proposal_open
+		proposal_said = ""
+		update_composer()
+
+
+	func _update_treaty_composer() -> void:
+		var counterpart := treaty_counterpart()
+		if counterpart.is_empty():
+			proposal_open = false
+		_propose_button.visible = not counterpart.is_empty()
+		_propose_button.disabled = loading
+		TreatyCards.style_propose_button(_propose_button, proposal_open)
+		var open_now := proposal_open and not counterpart.is_empty()
+		var signature := "%s|%s|%s|%s" % [open_now, counterpart, proposal_said, loading]
+		if signature == _proposal_signature and (_proposal_holder.get_child_count() > 0) == open_now:
+			return
+		_proposal_signature = signature
+		ChatPanel.clear(_proposal_holder)
+		_proposal_holder.visible = open_now
+		if open_now:
+			_proposal_holder.add_child(TreatyCards.proposal_box(counterpart, proposal_text, proposal_said, loading, _on_proposal_text, send_proposal, _toggle_proposal))
+
+
+	func _on_proposal_text(value: String) -> void:
+		var was_empty := proposal_text.strip_edges().is_empty()
+		proposal_text = value
+		if was_empty != value.strip_edges().is_empty():
+			for node in _proposal_holder.find_children("*", "Button", true, false):
+				if (node as Button).has_meta("proposal_send"):
+					(node as Button).disabled = loading or value.strip_edges().is_empty()
+
+
+	func send_proposal() -> void:
+		var text := proposal_text.strip_edges()
+		if text.is_empty() or loading:
+			return
+		if treaty_counterpart().is_empty():
+			proposal_said = "That treaty is no longer on the table."
+			update_composer()
+			return
+		_proposals[text] = true
+		proposal_open = false
+		proposal_text = ""
+		proposal_said = ""
+		update_composer()
+		await submit_player_text(text)
+
+
+	func answer_treaty(op: String, offer: Dictionary) -> void:
+		var id := ChatPanel.t(offer.get("id", ""))
+		if id.is_empty() or treaty_busy.get(id, false):
+			return
+		treaty_busy[id] = true
+		treaty_errors.erase(id)
+		render_messages(false)
+		var reply := await panel.engine.request("chat.treaty", {"op": op, "ref": id})
+		treaty_busy.erase(id)
+		var result := ChatPanel.d(reply.get("result", {})) if reply.get("ok", false) else {"ok": false, "said": "That could not be done."}
+		if not result.get("ok", false):
+			var said := ChatPanel.t(result.get("said", ""))
+			treaty_errors[id] = said if not said.is_empty() else "That could not be done."
+			render_messages(false)
+			return
+		if op == "sign":
+			panel.world_changed.emit()
+		render_messages(false)
+		refresh_peace()
+
+
+	func _disarm_end(id: String) -> void:
+		if end_armed == id and end_busy.is_empty():
+			end_armed = ""
+			render_messages(false)
+
+
+	func end_agreement(agreement: Dictionary) -> void:
+		var id := ChatPanel.t(agreement.get("id", ""))
+		if id.is_empty() or not end_busy.is_empty():
+			return
+		if end_armed != id:
+			end_armed = id
+			render_messages(false)
+			return
+		end_busy = id
+		end_error = ""
+		render_messages(false)
+		var reply := await panel.engine.request("chat.treaty", {"op": "end", "ref": id})
+		end_busy = ""
+		end_armed = ""
+		var result := ChatPanel.d(reply.get("result", {})) if reply.get("ok", false) else {"ok": false, "said": "That could not be done."}
+		if not result.get("ok", false):
+			var said := ChatPanel.t(result.get("said", ""))
+			end_error = said if not said.is_empty() else "That could not be done."
+		else:
+			panel.world_changed.emit()
+		render_messages(false)
+		refresh_peace()
 
 
 	func answer_peace(offer: Dictionary, op: String) -> void:
@@ -5417,6 +5583,15 @@ class Conversation extends VBoxContainer:
 			_box.add_child(_demand_card(ChatPanel.d(demand)))
 		for offer in peace_stranded:
 			_box.add_child(_peace_card(ChatPanel.d(offer)))
+		var treaty := treaty_info()
+		if not treaty.is_empty():
+			var in_force := ChatPanel.a(treaty.get("agreements", []))
+			if not in_force.is_empty():
+				_box.add_child(TreatyCards.agreements_card(in_force, end_armed, end_busy, end_error, end_agreement, _disarm_end))
+			for offer in ChatPanel.a(treaty.get("drafts", [])):
+				var entry := ChatPanel.d(offer)
+				var offer_id := ChatPanel.t(entry.get("id", ""))
+				_box.add_child(TreatyCards.treaty_card(entry, treaty_busy.get(offer_id, false) == true, ChatPanel.t(treaty_errors.get(offer_id, "")), answer_treaty))
 		for asked in calls_stranded:
 			_box.add_child(_call_card(ChatPanel.d(asked)))
 		var list := countries()

@@ -13,6 +13,7 @@ var empty_label := "No countries selected yet"
 var confirm_label: Callable = func(count: int) -> String: return "Start conversation" if count > 0 else "Choose a recipient"
 var single := false
 var countries: Array = []
+var groups: Array = []
 var loading := false
 var selected: Array = []
 var flag_maker: Callable
@@ -27,6 +28,9 @@ var chips: HFlowContainer
 var results_count: Label
 var results: ScrollContainer
 var grid: GridContainer
+var group_box: VBoxContainer
+var group_grid: GridContainer
+var _group_count: Label
 var empty_note: Label
 var confirm_button: Button
 var cancel_button: Button
@@ -55,6 +59,7 @@ func configure(options: Dictionary) -> void:
 	confirm_label = label_of if label_of is Callable else (func(count: int) -> String: return "Start conversation" if count > 0 else "Choose a recipient")
 	if options.has("corner"):
 		corner = int(options.get("corner"))
+	groups = []
 	selected = []
 	search.text = ""
 	_restyle()
@@ -67,6 +72,18 @@ func set_countries(list: Array, still_loading: bool) -> void:
 	countries = list
 	loading = still_loading
 	render()
+
+
+func set_groups(list: Array) -> void:
+	groups = list
+	render()
+
+
+func filtered_groups() -> Array:
+	var query := search.text.strip_edges().to_lower()
+	if query.is_empty():
+		return groups
+	return groups.filter(func(entry: Variant) -> bool: return str((entry as Dictionary).get("name", "")).to_lower().contains(query))
 
 
 func unique_countries() -> Array:
@@ -281,6 +298,41 @@ func _build() -> void:
 	grid.add_theme_constant_override("h_separation", GRID_GAP)
 	grid.add_theme_constant_override("v_separation", GRID_GAP)
 	results_column.add_child(grid)
+	group_box = VBoxContainer.new()
+	group_box.set_meta("directory_groups", true)
+	group_box.add_theme_constant_override("separation", GRID_GAP)
+	group_box.visible = false
+	var group_heading := PanelContainer.new()
+	var heading_look := StyleBoxFlat.new()
+	heading_look.bg_color = Color(0, 0, 0, 0)
+	heading_look.border_color = _line(Color(1, 1, 1, 0.08))
+	heading_look.border_width_top = 1
+	heading_look.border_width_bottom = 1
+	heading_look.content_margin_left = 19
+	heading_look.content_margin_right = 19
+	heading_look.content_margin_top = 10
+	heading_look.content_margin_bottom = 10
+	group_heading.add_theme_stylebox_override("panel", heading_look)
+	var group_row := HBoxContainer.new()
+	group_row.add_theme_constant_override("separation", 16)
+	var group_title := UI.label("Groups", 11, _muted(0.6), 800, "Arial", 1)
+	group_title.uppercase = true
+	group_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	group_row.add_child(group_title)
+	_group_count = UI.label("", 11, UiTheme.pick("accent", Color("#91c9e7")), 700)
+	group_row.add_child(_group_count)
+	group_heading.add_child(group_row)
+	var heading_gap := MarginContainer.new()
+	heading_gap.add_theme_constant_override("margin_top", 10)
+	heading_gap.add_child(group_heading)
+	group_box.add_child(heading_gap)
+	group_grid = GridContainer.new()
+	group_grid.columns = 1
+	group_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	group_grid.add_theme_constant_override("h_separation", GRID_GAP)
+	group_grid.add_theme_constant_override("v_separation", GRID_GAP)
+	group_box.add_child(group_grid)
+	results_column.add_child(group_box)
 	_results_margin.add_child(results_column)
 	results.add_child(_results_margin)
 	results.resized.connect(_fit_columns)
@@ -469,11 +521,24 @@ func _render_grid() -> void:
 	if shown.is_empty():
 		empty_note.text = "No matching countries."
 		empty_note.visible = true
+		_render_groups()
 		return
 	empty_note.visible = false
 	for entry in shown:
 		grid.add_child(_country_card(entry))
+	_render_groups()
 	_fit_columns()
+
+
+func _render_groups() -> void:
+	for child in group_grid.get_children():
+		group_grid.remove_child(child)
+		child.queue_free()
+	var shown := filtered_groups() if not loading else []
+	group_box.visible = not shown.is_empty()
+	_group_count.text = str(shown.size())
+	for entry in shown:
+		group_grid.add_child(_country_card(entry))
 
 
 func _fit_columns() -> void:
@@ -484,6 +549,7 @@ func _fit_columns() -> void:
 	if width <= 0.0:
 		return
 	grid.columns = maxi(1, floori((width + GRID_GAP) / (minf(width, CARD_MIN) + GRID_GAP)))
+	group_grid.columns = grid.columns
 	empty_note.custom_minimum_size.y = 96.0
 
 
