@@ -1744,6 +1744,28 @@ export const register = (ctx) => {
       return relationRoster(extras, relationRows(identity, world, key), { search, sort });
     },
     "country.chart": async (args) => chartView(args),
+    "country.refreshCadence": async () => {
+      const refresh = engine.statsRefresh;
+      return {
+        months: refresh.readStatsRefreshMonths(),
+        choices: [...refresh.STATS_REFRESH_MONTH_CHOICES],
+        most: refresh.STATS_REFRESH_BATCH_MOST,
+        role: cleanText(engine.mpBridge?.sharedGameRole?.()),
+      };
+    },
+    "country.setRefreshCadence": async ({ months = 0 } = {}) => {
+      const refresh = engine.statsRefresh;
+      refresh.writeStatsRefreshMonths(refresh.deviceStorage(), Number(months) || 0);
+      const stored = refresh.readStatsRefreshMonths();
+      engine.debugLog?.logSettingChange?.("Stats auto-refresh cadence", stored ? `every ${stored} game months` : "off");
+      storage?.flush?.();
+      return {
+        months: stored,
+        choices: [...refresh.STATS_REFRESH_MONTH_CHOICES],
+        most: refresh.STATS_REFRESH_BATCH_MOST,
+        role: cleanText(engine.mpBridge?.sharedGameRole?.()),
+      };
+    },
     "country.answer": async ({ op = "", ref = "", territory = "", money = "none", theirs = "", country = "free", cede = "", ours = "", more = "", chatId = "", messageId = "" } = {}) => {
       if (op === "propose") {
         const player = await readPlayer();

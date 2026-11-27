@@ -2773,6 +2773,74 @@ func _open_advanced() -> void:
 		await _render_advanced()
 
 
+func _refresh_cadence() -> Control:
+	var reply: Dictionary = await engine.request("country.refreshCadence")
+	if not reply.get("ok", false) or typeof(reply.get("result")) != TYPE_DICTIONARY:
+		return null
+	return _cadence_box(reply["result"])
+
+
+func _cadence_label(months: int) -> String:
+	if months <= 0:
+		return I18n.ui("Off")
+	return I18n.ui("Every month") if months == 1 else I18n.ui("Every {{count}} months", {"count": months})
+
+
+func _cadence_box(state: Dictionary) -> Control:
+	var role := str(state.get("role", ""))
+	if role == "guest":
+		return null
+	var months := int(state.get("months", 0))
+	var box := card(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.08), 12, Vector4(12.8, 12, 12.8, 12))
+	box.set_meta("refresh_cadence", true)
+	var inner := column(0)
+	inner.add_child(text("Auto-refresh cadence", 11, Color(1, 1, 1, 0.8), 800))
+	inner.add_child(gap(8))
+	var chips := flow(6, 6)
+	for value in state.get("choices", []):
+		var choice := int(value)
+		var active := choice == months
+		var chip := small_button(I18n.ui("Off") if choice == 0 else I18n.ui("{{count}} months", {"count": choice}), Color(0, 0, 0, 0.42) if active else Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.28) if active else Color(1, 1, 1, 0.08), Color("#f4f4f5") if active else Color(1, 1, 1, 0.68), 11, 800 if active else 700, Vector4(10.4, 6.4, 10.4, 6.4), 999)
+		chip.set_meta("months", choice)
+		chip.pressed.connect(_choose_cadence.bind(choice, box))
+		chips.add_child(chip)
+	inner.add_child(chips)
+	inner.add_child(gap(9))
+	var current := RichTextLabel.new()
+	current.bbcode_enabled = true
+	current.fit_content = true
+	current.scroll_active = false
+	current.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	current.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	current.add_theme_font_override("normal_font", UI.font(400))
+	current.add_theme_font_size_override("normal_font_size", 10)
+	current.add_theme_color_override("default_color", Color(1, 1, 1, 0.42))
+	current.text = "%s [color=#dbeafe]%s[/color]." % [I18n.ui("Current setting:"), _cadence_label(months)]
+	inner.add_child(current)
+	inner.add_child(gap(5))
+	var most := int(state.get("most", 6))
+	var said := I18n.ui("Off: a country's stat sheet changes only when a time skip changes it, or when you refresh it from its ↻ menu.") if months == 0 else I18n.ui("After a time skip, once {{interval}} months of game time have passed since the last refresh, one background request brings up to date the stat sheets the news has changed, for up to {{most}} countries, yours first. A long skip still makes at most one such request. It stops at the day's cap of requests nobody pressed a button for.", {"interval": months, "most": most})
+	inner.add_child(prose(said, 10, Color(1, 1, 1, 0.42)))
+	if role == "host":
+		inner.add_child(gap(5))
+		inner.add_child(prose(I18n.ui("In a shared game this runs only on the host, and only while the host's AI answers for every player."), 10, Color(1, 1, 1, 0.42)))
+	box.add_child(inner)
+	return box
+
+
+func _choose_cadence(months: int, box: Control) -> void:
+	var reply: Dictionary = await engine.request("country.setRefreshCadence", {"months": months})
+	if not reply.get("ok", false) or typeof(reply.get("result")) != TYPE_DICTIONARY or not is_instance_valid(box):
+		return
+	var fresh := _cadence_box(reply["result"])
+	var parent := box.get_parent()
+	if fresh and parent:
+		var at := box.get_index()
+		parent.add_child(fresh)
+		parent.move_child(fresh, at)
+	box.queue_free()
+
+
 func _render_advanced(loading := false) -> void:
 	var reply: Dictionary = await engine.request("country.chart", {"target": target, "metricKeys": chart_keys, "range": chart_range, "loading": loading})
 	if not reply.get("ok", false):
@@ -2875,6 +2943,10 @@ func _render_advanced(loading := false) -> void:
 	for side in [["margin_left", 14], ["margin_right", 14], ["margin_top", 14], ["margin_bottom", 16]]:
 		aside_margin.add_theme_constant_override(side[0], side[1])
 	var aside := column(0)
+	var cadence := await _refresh_cadence()
+	if cadence:
+		aside.add_child(cadence)
+		aside.add_child(gap(16))
 	aside.add_child(text("TIME RANGE", 9, Color(1, 1, 1, 0.42), 900, true, 1))
 	aside.add_child(gap(8))
 	var ranges := flow(6, 6)

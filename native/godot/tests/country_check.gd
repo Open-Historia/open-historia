@@ -473,6 +473,15 @@ func cancel(id: int) -> void:
 	await _wait(0.8)
 	_check(panel._modal != null and _has_text(panel._modal, "Advanced Statistics") and _has_text(panel._modal, "TIME RANGE"), "advanced statistics modal")
 	await _shoot("10-country-advanced")
+	_check(_has_text(panel._modal, "Auto-refresh cadence") and _has_text(panel._modal, "Every 6 months") and _has_text(panel._modal, "12 months"), "Advanced Statistics offers the auto-refresh cadence, every 6 months by default")
+	var chips := _find_all(panel._modal, func(node: Node) -> bool: return node is Button and node.has_meta("months") and int(node.get_meta("months")) == 0, [])
+	if not chips.is_empty():
+		(chips[0] as Button).pressed.emit()
+		await _wait(0.6)
+	var cadence: Dictionary = (await main.engine.request("country.refreshCadence")).get("result", {})
+	_check(int(cadence.get("months", -1)) == 0 and _has_text(panel._modal, "Off: a country's stat sheet changes only when a time skip changes it, or when you refresh it from its ↻ menu."), "Off turns the background refresh off and says so")
+	await _shoot("10b-country-advanced-refresh-off")
+	await main.engine.request("country.setRefreshCadence", {"months": 6})
 	panel._close_modal()
 	_check(not panel.has_method("_open_tracking") and panel.get("_tracking_model") == null, "Stats has no Historical tracking sheet")
 	panel.scroll.scroll_vertical = 0
