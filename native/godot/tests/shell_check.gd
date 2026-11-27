@@ -7,8 +7,8 @@ var failures: PackedStringArray = []
 var played: PackedStringArray = []
 var only := ""
 
-const NEWEST_UPDATES := ["2026-11-native-beta-catch-up", "2026-11-projects-recovery-safeguards", "2026-11-diplomatic-atlas", "2026-11-projects-that-build", "2026-11-diplomatic-correspondence-refresh", "2026-11-national-stats-improvements", "2026-11-wars-end-with-an-outcome", "2026-11-advisor-action-completeness"]
-const NEWEST_TITLES := ["Projects, Safely Preserved", "A better diplomatic inbox", "More reliable national statistics", "Wars end with an outcome"]
+const NEWEST_UPDATES := ["2026-11-interactive-event-history", "2026-11-map-editor-v2", "2026-11-project-currency-clarity", "2026-11-gm-one-change", "2026-11-back-channels", "2026-11-edit-orders", "2026-11-shared-games-fixes", "2026-11-shared-game-replies"]
+const NEWEST_TITLES := ["Your decisions, remembered", "Back Channels", "Edit your orders", "Shared Worlds"]
 const RELEASE := "2026-11-version-2-5"
 
 

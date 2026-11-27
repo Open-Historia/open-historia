@@ -56,6 +56,66 @@ const walkFiles = (dir, found = []) => {
 
 const NOT_ON_NATIVE = new Set(["2026-11-smoother-zooming", "2026-11-picture-edges-and-strike-targets", "2026-11-less-for-the-gpu", "2026-11-mac-opening", "2026-11-slower-welcome", "2026-11-smoother-lighter-map", "2026-11-battlefields-on-3d-terrain", "2026-11-installer-privacy-page", "2026-11-advisor-group-silent-repair", "2026-11-country-stats-reliability", "2026-11-every-language-alike", "2026-11-custom-unit-types", "2026-11-whole-coalitions", "2026-11-sturdier-wars", "2026-11-political-world-prehistory", "2026-11-war-music-only-in-war", "2026-11-advisor-country-tools", "2026-11-stats-in-dollars", "2026-11-features-off-left-out"]);
 
+const LINES_NOT_ON_NATIVE = new Set([
+  "Require a country to be human-controlled or not human-controlled before an event fires.",
+  "Create up to 256 Day-one facts instead of 32.",
+  "Manage starting diplomatic scores and descriptions from Scenario Politics, using search and country filters.",
+  "Political World, Institutions and diplomatic relations managers now follow the selected interface theme.",
+  "Opt eligible custom characters into reading authored simulation rules; access is off by default.",
+  "Adjust when polity names disappear as you zoom in under Settings, Map, Labels.",
+  "Select units, cities and appropriate structures even on non-interactable territory; water placement rules still apply.",
+  "Discord Rich Presence follows the current campaign date and distinguishes saves with identical names.",
+  "Draw, split and repaint regions with clearer tools and precise close-up controls.",
+  "Find and select territory across large maps from a dedicated region workspace.",
+  "Zoom from Z1 to Z24 with finer close-up steps and compact mobile controls.",
+  "Search and edit from the map or the accompanying lists without hunting through scattered controls.",
+  "View a temporary OpenStreetMap street reference when tracing modern geography.",
+  "Use Hand to pan even while adjusting a reference image; switch to Select to move or resize it.",
+  "Rename polities, manage their alternative names and keep their identities distinct.",
+  "Edit government details and starting relations for the scenario's Political World.",
+  "Review the changes to your scenario separately from the map's working copy.",
+  "Generate a new world and publish it as its own scenario instead of replacing established historical politics.",
+  "Regions, cities and polity colours are saved with the new scenario.",
+  "Custom worlds retain only their own polity colours, while ordinary stock maps keep the colours they need.",
+  "Verified recovery maps give you a way back before major world replacements.",
+  "Paste regions and their newly imported records together, then undo or redo the whole paste in one step.",
+  "Start a conversation with a group from the Diplomacy panel's list, from its area on the map (Talk to their leadership), or from a country's Groups on its territory.",
+  "A counter-offer comes as a card you sign or decline. Every deal in force is listed in the conversation and in a country's dossier with what it does, and you can end it there, though breaking it costs what it says.",
+  "On the Diplomatic map's Relations view, each group's area is drawn in its standing with the focus country, a crackdown in a colour of its own.",
+  "The legend lists the groups apart from the countries, and a group's card shows its relation and its deals with you.",
+  "Pick the name other players see you by when you join a shared game; a star marks every country a person plays (click it to see who), and the game menu has a Players list.",
+  "Current on your open shared game takes you back into it, and the lobby shows only what you can do in it.",
+  "The round bar shows today's date and the day the round lands, and the Timeline panel shows the round.",
+  "Players on the website and the Android app can join a game hosted on the desktop app again.",
+]);
+const BANNERS_NOT_ON_NATIVE = new Set(["Finance your projects", "Groups on the Diplomatic Map"]);
+
+const nativeLines = (items) => items.filter((line) => !LINES_NOT_ON_NATIVE.has(line));
+
+const nativeBanner = (banner) => {
+  const next = { ...banner };
+  if (Array.isArray(banner.items)) next.items = nativeLines(banner.items);
+  if (Array.isArray(banner.sections)) {
+    next.sections = banner.sections
+      .map((section) => (Array.isArray(section?.items) ? { ...section, items: nativeLines(section.items) } : section))
+      .filter((section) => !Array.isArray(section?.items) || section.items.length > 0);
+  }
+  return next;
+};
+
+const emptied = (before, after) => (Array.isArray(before.items) && before.items.length > 0 && after.items.length === 0)
+  || (Array.isArray(before.sections) && before.sections.length > 0 && after.sections.length === 0);
+
+export const nativeUpdate = (update) => {
+  if (!Array.isArray(update?.banners)) return update;
+  const banners = update.banners
+    .filter((banner) => banner && typeof banner === "object" && !BANNERS_NOT_ON_NATIVE.has(banner.title))
+    .map((banner) => [banner, nativeBanner(banner)])
+    .filter(([before, after]) => !emptied(before, after))
+    .map(([, after]) => after);
+  return { ...update, banners };
+};
+
 export const register = (ctx) => {
   const { engine, api, emit, plain, storage, clean, list, cacheDir, standIn } = ctx;
   const notes = engine.shellNotes;
@@ -370,8 +430,8 @@ export const register = (ctx) => {
 
   return {
     "shell.boot": async ({ preview = "" } = {}) => {
-      const asked = notices.previewedUpdates(previewSearch(preview), list(notes.UPDATES).filter(onNative));
-      const notice = asked ? { updates: asked, preview: true } : { updates: notices.pendingUpdates({ updates: list(notes.NOTICE_UPDATES).filter(onNative) }), preview: false };
+      const asked = notices.previewedUpdates(previewSearch(preview), list(notes.UPDATES).filter(onNative).map(nativeUpdate));
+      const notice = asked ? { updates: asked, preview: true } : { updates: notices.pendingUpdates({ updates: list(notes.NOTICE_UPDATES).filter(onNative).map(nativeUpdate) }), preview: false };
       const door = await doorDue.decideVaultDoor({ always: settings.vaultDoorAlways(), resolveBuild: nativeBuild }).catch(() => ({ show: false, build: "" }));
       return {
         door: { show: door.show === true, build: clean(door.build) },
@@ -397,7 +457,7 @@ export const register = (ctx) => {
       changelog: page.changelog ? list(page.changelog).map((update) => clean(update?.id)) : null,
     })),
     "shell.state": async () => ({ seen: notices.seenUpdate() ?? "", doorBuild: doorDue.readVaultDoorBuild() ?? "" }),
-    "shell.updates": async () => ({ updates: list(notes.UPDATES).filter(onNative).map(updateView) }),
+    "shell.updates": async () => ({ updates: list(notes.UPDATES).filter(onNative).map(nativeUpdate).map(updateView) }),
     "shell.prefs": async () => prefs(),
     "shell.metal": async () => metal(),
     "shell.brushedMetal": async ({ size = 64, options = {} } = {}) => brushedDisc(Math.max(8, Math.min(1024, Math.round(Number(size) || 64))), options && typeof options === "object" ? options : {}),
