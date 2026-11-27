@@ -238,7 +238,7 @@ static func proposal_box(counterpart: String, text: String, said: String, busy: 
 	box.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.03)), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 10, 1, Vector4(10, 10, 10, 10)))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 7)
-	column.add_child(_name_label(I18n.ui("Propose a deal to {{name}}", {"name": counterpart}), 10, UiTheme.pick("text", INK), 820))
+	column.add_child(_name_label("%s %s" % [I18n.ui("Propose a deal to"), counterpart], 10, UiTheme.pick("text", INK), 820))
 	column.add_child(UI.wrapped("Write it out in your own words: what each side gives, gets and does, and for how long. Their answer writes the treaty and what it does.", 10, UiTheme.pick("muted", Color(1, 1, 1, 0.5))))
 	var area := TextEdit.new()
 	area.set_meta("proposal_text", true)
