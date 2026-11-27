@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { applyProjectOutcomesToWorld, normalizeWorldState } from "./gameState.js";
-import { statPathEnum, statPathsOf, withStatPathEnum } from "./statPaths.js";
+import { describeStatPaths, statPathEnum, statPathsOf, withStatPathEnum } from "./statPaths.js";
 import { PROJECT_PLAN_SCHEMA } from "../Game/AI/gameplaySchemas.js";
 
 const save = JSON.parse(readFileSync(new URL("./testdata/nemoModernDay2026.json", import.meta.url), "utf8"));
@@ -31,11 +31,20 @@ test("the paths an effect may name are the sheet's own: every figure of a scenar
   assert.ok(!paths.includes("stability"), "the standard sheet's figure is not this sheet's");
   assert.ok(!paths.some((path) => path.startsWith("indices.")));
   assert.equal(paths.length, Object.keys(save.countryStats.Nemo.customStats).length);
-  // The standard sheet: stability, the six indices, the economy, the people.
+  // The standard sheet: stability, the six indices, the economy, the people, and military figures.
   const standard = statPathEnum({ definition: null, sheet: null });
-  for (const path of ["stability", "indices.internalSecurity", "indices.internationalReputation", "indices.energyAutonomy", "economy.gdp", "economy.inflation", "population.total"]) {
+  for (const path of ["stability", "indices.internalSecurity", "indices.internationalReputation", "indices.energyAutonomy", "economy.gdp", "economy.inflation", "population.total", "military.technology", "military.sea"]) {
     assert.ok(standard.includes(path), path);
   }
+  // A backend-only stub (from conflictBackends) keeps the full path list and never prints undefined values.
+  const stub = { population: { total: 5_000_000 }, economy: { gdp: 9e10, budgetBalance: -2, publicDebt: 50 } };
+  const stubStandard = statPathEnum({ definition: null, sheet: stub });
+  assert.ok(stubStandard.includes("stability") && stubStandard.includes("military.technology"));
+  const described = describeStatPaths({ definition: null, sheet: stub });
+  assert.ok(described.includes("economy.gdp 90000000000") && !described.includes("undefined"));
+  const stubCustom = statPathEnum({ definition: save.statSheet, sheet: stub });
+  assert.ok(stubCustom.includes("customStats.energyAutonomy"));
+  assert.equal(describeStatPaths({ definition: save.statSheet, sheet: stub }), "");
   // Labels come from the scenario.
   assert.equal(statPathsOf({ definition: save.statSheet }).find((entry) => entry.path === "customStats.internalSecurity").label, "Internal security");
 });

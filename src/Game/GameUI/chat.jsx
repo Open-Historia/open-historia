@@ -4855,7 +4855,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
 
             <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} groups={pickableGroups} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
-            {activeChat && (!activeChat.institutionId || (activeChat.lifecycleInstitutionId && activeChat.lifecycleCaseIds?.length)) && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
+            {activeChat && (!activeChat.institutionId || (activeChat.lifecycleInstitutionId && activeChat.lifecycleCaseIds?.length)) && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 && !chatWithEndedGroupsOnly(activeChat, endedGroups, playerCountry) ? (
                 <div className="oh-diplomacy-split" data-diplomacy-layout="responsive-split">
                     <aside className="oh-diplomacy-active-sidebar" aria-label="Diplomatic correspondence">
                         <div className="oh-diplomacy-sidebar-heading">

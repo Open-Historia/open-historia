@@ -52,8 +52,14 @@ export const statPathsOf = ({ definition = null, sheet = null } = {}) => {
     seen.add(path);
     out.push({ path, label: label || path });
   };
+  // A backend-only stub (from conflictBackends / statsBackendPatch) has only
+  // population/economy and no standard stability/indices or customStats yet;
+  // treat it as unread so the planner still sees the sheet's full path list.
+  const hasVisibleFigures = isRecord(sheet) && (read.custom
+    ? isRecord(sheet.customStats) && Object.values(sheet.customStats).some(finite)
+    : finite(sheet.stability) || (isRecord(sheet.indices) && Object.values(sheet.indices).some(finite)));
   const has = (head, key) => {
-    if (!isRecord(sheet)) return true;
+    if (!hasVisibleFigures) return true;
     if (head === "stability") return finite(sheet.stability);
     return isRecord(sheet[head]) && finite(sheet[head][key]);
   };
@@ -65,6 +71,7 @@ export const statPathsOf = ({ definition = null, sheet = null } = {}) => {
     for (const row of indexRows) if (has("indices", row.key)) add(`indices.${row.key}`, row.label);
     for (const key of ECONOMY_STAT_FIGURES) if (has("economy", key)) add(`economy.${key}`);
     if (has("population", "total")) add("population.total");
+    if (!hasVisibleFigures) for (const key of MILITARY_STAT_FIGURES) add(`military.${key}`);
   }
   if (isRecord(sheet)) {
     // Whatever the sheet itself carries that the definition does not list.
@@ -108,9 +115,10 @@ export const withStatPathEnum = (tool, paths) => {
 // line saying the sheet has not been read yet.
 export const describeStatPaths = ({ definition = null, sheet = null } = {}) => {
   if (!isRecord(sheet)) return "";
-  return statPathsOf({ definition, sheet }).map(({ path, label }) => {
+  return statPathsOf({ definition, sheet }).flatMap(({ path, label }) => {
     const [head, key] = path.split(".");
     const value = head === "stability" ? sheet.stability : sheet[head]?.[key];
-    return `${path}${label && label !== path ? ` (${label})` : ""} ${value}`;
+    if (!finite(value)) return [];
+    return [`${path}${label && label !== path ? ` (${label})` : ""} ${value}`];
   }).join(", ");
 };

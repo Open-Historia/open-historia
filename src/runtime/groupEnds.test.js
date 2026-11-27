@@ -148,10 +148,34 @@ test("an ended group is not raised by a stray take or update; a create brings it
   assert.deepEqual(back.changes.map((change) => change.op), ["restore", "take"]);
 });
 
-test("a thread with only an ended group is shown closed; one with a live party is not", () => {
+test("a thread with only an ended group is shown closed (object or string entries); one with a live party is not", () => {
   assert.equal(chatWithEndedGroupsOnly({ countries: [PLAYER, SINALOA] }, [SINALOA], PLAYER), true);
+  assert.equal(chatWithEndedGroupsOnly({ countries: [{ name: PLAYER, code: PLAYER }, { name: SINALOA, code: SINALOA }] }, [SINALOA], PLAYER), true);
+  assert.equal(chatWithEndedGroupsOnly({ countries: [{ name: PLAYER, code: PLAYER }, { name: SINALOA, code: SINALOA }, { name: "Mexico", code: "Mexico" }] }, [SINALOA], PLAYER), false);
   assert.equal(chatWithEndedGroupsOnly({ countries: [PLAYER, SINALOA, "Mexico"] }, [SINALOA], PLAYER), false);
   assert.equal(chatWithEndedGroupsOnly({ countries: [PLAYER, "Mexico"] }, [], PLAYER), false);
+});
+
+test("dissolving a group whose name collides with a stock country only clears group-tagged entries, never the stock country", () => {
+  const base = normalizeWorldState({
+    groups: { France: { name: "France", description: "Underground movement", color: "#eab308" } },
+    groupAreas: { r1: "France" },
+    units: [
+      { id: "u-state", name: "French Army", ownerCode: "France", type: "infantry", lng: 2.3, lat: 48.8, strength: 100 },
+      { id: "u-group", name: "Resistance Cell", ownerCode: "group: France", type: "infantry", lng: 2.4, lat: 48.9, strength: 100 },
+    ],
+    wars: [{ id: "w-state", title: "State War", status: "active", sideA: ["France"], sideB: ["Germany"] }],
+    relations: [
+      { a: "France", b: "Germany", score: 40 },
+      { a: "group: France", b: "Germany", score: -80 },
+    ],
+  });
+  assert.equal(dissolveGroup(base, "France", { date: "2026-07-01" }), "France");
+  assert.equal(base.groups.France, undefined);
+  assert.ok(base.defunctGroups.France);
+  assert.deepEqual(base.units.map((unit) => unit.id), ["u-state"], "stock country units survive; group-tagged units leave");
+  assert.equal(base.wars[0].status, "active", "stock country war is untouched");
+  assert.deepEqual(base.relations.map((row) => row.a), ["France"], "stock country relations survive; group-tagged relations go");
 });
 
 test("a save from before the door: the group's record was deleted and its troops, war and relations stayed; the next turn clears them", () => {

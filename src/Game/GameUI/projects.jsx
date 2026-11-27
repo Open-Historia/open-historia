@@ -18,7 +18,7 @@
 //
 // Every write goes through applyProjectOpsToWorld with actor "player", the door
 // that lets a government touch its own programmes only.
-import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import React, { createContext, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { APP_HEIGHT, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
 
 import { getNationFlags } from "../../runtime/assets.js";
@@ -286,22 +286,25 @@ const STAT_LABELS = {
 };
 // The scenario's own names for its figures: a sheet of its own keeps them
 // under customStats, and "customStats.internalSecurity" is "Internal security"
-// (names, never keys). Read once a scenario, by the panel (useSheetLabels).
-let sheetLabels = new Map();
-const useSheetLabels = () => {
-  const [, setRead] = useState(0);
+// (names, never keys). Provided via context so memoized ProjectCards and draft
+// previews re-render as soon as the definition loads or a scenario changes.
+const EMPTY_SHEET_LABELS = new Map();
+const SheetLabelsContext = createContext(EMPTY_SHEET_LABELS);
+const useSheetLabels = (isOpen) => {
+  const [labels, setLabels] = useState(EMPTY_SHEET_LABELS);
   useEffect(() => {
+    if (!isOpen) return undefined;
     let live = true;
     loadStatSheetDefinition().then((definition) => {
       if (!live) return;
-      sheetLabels = new Map(statPathsOf({ definition }).filter((entry) => entry.label !== entry.path).map((entry) => [entry.path, entry.label]));
-      setRead((count) => count + 1);
+      setLabels(new Map(statPathsOf({ definition }).filter((entry) => entry.label !== entry.path).map((entry) => [entry.path, entry.label])));
     }).catch(() => {});
     return () => { live = false; };
-  }, []);
+  }, [isOpen]);
+  return labels;
 };
-const statLabel = (path) => {
-  if (String(path ?? "").startsWith("customStats.") && sheetLabels.has(path)) return sheetLabels.get(path);
+const statLabel = (path, labels = EMPTY_SHEET_LABELS) => {
+  if (String(path ?? "").startsWith("customStats.") && labels.has(path)) return labels.get(path);
   if (STAT_LABELS[path]) return uiString(STAT_LABELS[path]);
   const [head, key] = String(path ?? "").split(".");
   if (head === "indices") return uiString(DEFAULT_STAT_INDEX_ROWS.find((row) => row.key === key)?.label || key);
@@ -316,12 +319,12 @@ const changeText = (effect) => {
 };
 
 // One effect as the card says it.
-const describeEffectForPlayer = (effect, owner) => {
+const describeEffectForPlayer = (effect, owner, labels = EMPTY_SHEET_LABELS) => {
   if (!effect) return "";
   if (effect.type === "stat") {
     return effect.country && effect.country !== owner
-      ? uiString("{{country}}: {{stat}} {{change}}", { country: effect.country, stat: statLabel(effect.stat), change: changeText(effect) })
-      : `${statLabel(effect.stat)} ${changeText(effect)}`;
+      ? uiString("{{country}}: {{stat}} {{change}}", { country: effect.country, stat: statLabel(effect.stat, labels), change: changeText(effect) })
+      : `${statLabel(effect.stat, labels)} ${changeText(effect)}`;
   }
   if (effect.type === "relation") return uiString("Relations with {{country}} {{change}}", { country: effect.country, change: signed(effect.change) });
   if (effect.type === "structure") return uiString("Builds {{name}}", { name: effect.name });
@@ -434,9 +437,10 @@ const FundingSwitch = ({ busy, onSelect, value }) => (
 // costShown: the card says the cost already (at the project's own funding), so
 // the plan's is left out.
 const PlanFacts = ({ plan, owner, costShown = false, displayCurrency }) => {
+  const sheetLabels = useContext(SheetLabelsContext);
   if (!plan) return null;
-  const effects = (plan.effects ?? []).map((effect) => describeEffectForPlayer(effect, owner)).filter(Boolean);
-  const yields = (plan.yields ?? []).map((effect) => describeEffectForPlayer(effect, owner)).filter(Boolean);
+  const effects = (plan.effects ?? []).map((effect) => describeEffectForPlayer(effect, owner, sheetLabels)).filter(Boolean);
+  const yields = (plan.yields ?? []).map((effect) => describeEffectForPlayer(effect, owner, sheetLabels)).filter(Boolean);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginTop: "0.5rem" }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.8rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.8)" }}>
@@ -473,6 +477,7 @@ const EFFECT_REFUSAL_TEXT = {
   noCountry: "no such country",
 };
 const EffectResults = ({ results, owner }) => {
+  const sheetLabels = useContext(SheetLabelsContext);
   const list = Array.isArray(results) ? results : [];
   if (!list.length) return null;
   return (
@@ -481,7 +486,7 @@ const EffectResults = ({ results, owner }) => {
       <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem", marginTop: "0.2rem" }}>
         {list.map((row, index) => {
           const shown = row.status === "applied" && Number.isFinite(row.change) ? { ...row.effect, change: row.change } : row.effect;
-          const text = describeEffectForPlayer(shown, owner);
+          const text = describeEffectForPlayer(shown, owner, sheetLabels);
           const mark = row.status === "applied" ? "✓" : row.status === "waiting" ? "…" : "✕";
           const color = row.status === "applied" ? ACCENT : row.status === "waiting" ? "rgba(255,255,255,0.45)" : "#f87171";
           const why = row.status === "waiting"
@@ -1470,7 +1475,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   // going (projectEngine.js), worked out here from the world as it stands.
   const engineWorld = useMemo(() => ({ countryStats, projects, projectFundingMode }), [countryStats, projects, projectFundingMode]);
   const means = useMemo(() => ownerMeans(engineWorld, playerCountry, projects, playerCountry), [engineWorld, playerCountry, projects]);
-  useSheetLabels();
+  const sheetLabels = useSheetLabels(isOpen);
   const financedOwners = useMemo(() => {
     if (!financing?.receipts?.length) return new Set();
     try {
@@ -1673,6 +1678,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   );
 
   return (
+    <SheetLabelsContext.Provider value={sheetLabels}>
     <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
       <div style={scrollAsOne
         ? { display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent" }
@@ -1815,6 +1821,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
       </div>
       </div>{/* the phone scroller */}
     </div>
+    </SheetLabelsContext.Provider>
   );
 };
 

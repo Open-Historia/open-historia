@@ -6112,12 +6112,21 @@ export const dissolveGroup = (world, name, { heir = "", date = "", eventId = "" 
   world.groups = applied.groups;
   world.groupAreas = applied.groupAreas;
   world.defunctGroups = applied.defunctGroups;
+  const hasCollidingPolity = Boolean(resolvePolityIdentity(key, world, {
+    allowUnknown: false,
+    requireActive: false,
+    allowStockBase: true,
+    identityIndex: diplomaticIdentityIndexOf(world),
+  })?.resolved);
   // A party names it by its exact name, or tagged as a group ("group: X"),
-  // never as another kind (nameRefs.js).
+  // never as another kind (nameRefs.js). Where a stock or overridden polity
+  // shares the bare name, only "group: X" refers to the group so the polity's
+  // own units, wars, relations and stats are never touched.
   const isIt = (party) => {
     if (typeof party !== "string") return false;
     const ref = readNameRef(party);
-    return (!ref.kind || ref.kind === "group") && samePolity(ref.name, key);
+    if (ref.kind === "group") return samePolity(ref.name, key);
+    return !ref.kind && !hasCollidingPolity && samePolity(ref.name, key);
   };
   const successor = normalizeOptionalString(heir) && !samePolity(heir, key) ? normalizeOptionalString(heir) : "";
   const stamp = (row, field = "lastUpdatedDate") => (endedDate ? { [field]: endedDate } : {});
@@ -6125,12 +6134,6 @@ export const dissolveGroup = (world, name, { heir = "", date = "", eventId = "" 
   // Its agreements end, and with them every effect they carry (agreementEffects.js
   // reads agreements in force only). A bare name that is also a polity's is the
   // polity's: only "group: X" is the group's then.
-  const hasCollidingPolity = Boolean(resolvePolityIdentity(key, world, {
-    allowUnknown: false,
-    requireActive: false,
-    allowStockBase: true,
-    identityIndex: diplomaticIdentityIndexOf(world),
-  })?.resolved);
   const groupTag = `group: ${key}`.toLocaleLowerCase();
   world.agreements = normalizeArray(world.agreements).map((agreement) => {
     if (!agreement || typeof agreement !== "object") return agreement;
@@ -6220,7 +6223,11 @@ export const settleEndedGroups = (world, events = []) => {
     && !liveGroupKey(world, entry.name)
     && !Object.keys(world.polityOverrides ?? {}).some((polity) => samePolityName(polity, entry.name)));
   if (!ended.length) return world;
-  const isNamed = (name) => (party) => typeof party === "string" && samePolity(readNameRef(party).name, name);
+  const isNamed = (name) => (party) => {
+    if (typeof party !== "string") return false;
+    const ref = readNameRef(party);
+    return (!ref.kind || ref.kind === "group") && samePolity(ref.name, name);
+  };
   const left = ended.filter(({ name }) => {
     const named = isNamed(name);
     return normalizeArray(world.units).some((unit) => named(unit?.ownerCode))
@@ -6237,9 +6244,13 @@ export const settleEndedGroups = (world, events = []) => {
     const kept = findGroupKey(next.defunctGroups, name);
     const record = kept ? next.defunctGroups[kept] : { name, description: "", color: defaultGroupColor(name) };
     if (kept) delete next.defunctGroups[kept];
-    const { dissolvedDate, sourceEventIds: _ids, ...group } = record;
+    const { dissolvedDate, sourceEventIds, ...group } = record;
     next.groups[record.name] = group;
-    dissolveGroup(next, record.name, { date: dissolvedDate || date, eventId });
+    const endedKey = dissolveGroup(next, record.name, { date: dissolvedDate || date, eventId });
+    if (endedKey && Array.isArray(sourceEventIds) && sourceEventIds.length && next.defunctGroups?.[endedKey]) {
+      const merged = [...new Set([...sourceEventIds, ...(next.defunctGroups[endedKey].sourceEventIds ?? [])])].slice(-8);
+      next.defunctGroups[endedKey] = { ...next.defunctGroups[endedKey], sourceEventIds: merged };
+    }
   }
   return next;
 };

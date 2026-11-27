@@ -173,7 +173,9 @@ export const isGroupName = (world, name) => Boolean(liveGroupKey(world, name) ||
 export const chatWithEndedGroupsOnly = (chat, endedNames = [], player = "") => {
   const ended = new Set((Array.isArray(endedNames) ? endedNames : []).map(fold).filter(Boolean));
   if (!ended.size) return false;
-  const others = (Array.isArray(chat?.countries) ? chat.countries : []).map(fold).filter((name) => name && name !== fold(player));
+  const nameOf = (entry) => fold(typeof entry === "string" ? entry : (entry?.name || entry?.code));
+  const self = fold(player);
+  const others = (Array.isArray(chat?.countries) ? chat.countries : []).map(nameOf).filter((name) => name && name !== self);
   return others.length > 0 && others.every((name) => ended.has(name));
 };
 
