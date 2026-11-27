@@ -620,6 +620,49 @@ func _group_diplomacy() -> void:
 	await _shoot("chat-6f-directory-groups")
 	panel._close_selector()
 	await _wait(0.3)
+	await _group_card()
+	panel.open()
+	panel._set_view("chats")
+	await _wait(0.3)
+	panel._open_selector()
+	await _wait(0.2)
+	panel._close_selector()
+	await _wait(0.3)
+
+
+func _group_card() -> void:
+	var view: MapView = main.map_view
+	var index := -1
+	for at in range(view._names.size()):
+		if view.region_owner(at) == "Mexico":
+			index = at
+			break
+	if index < 0:
+		_check("a Mexican region is on the map for the group's card", false)
+		return
+	var region: Dictionary = await main.engine.request("mapcards.region", {"index": index, "regionName": view.region_name(index), "owner": "Mexico"})
+	var region_id := str((region.get("result", {}) as Dictionary).get("regionId", ""))
+	await main.engine.request("chat.test.group", {"name": "Gulf Cartel", "color": "#b45309", "region": region_id})
+	var cards: MapCards = main.hud.map_cards
+	cards.dismiss_all()
+	await _wait(0.3)
+	await cards.show_region(index, view.region_name(index), "Mexico")
+	await _wait(0.8)
+	var card: Control = cards._floating
+	var standing: Array = card.find_children("*", "GridContainer", true, false).filter(func(node: Node) -> bool: return (node as Control).has_meta("group_standing")) if card else []
+	_check("a group's area card says where it stands with you", not standing.is_empty() and _labels(standing[0]).has("Relation"))
+	var talk: Array = card.find_children("*", "Button", true, false).filter(func(node: Node) -> bool: return (node as Control).has_meta("group_talk")) if card else []
+	_check("and offers Talk to their leadership", not talk.is_empty() and (talk[0] as Button).text == "Talk to their leadership")
+	await _shoot("chat-6g-group-card")
+	if talk.is_empty():
+		return
+	(talk[0] as Button).pressed.emit()
+	await _until(func() -> bool: return panel.conversation_visible() and panel.conversation.countries().any(func(entry: Variant) -> bool: return ChatPanel.t(ChatPanel.d(entry).get("name", "")) == "Gulf Cartel"), 15.0)
+	_check("Talk to their leadership opens a conversation with the group", panel.conversation_visible() and panel.conversation.countries().any(func(entry: Variant) -> bool: return ChatPanel.t(ChatPanel.d(entry).get("name", "")) == "Gulf Cartel"))
+	await _wait(0.4)
+	await _shoot("chat-6h-group-conversation")
+	panel.leave_active()
+	await _wait(0.3)
 
 
 func _peace_in_chat() -> void:

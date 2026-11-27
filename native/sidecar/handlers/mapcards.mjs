@@ -276,9 +276,21 @@ export const register = (ctx) => {
         occupied: Boolean(status.isOccupied),
         claimants: claimants.map(displayPolity).join(", "),
       } : null,
-      group: group ? { name: cleanText(group.name), color: cssHex(group.color), description: String(group.description ?? "").trim() } : null,
+      group: group ? { name: cleanText(group.name), color: cssHex(group.color), description: String(group.description ?? "").trim(), standing: groupStanding(world, group.name, player) } : null,
       rostra: !isUnclaimed && featureOn(features, "socialMedia"),
       rostraPlace: toCountryName(controllerCode) || displayCountry,
+    };
+  };
+
+  const groupStanding = (world, name, player) => {
+    if (!player || cleanText(name).toLowerCase() === player.toLowerCase()) return null;
+    const views = engine.diplomaticViews;
+    const relation = engine.groupParties.relationBetween(world, name, player);
+    const deals = engine.groupParties.dealsBetween(world, name, player);
+    return {
+      relation: relation ? views.RELATION_CATEGORY_LABELS[engine.diplomaticStance.relationBandForScore(relation.score)] ?? "" : views.RELATION_CATEGORY_LABELS.unknown,
+      score: relation ? String(Math.round(Number(relation.score) || 0)) : "",
+      deals: deals.map((deal) => views.AGREEMENT_TYPE_LABELS[deal.type] ?? views.AGREEMENT_TYPE_LABELS.other),
     };
   };
 

@@ -682,6 +682,37 @@ func _build_region(animate: bool) -> void:
 		if not str(held.get("description", "")).is_empty():
 			inner.add_child(Country.gap(3))
 			inner.add_child(Country.text(str(held["description"]), 11, Color(1, 1, 1, 0.72)))
+		var standing: Variant = held.get("standing")
+		if typeof(standing) == TYPE_DICTIONARY:
+			var stand: Dictionary = standing
+			inner.add_child(Country.gap(5))
+			var standing_grid := _info_grid()
+			standing_grid.set_meta("group_standing", true)
+			var score := str(stand.get("score", ""))
+			var relation_text := I18n.ui(str(stand.get("relation", ""))) + ((" (%s)" % score) if not score.is_empty() else "")
+			_grid_row(standing_grid, "Relation", relation_text)
+			(standing_grid.get_child(standing_grid.get_child_count() - 1) as Control).auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			var deals: Array = stand.get("deals", [])
+			if not deals.is_empty():
+				var named: PackedStringArray = []
+				for deal in deals:
+					named.append(I18n.ui(str(deal)))
+				_grid_row(standing_grid, "Deals", ", ".join(named))
+				(standing_grid.get_child(standing_grid.get_child_count() - 1) as Control).auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			inner.add_child(standing_grid)
+			inner.add_child(Country.gap(8))
+			var talk := Country.small_button("Talk to their leadership", Color(1, 1, 1, 0.07), Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.35), UI.ACCENT, 12, 600, Vector4(8, 6, 8, 6), 8)
+			var talk_hover := UI.box(Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.15), UI.ACCENT, 8, 1, Vector4(8, 6, 8, 6))
+			for state in ["hover", "pressed", "hover_pressed"]:
+				talk.add_theme_stylebox_override(state, talk_hover)
+			talk.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			talk.custom_minimum_size.y = 28
+			talk.set_meta("group_talk", true)
+			var group_name := str(held.get("name", ""))
+			talk.pressed.connect(func() -> void:
+				open_chat.emit(group_name, "")
+				dismiss())
+			inner.add_child(talk)
 	if _region.get("rostra", false):
 		inner.add_child(Country.gap(8))
 		var rostra := Country.small_button("", Color(1, 1, 1, 0.07), Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.35), UI.ACCENT, 12, 600, Vector4(8, 6, 8, 6), 8)

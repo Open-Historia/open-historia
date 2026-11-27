@@ -445,8 +445,12 @@ export const register = (ctx) => {
   engine.simulationStatus.subscribeChatGeneration((value) => emit("chat.generating", { generating: value === true }));
 
   const testRoutes = standIn ? {
-    "chat.test.group": async ({ name = "", color = "#b45309" } = {}) => {
-      await gs.mutateWorldState((world) => ({ ...world, groups: { ...(world?.groups || {}), [clean(name)]: { name: clean(name), color: clean(color), kind: "cartel" } } }));
+    "chat.test.group": async ({ name = "", color = "#b45309", region = "" } = {}) => {
+      await gs.mutateWorldState((world) => ({
+        ...world,
+        groups: { ...(world?.groups || {}), [clean(name)]: { name: clean(name), color: clean(color), kind: "cartel" } },
+        ...(clean(region) ? { groupAreas: { ...(world?.groupAreas || {}), [clean(region)]: clean(name) } } : {}),
+      }));
       return { ok: true };
     },
     "chat.test.callAsked": async ({ callId = "", messageId = "" } = {}) => {
