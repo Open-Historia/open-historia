@@ -11,7 +11,8 @@ pub const TRANSPORT_ORDERS: [(&str, &str); 3] = [("ship", "sea"), ("rail", "land
 pub const TRANSPORT_LOAD_USUAL: f64 = 8.0;
 pub const TRANSPORT_STATUSES: [&str; 6] = ["ordered", "moving", "landed", "lost", "refused", "returned"];
 pub const TRANSPORT_ENDED: [&str; 4] = ["landed", "lost", "refused", "returned"];
-pub const MAX_TRANSPORTS: usize = 24;
+pub const TRANSPORTS_OUT_MOST: usize = 20;
+pub const MAX_TRANSPORTS: usize = 8 * (TRANSPORTS_OUT_MOST + 4);
 pub const TRANSPORT_LOAD_MOST: f64 = 40.0;
 pub const TRANSPORT_HUNTERS_MOST: usize = 6;
 pub const TRANSPORT_CAPACITY: [f64; 2] = [1.0, 12.0];
@@ -452,7 +453,8 @@ pub fn order_transport(transports: &Val, spec: &Val, date: &str, year: Option<f6
     if usual.is_none() && !(!named.is_empty() && said > 0.0) {
         return Err("not-yet");
     }
-    if kept.iter().filter(|entry| is_under_way(entry)).count() >= MAX_TRANSPORTS - 4 {
+    let asker = fold(spec.get("owner"));
+    if kept.iter().filter(|entry| is_under_way(entry) && fold(&Val::str(&entry.owner)) == asker).count() >= TRANSPORTS_OUT_MOST {
         return Err("too-many");
     }
     let kind = if !named.is_empty() {

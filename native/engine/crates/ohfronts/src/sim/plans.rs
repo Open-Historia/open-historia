@@ -602,13 +602,13 @@ pub fn operations_on(record: &Val, side: &Val, context: &Context) -> Vec<Obj> {
         if !entry.truthy() || !matches!(entry.get("kind"), Val::Str(kind) if kind == "operation") || !matches!(entry.get("status"), Val::Str(status) if OPEN_STATUSES.contains(&status.as_str())) {
             continue;
         }
-        if entry.get("linkedSpyIds").as_array().is_some_and(|ids| !ids.is_empty()) {
-            continue;
-        }
         let owner = {
             let code = clean(entry.get("ownerCode"));
             if code.is_empty() { player.clone() } else { code }
         };
+        if own.contains(&fold(&text(&owner))) && entry.get("linkedSpyIds").as_array().is_some_and(|ids| !ids.is_empty()) {
+            continue;
+        }
         if owner.is_empty() || !members.contains(&fold(&text(&owner))) {
             continue;
         }
