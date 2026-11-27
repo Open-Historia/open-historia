@@ -439,3 +439,5 @@ export * as groupParties from "../../src/runtime/groupParties.js";
 export * as groupBanner from "../../src/Game/GameUI/groupBanner.js";
 export * as actionEdit from "../../src/runtime/actionEdit.js";
 export * as mpOrders from "../../src/multiplayer/client/sharedOrders.js";
+export * as publicCommunications from "../../src/runtime/publicCommunications.js";
+export * as publicPublication from "../../src/runtime/publicPublication.js";

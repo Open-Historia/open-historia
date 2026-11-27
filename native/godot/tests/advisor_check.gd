@@ -693,6 +693,7 @@ func _run() -> void:
 	var cleared: Variant = await _doc("advisor")
 	_check("Clear chat empties the conversation and the file", panel.messages.is_empty() and typeof(cleared) == TYPE_ARRAY and (cleared as Array).is_empty())
 	await _shoot("advisor-19-cleared")
+	await _public_statement()
 	await _microphone()
 	await _contacts()
 	_say("%d failures" % failures.size())
@@ -819,6 +820,77 @@ func _receipts_kept() -> void:
 	_check("a conversation save drops a forged receipt and keeps saving", bool((saved.get("result", {}) as Dictionary).get("saved", false)) and got_8 == "queued" and not after_forged.contains("action-advisor-reply-forged-0001-7"), JSON.stringify(saved))
 	saved = await main.engine.request("advisor.save", {"json": JSON.stringify(panel.messages, "", false, true), "threadId": "chief"})
 	_check("the conversation saves again as it is", bool((saved.get("result", {}) as Dictionary).get("saved", false)))
+
+
+func _public_card(node: Node) -> Control:
+	for found in node.find_children("*", "PanelContainer", true, false):
+		if (found as Control).has_meta("public_statement") and (found as Control).visible:
+			return found
+	return null
+
+
+func _public_statement() -> void:
+	var statement := {"title": "A message to the nation", "body": "Our government will hold steady through the winter.\nEvery household will be heard.", "audience": {"kind": "domestic", "target": ""}}
+	var fence := "I prepared the address.\n\n```publicstatement\n" + JSON.stringify([statement]) + "\n```"
+	var transcript := [
+		{"id": "user-public-0001", "role": "user", "text": "Draft an address to the nation.", "time": "2016-01-01"},
+		{"id": "advisor-public-0001", "role": "advisor", "text": fence, "time": "2016-01-01"},
+	]
+	await main.engine.request("advisor.save", {"json": JSON.stringify(transcript, "", false, true), "threadId": "chief"})
+	var fresh := AdvisorPanel.new()
+	main.hud.add_child(fresh)
+	fresh.setup(main.engine, {})
+	panel.close()
+	fresh.open()
+	await _until(func() -> bool: return fresh._has_bootstrapped, 20.0)
+	await _until(func() -> bool: return _public_card(fresh) != null, 15.0)
+	await _wait(0.4)
+	var card := _public_card(fresh)
+	_check("an advisor's public statement draft is a card under its reply", card != null and _labels_with(card, "Proposed public address") and _labels_with(card, "A message to the nation") and not _labels_with(fresh, "```publicstatement"))
+	if card == null:
+		fresh.queue_free()
+		panel.open()
+		return
+	_check("the card names its issuer and audience and asks for authority first", _labels_with(card, "Audience: Domestic public") and _find_button(card, "Edit statement") != null and _find_button(card, "Publish address") != null and _find_button(card, "Publish address").disabled)
+	fresh.scroll.ensure_control_visible(card)
+	await _frames(3)
+	await _shoot("advisor-20-public-statement")
+	await main.engine.request("turn.seen", {"through": 999})
+	var authorize: CheckBox = null
+	for found in card.find_children("*", "CheckBox", true, false):
+		authorize = found
+	authorize.button_pressed = true
+	await _until(func() -> bool: return _find_button(_public_card(fresh), "Publish address") != null and not _find_button(_public_card(fresh), "Publish address").disabled, 10.0)
+	card = _public_card(fresh)
+	_check("authorising the exact wording lets it be published", _find_button(card, "Publish address") != null and not _find_button(card, "Publish address").disabled)
+	if _find_button(card, "Publish address") == null or _find_button(card, "Publish address").disabled:
+		fresh.queue_free()
+		panel.open()
+		return
+	_find_button(card, "Publish address").pressed.emit()
+	await _until(func() -> bool: return _public_card(fresh) != null and _labels_with(_public_card(fresh), "Published public statement"), 15.0)
+	await _wait(0.3)
+	card = _public_card(fresh)
+	_check("a published statement says so and is kept in Events", card != null and _labels_with(card, "Published public statement") and _labels_with(card, "Published in your campaign's Events record.") and JSON.stringify(await _doc("events")).contains("event-publication-advisor-public-0001:public:0"))
+	fresh.scroll.ensure_control_visible(card)
+	await _frames(3)
+	await _shoot("advisor-21-public-published")
+	_find_button(card, "Withdraw publication").pressed.emit()
+	await _frames(3)
+	card = _public_card(fresh)
+	_check("withdrawing asks again", _find_button(card, "Confirm withdraw") != null and _find_button(card, "Keep published") != null)
+	_find_button(card, "Confirm withdraw").pressed.emit()
+	await _until(func() -> bool: return _public_card(fresh) != null and _labels_with(_public_card(fresh), "Cancelled public statement"), 15.0)
+	card = _public_card(fresh)
+	_check("a withdrawn statement leaves Events before time moves", card != null and _labels_with(card, "Publication withdrawn before time advanced.") and not JSON.stringify(await _doc("events")).contains("event-publication-advisor-public-0001"))
+	fresh.scroll.ensure_control_visible(card)
+	await _frames(3)
+	await _shoot("advisor-22-public-withdrawn")
+	fresh.close()
+	await _wait(0.4)
+	fresh.queue_free()
+	panel.open()
+	await _wait(0.4)
 
 
 func _tone(seconds: float, amplitude: float, hertz: float) -> PackedFloat32Array:

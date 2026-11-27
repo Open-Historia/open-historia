@@ -1,6 +1,8 @@
 class_name AdvisorPanel
 extends PanelFrame
 
+const PublicStatementCard := preload("res://scripts/ui/public_statement_card.gd")
+
 signal open_actions
 signal open_projects
 signal open_thread(target: Dictionary, draft: String)
@@ -71,6 +73,7 @@ static var _re := {}
 static var _pictures := {}
 
 var engine: EngineLink
+var _public_cards: Dictionary = {}
 var context: Dictionary = {}
 var messages: Array = []
 var views: Array = []
@@ -2568,6 +2571,22 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 		if not drafts.is_empty():
 			full = true
 	var streaming := bool(message.get("streaming", false))
+	var public_drafts: Array = view.get("publicDrafts", []) if typeof(view.get("publicDrafts")) == TYPE_ARRAY and not streaming else []
+	for public_draft in public_drafts:
+		if typeof(public_draft) != TYPE_DICTIONARY:
+			continue
+		var card = PublicStatementCard.new()
+		card.setup(engine, _public_cards, active_thread, str(message.get("id", "")), int((public_draft as Dictionary).get("index", 0)), public_draft, _discuss_public_statement)
+		content.add_child(_gap(10.4))
+		content.add_child(card)
+		full = true
+	var public_problems: Array = view.get("publicProblems", []) if typeof(view.get("publicProblems")) == TYPE_ARRAY and not streaming else []
+	if not public_problems.is_empty() and not public_drafts.is_empty():
+		var joined_public: PackedStringArray = []
+		for problem in public_problems:
+			joined_public.append(str(problem))
+		content.add_child(_gap(6))
+		content.add_child(UI.wrapped(" ".join(joined_public), 12, Color(1, 1, 1, 0.75)))
 	var chart: Variant = view.get("chartConfig", null)
 	if typeof(chart) == TYPE_DICTIONARY:
 		content.add_child(_gap(12))
@@ -3074,6 +3093,23 @@ func _discuss_pressed(message_id: String, proposal: Dictionary, queued: bool, ne
 		if not cancelled:
 			return
 	_discuss_action(proposal, needs_new_action)
+
+
+func _discuss_public_statement(draft: Dictionary) -> void:
+	if _turn_in_flight or _side_effects > 0 or _thread_switching:
+		return
+	var subject := str(draft.get("title", "this statement")).strip_edges().left(180)
+	if subject.is_empty():
+		subject = "this statement"
+	var prompt := "Let's discuss the proposed public statement %s before publication. Prepare a fresh draft if we agree on revisions." % JSON.stringify(subject)
+	var current := _input.text
+	_input.text = (_regex("\\s+$").sub(current, "") + "\n\n" + prompt) if not current.strip_edges().is_empty() else prompt
+	_input.grab_focus()
+	var last_line := _input.get_line_count() - 1
+	_input.set_caret_line(last_line)
+	_input.set_caret_column(_input.get_line(last_line).length())
+	_resize_input()
+	_update_send()
 
 
 func _discuss_action(proposal: Dictionary, needs_new_action := false) -> void:

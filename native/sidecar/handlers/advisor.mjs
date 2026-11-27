@@ -614,6 +614,8 @@ export const register = (ctx) => {
           ? parsed.institutionDrafts.map((draft) => ({ ...draft, label: institutionDraftButtonLabel(draft), detail: institutionDraftDetail(draft) }))
           : null,
         deployments: parsed.deployments,
+        publicDrafts: message.streaming ? null : (Array.isArray(parsed.publicDrafts) ? parsed.publicDrafts.map((draft, index) => (draft ? { ...draft, index } : null)) : null),
+        publicProblems: message.streaming ? [] : list(parsed.publicProblems).map(String),
         date: formatAdvisorDate(message.time),
       };
     }
@@ -1314,6 +1316,94 @@ export const register = (ctx) => {
           ...(error?.diagnostics ? { diagnostics: error.diagnostics } : {}),
         };
         return plain({ error: failed, view: viewOf(failed, {}) });
+      }
+    },
+    "advisor.public.state": async ({ threadId = CHIEF, replyId = "", index = 0 } = {}) => {
+      const pc = engine.publicCommunications;
+      const [world, game, events, saved] = await Promise.all([
+        engine.readJson(urls.world, { defaultValue: {}, force: true }).catch(() => ({})),
+        gameState.readGameData({ force: true }).catch(() => ({})),
+        gameState.readEventsState({ force: true }).catch(() => []),
+        loadMessages(),
+      ]);
+      const thread = String(threadId || CHIEF);
+      const recipient = thread === CHIEF ? null : threads.advisorContacts(list(saved)).find((contact) => contact.id === thread) || null;
+      const meeting = thread !== CHIEF && !recipient;
+      const shared = Boolean(engine.mpBridge?.isSharedMultiplayerSession?.());
+      const id = clean(replyId) ? `${clean(replyId)}:public:${Number(index) || 0}` : "";
+      const receipt = list(events).find((event) => event?.id === pc.publicationId(id)) ?? null;
+      const approved = pc.normalizePublicStatement(receipt);
+      const cancelled = list(world?.cancelledPublicDrafts).includes(id);
+      const options = pc.publicAudienceOptions(world);
+      const offices = pc.publicIssuerOptions(world, game);
+      return plain({
+        allowed: Boolean(id) && pc.permitsPublicDraft(thread, recipient, { sharedGame: shared, meetingMode: meeting }),
+        id,
+        approved,
+        cancelled,
+        cancellable: !cancelled && (!approved || pc.canCancelPublicStatement(receipt, world, game)),
+        receiptDate: String(receipt?.date ?? ""),
+        polities: options.polities,
+        institutions: options.institutions,
+        issuers: offices.issuers,
+        defaultIssuerId: offices.defaultIssuerId,
+        polity: offices.polity,
+        max: pc.PUBLICATION_MAX_BODY,
+        game: { country: clean(game?.country), date: clean(game?.gameDate), round: game?.round ?? 0 },
+      });
+    },
+    "advisor.public.valid": async ({ draft = {} } = {}) => ({ valid: Boolean(engine.publicCommunications.normalizePublicDraft(draft)) }),
+    "advisor.public.review": async ({ draft = {}, issuerId = "", issuerLabel = "", audienceLabel = "", expected = {} } = {}) => {
+      try {
+        const captured = await engine.publicPublication.capturePublicReview();
+        const { kind, target } = draft?.audience ?? {};
+        const capturedAudience = kind === "foreign-public"
+          ? `People of ${captured.polities.find((polity) => polity.id === target)?.label || target}`
+          : kind === "institution" ? captured.institutions.find((inst) => inst.id === target)?.label || target : clean(audienceLabel);
+        if (
+          captured.expected.country !== expected?.country
+          || captured.expected.date !== expected?.date
+          || captured.expected.round !== expected?.round
+          || captured.issuers.find((entry) => entry.id === issuerId)?.label !== issuerLabel
+          || capturedAudience !== audienceLabel
+        ) {
+          throw new Error("Campaign changed; review the statement again.");
+        }
+        return plain({ review: { ...captured, selectedIssuerId: issuerId, approvedDraft: engine.publicCommunications.normalizePublicDraft({ ...draft, issuerId }) } });
+      } catch (error) {
+        return { said: String(error?.message ?? error) };
+      }
+    },
+    "advisor.public.publish": async ({ review = null, draft = {}, issuerId = "", threadId = CHIEF, replyId = "", index = 0 } = {}) => {
+      try {
+        const result = await engine.publicPublication.commitPublicReview({
+          review: review && typeof review === "object" ? { ...review, approvedDraft: engine.publicCommunications.normalizePublicDraft(review.approvedDraft) } : review,
+          draft: { ...draft, issuerId },
+          draftId: `${clean(replyId)}:public:${Number(index) || 0}`,
+          threadId: String(threadId || CHIEF),
+          replyId: clean(replyId),
+          index: Number(index) || 0,
+          confirmed: true,
+        });
+        return { said: result?.skipped ? "Already published." : "Published in your campaign's Events record.", ok: true };
+      } catch (error) {
+        return { said: String(error?.message ?? error), ok: false };
+      }
+    },
+    "advisor.public.cancel": async ({ threadId = CHIEF, replyId = "", index = 0, approved = false } = {}) => {
+      try {
+        const game = await gameState.readGameData({ force: true });
+        await engine.publicPublication.cancelPublicReview({
+          campaignId: engine.getLibraryState().activeGameId,
+          expected: { country: game.country, date: game.gameDate, round: game.round },
+          draftId: `${clean(replyId)}:public:${Number(index) || 0}`,
+          threadId: String(threadId || CHIEF),
+          replyId: clean(replyId),
+          index: Number(index) || 0,
+        });
+        return { said: approved ? "Publication withdrawn before time advanced." : "Draft cancelled.", ok: true };
+      } catch (error) {
+        return { said: String(error?.message ?? error), ok: false };
       }
     },
     "advisor.deploy": async ({ deployment = {} } = {}) => {
