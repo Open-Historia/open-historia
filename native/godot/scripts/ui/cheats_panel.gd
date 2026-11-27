@@ -1247,6 +1247,10 @@ func _gm_apply() -> void:
 	var view := _sd("gm_view")
 	if view.is_empty() or _busy or bool(view.get("applied", false)):
 		return
+	if not (view.get("notes", []) as Array).is_empty() and not await CommunityKit.confirm(self, "Some requested operations were left out of this preview. Apply the partial transaction anyway?"):
+		_status = "Partial transaction not applied."
+		refresh()
+		return
 	_set_busy(true)
 	var reply: Dictionary = await engine.request("cheats.gm.apply", {"id": str(view.get("id", ""))})
 	if reply.get("ok", false):
@@ -1292,7 +1296,9 @@ func _gm_preview_box(view: Dictionary) -> Control:
 	var date := str(view.get("date", ""))
 	titles.add_child(_note("%s · %s · source %s" % [date if not date.is_empty() else "Current date", str(view.get("mode", "")), str(view.get("source", "unknown"))], 10, Color(1, 1, 1, 0.42)))
 	top.add_child(titles)
-	top.add_child(_pill_label("APPLIED" if applied else "VALIDATED", GREEN, Color(0, 0, 0, 0), Color(74 / 255.0, 222 / 255.0, 128 / 255.0, 0.25), 10, 400, 0))
+	var partial := not (view.get("notes", []) as Array).is_empty()
+	var verdict := ("APPLIED" if applied else "VALIDATED") + (" · PARTIAL" if partial else "")
+	top.add_child(_pill_label(verdict, Color("#fbbf24") if partial else GREEN, Color(0, 0, 0, 0), Color(251 / 255.0, 191 / 255.0, 36 / 255.0, 0.4) if partial else Color(74 / 255.0, 222 / 255.0, 128 / 255.0, 0.25), 10, 400, 0))
 	column.add_child(top)
 	column.add_child(_gap(9))
 	var summary := str(view.get("summary", ""))
