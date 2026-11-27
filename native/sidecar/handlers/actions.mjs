@@ -41,6 +41,13 @@ export const register = (ctx) => {
 
   const movesUnit = (action) => Boolean(action?.unitRevert) && (action.status ?? "planned") === "planned";
 
+  const ORDER_NOT_CHANGED = "The order could not be changed, so the next time skip would carry out its old words. Try again.";
+  const editStateNow = () => {
+    const bridge = engine.mpBridge;
+    const sharedGame = Boolean(bridge?.inSharedGame?.());
+    return { turnRunning: engine.simulationStatus.isSimulationBusy(), sharedGame, roundPhase: sharedGame ? clean(bridge.sharedRoundPhase()) : "" };
+  };
+
   const header = async (force = true) => {
     const game = await gameState.readGameData({ force });
     return {
@@ -57,7 +64,7 @@ export const register = (ctx) => {
       .map((topic) => `${clean(topic?.id)}:${clean(topic?.source)}:${list(topic?.actions).map((action) => clean(action?.id)).join(",")}`)
       .join("|");
     const orders = list(actions)
-      .map((action) => `${clean(action?.id)}:${clean(action?.title)}:${clean(action?.text)}:${clean(action?.status)}:${action?.unitRevert ? 1 : 0}`)
+      .map((action) => `${clean(action?.id)}:${clean(action?.title)}:${clean(action?.text)}:${clean(action?.chatStarter)}:${clean(action?.status)}:${action?.unitRevert ? 1 : 0}`)
       .join("|");
     return crypto.createHash("sha1").update(`${game.country}\n${game.round}\n${goal}\n${reading}\n${topics}\n${orders}`).digest("hex");
   };
@@ -70,6 +77,7 @@ export const register = (ctx) => {
     ]);
     const suggestions = engine.actionSuggestions.selectSavedSuggestions(world);
     const queued = engine.actionSuggestions.queuedActionIds(actions);
+    const editState = editStateNow();
     const submitted = [];
     actions.forEach((action, index) => {
       const normalized = gameState.normalizeActionEntry(action, index);
@@ -84,6 +92,12 @@ export const register = (ctx) => {
         kind: normalized.kind,
         status: normalized.status,
         movesUnit: movesUnit(normalized),
+        editBlock: engine.actionEdit.orderEditBlock(normalized, editState),
+        edit: {
+          title: engine.actionEdit.hasOwnTitle(normalized) ? clean(normalized.title) : "",
+          text: String(normalized.text ?? ""),
+          chatStarter: normalized.kind === "chat" ? String(normalized.chatStarter ?? "") : "",
+        },
       });
     });
     return {
@@ -227,6 +241,36 @@ export const register = (ctx) => {
         reverted: Boolean(removed?.unitRevert && (removed.status ?? "planned") === "planned"),
       });
       return view();
+    },
+    "actions.edit": async ({ id = "", fields = {} } = {}) => {
+      const wanted = clean(id);
+      const current = (await gameState.readActionsState({ force: true })).find((action) => clean(action?.id) === wanted);
+      if (!wanted || !current) return { said: engine.actionEdit.ORDER_GONE_NOTE };
+      const editState = editStateNow();
+      const block = engine.actionEdit.orderEditBlock(current, editState);
+      if (block) return { said: block };
+      const asked = {
+        text: String(fields?.text ?? "").trim(),
+        ...(clean(fields?.title) ? { title: clean(fields.title) } : {}),
+        ...(String(fields?.chatStarter ?? "").trim() ? { chatStarter: String(fields.chatStarter).trim() } : {}),
+      };
+      if (editState.sharedGame) {
+        const request = engine.mpOrders.rewordRequestFor(current, asked);
+        return request ? { ask: request } : { said: engine.actionEdit.ORDER_GONE_NOTE };
+      }
+      let result = { next: null, outcome: "" };
+      try {
+        await gameState.mutateActionsState((stored) => {
+          result = engine.actionEdit.rewordOrderIn(Array.isArray(stored) ? stored : [], wanted, asked, { turnRunning: engine.simulationStatus.isSimulationBusy() });
+          return result.next;
+        });
+      } catch (error) {
+        console.warn("[actions] the edited order could not be saved:", error);
+        return { said: ORDER_NOT_CHANGED };
+      }
+      if (result.outcome) return { said: result.outcome };
+      if (result.next) logAction(`Order edited: ${result.edited?.title || result.edited?.text || "(untitled)"}`);
+      return { said: "", view: await view({ force: true }) };
     },
     "actions.goal": async ({ text = "" } = {}) => {
       if (engine.simulationStatus.isSimulationBusy()) return { ...(await view()), locked: true };

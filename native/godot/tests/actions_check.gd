@@ -330,6 +330,7 @@ func _actions_checks() -> void:
 	_check(seeded_live.get("ok", false), "an order was written from outside the panel")
 	var live := await _until(func() -> bool: return (panel._view.get("submitted", []) as Array).size() == before + 1, 6.0)
 	_check(live, "the panel picks up an order written elsewhere without being reopened")
+	await _edit_checks(panel)
 	await _frames(2)
 	_hover_row(panel, "Raise taxes on luxury goods")
 	await _shoot("actions-6-submitted")
@@ -379,6 +380,68 @@ func _actions_checks() -> void:
 	await _wait(0.5)
 	panel.queue_free()
 	await _frames(2)
+
+
+func _submitted_entry(panel: ActionsPanel, id: String) -> Dictionary:
+	var rows: Array = panel._view.get("submitted", [])
+	for index in range(rows.size()):
+		var entry: Dictionary = rows[index]
+		if str(entry.get("id", "")) == id:
+			entry["at"] = index
+			return entry
+	return {}
+
+
+func _edit_field(panel: Node, key: String) -> Control:
+	for node in panel.find_children("*", "Control", true, false):
+		if (node as Control).has_meta("edit_field") and str((node as Control).get_meta("edit_field")) == key and (node as Control).is_visible_in_tree():
+			return node
+	return null
+
+
+func _edit_checks(panel: ActionsPanel) -> void:
+	var goal_was_open := panel.goal_open()
+	if goal_was_open:
+		panel._toggle_goal()
+		await _until(func() -> bool: return not panel.goal_open(), 5.0)
+		await _frames(3)
+	var entry := _submitted_entry(panel, "seed-live")
+	_check(not entry.is_empty() and str(entry.get("editBlock", "x")).is_empty(), "a waiting order can be edited")
+	var pencils := panel.find_children("*", "Button", true, false).filter(func(node: Node) -> bool: return (node as Button).has_meta("action_edit") and (node as Button).tooltip_text == "Edit action")
+	_check(pencils.size() == (panel._view.get("submitted", []) as Array).size(), "every waiting order has Edit beside Delete")
+	_hover_row(panel, "Recall the ambassador from Rome for consultations.")
+	await _shoot("actions-6a-edit-button")
+	panel._start_edit(entry)
+	await _frames(3)
+	var words := _edit_field(panel, "text") as TextEdit
+	var title := _edit_field(panel, "title") as LineEdit
+	_check(words != null and title != null and words.text == "Recall the ambassador from Rome for consultations." and title.text == "Recall the ambassador from Rome", "Edit opens the order in place with its title and words")
+	_check(_find_label(panel, "Title") != null and _find_label(panel, "Order") != null and _find_button(panel, "Save") != null and _find_button(panel, "Cancel") != null, "the editor names its fields and has Save and Cancel")
+	var editor: Array = panel.find_children("*", "PanelContainer", true, false).filter(func(node: Node) -> bool: return (node as Control).has_meta("action_editing"))
+	if not editor.is_empty() and is_instance_valid(panel._list_scroller):
+		panel._list_scroller.ensure_control_visible(editor[0])
+		await _frames(3)
+	await _shoot("actions-6b-editing")
+	if words == null:
+		return
+	words.gui_input.emit(_key(KEY_ESCAPE))
+	await _frames(3)
+	_check(panel._editing_id.is_empty() and _find_label(panel, "Recall the ambassador from Rome for consultations.") != null, "Esc leaves the order as it was")
+	panel._start_edit(_submitted_entry(panel, "seed-live"))
+	await _frames(3)
+	words = _edit_field(panel, "text") as TextEdit
+	words.text = "Recall the ambassador from Rome and expel their attaché."
+	words.text_changed.emit()
+	words.gui_input.emit(_key(KEY_ENTER))
+	var saved := await _until(func() -> bool: return _find_label(panel, "Recall the ambassador from Rome and expel their attaché.") != null, 10.0)
+	var after := _submitted_entry(panel, "seed-live")
+	_check(saved and panel._editing_id.is_empty(), "Enter saves the new words")
+	_check(not after.is_empty() and int(after.get("at", -1)) == int(entry.get("at", -2)) and str(after.get("title", "")) == "Recall the ambassador from Rome", "an edited order keeps its id, its place and its own title")
+	await _shoot("actions-6c-edited")
+	if goal_was_open and not panel.goal_open():
+		panel._toggle_goal()
+		await _until(func() -> bool: return panel.goal_open(), 5.0)
+		await _frames(3)
 
 
 func _goal_and_resize_checks(panel: ActionsPanel) -> void:

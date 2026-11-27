@@ -429,3 +429,5 @@ export * as interactiveTranscript from "../../src/runtime/interactiveTranscript.
 export * as agreementEffects from "../../src/runtime/agreementEffects.js";
 export * as groupParties from "../../src/runtime/groupParties.js";
 export * as groupBanner from "../../src/Game/GameUI/groupBanner.js";
+export * as actionEdit from "../../src/runtime/actionEdit.js";
+export * as mpOrders from "../../src/multiplayer/client/sharedOrders.js";

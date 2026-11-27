@@ -15,6 +15,7 @@ const GOAL_FAILED := "The goal could not be saved. Try again."
 const TURN_RUNNING_NOTE := "A turn is running. This can be changed once it ends."
 const ORDER_NOT_SAVED := "Your order could not be saved, so the next time skip would not see it. Try again."
 const ORDER_NOT_REMOVED := "The order could not be removed, so the next time skip would still carry it out. Try again."
+const ORDER_NOT_CHANGED := "The order could not be changed, so the next time skip would carry out its old words. Try again."
 const COMPOSER_HINT := "Enter your action…  (Shift+Enter for a new line)"
 const COMPOSER_HINT_TOUCH := "Enter your action…"
 const REPORT_SAVE_TIP := "Saves the diagnostics log as a file, with this error's details at the top. Attach the file to your bug report."
@@ -36,6 +37,7 @@ const GLYPHS := {
 	"stop": "<svg viewBox='0 0 24 24' fill='#fff'><rect x='6' y='6' width='12' height='12' rx='2'/></svg>",
 	"send": "<svg viewBox='0 0 24 24' fill='#fff'><path d='M2.01 21L23 12 2.01 3 2 10l15 2-15 2z'/></svg>",
 	"orders": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3l1.8 4.6L18.5 9l-4.7 1.4L12 15l-1.8-4.6L5.5 9l4.7-1.4z'/><path d='M18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z'/></svg>",
+	"pencil": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 20h9'/><path d='M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z'/></svg>",
 	"board": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='4' y='3' width='16' height='18' rx='2'/><path d='M8 8h8'/><path d='M8 12h8'/><path d='M8 16h5'/></svg>",
 }
 
@@ -52,6 +54,12 @@ var _last_round := -1
 var _poll: Timer
 var _polling := false
 var _goal_holder: VBoxContainer
+var _editing_id := ""
+var _edit_draft := {}
+var _edit_saving := false
+var _edit_error := ""
+var _edit_save: Button
+var _edit_note: Label
 var _goal_mode := ""
 var _goal_shown := ""
 var _goal_editing := false
@@ -1421,6 +1429,8 @@ func _clickable(look: StyleBoxFlat, action: Callable, enabled := true) -> PanelC
 
 
 func _action_row(entry: Dictionary) -> Control:
+	if not _editing_id.is_empty() and str(entry.get("id", "")) == _editing_id:
+		return _action_editor(entry)
 	var locked := _turn_running and bool(entry.get("movesUnit", false))
 	var normal := _style(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.07), 10, Vector4(14, 9, 14, 9))
 	var hover := _style(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.08)), Color(1, 1, 1, 0.07), 10, Vector4(14, 9, 14, 9))
@@ -1449,6 +1459,28 @@ func _action_row(entry: Dictionary) -> Control:
 	meta_pad.add_child(_leading(meta, 11, 1.75))
 	text.add_child(meta_pad)
 	line.add_child(text)
+	var block := str(entry.get("editBlock", ""))
+	var edit := Button.new()
+	edit.focus_mode = Control.FOCUS_NONE
+	edit.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	edit.custom_minimum_size = Vector2(UI.PHONE_TAP, UI.PHONE_TAP) if UI.phone() else Vector2(26, 24)
+	edit.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var edit_idle := _glyph("pencil", 14, Color(1, 1, 1, 0.18) if not block.is_empty() else Color(1, 1, 1, 0.6))
+	var edit_lit := _glyph("pencil", 14, Color(1, 1, 1, 0.18) if not block.is_empty() else UiTheme.pick("accent", UI.ACCENT))
+	edit.icon = edit_idle
+	var edit_rest := UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 6, 0)
+	var edit_hover := UI.box(Color(0, 0, 0, 0) if not block.is_empty() else UiTheme.pick("hover", Color(1, 1, 1, 0.08)), Color(0, 0, 0, 0), 6, 0)
+	for state in ["normal", "focus", "disabled"]:
+		edit.add_theme_stylebox_override(state, edit_rest)
+	for state in ["hover", "pressed", "hover_pressed"]:
+		edit.add_theme_stylebox_override(state, edit_hover)
+	edit.set_meta("action_edit", true)
+	edit.tooltip_text = block if not block.is_empty() else "Edit action"
+	edit.disabled = not block.is_empty()
+	edit.mouse_default_cursor_shape = Control.CURSOR_FORBIDDEN if not block.is_empty() else Control.CURSOR_POINTING_HAND
+	edit.modulate.a = 1.0 if UI.phone() else 0.0
+	edit.pressed.connect(_start_edit.bind(entry))
+	line.add_child(edit)
 	var remove := Button.new()
 	remove.text = "✕"
 	remove.flat = false
@@ -1472,13 +1504,206 @@ func _action_row(entry: Dictionary) -> Control:
 	row.add_child(line)
 	row.mouse_entered.connect(func() -> void:
 		row.add_theme_stylebox_override("panel", hover)
+		edit.icon = edit_lit
+		edit.modulate.a = 1.0
 		remove.modulate.a = 1.0)
 	row.mouse_exited.connect(func() -> void:
 		if row.get_global_rect().has_point(row.get_global_mouse_position()):
 			return
 		row.add_theme_stylebox_override("panel", normal)
+		edit.icon = edit_idle
+		edit.modulate.a = 1.0 if UI.phone() else 0.0
 		remove.modulate.a = 1.0 if UI.phone() else 0.0)
 	return row
+
+
+func _start_edit(entry: Dictionary) -> void:
+	if not str(entry.get("editBlock", "")).is_empty():
+		return
+	var fields: Dictionary = entry.get("edit", {}) if typeof(entry.get("edit", {})) == TYPE_DICTIONARY else {}
+	_editing_id = str(entry.get("id", ""))
+	_edit_draft = {"title": str(fields.get("title", "")), "text": str(fields.get("text", "")), "chatStarter": str(fields.get("chatStarter", ""))}
+	_edit_error = ""
+	_edit_saving = false
+	_render_sections()
+
+
+func _cancel_edit() -> void:
+	_editing_id = ""
+	_edit_draft = {}
+	_edit_error = ""
+	_edit_saving = false
+	_render_sections()
+
+
+func _edit_original(entry: Dictionary) -> Dictionary:
+	var fields: Dictionary = entry.get("edit", {}) if typeof(entry.get("edit", {})) == TYPE_DICTIONARY else {}
+	return {"title": str(fields.get("title", "")), "text": str(fields.get("text", "")), "chatStarter": str(fields.get("chatStarter", ""))}
+
+
+func _edit_can_save(entry: Dictionary) -> bool:
+	var original := _edit_original(entry)
+	var has_title := not str(original["title"]).strip_edges().is_empty()
+	var has_opening := not str(original["chatStarter"]).strip_edges().is_empty()
+	var filled := not str(_edit_draft.get("text", "")).strip_edges().is_empty() and (not has_title or not str(_edit_draft.get("title", "")).strip_edges().is_empty()) and (not has_opening or not str(_edit_draft.get("chatStarter", "")).strip_edges().is_empty())
+	return filled and not _edit_saving and str(entry.get("editBlock", "")).is_empty()
+
+
+func _update_edit_controls(entry: Dictionary) -> void:
+	if is_instance_valid(_edit_save):
+		_edit_save.disabled = not _edit_can_save(entry)
+		_edit_save.text = "Saving…" if _edit_saving else "Save"
+	if is_instance_valid(_edit_note):
+		var note := _edit_error if not _edit_error.is_empty() else str(entry.get("editBlock", ""))
+		_edit_note.text = note
+		_edit_note.visible = not note.is_empty()
+
+
+func _action_editor(entry: Dictionary) -> Control:
+	var original := _edit_original(entry)
+	var has_title := not str(original["title"]).strip_edges().is_empty()
+	var has_opening := not str(original["chatStarter"]).strip_edges().is_empty()
+	var card := PanelContainer.new()
+	card.set_meta("action_editing", true)
+	card.add_theme_stylebox_override("panel", _style(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.08)), UiTheme.pick("accent", Color(1, 1, 1, 0.18)), 10, Vector4(12, 10, 12, 10)))
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 7)
+	var first: Control = null
+	var specs: Array = []
+	if has_title:
+		specs.append(["title", "Title", false])
+	specs.append(["text", "Order", true])
+	if has_opening:
+		specs.append(["chatStarter", "Opening line", true])
+	for spec in specs:
+		var key := str(spec[0])
+		var field_box := VBoxContainer.new()
+		field_box.add_theme_constant_override("separation", 4)
+		if has_title or has_opening:
+			var caption := UI.label(str(spec[1]), 11, Color(1, 1, 1, 0.5), 700, "Arial", 1)
+			caption.uppercase = true
+			field_box.add_child(caption)
+		var look := _style(UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.2)), UiTheme.pick("line", Color(1, 1, 1, 0.15)), 8, Vector4(10, 8, 10, 8))
+		var focus_look := _style(UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.2)), UiTheme.pick("focus", Color(1, 1, 1, 0.25)), 8, Vector4(10, 8, 10, 8))
+		if bool(spec[2]):
+			var area := _text_edit("", 13)
+			area.tooltip_text = str(spec[1])
+			area.text = str(_edit_draft.get(key, ""))
+			area.custom_minimum_size.y = 48 if key == "chatStarter" else 66
+			area.add_theme_stylebox_override("normal", look)
+			area.add_theme_stylebox_override("focus", focus_look)
+			area.set_meta("edit_field", key)
+			area.text_changed.connect(_on_edit_typed.bind(area, key, entry))
+			area.gui_input.connect(_on_edit_key.bind(area, entry, true))
+			field_box.add_child(area)
+			if key == "text":
+				first = area
+		else:
+			var single := LineEdit.new()
+			single.text = str(_edit_draft.get(key, ""))
+			single.tooltip_text = str(spec[1])
+			single.add_theme_font_override("font", UI.font(400))
+			single.add_theme_font_size_override("font_size", 13)
+			single.add_theme_color_override("font_color", UI.WHITE)
+			single.add_theme_stylebox_override("normal", look)
+			single.add_theme_stylebox_override("focus", focus_look)
+			single.set_meta("edit_field", key)
+			single.text_changed.connect(_on_edit_line.bind(key, entry))
+			single.gui_input.connect(_on_edit_key.bind(single, entry, false))
+			field_box.add_child(single)
+		column.add_child(field_box)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	row.add_child(UI.spacer())
+	var cancel := _goal_button("Cancel", false)
+	cancel.pressed.connect(_cancel_edit)
+	row.add_child(cancel)
+	_edit_save = _goal_button("Save", true)
+	_edit_save.pressed.connect(_save_edit.bind(entry))
+	row.add_child(_edit_save)
+	column.add_child(row)
+	_edit_note = UI.wrapped("", 12, AMBER)
+	column.add_child(_edit_note)
+	card.add_child(column)
+	_update_edit_controls(entry)
+	if first != null:
+		_focus_edit.call_deferred(first)
+	return card
+
+
+func _focus_edit(area: TextEdit) -> void:
+	if is_instance_valid(area) and area.is_inside_tree():
+		area.grab_focus()
+		area.set_caret_line(area.get_line_count() - 1)
+		area.set_caret_column(area.get_line(area.get_line_count() - 1).length())
+
+
+func _on_edit_typed(area: TextEdit, key: String, entry: Dictionary) -> void:
+	_edit_draft[key] = area.text
+	_update_edit_controls(entry)
+
+
+func _on_edit_line(value: String, key: String, entry: Dictionary) -> void:
+	_edit_draft[key] = value
+	_update_edit_controls(entry)
+
+
+func _on_edit_key(event: InputEvent, field: Control, entry: Dictionary, multiline: bool) -> void:
+	if field is TextEdit and (field as TextEdit).has_ime_text():
+		return
+	var kind := _send_key(event)
+	if kind == 1:
+		field.accept_event()
+		_save_edit(entry)
+	elif kind == 2 and multiline:
+		field.accept_event()
+		(field as TextEdit).insert_text_at_caret("\n")
+	elif kind == 3:
+		field.accept_event()
+		_cancel_edit()
+
+
+func _save_edit(entry: Dictionary) -> void:
+	if not _edit_can_save(entry) or engine == null:
+		return
+	var original := _edit_original(entry)
+	var changed := false
+	for key in ["title", "text", "chatStarter"]:
+		if str(_edit_draft.get(key, "")).strip_edges() != str(original[key]).strip_edges():
+			changed = true
+	if not changed:
+		_cancel_edit()
+		return
+	_edit_saving = true
+	_edit_error = ""
+	_update_edit_controls(entry)
+	var fields := {"text": str(_edit_draft.get("text", "")).strip_edges()}
+	if not str(original["title"]).strip_edges().is_empty():
+		fields["title"] = str(_edit_draft.get("title", "")).strip_edges()
+	if not str(original["chatStarter"]).strip_edges().is_empty():
+		fields["chatStarter"] = str(_edit_draft.get("chatStarter", "")).strip_edges()
+	var reply: Dictionary = await engine.request("actions.edit", {"id": str(entry.get("id", "")), "fields": fields})
+	var result: Dictionary = reply["result"] if reply.get("ok", false) and typeof(reply["result"]) == TYPE_DICTIONARY else {"said": ORDER_NOT_CHANGED}
+	var said := str(result.get("said", ""))
+	if said.is_empty() and typeof(result.get("ask")) == TYPE_DICTIONARY:
+		var answer: Dictionary = await SharedGame.ask(engine, "reword", result["ask"])
+		if not answer.get("ok", false):
+			said = str(answer.get("error", ""))
+			if said.is_empty():
+				said = ORDER_NOT_CHANGED
+	_edit_saving = false
+	if not said.is_empty():
+		_edit_error = said
+		_update_edit_controls(entry)
+		return
+	_editing_id = ""
+	_edit_draft = {}
+	_edit_error = ""
+	_save_error = ""
+	if typeof(result.get("view")) == TYPE_DICTIONARY:
+		_apply_view(result["view"])
+	else:
+		_render_sections()
 
 
 func _shows_suggested() -> bool:
