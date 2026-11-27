@@ -72,6 +72,13 @@ var _expanded := ""
 var _pending := ""
 var _planning_id := ""
 var _plan_error := ""
+var _card_error := {"id": "", "text": ""}
+var _archive_open := false
+var _archive_pick := ""
+var _archive_busy := false
+var _archive_message := {"text": "", "error": false}
+var _archive_holder: VBoxContainer
+var _archive_confirm: ConfirmationDialog
 var _confirm_id := ""
 var _confirm_button: Button
 var _confirm_turn := 0
@@ -116,6 +123,16 @@ func _init() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	mouse_filter = Control.MOUSE_FILTER_PASS
 	_build_filters()
+	_archive_holder = VBoxContainer.new()
+	_archive_holder.add_theme_constant_override("separation", 0)
+	_archive_holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_archive_confirm = ConfirmationDialog.new()
+	_archive_confirm.title = "Open Historia"
+	_archive_confirm.dialog_text = I18n.ui("Archive all closed projects to free board slots? Their history will be preserved, and no running project will be affected.")
+	_archive_confirm.dialog_autowrap = true
+	_archive_confirm.min_size = Vector2i(380, 0)
+	_archive_confirm.confirmed.connect(_archive_closed)
+	_archive_holder.add_child(_archive_confirm)
 	_banner = PanelContainer.new()
 	var banner_style := UI.box(Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.12), Color(0, 0, 0, 0), 0, 0, Vector4(16, 8, 16, 8))
 	banner_style.border_color = Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.3)
@@ -141,12 +158,14 @@ func _init() -> void:
 		whole.add_theme_constant_override("separation", 0)
 		whole.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		whole.add_child(_filters)
+		whole.add_child(_archive_holder)
 		whole.add_child(_banner)
 		whole.add_child(cards_margin)
 		_cards_scroll.add_child(whole)
 		_cards_scroll.get_v_scroll_bar().value_changed.connect(_on_phone_scroll)
 	else:
 		add_child(_filters)
+		add_child(_archive_holder)
 		add_child(_banner)
 		_cards_scroll.add_child(cards_margin)
 	add_child(_cards_scroll)
@@ -664,6 +683,7 @@ func _render() -> void:
 	if _new_holder.get_child_count() == 0:
 		_render_new()
 	_render_means()
+	_render_archive()
 	_search_holder.visible = known
 	_chips.visible = known
 	if known:
@@ -683,7 +703,7 @@ func _render_means() -> void:
 	var means: Dictionary = _view.get("means", {})
 	var mode := str(means.get("mode", "gdp-proxy"))
 	var ink := Color(1, 1, 1, 0.5)
-	_means_row.tooltip_text = "Projects consume time and capacity, without claiming money or a national treasury." if mode == "nonmonetary" else "The project allowance is an estimate from GDP, budget balance and public debt. Spending is not reconciled to a national treasury."
+	_means_row.tooltip_text = I18n.ui("Projects consume time and capacity, without claiming money or a national treasury.") if mode == "nonmonetary" else "%s %s" % [I18n.ui("The project allowance is an estimate from GDP, budget balance and public debt. Spending is not reconciled to a national treasury."), str(means.get("unit", ""))]
 	_means_row.visible = _loaded
 	if not _loaded:
 		return
@@ -711,6 +731,139 @@ func _render_means() -> void:
 		line.mouse_filter = Control.MOUSE_FILTER_PASS
 		flow.add_child(line)
 	_means_row.add_child(flow)
+
+
+func _render_archive() -> void:
+	for child in _archive_holder.get_children():
+		if child != _archive_confirm:
+			_archive_holder.remove_child(child)
+			child.queue_free()
+	var archive: Dictionary = _view.get("archive", {})
+	var entries: Array = archive.get("entries", [])
+	var can_archive := bool(archive.get("canArchive", false))
+	if not _loaded or not bool(archive.get("shown", false)):
+		return
+	if entries.is_empty():
+		_archive_open = false
+		_archive_pick = ""
+	var line := Color(1, 1, 1, 0.08)
+	if can_archive or not entries.is_empty():
+		var row := HFlowContainer.new()
+		row.add_theme_constant_override("h_separation", 7)
+		row.add_theme_constant_override("v_separation", 7)
+		if can_archive:
+			var archive_button := _archive_button(I18n.ui("Archive closed projects"))
+			_dim(archive_button, _archive_busy)
+			archive_button.pressed.connect(_ask_archive)
+			row.add_child(archive_button)
+		if not entries.is_empty():
+			var list_button := _archive_button(I18n.ui("Archived projects ({{count}})", {"count": entries.size()}))
+			_dim(list_button, _archive_busy)
+			list_button.pressed.connect(_toggle_archive)
+			row.add_child(list_button)
+		_archive_holder.add_child(_archive_band(row, line, Vector4(16, 7, 16, 7)))
+	if _archive_open and not entries.is_empty():
+		var stack := VBoxContainer.new()
+		stack.add_theme_constant_override("separation", 7)
+		var row2 := HBoxContainer.new()
+		row2.add_theme_constant_override("separation", 7)
+		stack.add_child(row2)
+		var options: Array = [["", I18n.ui("Select archived project...")]]
+		for entry in entries:
+			options.append([str(entry.get("id", "")), str(entry.get("label", ""))])
+		var pick := _select(options, _archive_pick, 11, Vector4(8, 4, 8, 4), 8)
+		pick.tooltip_text = I18n.ui("Archived project to restore")
+		pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		pick.custom_minimum_size.x = 160
+		pick.item_selected.connect(_on_archive_pick.bind(pick))
+		row2.add_child(pick)
+		var restore := _archive_button(I18n.ui("Restore selected"))
+		_dim(restore, _archive_busy or _archive_pick.is_empty() or bool(archive.get("full", false)))
+		restore.pressed.connect(_restore_archived)
+		row2.add_child(restore)
+		var note := UI.wrapped(I18n.ui("Restoration requires a free slot and does not replay missed progress."), 10, Color(1, 1, 1, 0.55))
+		note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		stack.add_child(note)
+		_archive_holder.add_child(_archive_band(stack, line, Vector4(16, 8, 16, 8)))
+	if not str(_archive_message.get("text", "")).is_empty():
+		var said := UI.wrapped(str(_archive_message["text"]), 11, RED_INK if bool(_archive_message.get("error", false)) else Color("#a7f3d0"))
+		var pad := MarginContainer.new()
+		for side in [["margin_left", 16], ["margin_right", 16], ["margin_top", 6], ["margin_bottom", 6]]:
+			pad.add_theme_constant_override(side[0], side[1])
+		pad.add_child(said)
+		_archive_holder.add_child(pad)
+
+
+func _archive_band(content: Control, line: Color, pad: Vector4) -> PanelContainer:
+	var band := PanelContainer.new()
+	var look := UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0, pad)
+	look.border_color = line
+	look.border_width_bottom = 1
+	band.add_theme_stylebox_override("panel", look)
+	band.add_child(content)
+	return band
+
+
+func _archive_button(text: String) -> Button:
+	var pad := Vector4(8, 4, 8, 4)
+	var look := _style(UiTheme.pick("surface", Color(1, 1, 1, 0.06)), Color(1, 1, 1, 0.12), 8, pad)
+	var button := _styled_button(text, 11, 400, UI.WHITE, look, look)
+	button.custom_minimum_size.y = 26
+	return button
+
+
+func _ask_archive() -> void:
+	if _archive_busy:
+		return
+	_archive_confirm.popup_centered()
+
+
+func _toggle_archive() -> void:
+	_archive_open = not _archive_open
+	_render_archive()
+
+
+func _on_archive_pick(index: int, pick: OptionButton) -> void:
+	_archive_pick = str(pick.get_item_metadata(index))
+	_render_archive()
+
+
+func _archive_closed() -> void:
+	await _archive_call("projects.archiveClosed", {})
+
+
+func _restore_archived() -> void:
+	if _archive_pick.is_empty():
+		return
+	await _archive_call("projects.restoreArchived", {"projectId": _archive_pick})
+	if not bool(_archive_message.get("error", false)):
+		_archive_pick = ""
+		_render_archive()
+
+
+func _archive_call(method: String, args: Dictionary) -> void:
+	if engine == null or _archive_busy:
+		return
+	_archive_busy = true
+	_archive_message = {"text": "", "error": false}
+	_render_archive()
+	var payload := args.duplicate()
+	payload["view"] = _args()
+	var reply: Dictionary = await engine.request(method, payload)
+	_archive_busy = false
+	if reply.get("ok", false) and typeof(reply.get("result")) == TYPE_DICTIONARY:
+		var result: Dictionary = reply["result"]
+		var text := str(result.get("archiveMessage", ""))
+		if method == "projects.archiveClosed" and not bool(result.get("archiveError", false)):
+			text = I18n.ui("Archived {{count}} closed project records.", {"count": int(result.get("archiveCount", 0))})
+		elif method == "projects.restoreArchived" and not bool(result.get("archiveError", false)):
+			text = I18n.ui("Archived project restored to the live board.")
+		_archive_message = {"text": text, "error": bool(result.get("archiveError", false))}
+		_last_json = ""
+		_apply(result)
+	else:
+		_archive_message = {"text": str(reply.get("error", "")), "error": true}
+	_render_archive()
 
 
 func _render_new() -> void:
@@ -1316,6 +1469,11 @@ func _levers(card: Dictionary, id: String, busy: bool) -> Control:
 	if _confirm_id == id:
 		_confirm_button = abandon
 	levers.add_child(abandon)
+	if str(_card_error.get("id", "")) == id and not str(_card_error.get("text", "")).is_empty():
+		var said := UI.wrapped(str(_card_error["text"]), 11, RED_INK)
+		said.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		said.custom_minimum_size.x = 260
+		levers.add_child(said)
 	return levers
 
 
@@ -1446,6 +1604,7 @@ func _run_op(id: String, op: String, value: String) -> void:
 	if engine == null:
 		return
 	_pending = id
+	_card_error = {"id": "", "text": ""}
 	_render_cards()
 	_seq += 1
 	var mine := _seq
@@ -1455,7 +1614,7 @@ func _run_op(id: String, op: String, value: String) -> void:
 		var result: Dictionary = reply["result"]
 		var error := str(result.get("error", ""))
 		if not error.is_empty():
-			_plan_error = error
+			_card_error = {"id": str(result.get("errorId", id)), "text": error}
 		_apply(result)
 		_render_cards()
 	else:

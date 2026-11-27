@@ -60,16 +60,6 @@ const searchTags = (tags, query) => {
   });
 };
 
-const formatMoney = (value) => {
-  const amount = Number(value);
-  if (!Number.isFinite(amount) || amount <= 0) return "0";
-  try {
-    return new Intl.NumberFormat(undefined, { notation: "compact", maximumSignificantDigits: 3 }).format(amount);
-  } catch {
-    return String(Math.round(amount));
-  }
-};
-
 const signed = (value) => `${value > 0 ? "+" : ""}${value}`;
 
 export const register = (ctx) => {
@@ -79,6 +69,7 @@ export const register = (ctx) => {
   const projectEngine = engine.projectEngine;
   const recovery = engine.projectRecovery;
   const lib = engine.library;
+  const econ = engine.econCurrency;
 
   if (ctx.standIn && typeof ctx.addStandIn === "function") {
     ctx.addStandIn(({ tool, text }) => {
@@ -101,7 +92,15 @@ export const register = (ctx) => {
     playerLandless: false,
     eventTitles: new Map(),
     flagFiles: new Map(),
+    currency: econ.DEFAULT_ECONOMIC_DISPLAY_CURRENCY,
   };
+
+  const formatMoney = (value) => {
+    const amount = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+    return econ.formatEconomicDisplayValue(amount, state.currency, { compact: true });
+  };
+
+  const shared = () => Boolean(engine.mpBridge?.inSharedGame?.());
 
   let countryNames = null;
   const toCountryName = async (token) => {
@@ -128,6 +127,8 @@ export const register = (ctx) => {
     state.country = clean(game?.country);
     state.gameDate = String(game?.gameDate ?? "");
     state.round = Number(game?.round) || 0;
+    state.currency = econ.normalizeEconomicDisplayCurrency(game?.economicDisplayCurrency);
+    econ.setActiveEconomicDisplayCurrency(state.currency);
     state.playerCountry = await toCountryName(state.country);
     state.playerLandless = gameState.isPolityLandless(world, state.playerCountry);
     state.stamp = crypto.createHash("sha1").update(JSON.stringify([
@@ -137,6 +138,8 @@ export const register = (ctx) => {
       state.country,
       state.gameDate,
       state.round,
+      state.currency,
+      list(world?.projectRecoveryArchive).map((entry) => clean(entry?.id)),
       state.playerLandless,
       world?.projectFundingMode ?? "",
       world?.countryStats?.[state.playerCountry]?.economy ?? null,
@@ -327,6 +330,9 @@ export const register = (ctx) => {
     await ensureEventTitles(expandedProject);
     const means = projectEngine.ownerMeans(engineWorld(), state.playerCountry, projects, state.playerCountry);
     const names = ownerNames();
+    const archived = shared() ? [] : list(state.world?.projectRecoveryArchive)
+      .filter((entry) => entry?.board === "world" && entry?.project && board.isKnownToPlayer(entry.project, state.playerCountry))
+      .map((entry) => ({ id: clean(entry.id), label: `${clean(entry.project.name)} (${clean(entry.priorStatus || entry.project.status)})` }));
     const mine = [];
     const abroad = [];
     for (const project of visible) {
@@ -353,6 +359,13 @@ export const register = (ctx) => {
         budget: means.budget === null ? "" : formatMoney(means.budget),
         committed: formatMoney(means.committed),
         covered: Number(means.covered),
+        unit: `${econ.economicDisplayUnitLabel(state.currency)}.`,
+      },
+      archive: {
+        shown: !shared(),
+        canArchive: !shared() && closedCount > 0,
+        entries: archived,
+        full: projects.length >= gameState.PROJECT_BOARD_LIMIT,
       },
       mine,
       abroad,
@@ -410,10 +423,44 @@ export const register = (ctx) => {
             await writeOps([{ op: "cancel", projectId: project.id, name: project.name, note: "Abandoned by the player." }]);
           }
         } catch (failure) {
-          if (op === "secrecy") error = failureText(failure);
+          error = failureText(failure) || "The host did not take that.";
         }
       }
-      return { ...(await read({ ...view, force: true })), error };
+      return { ...(await read({ ...view, force: true })), error, errorId: error ? clean(projectId) : "" };
+    },
+    "projects.archiveClosed": async ({ view = {} } = {}) => {
+      if (shared()) return { ...(await read({ ...view, force: true })), archiveMessage: "", archiveError: false };
+      await load(true);
+      let moved = 0;
+      let message = "";
+      let failed = false;
+      try {
+        await gameState.mutateWorldState((world) => {
+          const next = recovery.archiveClosedProjectsInWorld(world, { date: state.gameDate });
+          const kept = new Set(list(next.projects).map((project) => project?.id));
+          moved = list(world.projects).filter((project) => !kept.has(project?.id) && board.isKnownToPlayer(project, state.playerCountry)).length;
+          return next;
+        });
+        message = `Archived ${moved} closed project records.`;
+      } catch (failure) {
+        message = failureText(failure);
+        failed = true;
+      }
+      return { ...(await read({ ...view, force: true })), archiveMessage: message, archiveError: failed, archiveCount: moved };
+    },
+    "projects.restoreArchived": async ({ projectId = "", view = {} } = {}) => {
+      if (shared() || !clean(projectId)) return { ...(await read({ ...view, force: true })), archiveMessage: "", archiveError: false };
+      await load(true);
+      let message = "";
+      let failed = false;
+      try {
+        await gameState.mutateWorldState((world) => recovery.restoreArchivedProjectInWorld(world, { projectId: clean(projectId), date: state.gameDate }));
+        message = "Archived project restored to the live board.";
+      } catch (failure) {
+        message = failureText(failure);
+        failed = true;
+      }
+      return { ...(await read({ ...view, force: true })), archiveMessage: message, archiveError: failed };
     },
     "projects.planEntry": async ({ projectId = "", view = {} } = {}) => {
       await load(true);
