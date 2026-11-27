@@ -1430,7 +1430,7 @@ export const register = (ctx) => {
       const samples = countryStats.withCurrentCountryStatSample(stored, currentSheet, { date: player.date, round: player.round });
       const recoveredCount = Math.max(0, stored.length - persistentCount);
       const persistedSeries = persistent[target] || [];
-      if (JSON.stringify(persistedSeries) !== JSON.stringify(stored)) {
+      if (!engine.mpBridge?.inSharedGame?.() && JSON.stringify(persistedSeries) !== JSON.stringify(stored)) {
         try {
           const latestWorld = await engine.gameState.readWorldState({ force: false });
           let latestHistory = countryStats.mergeCountryStatsHistory(latestWorld?.countryStatsHistory, recovered);
