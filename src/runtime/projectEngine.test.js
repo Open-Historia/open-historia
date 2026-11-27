@@ -155,11 +155,11 @@ test("a project paid next to nothing for a month stalls for want of funds, and t
   assert.ok(resumed.projects[1].progress > lean.progress);
 });
 
-test("an owner with no native GDP baseline cannot spend unassessed funds", () => {
+test("an owner with no GDP on record works at its planned pace and books nothing", () => {
   const { projects } = tickProjects({ projects: [project({ ownerCode: "Atlantis" })], world: world(), fromDate: "1936-01-01", toDate: "1936-01-11", host: "France", round: 5 });
-  assert.equal(projects[0].progress, 0);
+  assert.ok(projects[0].progress > 0);
   assert.equal(projects[0].spent, 0);
-  assert.equal(projects[0].paidShare, 0);
+  assert.equal(projects[0].paidShare, 1);
 });
 
 test("capacity follows the economy and stability, within its bounds", () => {

@@ -87,6 +87,7 @@ export const RECEIPT_PLAYER_TEXTS = Object.freeze({
   schemaTruncatedOne: "1 item beyond the allowed length was left out of the answer.",
   schemaTruncatedMany: "{{count}} items beyond the allowed length were left out of the answer.",
   schemaMalformed: "A malformed part of the answer was left out.",
+  schemaMalformedNamed: "{{name}} was left out: part of how it was written could not be read.",
   placedNowhere: "{{name}} could not be placed where the event said and was left off the map.",
   unnamedPlacedNowhere: "A unit or structure could not be placed where the event said and was left off the map.",
 
@@ -239,6 +240,8 @@ export const schemaRemovalNote = (removal) => {
   const quoted = /^"(.+)"$/.exec(label);
   const event = quoted ? quoted[1] : "";
   if (removal?.kind === "truncate") return one(removal.removedCount, "schemaTruncatedOne", "schemaTruncatedMany", {}, event);
+  // An operation left out whole is named, where it has a name (a structure, a unit).
+  if (removal?.kind === "item" && clean(removal?.name)) return receiptPlayerNote("schemaMalformedNamed", { name: clean(removal.name) }, event);
   return receiptPlayerNote("schemaMalformed", {}, event);
 };
 

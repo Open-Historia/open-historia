@@ -101,6 +101,16 @@ const applyRemoval = (root, removal) => {
 
 export const SCHEMA_SALVAGE_MAX_REMOVALS = 24;
 
+// The name an item carries in its own fields: `name`, or that of the thing it
+// builds or raises (`marker`, `unit`). "" for none.
+const nameOfItem = (item) => {
+    if (!isRecord(item)) return "";
+    for (const candidate of [item.name, item.marker?.name, item.unit?.name]) {
+        if (typeof candidate === "string" && candidate.trim()) return candidate.trim().slice(0, 120);
+    }
+    return "";
+};
+
 // validate(value) → { valid, error }. `value` is repaired IN PLACE (the caller
 // owns it: it is a fresh parse of the model's answer) and also returned.
 //
@@ -151,6 +161,9 @@ export const salvageBySchema = (value, validate, {
         } catch {
             label = "";
         }
+        // A list item left out whole is named by its own name field, where it
+        // has one (a structure's, a unit's), so the player is told what was lost.
+        const name = removal.kind === "item" ? nameOfItem(valueAt(value, removal.path)) : "";
         applyRemoval(value, removal);
         removed.push({
             kind: removal.kind,
@@ -158,6 +171,7 @@ export const salvageBySchema = (value, validate, {
             error: String(verdict.error),
             ...(removal.kind === "truncate" ? { removedCount: removal.removedCount } : {}),
             ...(label ? { label } : {}),
+            ...(name ? { name } : {}),
         });
         verdict = validate(value);
     }

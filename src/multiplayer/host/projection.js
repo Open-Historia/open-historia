@@ -69,7 +69,7 @@ const copy = (value) => (value === undefined ? undefined : JSON.parse(JSON.strin
 export const PUBLIC_WORLD_KEYS = Object.freeze([
   "allowedBasemaps", "allowedUnitTypes", "author", "background", "basemap", "cityPopulations", "cityRenames",
   "countryTags", "customCities", "customRegions", "difficulty", "diplomaticLedgerVersion",
-  "groupAreas", "groups", "internationalReputation", "labelFont", "labelHaloColor",
+  "defunctGroups", "groupAreas", "groups", "internationalReputation", "labelFont", "labelHaloColor",
   "labelTextColor", "language", "lastJumpMode", "lastJumpTargetDate", "mapCredit", "markers",
   "ownBasemaps", "ownerCodes", "ownerSchema", "polityOverrides", "powerStatus", "regionClaimants",
   "regionOwnershipOverrides", "regionRenames", "regionSovereigntyOverrides", "settledRegionClaims",

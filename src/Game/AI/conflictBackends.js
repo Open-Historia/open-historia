@@ -69,7 +69,7 @@ export const conflictBackendsRequest = ({ date = "", rules = "", player = "", co
     : `{"countries":[{"country":"the exact name you were given","population":0,"gdp":0,"budgetBalance":0,"publicDebt":0${militaryExample}}]}`;
   const systemPrompt = [
     "You are Open Historia's national-statistics estimator. For each polity you are given, estimate four figures the game's own arithmetic needs and no player sees:",
-    "population: its people, as a plain count.",
+    "population: its people, as a plain count (0 for a polity with no people of its own).",
     "gdp: the size of its economy in a year, in ONE unit that you use for every polity of this world (the unit of the polities already known, where some are shown).",
     "budgetBalance: its treasury's balance for the year as a percentage of that economy (a surplus above 0, a deficit below).",
     "publicDebt: what its treasury owes, as a percentage of that economy.",
@@ -110,7 +110,7 @@ export const conflictBackendsRequest = ({ date = "", rules = "", player = "", co
     custom ? `THE SCENARIO'S OWN SHEET:\n${String(sheet.description ?? "").trim().slice(0, 2400)}` : "",
     shown.length
       ? `ALREADY KNOWN (for the unit and the scale; do not return these):\n${shown.map((entry) => `- ${clean(entry.name)}: ${JSON.stringify(entry.backend)}`).join("\n")}`
-      : "No polity's figures are known yet: choose one unit for gdp and use it for all of these.",
+      : "No polity's figures are known yet: write gdp in constant 2026 US dollars as a plain count (not thousands, millions or billions) for all of these.",
     scale.length ? `MILITARIES ALREADY RATED (the scale every military you rate keeps to; do not return these):\n${scale.map((entry) => `- ${entry.name}: ${entry.line}`).join("\n")}` : "",
     `ESTIMATE THESE:\n${asked.map(line).join("\n")}`,
   ].filter(Boolean).join("\n\n");

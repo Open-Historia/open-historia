@@ -230,7 +230,11 @@ export const nextRatingBatch = (entries) => {
 // designer's, and a group is no country with a sheet. Exact names, each once, in the order given.
 export const unratedOf = (world, names) => {
   const lookup = militaryLookup(world);
-  const groups = new Set(Object.keys(world?.groups && typeof world.groups === "object" ? world.groups : {}).map(fold));
+  // (An ended group's name too: groups.js defunctGroups.)
+  const groups = new Set([
+    ...Object.keys(world?.groups && typeof world.groups === "object" ? world.groups : {}),
+    ...Object.keys(world?.defunctGroups && typeof world.defunctGroups === "object" ? world.defunctGroups : {}),
+  ].map(fold));
   const seen = new Set();
   return list(names).map(clean).filter((name) => {
     const key = fold(name);
@@ -246,7 +250,11 @@ export const unratedOf = (world, names) => {
 // names, each once.
 export const militaryTargets = (world, { skip = [] } = {}) => {
   const lookup = militaryLookup(world);
-  const skipped = new Set([...list(skip), ...Object.keys(world?.groups && typeof world.groups === "object" ? world.groups : {})].map(fold));
+  const skipped = new Set([
+    ...list(skip),
+    ...Object.keys(world?.groups && typeof world.groups === "object" ? world.groups : {}),
+    ...Object.keys(world?.defunctGroups && typeof world.defunctGroups === "object" ? world.defunctGroups : {}),
+  ].map(fold));
   const wanted = new Map();
   const add = (name) => {
     const key = fold(name);

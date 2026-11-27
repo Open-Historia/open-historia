@@ -608,6 +608,21 @@ const goalButtonStyle = (enabled, tone = "neutral") => ({
     padding: "0.3rem 0.7rem",
 });
 
+// A goal and its reading are the player's own words and the model's, of any
+// length: shown whole, in a box that scrolls past a few lines rather than cut
+// off at three ("Goal summary gets cut off when its too long. Fix: make it
+// scrollable", a player, 2026-11-26). The scrollbar is the game's own
+// (styles.css), and `contain` keeps a phone's swipe from scrolling the panel.
+const GOAL_SCROLL_STYLE = Object.freeze({
+    maxHeight: "min(9.5em, 30vh)",
+    minHeight: 0,
+    overflowWrap: "anywhere",
+    overflowY: "auto",
+    overscrollBehavior: "contain",
+    paddingRight: "0.25rem",
+    whiteSpace: "pre-wrap",
+});
+
 // How far the goal has come (gameplay.js assessGoalProgress): read on demand,
 // since every reading is a request, and marked when a turn has passed since.
 const GoalProgress = ({ country, round, turnRunning }) => {
@@ -669,8 +684,9 @@ const GoalProgress = ({ country, round, turnRunning }) => {
         {busy ? "…" : "↻"}
         </button>
         </div>
+        <div data-goal-scroll="summary" style={{ ...GOAL_SCROLL_STYLE, display: "flex", flexDirection: "column", gap: "0.35rem", maxHeight: open ? "min(16em, 40vh)" : GOAL_SCROLL_STYLE.maxHeight }}>
         <button type="button" className="oh-tap" onClick={() => setOpen((value) => !value)} aria-expanded={open}
-        style={{ background: "none", border: "none", color: "rgba(255,255,255,0.78)", cursor: "pointer", fontSize: "0.74rem", lineHeight: "1.45", padding: 0, textAlign: "left" }}>
+        style={{ background: "none", border: "none", color: "rgba(255,255,255,0.78)", cursor: "pointer", flexShrink: 0, fontSize: "0.74rem", lineHeight: "1.45", padding: 0, textAlign: "left", whiteSpace: "pre-wrap" }}>
         {progress.summary}
         </button>
         {open && (
@@ -680,6 +696,7 @@ const GoalProgress = ({ country, round, turnRunning }) => {
             {list("Next steps", progress.nextSteps)}
             </>
         )}
+        </div>
         <span style={muted}>
         {error || `As of ${progress.asOf || "an earlier turn"}${stale ? " — a turn has passed since; ↻ to update" : ""}. ${open ? "" : "Click the summary for details."}`}
         </span>
@@ -896,7 +913,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen, open = true, onToggle 
         </div>
         {open && (
             <>
-            <span title={goal} style={{ color: "rgba(255,255,255,0.82)", display: "-webkit-box", fontSize: "0.8rem", lineHeight: "1.45", overflow: "hidden", WebkitBoxOrient: "vertical", WebkitLineClamp: 3 }}>
+            <span data-goal-scroll="goal" style={{ ...GOAL_SCROLL_STYLE, color: "rgba(255,255,255,0.82)", display: "block", fontSize: "0.8rem", lineHeight: "1.45" }}>
             {"\u{1F3AF} "}{goal}
             </span>
             <GoalProgress country={country} round={round} turnRunning={turnRunning} />

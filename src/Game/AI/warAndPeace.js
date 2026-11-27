@@ -654,7 +654,10 @@ export const endConqueredWars = (world, { held = null, date = "", round = 0 } = 
   // (Only on a count of every region: one of the regions that changed hands alone would find landless a country
   // that holds all it ever did.)
   if (holdings.complete !== true) return world;
-  const groups = new Set(Object.keys(world?.groups && typeof world.groups === "object" ? world.groups : {}).map(fold));
+  const groups = new Set([
+    ...Object.keys(world?.groups && typeof world.groups === "object" ? world.groups : {}),
+    ...Object.keys(world?.defunctGroups && typeof world.defunctGroups === "object" ? world.defunctGroups : {}),
+  ].map(fold));
   const countries = (side) => side.filter((name) => !groups.has(fold(name)));
   const landless = (side) => countries(side).length > 0 && countries(side).every((name) => !((holdings.get(fold(name)) ?? 0) > 0));
   const holdsLand = (side) => side.some((name) => (holdings.get(fold(name)) ?? 0) > 0);

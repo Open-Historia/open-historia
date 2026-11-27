@@ -34,15 +34,25 @@ const number = (value) => {
 const within = (value, least, most) => Math.min(most, Math.max(least, value));
 
 // A backend as a model wrote it, held to what each figure can be; null when
-// it says nothing usable of a country's people.
+// it says nothing usable of a polity's people or its economy.
 //   partial   a change to a backend that is there (a turn's patch): whichever of
 //             the four it names, where a whole one has to say how many people
+//             or how large an economy
+// A polity may have an economy and no people of its own (a company, a machine,
+// an order of monks counted elsewhere): a whole backend of 0 people with an
+// economy is kept, as 0 people. It used to be thrown away whole, economy and
+// all, because it had no people, and a country with no economy on record has
+// no project budget: a played sapient AI's projects sat at 0% for fifteen
+// months (a player's Modern Day 2026 save, 2026-11-26).
 export const readStatsBackend = (value, { partial = false } = {}) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const population = number(value.population);
-  if (!(population >= 1) && !partial) return null;
-  const backend = population >= 1 ? { population: Math.round(within(population, 1, 2e10)) } : {};
   const gdp = number(value.gdp);
+  // A whole one says how many people, 0 among them for a polity with an economy and none.
+  if (!partial && !(population >= 1) && !(population === 0 && gdp > 0)) return null;
+  const backend = population >= 1
+    ? { population: Math.round(within(population, 1, 2e10)) }
+    : population === 0 && !partial ? { population: 0 } : {};
   if (gdp > 0) backend.gdp = within(gdp, 1, 1e18);
   const balance = number(value.budgetBalance);
   if (!Number.isNaN(balance)) backend.budgetBalance = within(balance, -100, 100);
@@ -108,12 +118,13 @@ export const readableFigure = (value) => {
   return String(Math.round(n));
 };
 
-// The backend a sheet carries, as the four figures; null for a sheet with no people on it.
+// The backend a sheet carries, as the four figures; null for a sheet with
+// neither people nor an economy on it (a polity of 0 people with an economy has one).
 export const statsBackendOf = (sheet) => {
   const population = number(sheet?.population?.total);
-  if (!(population >= 1)) return null;
-  const backend = { population: Math.round(population) };
   const gdp = number(sheet?.economy?.gdp);
+  if (!(population >= 1) && !(gdp > 0)) return null;
+  const backend = { population: population >= 1 ? Math.round(population) : 0 };
   if (gdp > 0) backend.gdp = gdp;
   const balance = number(sheet?.economy?.budgetBalance);
   if (!Number.isNaN(balance)) backend.budgetBalance = balance;
@@ -129,15 +140,19 @@ export const hasStatsBackend = (sheet) => statsBackendOf(sheet) !== null;
 
 // What a request that writes a scenario's own sheet is told of the backend.
 //   previous   the backend the country's sheet already carries, or null
-export const statsBackendInstruction = (previous = null) => [
+//   known      [{ name, backend }] other polities' backends, for the unit and the scale
+export const statsBackendInstruction = (previous = null, known = []) => [
   `HIDDEN BACKEND (\`${STATS_BACKEND_FIELD}\`), the one exception to the rule that nothing modern is kept: the game's own arithmetic needs four figures for every polity, which this scenario's player never sees. `
-  + "population: its people, as a count. gdp: the size of its economy in a year, in one unit you use for every polity of this world. "
+  + "population: its people, as a count (0 for a polity with no people of its own). gdp: the size of its economy in a year, in the one unit every polity of this world is written in (the unit of the economies shown below where some are; where none is, constant 2026 US dollars as a plain count, not thousands, millions or billions). "
   + "budgetBalance: its treasury's balance as a percentage of that economy (a surplus above 0, a deficit below). publicDebt: what it owes, as a percentage of that economy. "
   + "Armies are raised from the first and paid from the rest. Work these four out FIRST, from the era, the world and this polity's place in it; "
   + "then write the scenario's own values so that they say the same thing: a polity its backend makes populous and rich is not poor and empty on its sheet, and one that has lost a tenth of its people shows it.",
   previous
     ? `Its backend as it stands (campaign canon; move it only by what has happened since): ${JSON.stringify(previous)}`
     : "It has no backend yet: establish one that fits the era and this polity's size.",
+  ...(Array.isArray(known) && known.length
+    ? [`Economies already on record, for the unit and the scale: ${known.slice(0, 4).map((entry) => `${entry.name}: ${JSON.stringify(entry.backend)}`).join("; ")}`]
+    : []),
 ].join("\n");
 
 // ---- the countries a person's country comes into conflict with --------------------------

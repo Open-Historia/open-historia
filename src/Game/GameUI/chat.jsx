@@ -13,7 +13,7 @@ import { SharedGameRefusal, answerPeaceInChat, answerTreatyInChat, checkDemandRe
 import { AgreementsInForce, ProposalBox, ProposeDealButton, TreatyCard, treatyReasonText } from "./treatyCards.jsx";
 import { groupBannerDataUrl, pickableGroupsOf } from "./groupBanner.js";
 import { dealsBetween } from "../../runtime/groupParties.js";
-import { findGroupKey } from "../../runtime/groups.js";
+import { chatWithEndedGroupsOnly, findGroupKey } from "../../runtime/groups.js";
 import { CallToArmsCard, PeaceOfferCard, PeaceTermsForm, sendPeaceAnswer } from "./warAndPeace.jsx";
 import { TreatyForm, TreatyOfferCard, sendTreaty, treatyOffersForThread } from "./treaties.jsx";
 import { describeTerms, warBetween } from "../../runtime/peaceTerms.js";
@@ -4025,6 +4025,10 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
     );
 };
 
+// The names of the groups that have ended, as one string so the panel renders
+// again only when that list changes.
+const selectEndedGroupNames = (world) => Object.keys(world?.defunctGroups && typeof world.defunctGroups === "object" ? world.defunctGroups : {}).join("\u0001");
+
 const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onConsumeRequest, requestedChatId = "", onConsumeRequestedChat, isGenerating = false }) => {
     // "chats" is the diplomacy the player is party to; "spy" is everyone else's.
     const [view, setView] = useState("chats");
@@ -4087,7 +4091,12 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     const unseen = useUnseenEventIds();
     const shownChats = useMemo(() => withoutUnseenChats(chats, unseen), [chats, unseen]);
     const shownVersion = (chat) => (chat ? withoutUnseenChats([chat], unseen)[0] ?? chat : chat);
-    const allOpenChats = shownChats.filter((chat) => chat.status !== "closed" && Array.isArray(chat.countries) && chat.countries.length > 0);
+    // A thread with groups that have all ended (gameState.js dissolveGroup) is
+    // closed: nobody is left to answer in it (groups.js chatWithEndedGroupsOnly).
+    const endedGroupNames = useRuntimeState("world", selectEndedGroupNames);
+    const endedGroups = useMemo(() => (endedGroupNames ? endedGroupNames.split("\u0001") : []), [endedGroupNames]);
+    const allOpenChats = shownChats.filter((chat) => chat.status !== "closed" && Array.isArray(chat.countries) && chat.countries.length > 0
+        && !chatWithEndedGroupsOnly(chat, endedGroups, playerCountry));
     // Formal institution councils have their own first-class workspace. Keep
     // them out of the ordinary Diplomacy list instead of flattening NATO/EU/etc.
     // into ad-hoc country chats, while retaining them in unread tracking.
@@ -4846,7 +4855,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
 
             <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} groups={pickableGroups} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
-            {activeChat && (!activeChat.institutionId || (activeChat.lifecycleInstitutionId && activeChat.lifecycleCaseIds?.length)) && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
+            {activeChat && (!activeChat.institutionId || (activeChat.lifecycleInstitutionId && activeChat.lifecycleCaseIds?.length)) && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 && !chatWithEndedGroupsOnly(activeChat, endedGroups, playerCountry) ? (
                 <div className="oh-diplomacy-split" data-diplomacy-layout="responsive-split">
                     <aside className="oh-diplomacy-active-sidebar" aria-label="Diplomatic correspondence">
                         <div className="oh-diplomacy-sidebar-heading">

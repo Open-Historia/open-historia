@@ -8,6 +8,12 @@
 //
 //   world.groups     { [name]: { name, description, color, formerNames?, owner? } }
 //   world.groupAreas { [regionId]: groupName }   one group per region, sparse
+//   world.defunctGroups { [name]: { ...its record, dissolvedDate, sourceEventIds } }
+//                    the groups that ended (gameState.js dissolveGroup), kept
+//                    for history: old events still name them, and a name that
+//                    was a group's is still a group's, never a country's. Not
+//                    in world.groups, so nothing that lists, draws, picks or
+//                    tells the AI of the groups there are ever shows one.
 //
 // `owner`, where there is one, is the country whose force the group is: a
 // country at war with a group on a third country's land takes that ground as
@@ -26,6 +32,9 @@ export const GROUP_NAME_MAX = 80;
 export const GROUP_DESCRIPTION_MAX = 1200;
 export const MAX_GROUPS = 64;
 export const MAX_GROUP_OP_REGIONS = 200;
+// The ended groups kept for history, the newest kept when there are more.
+export const MAX_DEFUNCT_GROUPS = 128;
+export const DEFUNCT_GROUP_EVENT_IDS_MOST = 8;
 
 // Distinct, readable over any country colour. No purple: the interface keeps
 // its greys and one accent, and the map's own colours are the countries'.
@@ -124,6 +133,52 @@ export const normalizeGroups = (raw) => {
   return out;
 };
 
+// The groups that ended, as history keeps them: each record as it stood, the
+// date it ended and the events that ended it. A name a live group holds is not
+// also a dead one's (a group ended and then formed again under its name is the
+// live one), so `live` is left out.
+export const normalizeDefunctGroups = (raw, live = {}) => {
+  const out = {};
+  for (const [key, value] of Object.entries(isRecord(raw) ? raw : {})) {
+    const group = normalizeGroup(key, value);
+    if (!group || findGroupKey(live, group.name) || Object.keys(out).some((existing) => fold(existing) === fold(group.name))) continue;
+    const ids = [...new Set((Array.isArray(value?.sourceEventIds) ? value.sourceEventIds : []).map(clean).filter(Boolean))].slice(-DEFUNCT_GROUP_EVENT_IDS_MOST);
+    out[group.name] = {
+      ...group,
+      dissolvedDate: clean(value?.dissolvedDate).slice(0, 40),
+      ...(ids.length ? { sourceEventIds: ids } : {}),
+    };
+  }
+  const keys = Object.keys(out);
+  for (const key of keys.slice(0, Math.max(0, keys.length - MAX_DEFUNCT_GROUPS))) delete out[key];
+  return out;
+};
+
+// The live group a name is, or "" (world.groups only).
+export const liveGroupKey = (world, name) => findGroupKey(isRecord(world?.groups) ? world.groups : {}, name);
+export const isLiveGroup = (world, name) => Boolean(liveGroupKey(world, name));
+// The ended group a name is, or "": none while a live group answers to it.
+export const defunctGroupKey = (world, name) => (liveGroupKey(world, name)
+  ? ""
+  : findGroupKey(isRecord(world?.defunctGroups) ? world.defunctGroups : {}, name));
+// Whether a name is a group's at all, alive or ended: what decides that a name
+// is NOT a country (an ended group's name never founds a phantom polity).
+export const isGroupName = (world, name) => Boolean(liveGroupKey(world, name) || defunctGroupKey(world, name));
+
+// A thread whose every other party is a group that has ended
+// (world.defunctGroups) has nobody left to answer: the Diplomacy panel shows it
+// closed, as a shared game closes a thread with a seat that is gone. By the
+// thread's own list of parties, each by its exact name. `player` is the
+// player's own name, never counted.
+export const chatWithEndedGroupsOnly = (chat, endedNames = [], player = "") => {
+  const ended = new Set((Array.isArray(endedNames) ? endedNames : []).map(fold).filter(Boolean));
+  if (!ended.size) return false;
+  const nameOf = (entry) => fold(typeof entry === "string" ? entry : (entry?.name || entry?.code));
+  const self = fold(player);
+  const others = (Array.isArray(chat?.countries) ? chat.countries : []).map(nameOf).filter((name) => name && name !== self);
+  return others.length > 0 && others.every((name) => ended.has(name));
+};
+
 // Rows naming a group the registry does not have are dropped: an area with no
 // group has no colour, no description, nothing to draw or tell.
 export const normalizeGroupAreas = (raw, groups) => {
@@ -190,9 +245,16 @@ export const normalizeGroupOp = (entry) => {
 // a line per change for the turn's record. Lenient where the model is likely to
 // be loose and the intent is plain: an update or a take naming a group nobody
 // has creates it; a create naming one that exists updates it.
-export const applyGroupOps = ({ groups = {}, groupAreas = {} } = {}, ops = []) => {
+//   defunctGroups   the groups that ended (normalizeDefunctGroups): a dissolve
+//                   keeps the record there (`date`, `eventId`), and only a
+//                   create brings one back. An update or a take naming an ended
+//                   group is refused: the story is not to raise it by accident.
+// A dissolve here is only the registry's part of a group's end; the game ends a
+// group through gameState.js dissolveGroup, which also clears what it leaves.
+export const applyGroupOps = ({ groups = {}, groupAreas = {}, defunctGroups = {} } = {}, ops = [], { date = "", eventId = "" } = {}) => {
   const nextGroups = normalizeGroups(groups);
   const nextAreas = normalizeGroupAreas(groupAreas, nextGroups);
+  const nextDefunct = normalizeDefunctGroups(defunctGroups, nextGroups);
   const changes = [];
   for (const raw of Array.isArray(ops) ? ops : []) {
     const op = normalizeGroupOp(raw);
@@ -201,6 +263,12 @@ export const applyGroupOps = ({ groups = {}, groupAreas = {} } = {}, ops = []) =
 
     if (op.op === "dissolve") {
       if (!key) continue;
+      const before = nextDefunct[key];
+      nextDefunct[key] = {
+        ...nextGroups[key],
+        dissolvedDate: clean(date).slice(0, 40),
+        sourceEventIds: [...new Set([...(before?.sourceEventIds ?? []), clean(eventId)].filter(Boolean))].slice(-DEFUNCT_GROUP_EVENT_IDS_MOST),
+      };
       delete nextGroups[key];
       for (const [regionId, name] of Object.entries(nextAreas)) if (name === key) delete nextAreas[regionId];
       changes.push({ op: "dissolve", name: key });
@@ -209,18 +277,27 @@ export const applyGroupOps = ({ groups = {}, groupAreas = {} } = {}, ops = []) =
 
     if (!key) {
       if (op.op === "release") continue;
+      const ended = findGroupKey(nextDefunct, op.name);
+      if (ended && op.op !== "create") {
+        changes.push({ op: "refused", name: ended, reason: "dissolved" });
+        continue;
+      }
       if (Object.keys(nextGroups).length >= MAX_GROUPS) {
         changes.push({ op: "refused", name: op.name, reason: "limit" });
         continue;
       }
-      key = op.name;
+      key = ended || op.name;
+      const past = ended ? nextDefunct[ended] : null;
+      if (ended) delete nextDefunct[ended];
+      const { dissolvedDate: _date, sourceEventIds: _ids, ...kept } = past ?? {};
       nextGroups[key] = {
+        ...kept,
         name: key,
-        description: op.description ?? "",
-        color: op.color || defaultGroupColor(key),
+        description: op.description ?? kept.description ?? "",
+        color: op.color || kept.color || defaultGroupColor(key),
         ...(op.owner ? { owner: op.owner } : {}),
       };
-      changes.push({ op: "create", name: key });
+      changes.push({ op: ended ? "restore" : "create", name: key });
     } else if ((op.description || op.color) && op.by !== "front") {
       // (What the front engine says of a force it founds is said once, when it founds it.)
       nextGroups[key] = {
@@ -256,7 +333,7 @@ export const applyGroupOps = ({ groups = {}, groupAreas = {} } = {}, ops = []) =
     for (const regionId of taken) nextAreas[regionId] = key;
     if (taken.length) changes.push({ op: "take", name: key, regionIds: taken });
   }
-  return { groups: nextGroups, groupAreas: nextAreas, changes };
+  return { groups: nextGroups, groupAreas: nextAreas, defunctGroups: nextDefunct, changes };
 };
 
 // ---- what the AI and the player are shown -----------------------------------

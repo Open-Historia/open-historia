@@ -18,7 +18,7 @@
 //
 // Every write goes through applyProjectOpsToWorld with actor "player", the door
 // that lets a government touch its own programmes only.
-import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import React, { createContext, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { APP_HEIGHT, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
 
 import { getNationFlags } from "../../runtime/assets.js";
@@ -53,6 +53,8 @@ import { ProjectFinancePanel } from "./projectFinance.jsx";
 import { projectFinanceSnapshot } from "../../runtime/projectFinance.js";
 import { projectOwnerOf, DAYS_PER_MONTH, dailyCostOf, estimateProjectFinish, ownerMeans, statMeasure } from "../../runtime/projectEngine.js";
 import { DEFAULT_STAT_INDEX_ROWS } from "../../runtime/statIndexDefinitions.js";
+import { loadStatSheetDefinition } from "../../runtime/statsSheet.js";
+import { statPathsOf } from "../../runtime/statPaths.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { uiString } from "../../runtime/translator.js";
 import { TAG_SEARCH_FROM, searchTags, stepTagFocus, tickedFirst } from "./projectTagMenu.js";
@@ -282,7 +284,27 @@ const STAT_LABELS = {
   "economy.publicDebt": "Public debt",
   "population.total": "Population",
 };
-const statLabel = (path) => {
+// The scenario's own names for its figures: a sheet of its own keeps them
+// under customStats, and "customStats.internalSecurity" is "Internal security"
+// (names, never keys). Provided via context so memoized ProjectCards and draft
+// previews re-render as soon as the definition loads or a scenario changes.
+const EMPTY_SHEET_LABELS = new Map();
+const SheetLabelsContext = createContext(EMPTY_SHEET_LABELS);
+const useSheetLabels = (isOpen) => {
+  const [labels, setLabels] = useState(EMPTY_SHEET_LABELS);
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    let live = true;
+    loadStatSheetDefinition().then((definition) => {
+      if (!live) return;
+      setLabels(new Map(statPathsOf({ definition }).filter((entry) => entry.label !== entry.path).map((entry) => [entry.path, entry.label])));
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [isOpen]);
+  return labels;
+};
+const statLabel = (path, labels = EMPTY_SHEET_LABELS) => {
+  if (String(path ?? "").startsWith("customStats.") && labels.has(path)) return labels.get(path);
   if (STAT_LABELS[path]) return uiString(STAT_LABELS[path]);
   const [head, key] = String(path ?? "").split(".");
   if (head === "indices") return uiString(DEFAULT_STAT_INDEX_ROWS.find((row) => row.key === key)?.label || key);
@@ -297,12 +319,12 @@ const changeText = (effect) => {
 };
 
 // One effect as the card says it.
-const describeEffectForPlayer = (effect, owner) => {
+const describeEffectForPlayer = (effect, owner, labels = EMPTY_SHEET_LABELS) => {
   if (!effect) return "";
   if (effect.type === "stat") {
     return effect.country && effect.country !== owner
-      ? uiString("{{country}}: {{stat}} {{change}}", { country: effect.country, stat: statLabel(effect.stat), change: changeText(effect) })
-      : `${statLabel(effect.stat)} ${changeText(effect)}`;
+      ? uiString("{{country}}: {{stat}} {{change}}", { country: effect.country, stat: statLabel(effect.stat, labels), change: changeText(effect) })
+      : `${statLabel(effect.stat, labels)} ${changeText(effect)}`;
   }
   if (effect.type === "relation") return uiString("Relations with {{country}} {{change}}", { country: effect.country, change: signed(effect.change) });
   if (effect.type === "structure") return uiString("Builds {{name}}", { name: effect.name });
@@ -415,9 +437,10 @@ const FundingSwitch = ({ busy, onSelect, value }) => (
 // costShown: the card says the cost already (at the project's own funding), so
 // the plan's is left out.
 const PlanFacts = ({ plan, owner, costShown = false, displayCurrency }) => {
+  const sheetLabels = useContext(SheetLabelsContext);
   if (!plan) return null;
-  const effects = (plan.effects ?? []).map((effect) => describeEffectForPlayer(effect, owner)).filter(Boolean);
-  const yields = (plan.yields ?? []).map((effect) => describeEffectForPlayer(effect, owner)).filter(Boolean);
+  const effects = (plan.effects ?? []).map((effect) => describeEffectForPlayer(effect, owner, sheetLabels)).filter(Boolean);
+  const yields = (plan.yields ?? []).map((effect) => describeEffectForPlayer(effect, owner, sheetLabels)).filter(Boolean);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginTop: "0.5rem" }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.8rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.8)" }}>
@@ -437,6 +460,49 @@ const PlanFacts = ({ plan, owner, costShown = false, displayCurrency }) => {
           <div data-no-translate style={{ marginTop: "0.15rem" }}>{yields.join(" · ")}</div>
         </div>
       )}
+    </div>
+  );
+};
+
+// What a finished project's effects came to (gameState.js
+// applyProjectOutcomesToWorld): carried out, waiting for a country's figures to
+// be read, or not carried out and why. Never left unsaid: "Project was completed
+// and the listed changes didn't happen" (a player, 2026-11-26).
+const EFFECT_REFUSAL_TEXT = {
+  noFigure: "its sheet has no such figure",
+  noSheet: "no figures are kept for that country",
+  sameCountry: "a country has no relations with itself",
+  noPlace: "it had no place on the map",
+  noChange: "too small to change anything",
+  noCountry: "no such country",
+};
+const EffectResults = ({ results, owner }) => {
+  const sheetLabels = useContext(SheetLabelsContext);
+  const list = Array.isArray(results) ? results : [];
+  if (!list.length) return null;
+  return (
+    <div style={{ marginTop: "0.5rem" }}>
+      <span style={smallLabel}>{uiString("What it did")}</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem", marginTop: "0.2rem" }}>
+        {list.map((row, index) => {
+          const shown = row.status === "applied" && Number.isFinite(row.change) ? { ...row.effect, change: row.change } : row.effect;
+          const text = describeEffectForPlayer(shown, owner, sheetLabels);
+          const mark = row.status === "applied" ? "✓" : row.status === "waiting" ? "…" : "✕";
+          const color = row.status === "applied" ? ACCENT : row.status === "waiting" ? "rgba(255,255,255,0.45)" : "#f87171";
+          const why = row.status === "waiting"
+            ? uiString("waits until those figures are read")
+            : row.status === "refused" ? uiString(EFFECT_REFUSAL_TEXT[row.reason] || "not carried out") : "";
+          return (
+            <div key={`${index}-${text}`} data-effect-result={row.status} style={{ display: "flex", fontSize: "0.7rem", gap: "0.4rem" }}>
+              <span aria-hidden="true" style={{ color, flexShrink: 0 }}>{mark}</span>
+              <span style={{ color: row.status === "applied" ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.55)", flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
+                <span data-no-translate>{text}</span>
+                {why && <span>{` — ${why}`}</span>}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 };
@@ -595,6 +661,7 @@ const ProjectCard = memo(({ project, fundingMode, displayCurrency, eventTitles, 
       )}
 
       {project.plan && <PlanFacts costShown displayCurrency={displayCurrency} owner={ownerKey} plan={project.plan} />}
+      <EffectResults owner={ownerKey} results={project.effectResults} />
       {project.plan && <Milestones plan={project.plan} />}
 
       {project.lastUpdate && (
@@ -1408,6 +1475,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   // going (projectEngine.js), worked out here from the world as it stands.
   const engineWorld = useMemo(() => ({ countryStats, projects, projectFundingMode }), [countryStats, projects, projectFundingMode]);
   const means = useMemo(() => ownerMeans(engineWorld, playerCountry, projects, playerCountry), [engineWorld, playerCountry, projects]);
+  const sheetLabels = useSheetLabels(isOpen);
   const financedOwners = useMemo(() => {
     if (!financing?.receipts?.length) return new Set();
     try {
@@ -1610,6 +1678,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   );
 
   return (
+    <SheetLabelsContext.Provider value={sheetLabels}>
     <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
       <div style={scrollAsOne
         ? { display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent" }
@@ -1631,7 +1700,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
           {means.mode === "nonmonetary" ? (
             <span>{uiString("Non-monetary project funding: time and capacity only; no GDP or cash payments required")}</span>
           ) : means.budget === null ? (
-            <span style={{ color: "#fbbf24" }}>{uiString("No native GDP baseline: paid projects cannot receive funding until assessed")}</span>
+            <span style={{ color: "#fbbf24" }}>{uiString("Economy not assessed yet: projects work at their planned pace, and nothing is paid until it is")}</span>
           ) : (
             <>
               <span>{uiString("Estimated project allowance: {{amount}} per month", { amount: formatMoney(means.budget, displayCurrency) })}</span>
@@ -1752,6 +1821,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
       </div>
       </div>{/* the phone scroller */}
     </div>
+    </SheetLabelsContext.Provider>
   );
 };
 
