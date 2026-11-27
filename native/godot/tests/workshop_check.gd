@@ -217,6 +217,7 @@ func _run() -> void:
 	await _shoot("ws-1-opened")
 	await _close_late_notice()
 	await _paint()
+	await _editor_v2()
 	await _countries()
 	await _city()
 	await _edit_tools()
@@ -264,6 +265,135 @@ func _paint() -> void:
 	_check("the scenario is marked unsaved", bool(status.get("scenarioDirty", false)))
 	await _shoot("ws-3-painted")
 	workshop.set_tool("select")
+
+
+func _key(code: Key) -> void:
+	var event := InputEventKey.new()
+	event.keycode = code
+	event.physical_keycode = code
+	event.pressed = true
+	root.push_input(event)
+	await _frames(1)
+	var up := event.duplicate() as InputEventKey
+	up.pressed = false
+	root.push_input(up)
+	await _frames(2)
+
+
+func _editor_v2() -> void:
+	var dock: Control = workshop._dock
+	_check("the tool dock floats over the map", dock != null and dock.is_visible_in_tree())
+	var tips: Array = []
+	for button in _find_type(dock, "Button"):
+		tips.append((button as Button).tooltip_text)
+	_check("the dock holds every tool with its key", tips.has("Scissors: select ONE region, then draw a line across it to split (double-click finishes; one Undo) (S)") and tips.has("Rectangle select regions (drag to select touched regions; Shift adds) (M)") and tips.has("Undo region edit") and tips.has("Fit map to all regions"), str(tips.size()))
+	_check("the dock names the current tool", _find_label(dock, "Select region") != null)
+	_check("the sidebar names the working map state", _find_label(workshop._footer, "Working map unsaved") != null or _find_label(workshop._footer, "Working map saved") != null)
+	await _shoot("ws-v2-1-dock")
+	await _key(KEY_M)
+	_check("M picks Rectangle select", workshop.tool == "region-box", workshop.tool)
+	_check("the sidebar explains Rectangle select", _find_label(workshop._sidebar, "Drag a rectangle to select every region touched; hold Shift to add to your current selection. Press M for Rectangle or L for Lasso.") != null)
+	var target := "FRA.1_1"
+	var centre := _screen_of_region(target)
+	workshop.set_selection([])
+	_mouse(centre - Vector2(4, 4), true)
+	await _frames(1)
+	_drag_to(centre - Vector2(4, 4), centre + Vector2(4, 4))
+	await _frames(1)
+	_mouse(centre + Vector2(4, 4), false)
+	await _until(func() -> bool: return workshop.selection.has(target), 10.0)
+	_check("a dragged rectangle selects the regions it touches", workshop.selection.has(target), str(workshop.selection))
+	await _shoot("ws-v2-2-rectangle")
+	workshop.set_selection([target])
+	await _key(KEY_S)
+	_check("S picks the Scissors", workshop.tool == "scissors", workshop.tool)
+	var before := workshop.map.ids.size()
+	var history: Dictionary = workshop.state.get("history", {})
+	var a := centre + Vector2(-170, -3)
+	var b := centre + Vector2(170, 3)
+	await _click(a)
+	await _click(b)
+	var twice := InputEventMouseButton.new()
+	twice.button_index = MOUSE_BUTTON_LEFT
+	twice.pressed = true
+	twice.double_click = true
+	twice.position = b
+	twice.global_position = b
+	root.push_input(twice)
+	await _frames(1)
+	_mouse(b, false)
+	await _until(func() -> bool: return workshop.map.ids.size() == before + 1, 15.0)
+	_check("the Scissors split the selected region in two", workshop.map.ids.size() == before + 1 and workshop.selection.size() == 2, "%d -> %d, %s" % [before, workshop.map.ids.size(), str(workshop.selection)])
+	await _shoot("ws-v2-3-scissors")
+	workshop.undo()
+	await _until(func() -> bool: return workshop.map.ids.size() == before, 15.0)
+	_check("one Undo puts the region back", workshop.map.ids.size() == before)
+	_say("history before the cut: %s" % str(history))
+	await _key(KEY_V)
+	_check("V picks Select", workshop.tool == "select")
+	workshop.choose_workspace("territory", "regions")
+	await _frames(4)
+	_check("Territory & borders opens Regions", workshop.open_panel == "regions" and _find_label(workshop._sidebar, "Region types") != null and _find_label(workshop._sidebar, "Copy or paste regions") != null)
+	await _shoot("ws-v2-4-territory")
+	workshop.activate_workspace_item("types")
+	await _frames(4)
+	_check("a workspace item opens its panel", workshop.open_panel == "types")
+	workshop.choose_workspace("overview", "")
+	await _frames(4)
+	_check("Overview shows the current map", workshop.open_panel.is_empty() and _find_label(workshop._sidebar, "Current map") != null)
+	await _shoot("ws-v2-5-overview")
+	workshop.choose_workspace("review", "")
+	await _frames(4)
+	_check("Review & save counts the scenario", _find_label(workshop._sidebar, "Review scenario authoring") != null and _find_button(workshop._sidebar, "Save changes to scenario") != null and _find_label(workshop._sidebar, "Starting units") != null)
+	for scroll in _find_type(workshop._sidebar, "ScrollContainer"):
+		(scroll as ScrollContainer).scroll_vertical = 100000
+	await _shoot("ws-v2-6-review")
+	workshop.choose_workspace("overview", "")
+	await _frames(2)
+	await _country_form()
+
+
+func _country_form() -> void:
+	workshop.open_panel_named("polities")
+	await _frames(6)
+	var open := _find_button(workshop._panel, "+ Create polity")
+	_check("the Polities panel offers + Create polity", open != null)
+	if open == null:
+		return
+	open.pressed.emit()
+	var ready := await _until(func() -> bool: return workshop._panel != null and _find_label(workshop._panel, "NEW POLITY · NOT YET CREATED") != null, 10.0)
+	_check("Create polity opens the polity setup", ready)
+	if not ready:
+		return
+	var form: Control = workshop._panel
+	await _shoot("ws-v2-7-create-identity")
+	form.set("tab", "review")
+	form.call("render")
+	await _frames(3)
+	_check("an unnamed polity cannot be created", _find_button(form, "Create polity") != null and _find_button(form, "Create polity").disabled)
+	await form.call("_patch", "name", "Free Testland", false)
+	form.set("draft", (form.get("draft") as Dictionary).merged({"aliases": ["Testland"], "population": "4600000"}, true))
+	await form.call("_replan")
+	form.set("tab", "relations")
+	form.call("render")
+	await _frames(3)
+	await _shoot("ws-v2-8-create-relations")
+	form.set("tab", "review")
+	form.call("render")
+	await _frames(3)
+	_check("the review lists what will be registered", _find_label(form, "Ready to create. Polity identity and relationships have passed preflight checks.") != null and _find_label(form, "Testland") != null and _find_label(form, "4,600,000") != null)
+	await _shoot("ws-v2-9-create-review")
+	var create := _find_button(form, "Create polity")
+	if create:
+		create.pressed.emit()
+	var made := await _until(func() -> bool: return ((workshop.state.get("doc", {}) as Dictionary).get("polities", {}) as Dictionary).has("Free Testland"), 10.0)
+	_check("Create polity registers the polity", made)
+	_check("the Polities panel comes back on the new polity", workshop._panel is WorkshopCountries and (workshop._panel as WorkshopCountries)._selected_key == "Free Testland")
+	workshop.undo()
+	await _until(func() -> bool: return not ((workshop.state.get("doc", {}) as Dictionary).get("polities", {}) as Dictionary).has("Free Testland"), 10.0)
+	_check("one Undo takes the new polity back", not ((workshop.state.get("doc", {}) as Dictionary).get("polities", {}) as Dictionary).has("Free Testland"))
+	workshop.close_panel()
+	await _frames(2)
 
 
 func _countries() -> void:

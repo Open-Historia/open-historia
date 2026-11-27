@@ -22,6 +22,7 @@ var _community_error := ""
 var _community_notice := ""
 var _hub_url := ""
 var _busy_id := ""
+var on_pick := Callable()
 
 
 func _init() -> void:
@@ -120,6 +121,10 @@ func _on_query(text: String) -> void:
 
 
 func _pick(value: Variant) -> void:
+	if on_pick.is_valid():
+		on_pick.call(value)
+		closed.emit()
+		return
 	await host.request("workshop.polity.flag", {"key": polity_key, "value": value})
 	closed.emit()
 
@@ -138,6 +143,11 @@ func _upload() -> void:
 	if scale < 1.0:
 		image.resize(maxi(1, int(round(image.get_width() * scale))), maxi(1, int(round(image.get_height() * scale))), Image.INTERPOLATE_LANCZOS)
 	var data_url := "data:image/png;base64," + Marshalls.raw_to_base64(image.save_png_to_buffer())
+	if on_pick.is_valid():
+		await host.request("workshop.flags.save", {"owner": "", "name": path.get_file().get_basename(), "dataUrl": data_url})
+		on_pick.call(data_url)
+		closed.emit()
+		return
 	await host.request("workshop.flags.save", {"owner": polity_key, "name": path.get_file().get_basename(), "dataUrl": data_url})
 	closed.emit()
 

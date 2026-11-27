@@ -12,6 +12,8 @@ signal dissolve_click(index: int, neighbour: int)
 signal paint_stroke(indices: PackedInt32Array)
 signal lasso_done(ring: Array)
 signal box_done(ids: PackedStringArray, additive: bool)
+signal region_box_done(corners: Array, additive: bool)
+signal scissors_drawn(points: Array)
 signal move_done(index: int, from: Vector2, to: Vector2)
 signal move_started(index: int)
 signal war_drawn(kind: String, coords: Array)
@@ -818,7 +820,10 @@ func _commit_sketch() -> void:
 	_sketch = []
 	_sketch_kind = ""
 	_overlay.queue_redraw()
-	if kind == "fortification":
+	if kind == "scissors":
+		if points.size() >= 2:
+			scissors_drawn.emit(points)
+	elif kind == "fortification":
 		if points.size() >= 2:
 			war_drawn.emit(kind, points)
 	elif points.size() >= 3:
@@ -1183,10 +1188,10 @@ func _press(button: InputEventMouseButton) -> void:
 		if tool == "draw":
 			_finish_draw()
 			return
-		if tool in ["terrain", "fortification", "climate"]:
+		if tool in ["terrain", "fortification", "climate", "scissors"]:
 			_commit_sketch()
 			return
-		if tool == "lasso":
+		if tool in ["lasso", "region-box"]:
 			return
 		if tool == "select":
 			var hit := pick(button.position)
@@ -1216,6 +1221,9 @@ func _press(button: InputEventMouseButton) -> void:
 			_lasso = PackedVector2Array([button.position])
 		"feature-box":
 			_drag = "box"
+			_box = Rect2(button.position, Vector2.ZERO)
+		"region-box":
+			_drag = "region_box"
 			_box = Rect2(button.position, Vector2.ZERO)
 		"modify", "border":
 			var handle := _edit_hit(button.position)
@@ -1278,7 +1286,7 @@ func _draw_move_preview(canvas: Control) -> void:
 
 func _update_cursor(point: Vector2) -> void:
 	var shape := Control.CURSOR_ARROW
-	if tool in ["lasso", "draw", "modify", "border", "paint", "feature-box", "terrain", "fortification", "climate"]:
+	if tool in ["lasso", "region-box", "draw", "scissors", "modify", "border", "paint", "feature-box", "terrain", "fortification", "climate"]:
 		shape = Control.CURSOR_CROSS
 	elif tool in ["feature", "marker", "delete", "unit"]:
 		if not point_at(point, ["unit", "feature"], 8.0).is_empty() or (tool == "delete" and pick(point) >= 0):
@@ -1303,7 +1311,7 @@ func _motion(motion: InputEventMouseMotion) -> void:
 			if _scale_start != null:
 				scale_hover.emit(_scale_start, _scale_lonlat(motion.position))
 			_overlay.queue_redraw()
-		elif tool in ["terrain", "fortification", "climate"] and not _sketch.is_empty():
+		elif tool in ["terrain", "fortification", "climate", "scissors"] and not _sketch.is_empty():
 			_overlay.hover = motion.position
 			_overlay.queue_redraw()
 		elif tool == "draw":
@@ -1334,7 +1342,7 @@ func _motion(motion: InputEventMouseMotion) -> void:
 		"lasso":
 			_lasso.append(motion.position)
 			_overlay.queue_redraw()
-		"box":
+		"box", "region_box":
 			_box = Rect2(_drag_start, motion.position - _drag_start).abs()
 			_overlay.queue_redraw()
 		"move":
@@ -1385,6 +1393,17 @@ func _release(button: InputEventMouseButton) -> void:
 			_box = Rect2()
 			_overlay.queue_redraw()
 			box_done.emit(picked, button.shift_pressed)
+		"region_box":
+			var area := _box
+			_box = Rect2()
+			_overlay.queue_redraw()
+			if _drag_distance < 5.0:
+				return
+			var corners: Array = []
+			for corner in [area.position, Vector2(area.end.x, area.position.y), area.end, Vector2(area.position.x, area.end.y)]:
+				var lonlat := world_to_lonlat(screen_to_world(corner))
+				corners.append([lonlat.x, lonlat.y])
+			region_box_done.emit(corners, button.shift_pressed)
 		"move":
 			var from := world_to_lonlat(screen_to_world(_move_line[0]))
 			var to := world_to_lonlat(screen_to_world(button.position))
@@ -1504,6 +1523,13 @@ func _click(button: InputEventMouseButton) -> void:
 				scale_sketch_label = ""
 				scale_drawn.emit(from, lonlat)
 			_overlay.queue_redraw()
+		"scissors":
+			if button.shift_pressed or button.ctrl_pressed or button.alt_pressed or button.meta_pressed:
+				return
+			var lonlat := world_to_lonlat(screen_to_world(point))
+			_sketch_kind = tool
+			_sketch.append([lonlat.x, lonlat.y])
+			_overlay.queue_redraw()
 		"terrain", "fortification", "climate":
 			if _sketch.is_empty():
 				var shape := war_shape_near(point, [tool])
@@ -1614,7 +1640,7 @@ func _draw_overlay(canvas: Control) -> void:
 		if canvas is Overlay and (canvas as Overlay).hover != Vector2.ZERO:
 			hover = (canvas as Overlay).hover
 			line.append(hover)
-		_sketch_shape(canvas, line, _sketch_kind != "fortification", hover)
+		_sketch_shape(canvas, line, _sketch_kind not in ["fortification", "scissors"], hover)
 	if not scale_line.is_empty():
 		_draw_scale_line(canvas, screen_of(scale_line["from"]), screen_of(scale_line["to"]), str(scale_line.get("label", "")))
 	if tool == "scale":

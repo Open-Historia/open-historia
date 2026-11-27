@@ -6,7 +6,6 @@ var _query := ""
 var _selected_key := ""
 var _bulk := {}
 var _draft_name := ""
-var _new_name := ""
 var _transfer_from := ""
 var _usage: Array = []
 var _usage_map := {}
@@ -55,6 +54,7 @@ func setup(workshop: Workshop) -> void:
 	_create_box = VBoxContainer.new()
 	_create_box.add_theme_constant_override("separation", 6)
 	body.add_child(_create_box)
+	body.move_child(_create_box, 0)
 	await _reload()
 
 
@@ -747,25 +747,13 @@ func _fill_standard_flags() -> void:
 
 func _render_create() -> void:
 	WorkshopUI.clear(_create_box)
-	_create_box.add_child(WorkshopUI.rule())
-	_create_box.add_child(UI.label("Create country", 12, Color(1, 1, 1), 700))
-	var count := host.selection.size()
-	var create := WorkshopUI.pill(("Create country + assign %d selected regions" % count) if count > 0 else "Create country (no regions yet)")
-	create.disabled = _new_name.strip_edges().is_empty()
-	var name_edit := WorkshopUI.input(_new_name, "Name, e.g. Austria-Hungary", func(text: String) -> void:
-		_new_name = text
-		create.disabled = text.strip_edges().is_empty(), 13.6, 34.0)
-	_create_box.add_child(name_edit)
-	create.pressed.connect(func() -> void:
-		var name := _new_name.strip_edges()
-		if name.is_empty():
-			return
-		var reply := await host.request("workshop.polity.create", {"name": name, "assign": host.selection})
-		if reply.has("refused"):
-			await host.alert(str(reply["refused"]))
-			return
-		_selected_key = name
-		_draft_name = name
-		_new_name = ""
-		await _reload())
-	_create_box.add_child(create)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var title_text := UI.label("Find a polity", WorkshopUI.font_size(12.5), Color(1, 1, 1), 700)
+	title_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_text.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(title_text)
+	var create := WorkshopUI.pill("+ Create polity", true)
+	create.pressed.connect(host.open_country_form)
+	row.add_child(create)
+	_create_box.add_child(row)

@@ -14,32 +14,40 @@ const SIDE_KEY := "oh-map-editor-sidebar-side"
 const CLEAN_KEY := "oh_editor_border_clean"
 
 const TOOL_GROUPS := [
-	{"label": "Select", "tools": [
-		{"id": "select", "icon": "select", "label": "Select"},
-		{"id": "lasso", "icon": "lasso", "label": "Lasso select (drag to circle regions)"},
-		{"id": "pan", "icon": "pan", "label": "Pan"},
+	{"label": "Select & navigate", "tools": [
+		{"id": "select", "icon": "select", "label": "Select region (click; Shift-click adds, double-click selects polity)", "hotkey": "V"},
+		{"id": "region-box", "icon": "boxSelect", "label": "Rectangle select regions (drag to select touched regions; Shift adds)", "hotkey": "M"},
+		{"id": "lasso", "icon": "lasso", "label": "Lasso select regions (draw a freehand area)", "hotkey": "L"},
+		{"id": "pan", "icon": "pan", "label": "Pan the map", "hotkey": "H"},
 	]},
-	{"label": "Edit", "tools": [
-		{"id": "draw", "icon": "split", "label": "Draw region (click a border to trace along it)"},
-		{"id": "modify", "icon": "modify", "label": "Edit vertices (select regions first; snap + undo enabled)"},
-		{"id": "border", "icon": "merge", "label": "Shared border precision (select exactly 2 neighbouring regions)"},
-		{"id": "move", "icon": "move", "label": "Move"},
-		{"id": "delete", "icon": "trash", "label": "Delete (click a region)"},
-		{"id": "dissolve", "icon": "eraser", "label": "Delete border (merge two regions)"},
-		{"id": "paint", "icon": "paint", "label": "Paint polity (click or drag across regions; one stroke = one undo)"},
+	{"label": "Draw & edit borders", "tools": [
+		{"id": "draw", "icon": "split", "label": "Draw region (click a border to trace along it)", "hotkey": "D"},
+		{"id": "scissors", "icon": "scissors", "label": "Scissors: select ONE region, then draw a line across it to split (double-click finishes; one Undo)", "hotkey": "S"},
+		{"id": "modify", "icon": "modify", "label": "Edit vertices (select regions first; snap + undo enabled)", "hotkey": "A"},
+		{"id": "border", "icon": "merge", "label": "Shared border precision (select exactly 2 neighbouring regions)", "hotkey": "J"},
+		{"id": "dissolve", "icon": "eraser", "label": "Delete border (merge two regions)", "hotkey": "E"},
+		{"id": "delete", "icon": "trash", "label": "Delete region (click a region)", "hotkey": "X"},
 	]},
-	{"label": "On the map", "tools": [
-		{"id": "feature", "icon": "feature", "label": "City tool (click map to add a city, click a city to edit it)"},
-		{"id": "marker", "icon": "pin", "label": "Map feature tool (click the map to place a base, port, landmark or other feature; click one to edit it)"},
-		{"id": "unit", "icon": "unit", "label": "Unit tool (click the map to place a starting unit, click a unit to edit it)"},
-		{"id": "feature-box", "icon": "boxSelect", "label": "Box-select features (drag a rectangle over cities and features to select them all)"},
+	{"label": "Move & paint", "tools": [
+		{"id": "move", "icon": "move", "label": "Move selected regions together (drag any selected region; one undo)", "hotkey": "B"},
+		{"id": "paint", "icon": "paint", "label": "Paint polity (click or drag across regions; one stroke = one undo)", "hotkey": "P"},
 	]},
-	{"label": "War map", "tools": [
-		{"id": "terrain", "icon": "mountain", "label": "Terrain (draw an area troops cross more slowly; click an outline to pick one)"},
-		{"id": "fortification", "icon": "wall", "label": "Fortified line (draw a wall troops have to break through; click a line to pick one)"},
-		{"id": "climate", "icon": "climate", "label": "Climate zone (draw an area with its own seasons and weather; click an outline to pick one)"},
+	{"label": "Places & units", "tools": [
+		{"id": "feature", "icon": "feature", "label": "City tool (click map to add a city, click a city to edit it)", "hotkey": "C"},
+		{"id": "marker", "icon": "pin", "label": "Map feature tool (click the map to place a base, port, landmark or other feature; click one to edit it)", "hotkey": "K"},
+		{"id": "unit", "icon": "unit", "label": "Unit tool (click the map to place a starting unit, click one to edit it)", "hotkey": "U"},
+		{"id": "feature-box", "icon": "boxSelect", "label": "Rectangle select cities & features (drag to select; Shift adds)", "hotkey": "F"},
+	]},
+	{"label": "War geography", "tools": [
+		{"id": "terrain", "icon": "mountain", "label": "Terrain (draw an area troops cross more slowly; click an outline to pick one)", "hotkey": "T"},
+		{"id": "fortification", "icon": "wall", "label": "Fortified line (draw a wall troops have to break through; click a line to pick one)", "hotkey": "G"},
+		{"id": "climate", "icon": "climate", "label": "Climate zone (draw an area with its own seasons and weather; click an outline to pick one)", "hotkey": "W"},
 	]},
 ]
+
+const WorkshopNav := preload("res://scripts/editor/workshop_nav.gd")
+const WorkshopToolDock := preload("res://scripts/editor/workshop_tool_dock.gd")
+const WorkshopCountryCreate := preload("res://scripts/editor/workshop_country_create.gd")
 
 const WAR_TOOL_HINTS := {
 	"terrain": "Click to draw an area and double-click to finish (shift-drag draws freehand). Click an outline to pick an area, drag its points to reshape it, and press Delete to remove it.",
@@ -48,8 +56,8 @@ const WAR_TOOL_HINTS := {
 }
 
 const SAVE := {
-	"saved": {"color": "#22c55e", "label": "All saved"},
-	"dirty": {"color": "#f59e0b", "label": "Unsaved changes"},
+	"saved": {"color": "#22c55e", "label": "Working map saved"},
+	"dirty": {"color": "#f59e0b", "label": "Working map unsaved"},
 	"saving": {"color": "#f59e0b", "label": "Saving…"},
 	"error": {"color": "#ef4444", "label": "Save failed"},
 }
@@ -111,6 +119,8 @@ var _scale_serial := 0
 var _scale_hover_busy := false
 var _scale_hover_next: Variant = null
 var _picture_setup: Control
+var selected_workspace := "overview"
+var _dock: Control
 
 
 func setup(engine_link: EngineLink, setup_context: Dictionary) -> void:
@@ -181,6 +191,7 @@ func _check_fmg() -> void:
 		_fmg_info = reply["result"]
 		_fmg_tab.visible = true
 		_layout()
+		_render_panels_nav()
 
 
 func toggle_fmg() -> void:
@@ -374,6 +385,8 @@ func _build() -> void:
 	map.paint_stroke.connect(_on_paint_stroke)
 	map.lasso_done.connect(_on_lasso)
 	map.box_done.connect(_on_box)
+	map.region_box_done.connect(_on_region_box)
+	map.scissors_drawn.connect(_on_scissors)
 	map.move_done.connect(_on_move)
 	map.move_started.connect(_on_move_started)
 	map.war_drawn.connect(_on_war_drawn)
@@ -406,6 +419,10 @@ func _build() -> void:
 		sidebar_hidden = not sidebar_hidden
 		_layout())
 	add_child(_hide_tab)
+	_dock = WorkshopToolDock.new()
+	_dock.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(_dock)
+	_dock.call("setup", self)
 	_inspector = WorkshopInspector.new()
 	_inspector.visible = false
 	add_child(_inspector)
@@ -487,6 +504,8 @@ func _layout() -> void:
 	_place_panel()
 	_place_inspector()
 	_place_picture_setup()
+	if _dock:
+		_dock.call("place")
 
 
 func _place_panel() -> void:
@@ -651,9 +670,20 @@ func _tool_meta(id: String) -> Dictionary:
 
 
 func _render_tools() -> void:
+	if _dock and is_instance_valid(_dock):
+		_dock.call("render")
 	if not _tools_box:
 		return
 	WorkshopUI.clear(_tools_box)
+	var current := _tool_meta(tool)
+	var inner_probe := VBoxContainer.new()
+	_render_tool_options(inner_probe)
+	_tools_box.visible = inner_probe.get_child_count() > 0 and not current.is_empty()
+	if not _tools_box.visible:
+		inner_probe.free()
+		_undo_button = null
+		_redo_button = null
+		return
 	var head := HBoxContainer.new()
 	head.add_theme_constant_override("separation", 8)
 	var title := WorkshopUI.section_label("Tools")
@@ -678,26 +708,6 @@ func _render_tools() -> void:
 	head.add_child(fit)
 	_tools_box.add_child(head)
 	_render_history(history)
-	for group in TOOL_GROUPS:
-		var block := VBoxContainer.new()
-		block.add_theme_constant_override("separation", 5)
-		block.add_child(UI.label(str((group as Dictionary)["label"]), 12, Color(1, 1, 1, 0.55), 600))
-		var grid := GridContainer.new()
-		grid.columns = 6
-		grid.add_theme_constant_override("h_separation", 4)
-		grid.add_theme_constant_override("v_separation", 4)
-		for entry in (group as Dictionary)["tools"]:
-			var meta: Dictionary = entry
-			var id := str(meta["id"])
-			var button := WorkshopUI.tool_button(str(meta["icon"]), tool == id, str(meta["label"]))
-			button.custom_minimum_size = Vector2(34, 36)
-			button.pressed.connect(func() -> void: set_tool(id))
-			grid.add_child(button)
-		block.add_child(grid)
-		_tools_box.add_child(block)
-	var current := _tool_meta(tool)
-	if current.is_empty():
-		return
 	var parts := WorkshopUI.card(12, WorkshopUI.CARD, Color(1, 1, 1, 0.08), Vector4(11, 10, 11, 10), 8)
 	var card: PanelContainer = parts[0]
 	var inner: VBoxContainer = parts[1]
@@ -711,12 +721,17 @@ func _render_tools() -> void:
 	caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	line.add_child(caption)
 	inner.add_child(line)
-	_render_tool_options(inner)
+	for child in inner_probe.get_children():
+		inner_probe.remove_child(child)
+		inner.add_child(child)
+	inner_probe.free()
 	_tools_box.add_child(card)
 
 
 func _render_history(history: Dictionary) -> void:
-	if not _undo_button:
+	if _dock and is_instance_valid(_dock):
+		_dock.call("render_history", history)
+	if not _undo_button or not is_instance_valid(_undo_button):
 		return
 	var can_undo := bool(history.get("canUndo", false))
 	var can_redo := bool(history.get("canRedo", false))
@@ -822,7 +837,11 @@ func _render_tool_options(inner: VBoxContainer) -> void:
 		var text := "drag a border vertex or edge on either selected region; the released point is welded into BOTH regions · cyan halo = shared-border magnet · Alt-click removes the corresponding shared vertex · a 100 m topology check runs after each edit · Ctrl/Cmd+Z undo" if count == 2 else "select exactly 2 neighbouring regions first (%d selected)" % count
 		inner.add_child(_tool_note("Shared border precision:", text, Color(1, 1, 1, 0.74) if count == 2 else Color("#fbbf24")))
 	elif tool == "select":
-		inner.add_child(WorkshopUI.wrap("Click a region to select it, Shift-click to add more, and double-click to select its whole country.", 12, Color(1, 1, 1, 0.7)))
+		inner.add_child(WorkshopUI.wrap("Click a region to select it, Shift-click to add more, and double-click to select its whole polity.", 12, Color(1, 1, 1, 0.7)))
+	elif tool == "region-box":
+		inner.add_child(WorkshopUI.wrap("Drag a rectangle to select every region touched; hold Shift to add to your current selection. Press M for Rectangle or L for Lasso.", 12, Color(1, 1, 1, 0.7)))
+	elif tool == "move":
+		inner.add_child(WorkshopUI.wrap("Drag a selected region to move all selected regions together as one Undo step. Drag an unselected region to move it alone; this may create border gaps against unmoved neighbours.", 12, Color(1, 1, 1, 0.7)))
 
 
 func _tool_note(lead: String, text: String, color: Color) -> RichTextLabel:
@@ -885,54 +904,34 @@ func _update_war_visibility() -> void:
 func _render_panels_nav() -> void:
 	if not _panels_box:
 		return
-	WorkshopUI.clear(_panels_box)
-	_panels_box.add_child(WorkshopUI.section_label("Panels"))
-	var doc: Dictionary = state.get("doc", {})
-	var counts: Dictionary = doc.get("counts", {})
-	var metadata: Dictionary = doc.get("metadata", {})
-	var basemap_label := "Custom" if metadata.get("customBackground") != null else str(BASEMAP_LABELS.get(str(metadata.get("basemap", "ocean")), ""))
-	var tiled: Variant = metadata.get("tiledBasemap")
-	var detailed_label := str((tiled as Dictionary).get("name", "")) if tiled is Dictionary else ""
-	var groups := [
-		{"label": "Map", "items": [
-			{"id": "regions", "icon": "list", "label": "Regions", "count": int(counts.get("regions", 0))},
-			{"id": "polities", "icon": "flag", "label": "Countries", "count": int(doc.get("polityCount", 0))},
-			{"id": "groups", "icon": "users", "label": "Groups", "count": int(doc.get("groupCount", 0))},
-			{"id": "types", "icon": "types", "label": "Region Types", "count": int(counts.get("types", 0))},
-			{"id": "features", "icon": "pin", "label": "Map features", "count": int(counts.get("features", 0))},
-			{"id": "units", "icon": "unit", "label": "Units", "count": int(counts.get("units", 0))},
-			{"id": "war", "icon": "mountain", "label": "War map", "count": -1},
-		]},
-		{"label": "View", "items": [
-			{"id": "basemap", "icon": "map", "label": "Basemap", "value": basemap_label, "run": true},
-			{"id": "detailed", "icon": "image", "label": "Detailed map", "value": detailed_label, "run": true},
-			{"id": "layers", "icon": "layers", "label": "Layers", "count": -1},
-			{"id": "reference", "icon": "image", "label": "Reference", "count": -1},
-			{"id": "projection", "icon": "globe", "label": "Projection", "count": -1},
-		]},
-		{"label": "Import", "items": ([{"id": "suggestions", "icon": "review", "label": "Suggested changes", "count": int(review.get("total", 0)) - int(review.get("settled", 0))}] if bool(review.get("active", false)) else []) + [
-			{"id": "province-import", "icon": "upload", "label": "Import Map", "count": -1},
-			{"id": "clipboard", "icon": "copy", "label": "Clipboard", "count": int(doc.get("clipboardCount", 0))},
-		]},
-	]
-	for group in groups:
-		var block := VBoxContainer.new()
-		block.add_theme_constant_override("separation", 2)
-		var label_holder := MarginContainer.new()
-		label_holder.add_theme_constant_override("margin_bottom", 3)
-		label_holder.add_child(UI.label(str((group as Dictionary)["label"]), 12, Color(1, 1, 1, 0.55), 600))
-		block.add_child(label_holder)
-		for entry in (group as Dictionary)["items"]:
-			var item: Dictionary = entry
-			var id := str(item["id"])
-			var runs := bool(item.get("run", false))
-			var button := WorkshopUI.nav_item(str(item["icon"]), str(item["label"]), str(item.get("value", "")), int(item.get("count", -1)), not runs and open_panel == id)
-			if runs:
-				button.pressed.connect(open_basemaps)
-			else:
-				button.pressed.connect(func() -> void: toggle_panel(id))
-			block.add_child(button)
-		_panels_box.add_child(block)
+	WorkshopNav.render(self, _panels_box)
+
+
+func generator_available() -> bool:
+	return not _fmg_info.is_empty()
+
+
+func choose_workspace(id: String, panel: String) -> void:
+	selected_workspace = id
+	activate_workspace_item(panel)
+
+
+func activate_workspace_item(id: String) -> void:
+	if id == "basemap":
+		if not open_panel.is_empty():
+			close_panel()
+		open_basemaps()
+	elif id == "generator":
+		if not open_panel.is_empty():
+			close_panel()
+		if not _fmg_open:
+			toggle_fmg()
+	elif id.is_empty():
+		if not open_panel.is_empty():
+			close_panel()
+	elif open_panel != id:
+		open_panel_named(id)
+	_render_panels_nav()
 
 
 func _render_footer() -> void:
@@ -972,14 +971,19 @@ func _render_footer() -> void:
 	else:
 		line.add_child(dot)
 		line.add_child(UI.label(str(save["label"]), 12, Color(1, 1, 1, 0.8)))
+	_footer.add_child(line)
 	if bool(status.get("scenarioDirty", false)):
-		line.add_child(UI.spacer())
 		var badge := PanelContainer.new()
 		badge.add_theme_stylebox_override("panel", UI.box(Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.12), Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.35), 999, 1, Vector4(8, 3, 8, 3)))
 		badge.tooltip_text = "The editor document may be autosaved, but these changes have not yet been written into the scenario."
 		badge.add_child(UI.label("Scenario unsaved", 11, Color("#fbbf24"), 700))
-		line.add_child(badge)
-	_footer.add_child(line)
+		badge.size_flags_horizontal = Control.SIZE_SHRINK_END
+		var room := SIDEBAR_WIDTH - 24.0
+		if line.get_combined_minimum_size().x + 8.0 + badge.get_combined_minimum_size().x <= room:
+			line.add_child(UI.spacer())
+			line.add_child(badge)
+		else:
+			_footer.add_child(badge)
 	var action := _busy_action if not _busy_action.is_empty() else str(status.get("action", ""))
 	var dim := not action.is_empty() or not hydrated
 	var tip := "The scenario’s map is still loading" if not hydrated else ""
@@ -1251,6 +1255,26 @@ func _on_lasso(ring: Array) -> void:
 		set_selection((reply["result"] as Dictionary).get("ids", []))
 
 
+func _on_region_box(corners: Array, additive: bool) -> void:
+	var reply := await request_raw("workshop.regionBox", {"corners": corners, "current": selection, "additive": additive})
+	if reply.get("ok", false):
+		set_selection((reply["result"] as Dictionary).get("ids", []))
+
+
+func _on_scissors(points: Array) -> void:
+	if selection.size() != 1:
+		await alert("Scissors needs exactly one selected region. Select a region first, then draw a line across both of its borders.")
+		return
+	var reply := await request("workshop.regions.scissors", {"regionId": selection[0], "points": points})
+	if reply.has("refused"):
+		await alert(str(reply["refused"]))
+
+
+func _move_ids(index: int) -> Array:
+	var id := map.ids[index]
+	return selection.duplicate() if selection.has(id) else [id]
+
+
 func _on_box(ids: PackedStringArray, additive: bool) -> void:
 	var next: Array = []
 	if additive:
@@ -1273,7 +1297,7 @@ func set_feature_selection(ids: Array) -> void:
 func _on_move_started(index: int) -> void:
 	if index < 0 or index >= map.ids.size():
 		return
-	var reply := await request_raw("workshop.edit.rings", {"ids": [map.ids[index]]})
+	var reply := await request_raw("workshop.edit.rings", {"ids": _move_ids(index)})
 	if reply.get("ok", false) and map._move_line.size() == 2:
 		map.move_rings = (reply["result"] as Dictionary).get("rings", [])
 		map.redraw()
@@ -1282,7 +1306,7 @@ func _on_move_started(index: int) -> void:
 func _on_move(index: int, from: Vector2, to: Vector2) -> void:
 	if index < 0 or index >= map.ids.size():
 		return
-	await request("workshop.regions.move", {"ids": [map.ids[index]], "from": [from.x, from.y], "to": [to.x, to.y]})
+	await request("workshop.regions.move", {"ids": _move_ids(index), "from": [from.x, from.y], "to": [to.x, to.y]})
 
 
 func _on_map_click(lonlat: Vector2, screen: Vector2, index: int) -> void:
@@ -1566,10 +1590,35 @@ func open_basemaps() -> void:
 	picker.setup(self)
 
 
-func open_flag_picker(key: String) -> void:
+func open_flag_picker(key: String, on_pick := Callable()) -> void:
 	var picker := WorkshopFlags.new()
+	picker.on_pick = on_pick
 	_overlays.add_child(picker)
 	picker.setup(self, key)
+
+
+func open_country_form() -> void:
+	if _panel and is_instance_valid(_panel):
+		_panel.queue_free()
+	var shell := WorkshopCountryCreate.new()
+	add_child(shell)
+	move_child(shell, _inspector.get_index())
+	shell.closed.connect(open_panel_named.bind("polities"))
+	shell.created.connect(_on_country_created)
+	_panel = shell
+	open_panel = "polities"
+	_place_panel()
+	_render_panels_nav()
+	shell.call("setup", self)
+
+
+func _on_country_created(key: String) -> void:
+	open_panel_named("polities")
+	var countries := _panel as WorkshopCountries
+	if countries:
+		countries._selected_key = key
+		countries._draft_name = key
+		await countries._reload()
 
 
 func _toggle_settings(anchor: Control) -> void:
@@ -1757,6 +1806,17 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			map.undo_sketch_point()
 			return
+	if tool == "scissors" and map.is_sketching():
+		if key.keycode == KEY_ESCAPE:
+			get_viewport().set_input_as_handled()
+			map.abort_sketch()
+			return
+		if key.keycode == KEY_BACKSPACE or key.keycode == KEY_DELETE:
+			get_viewport().set_input_as_handled()
+			map.undo_sketch_point()
+			return
+	if _tool_hotkey(key):
+		return
 	if tool in ["terrain", "fortification", "climate"]:
 		if key.keycode == KEY_ESCAPE:
 			get_viewport().set_input_as_handled()
@@ -1784,6 +1844,23 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		var ids := selection.duplicate()
 		await request("workshop.regions.delete", {"ids": ids})
 		set_selection([])
+
+
+func _tool_hotkey(key: InputEventKey) -> bool:
+	if key.ctrl_pressed or key.meta_pressed or key.alt_pressed or key.shift_pressed or key.echo:
+		return false
+	if map.is_sketching() or (_popup and is_instance_valid(_popup)):
+		return false
+	var letter := OS.get_keycode_string(key.keycode).to_upper()
+	if letter.length() != 1:
+		return false
+	for group in TOOL_GROUPS:
+		for entry in (group as Dictionary)["tools"]:
+			if str((entry as Dictionary)["hotkey"]) == letter:
+				get_viewport().set_input_as_handled()
+				set_tool(str(entry["id"]))
+				return true
+	return false
 
 
 func paste_clipboard(simplify: bool) -> Dictionary:

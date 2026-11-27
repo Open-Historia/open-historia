@@ -555,7 +555,13 @@ export const register = (ctx) => {
     try {
       const renamed = rename.renamePolityInDocument(s.doc, from, to);
       const fromKey = rename.findPolityKey(s.doc.polities, from) || from;
-      s.doc = { ...renamed, polityRenames: [...(Array.isArray(s.doc.polityRenames) ? s.doc.polityRenames : []), { from: fromKey, to }] };
+      s.doc = {
+        ...renamed,
+        relations: engine.wsStartingRelations.rekeyStartingRelations(s.doc.relations, fromKey, to),
+        relationEdits: engine.wsStartingRelations.rekeyStartingRelations(s.doc.relationEdits, fromKey, to),
+        actorGovernmentEdits: engine.wsGovernmentEdits.rekeyGovernmentEdits(s.doc.actorGovernmentEdits, fromKey, to),
+        polityRenames: [...(Array.isArray(s.doc.polityRenames) ? s.doc.polityRenames : []), { from: fromKey, to }],
+      };
     } catch (error) {
       console.warn("[editor] polity rename refused:", error);
     }
@@ -575,7 +581,14 @@ export const register = (ctx) => {
       delete flags[stableKey];
       delete tags[stableKey];
     }
-    s.doc = { ...s.doc, polities, colorOverrides, flags, tags, puppets: engine.wsPuppets.withoutPolities(s.doc.puppets, stableKeys.length === 1 ? stableKeys[0] : stableKeys) };
+    const removed = stableKeys.length === 1 ? stableKeys[0] : stableKeys;
+    s.doc = {
+      ...s.doc, polities, colorOverrides, flags, tags, puppets: engine.wsPuppets.withoutPolities(s.doc.puppets, removed),
+      relations: engine.wsStartingRelations.withoutStartingRelations(s.doc.relations, removed,
+        Object.entries(s.doc.polities || {}).map(([key, record]) => ({ key, ...record }))),
+      relationEdits: engine.wsStartingRelations.withoutStartingRelations(s.doc.relationEdits, removed),
+      actorGovernmentEdits: engine.wsGovernmentEdits.removeGovernmentEdits(s.doc.actorGovernmentEdits, removed),
+    };
     dirty(s);
   };
 
@@ -1102,6 +1115,7 @@ export const register = (ctx) => {
       units: Array.isArray(world.units) ? world.units : [],
       markers: Array.isArray(world.markers) ? world.markers : [],
       puppets: Array.isArray(world.puppets) ? world.puppets : [],
+      relations: Array.isArray(world.relations) ? world.relations : [],
       regionTypes: Array.isArray(world.regionTypes) && world.regionTypes.length ? world.regionTypes : null,
       militaryDefaults: engine.wsMilitaryForm.militaryDefaultsFor(warSettings === undefined ? world.warSettings : warSettings, gameDate, { rules: world.simulationRules }),
       ...engine.wsWarGeography.warGeographyOf(world),
@@ -1122,6 +1136,9 @@ export const register = (ctx) => {
     if (initialMap.polities && typeof initialMap.polities === "object") base.polities = structuredClone(initialMap.polities);
     base.groups = groupsLib.normalizeGroups(initialMap.groups);
     base.puppets = Array.isArray(initialMap.puppets) ? structuredClone(initialMap.puppets) : [];
+    base.relations = Array.isArray(initialMap.relations) ? structuredClone(initialMap.relations) : [];
+    base.relationEdits = [];
+    base.actorGovernmentEdits = [];
     Object.assign(base, engine.wsWarGeography.warGeographyOf(initialMap));
     const regionTypes = typesLib.normalizeRegionTypes(initialMap.regionTypes);
     if (regionTypes.length) base.types = regionTypes;
@@ -1783,10 +1800,36 @@ export const register = (ctx) => {
     if (seedRegionCount === 0 && hadTerritory) {
       throw new Error("The map in the editor is empty while this scenario has territory — its map had not finished loading. Wait for it to appear, then save again.");
     }
+    const editedRelations = Array.isArray(seed.startingRelationEdits) ? seed.startingRelationEdits : [];
+    const removedKeys = (Array.isArray(seed.polityAuthoringOps) ? seed.polityAuthoringOps : [])
+      .filter((operation) => operation?.op === "remove")
+      .map((operation) => String(operation.key || "").trim()).filter(Boolean);
+    const previousChoices = Object.entries(currentWorld.polityOverrides || {})
+      .map(([key, record]) => ({ key, ...(record || {}) }));
+    const currentChoices = [...new Set([
+      ...Object.keys(reconciledWorld.polityOverrides || {}),
+      ...Object.keys(seed.world?.polityOverrides || {}),
+      ...Object.values(seed.world?.regionOwnershipOverrides || {}),
+      ...(Array.isArray(reconciledWorld.ownerCodes) ? reconciledWorld.ownerCodes : []),
+    ])].map((key) => ({
+      key,
+      ...(reconciledWorld.polityOverrides?.[key] || {}),
+      ...(seed.world?.polityOverrides?.[key] || {}),
+    }));
+    const relationPlan = engine.wsStartingRelations.applyStartingRelationEdits(
+      engine.wsStartingRelations.withoutStartingRelations(reconciledWorld.relations, removedKeys, previousChoices),
+      editedRelations,
+      currentChoices,
+    );
+    if (!relationPlan.ok) throw new Error(relationPlan.reason);
+    const governmentWorld = engine.wsGovernmentEdits.applyGovernmentEdits(reconciledWorld, seed.actorGovernmentEdits, {
+      polityNames: currentChoices.map((row) => row.key),
+    });
     const scenarioCountry = engine.wsPlayerCountry.playerCountryAfterSave(currentGame.country, seed);
     const savedScenarioDetails = await lib.saveScenario(scenarioId, {
       world: {
-        ...reconciledWorld,
+        ...governmentWorld,
+        ...(editedRelations.length || removedKeys.length ? { relations: relationPlan.relations } : {}),
         regionOwnershipOverrides: seed.world?.regionOwnershipOverrides ?? {},
         polityOverrides: seed.world?.polityOverrides ?? {},
         ...(seed.world?.regionClaimants
@@ -3673,6 +3716,28 @@ export const register = (ctx) => {
       });
       return { ids };
     },
+    "workshop.regionBox": async ({ session: id, corners = [], current = [], additive = false } = {}) => {
+      const s = need(id);
+      const points = list(corners).filter((p) => Array.isArray(p) && p.length >= 2).map((p) => fromLonLat([Number(p[0]), Number(p[1])]));
+      if (points.length < 2) return { ids: list(current).map(String) };
+      const xs = points.map((p) => p[0]);
+      const ys = points.map((p) => p[1]);
+      const extent = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+      return { ids: engine.wsRegionSelection.regionsInRectangle(s.source, extent, list(current).map(String), Boolean(additive)).map(String) };
+    },
+    "workshop.regions.scissors": async ({ session: id, regionId = "", points = [] } = {}) => {
+      const s = need(id);
+      const target = s.source.getFeatureById(String(regionId));
+      const coords = list(points).filter((p) => Array.isArray(p) && p.length >= 2).map((p) => fromLonLat([Number(p[0]), Number(p[1])]));
+      const step = target ? engine.wsRegionScissors.splitRegionFeature(s.source, target, coords, () => mapDoc.newId("reg")) : null;
+      if (!step) return { ...delta(s, {}), refused: "The cut did not divide the selected region into two valid pieces. Draw a continuous line across it, from outside one border to outside the other. Nothing was changed." };
+      notify(s, { geometry: true });
+      pushCmd(s, {
+        undo: () => { step.undo(); s.geometryRev += 1; },
+        redo: () => { step.redo(); s.geometryRev += 1; },
+      });
+      return { ...delta(s, { regions: true }), selection: [String(step.retainedId), String(step.createdId)] };
+    },
     "workshop.queryRegions": async ({ session: id, text = "", limit = 300 } = {}) => {
       const s = need(id);
       const search = engine.wsRegionSearch;
@@ -3730,6 +3795,70 @@ export const register = (ctx) => {
       upsertPolity(s, key, { name: key, code: key, aliases: [key], status: "active", note: "" });
       if (list(assign).length) setRegionAttrs(s, list(assign).map(String), { owner: key });
       return { ...delta(s, { regions: true }), key };
+    },
+    "workshop.polity.draftOptions": async ({ session: id } = {}) => {
+      const s = need(id);
+      return plain({
+        choices: polityChoices(s),
+        kinds: engine.wsPuppets.PUPPET_KIND_OPTIONS,
+        secrecy: engine.wsPuppets.PUPPET_SECRECY_OPTIONS,
+        tagSuggestions: engine.wsCountryTags.TAG_SUGGESTIONS,
+        maxTags: engine.wsCountryTags.MAX_TAGS,
+        bands: Array.from({ length: 201 }, (_, at) => engine.diplomaticStance.relationBandForScore(at - 100)),
+      });
+    },
+    "workshop.polity.draftPlan": async ({ session: id, draft = {} } = {}) => {
+      const s = need(id);
+      const plan = engine.wsCountryDraft.planCountryDraft({
+        draft, polities: s.doc.polities || {}, occupiedKeys: listPolityUsage(s).map((row) => row.key),
+        puppets: s.doc.puppets || [], polityChoices: polityChoices(s),
+      });
+      return plain(plan.ok ? { ok: true, key: plan.key } : { ok: false, reason: plan.reason });
+    },
+    "workshop.polity.createDraft": async ({ session: id, draft = {}, ids = [] } = {}) => {
+      const s = need(id);
+      const choices = polityChoices(s);
+      const plan = engine.wsCountryDraft.planCountryDraft({
+        draft, polities: s.doc.polities || {}, occupiedKeys: listPolityUsage(s).map((row) => row.key),
+        puppets: s.doc.puppets || [], polityChoices: choices,
+      });
+      if (!plan.ok) return { ...delta(s, {}), ok: false, reason: plan.reason };
+      const relations = engine.wsStartingRelations.applyStartingRelationEdits(
+        s.doc.relations, [...(s.doc.relationEdits || []), ...plan.relationEdits], [...choices, { key: plan.key }],
+      );
+      if (!relations.ok) return { ...delta(s, {}), ok: false, reason: relations.reason };
+      const selected = [...new Set(list(ids).map(String))];
+      if (plan.assignSelectedRegions && (!selected.length || selected.some((rid) => !s.source.getFeatureById(rid)))) {
+        return { ...delta(s, {}), ok: false, reason: "Select regions on the map before assigning starting territory." };
+      }
+      const before = s.doc;
+      let next;
+      try {
+        next = engine.wsPolityTransaction.planMapPolityCreation(before, plan);
+      } catch (error) {
+        return { ...delta(s, {}), ok: false, reason: error?.message || String(error) };
+      }
+      let regionCmd = null;
+      if (plan.assignSelectedRegions) {
+        const depth = s.undo.length;
+        setRegionAttrs(s, selected, { owner: plan.key });
+        if (s.undo.length > depth) regionCmd = s.undo.pop();
+      }
+      s.doc = next;
+      dirty(s);
+      pushCmd(s, {
+        undo: () => {
+          regionCmd?.undo();
+          s.doc = engine.wsPolityTransaction.revertMapPolityCreation(s.doc, plan.key, before);
+          dirty(s);
+        },
+        redo: () => {
+          regionCmd?.redo();
+          s.doc = engine.wsPolityTransaction.planMapPolityCreation(s.doc, plan);
+          dirty(s);
+        },
+      });
+      return { ...delta(s, { regions: true }), ok: true, key: plan.key };
     },
     "workshop.polity.createNamed": async ({ session: id, name = "", assign = [] } = {}) => {
       const s = need(id);
@@ -5042,10 +5171,20 @@ export const register = (ctx) => {
         const seed = {
           ...engine.wsExportPreset.buildGameSeed(s.doc, serializeRegions(s) || { type: "FeatureCollection", features: [] }, paintColors(s)),
           polityAuthoringOps: removalsForScenario(authoringOps),
+          startingRelationEdits: (s.doc.relationEdits || []).slice(),
+          actorGovernmentEdits: (s.doc.actorGovernmentEdits || []).slice(),
         };
         const renames = Array.isArray(s.doc.polityRenames) ? s.doc.polityRenames : [];
         const { scenarioCountry, details } = await lib.withSingleLibraryRefresh(() => writeMapToScenario(s.scenario.id, seed, renames));
         if (renames.length) s.doc = { ...s.doc, polityRenames: s.doc.polityRenames.slice(renames.length) };
+        if (seed.startingRelationEdits.length) {
+          const settled = engine.wsStartingRelations.settleStartingRelationEdits(s.doc, seed.startingRelationEdits, listPolityUsage(s).map((row) => row.key));
+          if (settled.ok) s.doc = settled.document;
+          else console.warn("[editor] could not settle authored starting relations:", settled.reason);
+        }
+        if (seed.actorGovernmentEdits.length) {
+          s.doc = { ...s.doc, actorGovernmentEdits: engine.wsGovernmentEdits.settleGovernmentEditRows(s.doc.actorGovernmentEdits, seed.actorGovernmentEdits, s.doc.polityRenames) };
+        }
         s.polityAuthoringOps = s.polityAuthoringOps.slice(authoringOps.length);
         s.scenarioDirty = false;
         let gameId = "";
