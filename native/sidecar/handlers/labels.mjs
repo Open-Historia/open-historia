@@ -129,7 +129,7 @@ const runPolityTextWorker = async () => {
     return signatures;
   };
 
-  const buildRecords = ({ overrides = {}, labelNames = {} }) => {
+  const buildRecords = ({ overrides = {}, labelNames = {}, played = [] }) => {
     const labelName = (owner) => String(labelNames?.[owner] ?? owner).trim() || owner;
     const signatures = ownerSignatures(overrides, labelNames);
     for (const owner of [...ownerLabels.keys()]) {
@@ -166,10 +166,10 @@ const runPolityTextWorker = async () => {
       logical.push(...entry.logical);
       ptr.push(...entry.ptr);
     }
-    const records = recordsModule.buildPolityTextPtr1Records({
+    const records = bundle.playerStars.withPlayerStars(recordsModule.buildPolityTextPtr1Records({
       ptrLabelData: { type: "FeatureCollection", features: ptr },
       labelData: { type: "FeatureCollection", features: logical },
-    });
+    }), Array.isArray(played) ? played : []);
     const digest = records.map((record) => continuity.polityTextRecordFingerprint(record)).join("\n");
     if (digest !== snapshotDigest) {
       revision += 1;
@@ -365,7 +365,13 @@ export const register = (ctx) => {
         displayName: engine.assets.resolveCountryDisplayName,
         translate: (label) => label,
       });
-      const result = await work({ type: "records", file, overrides, labelNames });
+      let played = [];
+      try {
+        played = engine.mpBridge?.inSharedGame?.() ? [...(engine.mpBridge.sharedGamePeople?.() ?? [])].map(String) : [];
+      } catch {
+        played = [];
+      }
+      const result = await work({ type: "records", file, overrides, labelNames, played });
       lastStyle = style(world);
       return { ...lastStyle, sha: state.sha, ...result };
     },

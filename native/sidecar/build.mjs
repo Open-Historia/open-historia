@@ -31,6 +31,7 @@ await build({
       'export * as polityTextCustomLayer from "../../src/Game/Map/labels/polityTextCustomLayer.js";',
       'export * as polityTextPlacement from "../../src/Game/Map/labels/polityTextPlacement.js";',
       'export * as polityTextContinuity from "../../src/Game/Map/labels/polityTextContinuity.js";',
+      'export * as playerStars from "../../src/Game/Map/labels/playerStars.js";',
       'export * as ownerNames from "../../src/runtime/ownerNames.js";',
     ].join(String.fromCharCode(10)),
     resolveDir: here,
