@@ -644,9 +644,11 @@ func _group_card() -> void:
 	var region_id := str((region.get("result", {}) as Dictionary).get("regionId", ""))
 	await main.engine.request("chat.test.group", {"name": "Gulf Cartel", "color": "#b45309", "region": region_id})
 	var cards: MapCards = main.hud.map_cards
+	panel.set_open(false)
+	await _wait(0.5)
 	cards.dismiss_all()
 	await _wait(0.3)
-	await cards.show_region(index, view.region_name(index), "Mexico")
+	await cards.show_region(index, view.region_name(index), "Mexico", Vector2(720, 400))
 	await _wait(0.8)
 	var card: Control = cards._floating
 	var standing: Array = card.find_children("*", "GridContainer", true, false).filter(func(node: Node) -> bool: return (node as Control).has_meta("group_standing")) if card else []

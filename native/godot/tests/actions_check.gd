@@ -409,7 +409,7 @@ func _edit_checks(panel: ActionsPanel) -> void:
 	_check(not entry.is_empty() and str(entry.get("editBlock", "x")).is_empty(), "a waiting order can be edited")
 	var pencils := panel.find_children("*", "Button", true, false).filter(func(node: Node) -> bool: return (node as Button).has_meta("action_edit") and (node as Button).tooltip_text == "Edit action")
 	_check(pencils.size() == (panel._view.get("submitted", []) as Array).size(), "every waiting order has Edit beside Delete")
-	_hover_row(panel, "Recall the ambassador from Rome for consultations.")
+	_hover_row(panel, "Raise taxes on luxury goods")
 	await _shoot("actions-6a-edit-button")
 	panel._start_edit(entry)
 	await _frames(3)
