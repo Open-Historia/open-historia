@@ -30,11 +30,11 @@ const Panel = ({ title, icon, onClose, side = "left", width = 340, footer, child
         alignItems: "center",
         gap: 10,
         padding: "12px 12px 12px 14px",
-        borderBottom: "1px solid rgba(255,255,255,0.07)",
+        borderBottom: "1px solid var(--oh-ui-line, rgba(255,255,255,0.07))",
       }}
     >
       {icon && (
-        <span style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, flexShrink: 0, borderRadius: 9, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}>
+        <span style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, flexShrink: 0, borderRadius: 9, background: "var(--oh-ui-raised, rgba(255,255,255,0.06))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.08))" }}>
           <Icon name={icon} size={15} />
         </span>
       )}
@@ -45,10 +45,10 @@ const Panel = ({ title, icon, onClose, side = "left", width = 340, footer, child
           title="Close"
           style={{
             alignItems: "center",
-            background: "rgba(255,255,255,0.05)",
-            border: "1px solid rgba(255,255,255,0.1)",
+            background: "var(--oh-ui-raised, rgba(255,255,255,0.05))",
+            border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))",
             borderRadius: 9,
-            color: "rgba(255,255,255,0.8)",
+            color: "var(--oh-ui-text, rgba(255,255,255,0.8))",
             cursor: "pointer",
             display: "flex",
             flexShrink: 0,
@@ -65,7 +65,7 @@ const Panel = ({ title, icon, onClose, side = "left", width = 340, footer, child
       {children}
     </div>
     {footer && (
-      <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "12px 14px" }}>{footer}</div>
+      <div style={{ borderTop: "1px solid var(--oh-ui-line, rgba(255,255,255,0.07))", padding: "12px 14px" }}>{footer}</div>
     )}
   </div>
 );

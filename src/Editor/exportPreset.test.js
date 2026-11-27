@@ -137,6 +137,41 @@ test("the Projection panel's scale line is saved with the projection, on a freef
   assert.deepEqual(again.world.projection, sheet.world.projection);
 });
 
+test("fully custom generated worlds export colors for their own polities, not the prior historical or stock palette",()=>{
+  const palette={
+    "HistoricPolity":[11,22,33],
+    "StockCountry":[44,55,66],
+    "New polity":[8,9,10],
+  };
+  const generated={
+    ...doc([]),
+    metadata:{kind:"blank",generatedWorldReplacementId:"fmg-replacement-qa"},
+    polities:{"New polity":{name:"New polity"}},
+    colorOverrides:{"New polity":[17,34,51],StaleOverride:[9,9,9]},
+  };
+  const regions={type:"FeatureCollection",features:[{
+    type:"Feature",id:"new-r1",properties:{id:"new-r1",owner:"New polity",typeId:"land"},
+    geometry:{type:"Polygon",coordinates:[[[0,0],[1,0],[1,1],[0,0]]]},
+  }]};
+  const custom=buildGameSeed(generated,regions,palette);
+  assert.equal(custom.world.customRegions,true);
+  assert.deepEqual(custom.colors,{"New polity":[17,34,51]},"No orphan color may persist into generated-world assets");
+  // After re-opening and re-saving the generated world its marker was already
+  // settled, but the custom geometry must still prevent stock palette leakage.
+  const reopened=buildGameSeed({...generated,metadata:{kind:"import-world"}},regions,palette);
+  assert.deepEqual(reopened.colors,{"New polity":[17,34,51]});
+  // Stock PMTiles-only reownership still needs every stock color in the game.
+  const stock={...doc([]),metadata:{kind:"import-world"},polities:{}};
+  const stockRegions={type:"FeatureCollection",features:[{
+    type:"Feature",id:"MNG.18_1",properties:{id:"MNG.18_1",owner:"Mongolia"},
+    geometry:{type:"Polygon",coordinates:[[[100,50],[101,50],[101,51],[100,50]]]},
+  }]};
+  const stockSeed=buildGameSeed(stock,stockRegions,palette);
+  assert.equal(stockSeed.world.customRegions,false);
+  assert.deepEqual(stockSeed.colors.HistoricPolity,palette.HistoricPolity);
+  assert.deepEqual(stockSeed.colors.StockCountry,palette.StockCountry);
+});
+
 test("a map started from the world map or the legacy world map saves its own regions, the stock world only its owners", () => {
   const regions = { type: "FeatureCollection", features: [{ type: "Feature", properties: { id: "MNG.18_1", owner: "Mongolia", typeId: "land" }, geometry: { type: "Polygon", coordinates: [[[106, 50], [107, 50], [107, 51], [106, 50]]] } }] };
   for (const kind of ["fault-lines", "modern-day"]) {

@@ -17,6 +17,37 @@ const claimedAction = [
   "The Action awaits your Proceed, mon Premier.",
 ].join("\n");
 
+test("1912 October 14: native naval deployment is reported to the Action checker, not duplicated", async () => {
+  const source = [
+    "The French Northern Squadron is ready for confirmation.",
+    "```deploy",
+    JSON.stringify([{ type: "naval", name: "French Northern Squadron", strength: 85, lng: -4.77, lat: 48.35 }]),
+    "```",
+  ].join("\n");
+  let receipts = null;
+  const result = await completeAdvisorActionReply({
+    reply: source, canPropose: true, allowedUnitTypes: ["naval", "infantry"],
+    check: async ({ delivered }) => { receipts = delivered; return "NO_MISSING_ACTION"; },
+  });
+  assert.deepEqual(receipts, { deployments: 1, projects: 0, diplomaticDrafts: 0, institutionDrafts: 0, publicStatements: 0 });
+  assert.equal(result.status, "none");
+  assert.equal(result.reply, source);
+  assert.equal(result.problem, "");
+  assert.equal(parseAdvisorReply(result.reply).actionsProposal, null);
+});
+
+test("a delivered deployment does not block a separately requested Action check", async () => {
+  const source = "```deploy\n" + JSON.stringify([{ type: "naval", name: "French Northern Squadron", strength: 85, lng: -4.77, lat: 48.35 }]) + "\n```";
+  let calls = 0;
+  const result = await completeAdvisorActionReply({
+    reply: source, canPropose: true, allowedUnitTypes: ["naval"],
+    check: async ({ delivered }) => { calls++; assert.equal(delivered.deployments, 1); return actionBlock; },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.status, "recovered");
+  assert.equal(parseAdvisorReply(result.reply).actionsProposal?.length, 1);
+});
+
 test("May 30 1912: an explicitly promised missing Action can be recovered as a review-only attachment", async () => {
   let calls = 0;
   const result = await completeAdvisorActionReply({
@@ -151,4 +182,35 @@ test("production checks missing proposals before finalizing and saving the one-t
   assert.match(middle, /if \(leftCampaign\(\)\) return;/);
   assert.match(middle, /reviewAdvisorActionProposals\(actionsProposal, replyId,/);
   assert.match(middle, /actionsProblems/);
+});
+
+test("1912 German public address: validated statement is delivered, not missing Action paperwork", async () => {
+  const fence = String.fromCharCode(96).repeat(3);
+  const draft = { title: "Declaration of the Imperial Government on Peace and the Rights of Germany",
+    body: "We seek settlement by negotiation and arbitration. Germany desires peace.",
+    issuerId: "head-of-government", audience: { kind: "worldwide", target: "" } };
+  const reply = "Below is my draft for your review, issued over the Chancellor's name.\n\nOne caution: publish before the fleet debate hardens. Once issued, I'd recommend pairing it with quiet bilateral reassurance to London - say the word and I'll prepare that letter.\n\n"
+    + fence + "publicstatement\n" + JSON.stringify([draft]) + "\n" + fence;
+  const result = await completeAdvisorActionReply({reply,canPropose:true,check:async ({delivered})=>{
+    assert.equal(delivered.publicStatements,1);
+    assert.equal(delivered.diplomaticDrafts,0);
+    return "NO_MISSING_ACTION";
+  }});
+  assert.equal(result.problem,"");
+  assert.equal(result.status,"none");
+  assert.equal(result.reply,reply);
+  assert.equal(parseAdvisorReply(result.reply).actionsProposal,null);
+  assert.deepEqual(parseAdvisorReply(result.reply).publicDrafts,[draft]);
+  const mixed = await completeAdvisorActionReply({reply,canPropose:true,check:async ({delivered})=>{
+    assert.equal(delivered.publicStatements,1);
+    return actionBlock;
+  }});
+  assert.equal(mixed.status,"recovered","a separately requested Action is still recoverable");
+  assert.equal(parseAdvisorReply(mixed.reply).actionsProposal.length,1);
+  assert.deepEqual(parseAdvisorReply(mixed.reply).publicDrafts,[draft]);
+  const malformed=reply.replace('"worldwide"','"invented-audience"');
+  await completeAdvisorActionReply({reply:malformed,canPropose:true,check:async ({delivered})=>{
+    assert.equal(delivered.publicStatements,0);
+    return "NO_MISSING_ACTION";
+  }});
 });

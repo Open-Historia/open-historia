@@ -1,6 +1,7 @@
 /*! Open Historia - scenario Political World manual authoring */
 import React, { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { authoringCardStyle, authoringCardRow, authoringCardCopy, authoringTitleStyle, authoringDescriptionStyle, authoringMetaStyle, authoringButtonStyle, authoringInputStyle, authoringOptionStyle, authoringLabelStyle, authoringSectionStyle, authoringShellStyle, authoringHeaderStyle, authoringCloseStyle, authoringEyebrowStyle, authoringHeadingStyle, authoringSubheadingStyle } from "./scenarioAuthoringStyles.js";
 
 import { saveScenario } from "../../runtime/library.js";
 import {
@@ -30,65 +31,17 @@ const clone = (value) => {
   return JSON.parse(JSON.stringify(value));
 };
 
-const panelStyle = {
-  background: "rgba(255,255,255,0.03)",
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: "18px",
-  marginBottom: "0.95rem",
-  padding: "0.9rem",
-};
+const panelStyle = authoringCardStyle;
 
-const buttonStyle = {
-  alignItems: "center",
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.12)",
-  borderRadius: "9px",
-  color: "rgba(246,246,248,0.94)",
-  cursor: "pointer",
-  display: "inline-flex",
-  fontSize: "0.76rem",
-  fontWeight: 750,
-  gap: "0.35rem",
-  justifyContent: "center",
-  minHeight: "2rem",
-  padding: "0 0.75rem",
-};
+const buttonStyle = authoringButtonStyle;
 
-const inputStyle = {
-  background: "rgba(255,255,255,0.045)",
-  border: "1px solid rgba(255,255,255,0.1)",
-  borderRadius: "10px",
-  boxSizing: "border-box",
-  color: "#f8fafc",
-  colorScheme: "dark",
-  fontSize: "0.76rem",
-  minWidth: 0,
-  outline: "none",
-  padding: "0.58rem 0.64rem",
-  width: "100%",
-};
+const inputStyle = { ...authoringInputStyle };
 
-const optionStyle = {
-  backgroundColor: "#1a1b1f",
-  color: "#f8fafc",
-};
+const optionStyle = authoringOptionStyle;
 
-const labelStyle = {
-  color: "rgba(255,255,255,0.58)",
-  display: "block",
-  fontSize: "0.62rem",
-  fontWeight: 800,
-  letterSpacing: "0.055em",
-  marginBottom: "0.3rem",
-  textTransform: "uppercase",
-};
+const labelStyle = authoringLabelStyle;
 
-const sectionStyle = {
-  background: "rgba(255,255,255,0.025)",
-  border: "1px solid rgba(255,255,255,0.075)",
-  borderRadius: "13px",
-  padding: "0.72rem",
-};
+const sectionStyle = authoringSectionStyle;
 
 const emptyParty = () => {
   const id = `custom-party-${Date.now().toString(36)}`;
@@ -386,19 +339,19 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
       }}
       style={{ alignItems: "center", background: "rgba(6,6,7,0.8)", backdropFilter: "blur(14px)", display: "flex", inset: 0, justifyContent: "center", padding: "clamp(0.5rem, 1.8vw, 1.2rem)", position: "fixed", zIndex: 2147483200 }}
     >
-      <div style={{ background: "rgba(24,24,27,0.985)", border: "1px solid rgba(255,255,255,0.11)", borderRadius: "20px", boxShadow: "0 24px 70px rgba(0,0,0,0.52)", color: "#fff", display: "flex", flexDirection: "column", maxHeight: "calc(100vh - 1.2rem)", minHeight: "min(46rem, calc(100vh - 1.2rem))", overflow: "hidden", width: "min(92rem, calc(100vw - 1rem))" }}>
-        <header style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.8rem", justifyContent: "space-between", padding: "0.85rem 1rem" }}>
+      <div style={{ ...authoringShellStyle }}>
+        <header style={authoringHeaderStyle}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ color: "rgba(255,255,255,0.46)", fontSize: "0.63rem", fontWeight: 850, letterSpacing: "0.08em", textTransform: "uppercase" }}>Scenario authoring</div>
-            <div style={{ fontSize: "1.15rem", fontWeight: 850, letterSpacing: "-0.025em", marginTop: "0.12rem" }}>Political World</div>
-            <div style={{ color: "rgba(255,255,255,0.46)", fontSize: "0.69rem", marginTop: "0.16rem" }}>{actorCount} Political World profile{actorCount === 1 ? "" : "s"} · {rows.length} scenario polities</div>
+            <div style={authoringEyebrowStyle}>Scenario authoring</div>
+            <div style={authoringHeadingStyle}>Political World</div>
+            <div style={authoringSubheadingStyle}>{actorCount} Political World profile{actorCount === 1 ? "" : "s"} · {rows.length} scenario polities</div>
           </div>
-          <button aria-label="Close Political World manager" className="oh-tap" onClick={closeManager} style={{ ...buttonStyle, background: "rgba(255,255,255,0.04)", fontSize: "1rem", minWidth: "2.35rem", padding: 0 }} type="button">×</button>
+          <button aria-label="Close Political World manager" className="oh-tap" onClick={closeManager} style={authoringCloseStyle} type="button">×</button>
         </header>
 
         <div style={{ display: "grid", flex: 1, gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "minmax(15rem, 0.72fr) minmax(0, 2.28fr)", gridTemplateRows: isMobile ? "minmax(10rem, 15rem) minmax(0, 1fr)" : undefined, minHeight: 0 }}>
-          <aside style={{ borderBottom: isMobile ? "1px solid rgba(255,255,255,0.08)" : undefined, borderRight: isMobile ? undefined : "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", minHeight: 0 }}>
-            <div style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", padding: "0.72rem" }}>
+          <aside style={{ borderBottom: isMobile ? "1px solid var(--oh-grey-border)" : undefined, borderRight: isMobile ? undefined : "1px solid var(--oh-grey-border)", display: "flex", flexDirection: "column", minHeight: 0 }}>
+            <div style={{ borderBottom: "1px solid var(--oh-grey-border)", padding: "0.72rem" }}>
               <input aria-label="Search scenario polities" placeholder="Search polity..." style={inputStyle} value={query} onChange={(event) => setQuery(event.target.value)} />
             </div>
             <div style={{ flex: 1, overflowY: "auto", padding: "0.45rem" }}>
@@ -409,33 +362,33 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                     className="oh-tap-row"
                     key={row.polityKey}
                     onClick={() => selectPolity(row.polityKey)}
-                    style={{ alignItems: "center", background: selected ? "var(--oh-grey-selected)" : "transparent", border: `1px solid ${selected ? "var(--oh-grey-border-strong)" : "transparent"}`, borderRadius: "10px", color: "#fff", cursor: "pointer", display: "flex", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.22rem", padding: "0.55rem 0.6rem", textAlign: "left", width: "100%" }}
+                    style={{ alignItems: "center", background: selected ? "var(--oh-ui-active, var(--oh-grey-selected))" : "transparent", border: `1px solid ${selected ? "var(--oh-ui-accent, var(--oh-grey-border-strong))" : "transparent"}`, borderRadius: "10px", color: "var(--oh-grey-text)", cursor: "pointer", display: "flex", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.22rem", padding: "0.55rem 0.6rem", textAlign: "left", width: "100%" }}
                     type="button"
                   >
                     <span style={{ minWidth: 0 }}>
                       <span style={{ display: "block", fontSize: "0.76rem", fontWeight: 750, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
-                      <code style={{ color: "rgba(255,255,255,0.35)", display: "block", fontSize: "0.57rem", marginTop: "0.12rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.polityKey}</code>
+                      <code style={{ color: "var(--oh-grey-muted)", display: "block", fontSize: "0.57rem", marginTop: "0.12rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.polityKey}</code>
                     </span>
                     <span title={row.hasActor ? "Political World configured" : "No Political World profile yet"} style={{ background: row.hasActor ? "rgba(34,197,94,0.15)" : "rgba(245,158,11,0.12)", border: `1px solid ${row.hasActor ? "rgba(34,197,94,0.26)" : "rgba(245,158,11,0.24)"}`, borderRadius: 999, color: row.hasActor ? "#86efac" : "#fbbf24", flex: "0 0 auto", fontSize: "0.55rem", fontWeight: 900, padding: "0.1rem 0.35rem" }}>{row.hasActor ? "SET" : "+"}</span>
                   </button>
                 );
-              }) : <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.72rem", padding: "1rem 0.5rem", textAlign: "center" }}>No polities match this search.</div>}
+              }) : <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.72rem", padding: "1rem 0.5rem", textAlign: "center" }}>No polities match this search.</div>}
             </div>
           </aside>
 
           <main style={{ minHeight: 0, overflowY: "auto", padding: "0.85rem 1rem 1rem" }}>
             {!selectedKey ? (
-              <div style={{ color: "rgba(255,255,255,0.44)", padding: "3rem 1rem", textAlign: "center" }}>This scenario has no editable polity roster yet.</div>
+              <div style={{ color: "var(--oh-grey-muted)", padding: "3rem 1rem", textAlign: "center" }}>This scenario has no editable polity roster yet.</div>
             ) : (
               <>
-                <div style={{ alignItems: "flex-start", background: "rgba(24,24,27,0.96)", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", flexWrap: "wrap", gap: "0.75rem", justifyContent: "space-between", margin: "-0.85rem -1rem 0.75rem", padding: "0.85rem 1rem 0.72rem", position: "sticky", top: "-0.85rem", zIndex: 3 }}>
+                <div style={{ alignItems: "flex-start", background: "var(--oh-grey-bg)", borderBottom: "1px solid var(--oh-grey-border)", display: "flex", flexWrap: "wrap", gap: "0.75rem", justifyContent: "space-between", margin: "-0.85rem -1rem 0.75rem", padding: "0.85rem 1rem 0.72rem", position: "sticky", top: "-0.85rem", zIndex: 3 }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
                       <div style={{ fontSize: "1.05rem", fontWeight: 850 }}>{actorLabel(world, selectedKey)}</div>
                       <span style={{ background: selectedActor ? "rgba(34,197,94,0.12)" : "rgba(245,158,11,0.12)", border: `1px solid ${selectedActor ? "rgba(34,197,94,0.26)" : "rgba(245,158,11,0.24)"}`, borderRadius: 999, color: selectedActor ? "#86efac" : "#fbbf24", fontSize: "0.56rem", fontWeight: 900, padding: "0.12rem 0.38rem", textTransform: "uppercase" }}>{selectedActor ? "Political World configured" : "Creates Political World profile on save"}</span>
                     </div>
-                    <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.63rem", marginTop: "0.18rem" }}>Stable polity key: <code>{selectedKey}</code></div>
-                    <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.67rem", lineHeight: 1.45, marginTop: "0.35rem", maxWidth: "52rem" }}>These are the scenario's starting political facts. Blank trait values stay unset rather than becoming 0, and Political World data this editor does not show is preserved.</div>
+                    <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.63rem", marginTop: "0.18rem" }}>Stable polity key: <code>{selectedKey}</code></div>
+                    <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.67rem", lineHeight: 1.45, marginTop: "0.35rem", maxWidth: "52rem" }}>These are the scenario's starting political facts. Blank trait values stay unset rather than becoming 0, and Political World data this editor does not show is preserved.</div>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
                     <button disabled={!selectedActor || busy} onClick={deletePoliticalWorldProfile} style={{ ...buttonStyle, borderColor: "rgba(239,68,68,0.28)", color: "#fca5a5", opacity: !selectedActor || busy ? 0.45 : 1 }} type="button">Delete Political World profile</button>
@@ -484,7 +437,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
 
                   <details style={sectionStyle}>
                     <summary style={{ cursor: "pointer", fontSize: "0.78rem", fontWeight: 850 }}>Strategic outlook</summary>
-                    <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>One item per line. These are canonical causal inputs, not flavor text.</div>
+                    <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>One item per line. These are canonical causal inputs, not flavor text.</div>
                     <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "repeat(auto-fit, minmax(16rem, 1fr))", marginTop: "0.65rem" }}>
                       {renderTextarea("Goals", "goalsText", "One goal per line")}
                       {renderTextarea("Fears", "fearsText", "One fear per line")}
@@ -495,8 +448,8 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
 
                   <details style={sectionStyle}>
                     <summary style={{ cursor: "pointer", fontSize: "0.78rem", fontWeight: 850 }}>Parties / political entities ({draft.parties?.length || 0})</summary>
-                    <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.63rem", lineHeight: 1.45, marginTop: "0.35rem" }}>Party roles update the government's actual party IDs. Support (%) and legislature seats are separate measures; blank seats mean unknown, while 0 means no seats.</div>
-                    <div role={composition.error ? "alert" : "status"} style={{ color: composition.error ? "#fca5a5" : "rgba(255,255,255,0.6)", fontSize: "0.67rem", lineHeight: 1.5, marginTop: "0.4rem" }}>
+                    <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.63rem", lineHeight: 1.45, marginTop: "0.35rem" }}>Party roles update the government's actual party IDs. Support (%) and legislature seats are separate measures; blank seats mean unknown, while 0 means no seats.</div>
+                    <div role={composition.error ? "alert" : "status"} style={{ color: composition.error ? "#fca5a5" : "var(--oh-grey-muted)", fontSize: "0.67rem", lineHeight: 1.5, marginTop: "0.4rem" }}>
                       {composition.error || (
                         <>
                           {composition.totalSeats === null
@@ -511,7 +464,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                     </div>
                     <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.6rem" }}>
                       {(draft.parties || []).map((party, index) => (
-                        <details key={party._editorKey || `party-row-${index}`} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.075)", borderRadius: "10px", padding: "0.55rem" }}>
+                        <details key={party._editorKey || `party-row-${index}`} style={{ background: "var(--oh-grey-surface)", border: "1px solid var(--oh-grey-border)", borderRadius: "10px", padding: "0.55rem" }}>
                           <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 800 }}>{party.name || `Political entity ${index + 1}`}{party.ruling ? " · Government" : party.coalition ? " · Coalition" : ""}</summary>
                           <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))", marginTop: "0.6rem" }}>
                             {[["Name", "name"], ["Short name", "shortName"], ["Native name", "nameNative"], ["Native abbreviation", "shortNameNative"], ["Leader", "leader"], ["Ideology", "ideology"], ["Political position", "politicalPosition"], ["Founded", "founded"], ["Party colour (hex)", "color"], ["Influence label", "influenceLabel"]].map(([label, field]) => <div key={field}><label style={labelStyle}>{label}</label><input style={inputStyle} value={party[field] ?? ""} onChange={(event) => editParty(index, field, event.target.value)} /></div>)}
@@ -531,7 +484,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                             <div><label style={labelStyle}>Foreign-policy outlook · one per line</label><textarea rows={3} style={{ ...inputStyle, resize: "vertical" }} value={party.publicForeignPolicyText ?? ""} onChange={(event) => editParty(index, "publicForeignPolicyText", event.target.value)} /></div>
                           </div>
                           <details style={{ marginTop: "0.55rem" }}>
-                            <summary style={{ color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: "0.65rem", fontWeight: 750 }}>Advanced identity</summary>
+                            <summary style={{ color: "var(--oh-grey-muted)", cursor: "pointer", fontSize: "0.65rem", fontWeight: 750 }}>Advanced identity</summary>
                             <div style={{ marginTop: "0.45rem" }}><label style={labelStyle}>Stable party ID</label><input style={inputStyle} value={party.id ?? ""} onChange={(event) => editParty(index, "id", event.target.value)} /></div>
                           </details>
                           <button onClick={() => removeParty(index)} style={{ ...buttonStyle, color: "#fca5a5", marginTop: "0.55rem" }} type="button">Remove political entity</button>
@@ -545,7 +498,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                     <summary style={{ cursor: "pointer", fontSize: "0.78rem", fontWeight: 850 }}>Power blocs / non-party actors ({draft.powerBlocs?.length || 0})</summary>
                     <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.6rem" }}>
                       {(draft.powerBlocs || []).map((bloc, index) => (
-                        <details key={bloc._editorKey || `bloc-row-${index}`} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.075)", borderRadius: "10px", padding: "0.55rem" }}>
+                        <details key={bloc._editorKey || `bloc-row-${index}`} style={{ background: "var(--oh-grey-surface)", border: "1px solid var(--oh-grey-border)", borderRadius: "10px", padding: "0.55rem" }}>
                           <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 800 }}>{bloc.name || `Power bloc ${index + 1}`}</summary>
                           <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))", marginTop: "0.6rem" }}>
                             {[["Name", "name"], ["Short name", "shortName"], ["Kind", "kind"], ["Status", "status"], ["Leader", "leader"], ["Ideology", "ideology"], ["Influence label", "influenceLabel"]].map(([label, field]) => <div key={field}><label style={labelStyle}>{label}</label><input style={inputStyle} value={bloc[field] ?? ""} onChange={(event) => editBloc(index, field, event.target.value)} /></div>)}
@@ -557,7 +510,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                             <div><label style={labelStyle}>Foreign-policy outlook · one per line</label><textarea rows={3} style={{ ...inputStyle, resize: "vertical" }} value={bloc.publicForeignPolicyText ?? ""} onChange={(event) => editBloc(index, "publicForeignPolicyText", event.target.value)} /></div>
                           </div>
                           <details style={{ marginTop: "0.55rem" }}>
-                            <summary style={{ color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: "0.65rem", fontWeight: 750 }}>Advanced identity</summary>
+                            <summary style={{ color: "var(--oh-grey-muted)", cursor: "pointer", fontSize: "0.65rem", fontWeight: 750 }}>Advanced identity</summary>
                             <div style={{ marginTop: "0.45rem" }}><label style={labelStyle}>Stable bloc ID</label><input style={inputStyle} value={bloc.id ?? ""} onChange={(event) => editBloc(index, "id", event.target.value)} /></div>
                           </details>
                           <button onClick={() => removeBloc(index)} style={{ ...buttonStyle, color: "#fca5a5", marginTop: "0.55rem" }} type="button">Remove power bloc</button>
@@ -569,22 +522,22 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
 
                   <details data-political-trait-catalog="true" style={sectionStyle}>
                     <summary style={{ cursor: "pointer", fontSize: "0.78rem", fontWeight: 850 }}>Political traits · full supported catalog ({POLITICAL_TRAIT_REGISTRY.length})</summary>
-                    <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>Every supported trait is shown. Blank means <strong>not specified</strong>, not 0. Values run from 0 to 100.</div>
+                    <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>Every supported trait is shown. Blank means <strong>not specified</strong>, not 0. Values run from 0 to 100.</div>
                     <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(13.5rem, 1fr))", marginTop: "0.65rem" }}>
                       {POLITICAL_TRAIT_REGISTRY.map((trait) => {
                         const rawValue = draft.traitValues?.[trait.key] ?? "";
                         const isSet = rawValue !== "" && rawValue !== null && rawValue !== undefined;
                         return (
-                          <div key={trait.key} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", padding: "0.55rem" }}>
+                          <div key={trait.key} style={{ background: "var(--oh-grey-surface)", border: "1px solid var(--oh-grey-border)", borderRadius: "10px", padding: "0.55rem" }}>
                             <div style={{ alignItems: "center", display: "flex", gap: "0.4rem", justifyContent: "space-between" }}>
                               <label style={{ ...labelStyle, margin: 0 }}>{trait.label}</label>
-                              <span style={{ color: isSet ? "#86efac" : "rgba(255,255,255,0.34)", fontSize: "0.54rem", fontWeight: 900, textTransform: "uppercase" }}>{isSet ? "set" : "unset"}</span>
+                              <span style={{ color: isSet ? "#86efac" : "var(--oh-grey-muted)", fontSize: "0.54rem", fontWeight: 900, textTransform: "uppercase" }}>{isSet ? "set" : "unset"}</span>
                             </div>
                             <div style={{ alignItems: "center", display: "grid", gap: "0.45rem", gridTemplateColumns: "minmax(0, 1fr) 4.6rem", marginTop: "0.35rem" }}>
-                              <input aria-label={`${trait.label} slider`} max={trait.max} min={trait.min} step="0.1" style={{ accentColor: "rgba(231,231,234,0.72)", width: "100%" }} type="range" value={isSet ? rawValue : trait.min} onChange={(event) => editTrait(trait.key, event.target.value)} />
+                              <input aria-label={`${trait.label} slider`} max={trait.max} min={trait.min} step="0.1" style={{ accentColor: "var(--oh-ui-accent, var(--oh-grey-text))", width: "100%" }} type="range" value={isSet ? rawValue : trait.min} onChange={(event) => editTrait(trait.key, event.target.value)} />
                               <input aria-label={`${trait.label} value`} max={trait.max} min={trait.min} placeholder="unset" step="0.1" style={inputStyle} type="number" value={rawValue} onChange={(event) => editTrait(trait.key, event.target.value)} />
                             </div>
-                            <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.57rem", lineHeight: 1.35, marginTop: "0.32rem" }}>{trait.description}</div>
+                            <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.57rem", lineHeight: 1.35, marginTop: "0.32rem" }}>{trait.description}</div>
                             <code style={{ color: "var(--oh-grey-muted)", display: "block", fontSize: "0.54rem", marginTop: "0.28rem" }}>{trait.key}</code>
                           </div>
                         );
@@ -594,7 +547,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
 
                   <details data-political-structured-json="true" style={sectionStyle}>
                     <summary style={{ cursor: "pointer", fontSize: "0.78rem", fontWeight: 850 }}>Advanced structured traits & perceptions</summary>
-                    <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>Raw JSON remains available for legacy or extension traits and structured perceptions. Registered traits stay synchronized with the controls above while this JSON is valid.</div>
+                    <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>Raw JSON remains available for legacy or extension traits and structured perceptions. Registered traits stay synchronized with the controls above while this JSON is valid.</div>
                     <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "repeat(auto-fit, minmax(20rem, 1fr))", marginTop: "0.65rem" }}>
                       <div><label style={labelStyle}>Traits JSON</label><textarea rows={12} spellCheck={false} style={{ ...inputStyle, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: "0.66rem", lineHeight: 1.42, resize: "vertical" }} value={draft.traitsJson ?? "{}"} onChange={(event) => editTraitsJson(event.target.value)} /></div>
                       <div><label style={labelStyle}>Perceptions JSON</label><textarea rows={12} spellCheck={false} style={{ ...inputStyle, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: "0.66rem", lineHeight: 1.42, resize: "vertical" }} value={draft.perceptionsJson ?? "{}"} onChange={(event) => edit("perceptionsJson", event.target.value)} /></div>
@@ -603,7 +556,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
 
                   <details data-political-debug="true" style={sectionStyle}>
                     <summary style={{ cursor: "pointer", fontSize: "0.78rem", fontWeight: 850 }}>Advanced saved state · read-only</summary>
-                    <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>This shows exactly what the scenario currently stores. Values calculated by the game are read-only here.</div>
+                    <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>This shows exactly what the scenario currently stores. Values calculated by the game are read-only here.</div>
                     <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "repeat(auto-fit, minmax(18rem, 1fr))", marginTop: "0.65rem" }}>
                       <div><label style={labelStyle}>Decision authority · derived</label><pre style={{ ...inputStyle, maxHeight: "13rem", overflow: "auto", whiteSpace: "pre-wrap" }}>{JSON.stringify(debugSnapshot?.decisionAuthority ?? null, null, 2)}</pre></div>
                       <div><label style={labelStyle}>Behavioral disposition · derived now</label><pre style={{ ...inputStyle, maxHeight: "13rem", overflow: "auto", whiteSpace: "pre-wrap" }}>{JSON.stringify(debugSnapshot?.derivedDisposition ?? null, null, 2)}</pre></div>
@@ -622,11 +575,11 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
 
   return (
     <div style={panelStyle}>
-      <div style={{ alignItems: "flex-start", display: "flex", flexWrap: "wrap", gap: "0.7rem", justifyContent: "space-between" }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.95rem", fontWeight: 800 }}>Manual Political World authoring</div>
-          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.2rem" }}>Set each country's starting Political World: government, leaders, parties, blocs, strategy, perceptions and political traits.</div>
-          <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.64rem", marginTop: "0.35rem" }}>{actorCount} actor{actorCount === 1 ? "" : "s"} configured across {rows.length} scenario polities.</div>
+      <div style={authoringCardRow}>
+        <div style={authoringCardCopy}>
+          <div style={authoringTitleStyle}>Manual Political World authoring</div>
+          <div style={authoringDescriptionStyle}>Set each country's starting Political World: government, leaders, parties, blocs, strategy, perceptions and political traits.</div>
+          <div style={authoringMetaStyle}>{actorCount} actor{actorCount === 1 ? "" : "s"} configured across {rows.length} scenario polities.</div>
         </div>
         <button onClick={() => setManagerOpen(true)} style={{ ...buttonStyle, background: "var(--oh-grey-raised)", borderColor: "var(--oh-grey-border-strong)", flex: "0 0 auto" }} type="button">Manage Political World</button>
       </div>

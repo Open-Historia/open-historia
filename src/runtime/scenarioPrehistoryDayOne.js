@@ -2,11 +2,12 @@
 import { PREGAME_BOOTSTRAP_CONTRACT_VERSION, compilePregameBootstrapCandidate, validatePregameBootstrapCandidateShape } from "../Game/AI/pregameBootstrapCompiler.js";
 import { AGREEMENT_TYPE_VALUES } from "../Game/AI/nativeDiplomaticDirector.js";
 import { compareGameDates, parseGameDate } from "./gameDates.js";
-import { normalizeScenarioPrehistory } from "./scenarioPrehistory.js";
+import { MAX_SEMANTIC_DAY_ONE_FACTS, normalizeScenarioPrehistory } from "./scenarioPrehistory.js";
+export { MAX_SEMANTIC_DAY_ONE_FACTS } from "./scenarioPrehistory.js";
 
 export const AUTHORABLE_DAY_ONE_KINDS = Object.freeze(["relation", "agreement", "storyline"]);
 export const DAY_ONE_AGREEMENT_TYPES = AGREEMENT_TYPE_VALUES;
-export const MAX_SEMANTIC_DAY_ONE_FACTS = 32;
+const dayOneLimitMessage = () => "At most " + MAX_SEMANTIC_DAY_ONE_FACTS + " semantic Day-one facts are supported.";
 const clean = (value) => String(value ?? "").trim();
 const list = (value) => Array.isArray(value) ? value : [];
 const unique = (values) => [...new Set(list(values).map(clean).filter(Boolean).map((value) => value.toLowerCase()))];
@@ -16,7 +17,7 @@ const factsOf = (record) => list(record?.updates?.canonicalUpdates);
 
 export const newManualDayOneFact = (kind, draft) => {
   if (!AUTHORABLE_DAY_ONE_KINDS.includes(kind)) throw new Error("Unsupported Day-one fact: " + kind);
-  if (factsOf(draft).length >= MAX_SEMANTIC_DAY_ONE_FACTS) throw new Error("At most 32 semantic Day-one facts are supported.");
+  if (factsOf(draft).length >= MAX_SEMANTIC_DAY_ONE_FACTS) throw new Error(dayOneLimitMessage());
   const refs = new Set(factsOf(draft).map((fact) => clean(fact?.ref)));
   let index = 1;
   while (refs.has("manual-f" + index)) index++;
@@ -79,7 +80,7 @@ export const changeManualAgreementType = (draft, index, type) => {
 export const dayOneEditorProblems = (draft, { startDate = "", world = {}, verifyWorld = false } = {}) => {
   const facts = factsOf(draft);
   const errors = [];
-  if (facts.length > MAX_SEMANTIC_DAY_ONE_FACTS) errors.push(error(-1, "At most 32 semantic Day-one facts are supported."));
+  if (facts.length > MAX_SEMANTIC_DAY_ONE_FACTS) errors.push(error(-1, dayOneLimitMessage()));
   const refs = new Set();
   const requireNames = (values, min, label, index) => {
     if (!Array.isArray(values) || unique(values).length < min) errors.push(error(index, label + " must name at least " + min + " distinct polities."));

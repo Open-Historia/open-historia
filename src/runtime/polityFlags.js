@@ -7,9 +7,11 @@
  * assigned a custom flag.
  */
 import COUNTRY_NAMES from "./generated/countryNames.js";
-import { JSON_URLS, readJson, writeJson } from "./assets.js";
+import { JSON_URLS, readJson } from "./assets.js";
+import { mutateFlagsState } from "./gameState.js";
 import { flagImageUrlFromGid } from "./countryFlags.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity, resolveStockCountryCode } from "./polityIdentity.js";
+import { inSharedGame, requestFromHost } from "../multiplayer/client/sharedGameBridge.js";
 
 const str = (value) => String(value ?? "").trim();
 const norm = (value) => str(value).toLowerCase();
@@ -242,9 +244,26 @@ export const resolveWritablePolityKey = (polity, world) => {
   return raw;
 };
 
-export const setPolityFlag = async ({ polity, world, dataUrl }) => {
+// `fence`: the entry of a shared game's host queue it is set in (the "flag"
+// request, multiplayer/host/gameHost.js), which its write carries.
+export const setPolityFlag = async ({ polity, world, dataUrl, fence = null }) => {
   const key = resolveWritablePolityKey(polity, world);
   if (!key) throw new Error("Cannot change a flag without a resolvable polity identity.");
+
+  // In a shared game the flags are the host's, drawn on every map: a page asks
+  // for the change ("flag" request), the host makes it for the asker's own
+  // country, or for a country the AI plays when the asker is the host (the
+  // owner, 2026-11-16), and the next view brings it. A page's own write was
+  // answered "saved" and dropped. Resolves with the flags as they will stand.
+  if (inSharedGame()) {
+    const image = str(dataUrl);
+    const answer = await requestFromHost("flag", { country: key, image });
+    if (!answer.ok) throw new Error(answer.error || "The host did not take that flag.");
+    const held = canonicalizeFlagMap(await readJson(JSON_URLS.flags, { defaultValue: {} }).catch(() => ({})), world);
+    if (image) held[key] = image;
+    else delete held[key];
+    return held;
+  }
 
   // force=true matters for an old save with no game-level flags.json yet: this read
   // returns the scenario's complete effective starting map, which we then clone and
@@ -253,18 +272,24 @@ export const setPolityFlag = async ({ polity, world, dataUrl }) => {
   // Read with no default: the whole map is written back, so a read that failed
   // must stop the write rather than pass for an empty file and erase every other
   // authored flag. A game without its own flags.json reads as {} and succeeds.
-  let current;
+  // Read and written in the game's one write order (gameState.js
+  // mutateFlagsState): a flag set beside another write of them was lost to it.
+  let next = null;
+  let read = false;
   try {
-    current = await readJson(JSON_URLS.flags, { force: true });
+    await mutateFlagsState((current) => {
+      read = true;
+      next = canonicalizeFlagMap(current, world);
+      const value = str(dataUrl);
+      if (value) next[key] = value;
+      else delete next[key];
+      return next;
+    }, { pretty: true, fence });
   } catch (error) {
+    // (A write refused for an entry its host let go is said as that.)
+    if (read || (fence && !fence.live)) throw error;
     console.warn("[flags] could not read flags.json; nothing was changed:", error);
     throw new Error("The game's flags could not be read, so nothing was changed. Try again.");
   }
-  const next = canonicalizeFlagMap(current, world);
-  const value = str(dataUrl);
-  if (value) next[key] = value;
-  else delete next[key];
-
-  await writeJson(JSON_URLS.flags, next, { pretty: true });
   return next;
 };

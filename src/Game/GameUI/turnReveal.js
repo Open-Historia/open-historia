@@ -31,6 +31,13 @@ export const LIVE_TURN_RECORD_ID = "live-turn";
 const liveEventCards = new WeakMap();
 let liveEventSeq = 0;
 
+// A category filter must never advance the actual reveal prefix. In particular,
+// it must not expose the transcript of a still-unseen outcome.
+export const revealedEventCards = (events, count, category = null) => {
+    const revealed = (Array.isArray(events) ? events : []).slice(0, Math.max(0, count || 0));
+    return category ? revealed.filter(event => Array.isArray(event?.tags) && event.tags.includes(category)) : revealed;
+};
+
 // The lists the cards, the camera and the map staging walk. A streamed event's
 // are whatever the model typed, and `?? []` does not save an iteration from a
 // non-array: that throws in a render and blanks the panel. Dropped here once.
@@ -45,6 +52,8 @@ export const liveEventCard = (event) => {
     if (!card) {
         liveEventSeq += 1;
         card = { ...event, id: `${LIVE_TURN_RECORD_ID}-${liveEventSeq}` };
+        // A transcript is a native attachment on a committed event, not model prose.
+        delete card.interactiveTranscript;
         for (const key of ["tags", "combatants"]) {
             if (card[key] !== undefined && !Array.isArray(card[key])) card[key] = [];
         }

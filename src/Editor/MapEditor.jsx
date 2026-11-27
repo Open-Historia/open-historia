@@ -10,9 +10,12 @@
 // tree, its own map instance) so it can't disturb the game's MapLibre map.
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
 import "ol/ol.css";
 import OlMap from "./OlMap.jsx";
 import EditorSidebar, { SIDEBAR_WIDTH } from "./EditorSidebar.jsx";
+import EditorToolDock from "./EditorToolDock.jsx";
+import { selectedCountryFromMap } from "./selectedCountryFromMap.js";
 
 const SIDEBAR_SIDE_KEY = "oh-map-editor-sidebar-side";
 import TypeManager from "./TypeManager.jsx";
@@ -38,12 +41,13 @@ import {
   subscribeRegionClipboard,
   writeRegionClipboard,
 } from "./regionClipboard.js";
+import { clipboardMetadataStep } from "./clipboardDocumentHistory.js";
 import SelectionInspector from "./SelectionInspector.jsx";
 import DocumentsMenu from "./DocumentsMenu.jsx";
 import CityPopup from "./CityPopup.jsx";
 import MarkerPopup from "./MarkerPopup.jsx";
 import { isMapFeature, markerToFeature, newMapFeature } from "./mapFeatures.js";
-import { addRowStep, membershipStep, patchRowStep, removeRowStep } from "./documentUndo.js";
+import { addRowStep, membershipStep, patchRowStep, removeRowStep, removeRowsStep, replaceRowsStep } from "./documentUndo.js";
 import WarMapPanel from "./WarMapPanel.jsx";
 import { WAR_LISTS, isWarTool, newClimateZone, newFortification, newTerrainArea, warGeographyOf } from "./warGeographyDoc.js";
 import SearchBar from "./SearchBar.jsx";
@@ -60,6 +64,7 @@ import { mapKm, mapMeasureOf } from "../../server/mapDistance.js";
 import { SCALE_TOOL, scaleLabelOf } from "./scaleLineLayer.js";
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
+import { createVerifiedMapRecovery } from "./mapRecoveryCheckpoint.js";
 import { createSaveRunner, isUnsavedStatus, saveRetryDelay, settleUnsavedWork } from "./documentSaving.js";
 import { OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
@@ -68,12 +73,18 @@ import { moveOwnBasemapsBetween, ownBasemapFromLibrary, ownBasemapIdOfLibrary } 
 import { addBuiltinMap, addOwnMap, makeStartingMap, removeMap, scenarioMaps, setShownOver } from "./scenarioMaps.js";
 import { DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE, buildGameSeed, gameCityToFeature } from "./exportPreset.js";
 import { normalizeGroups } from "../runtime/groups.js";
-import { isWaterType, normalizeRegionTypes } from "../runtime/regionTypes.js";
+import { isWaterType, MAX_REGION_TYPES, normalizeRegionTypes } from "../runtime/regionTypes.js";
 import { inputStyle, pillButton } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
 import SuggestionReviewPanel, { useSuggestionMarkup, useSuggestionReview } from "./SuggestionReviewPanel.jsx";
 import { checkFmgAvailable, generateFmgWorld } from "./fmg/fmgDriver.js";
 import { fmgToEditorSeed } from "./fmg/fmgImport.js";
+import { planGeneratedMapReplacement } from "./fmgReplacementPlan.js";
+import { generatedWorldReplacementId, settleGeneratedWorldReplacement } from "./scenarioWorldReplacement.js";
+import {
+  planMapPolityCreation, planMapPolityRename, revertMapPolityCreation,
+} from "./polityIdentityTransaction.js";
+import { alertDialog, confirmDialog, hasOpenUiDialog } from "../runtime/uiDialog.js";
 
 const hexToRgb = (value) => {
   const m = /^#?([a-f0-9]{6})$/i.exec(String(value || "").trim());
@@ -165,6 +176,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // loaded once it arrives, so never auto-seed the default world underneath it.
   const scenarioMode = Boolean(onApplyToScenario);
   const [api, setApi] = useState(null);
+  // The host sends back the scenario's just-saved Political World baseline.
+  // This is display-only while the Workshop stays open, not a rival registry.
+  const [savedPoliticalActors, setSavedPoliticalActors] = useState(null);
   const [openPanel, setOpenPanel] = useState(null); // 'types' | 'regions' | 'polities' | 'province-import' | 'layers' | 'features' | 'reference' | null
   const [paintOwner, setPaintOwner] = useState(""); // stable polity key assigned by the paint tool
   const [paintOnlyOwner, setPaintOnlyOwner] = useState("*"); // "*" | "__unowned__" | stable polity key
@@ -190,6 +204,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // the save sends of them, beside the renames it already logs, is
   // removalsForScenario above.
   const polityAuthoringOpsRef = useRef([]);
+  const scenarioSaveSeqRef = useRef(0);
   // The question a save asks first (BorderCleanupChoice): quick clean or deep
   // clean. Up while `cleanChoice` is set; the ref holds what its answer goes to.
   const [cleanChoice, setCleanChoice] = useState(null);
@@ -210,6 +225,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const [unitPopup, setUnitPopup] = useState(null); // {id, x, y, isNew} — inline unit editor
   const [featureSelection, setFeatureSelection] = useState([]); // feature ids ticked in the Features panel or box-selected on the map
   const [customBg, setCustomBg] = useState(null); // live background applied to the map
+  // This modern street reference exists only for the current editing session;
+  // scenario/document basemap choice and authored historical regions stay intact.
+  const [streetReference, setStreetReference] = useState(false);
   const [basemapPickerOpen, setBasemapPickerOpen] = useState(false);
   // Which country's flag we're picking, or null. Owned HERE, not in the inspector:
   // panelSurface used to carry backdrop-filter, which makes a containing block
@@ -224,6 +242,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const [fmgOpen, setFmgOpen] = useState(false); // FMG "Generate" drawer
   const [fmgBusy, setFmgBusy] = useState(false);
   const [fmgLog, setFmgLog] = useState([]);
+  const [newGeneratedScenarioName, setNewGeneratedScenarioName] = useState("Generated World");
   // Whether this build serves the generator (fmgDriver.js checkFmgAvailable):
   // null until asked once, and the GENERATE tab shows only on true.
   const [fmgAvailable, setFmgAvailable] = useState(null);
@@ -333,45 +352,92 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     setClipboardResult({ kind: "copied", count: regions.features.length });
     return true;
   };
-  const pasteClipboard = () => {
-    if (!api || !clipboard) return false;
-    // The document's side first (countries, colours, flags, tags, types and
-    // groups this map lacks), then the map's: OlMap carves and adds, one undo step.
-    const plan = planClipboardMerge(clipboard, { polities: d.polities, colors: d.colors, flags: d.flags, tags: d.tags, types: d.types, groups: d.groups });
-    if (plan.types.length) d.setTypes((list) => [...list, ...plan.types]);
-    if (Object.keys(plan.groups).length) d.setGroups((registry) => ({ ...plan.groups, ...registry }));
-    for (const [key, record] of Object.entries(plan.upserts)) d.upsertPolity(key, record);
-    for (const [key, rgb] of Object.entries(plan.colorOverrides)) d.setColorOverride(key, rgb);
-    for (const [key, flag] of Object.entries(plan.flags)) d.setFlag(key, flag);
-    for (const [key, list] of Object.entries(plan.tags)) d.setTags(key, list);
-    const result = api.pasteRegions(clipboard.regions, { simplify: pasteSimplified });
-    if (result.added.length) {
-      d.setSaveStatus("dirty");
-      api.zoomToSelection(result.added);
+  const pastingClipboardRef = useRef(false);
+  const removingAllUnitsRef = useRef(false);
+  const liveClipboardContextRef = useRef({ api, d, pasteSimplified });
+  liveClipboardContextRef.current = { api, d, pasteSimplified };
+  const pasteClipboard = async () => {
+    if (pastingClipboardRef.current) return false;
+    const confirmedClipboard = getRegionClipboard() || clipboard;
+    const count = confirmedClipboard?.regions?.features?.length || 0;
+    if (!api || !count) return false;
+    pastingClipboardRef.current = true;
+    try {
+      // Validate the cross-document type merge before any geometry is carved.
+      // The native game only accepts MAX_REGION_TYPES; silently overflowing here
+      // would strand freshly pasted regions with unresolved type references.
+      const initialPlan = planClipboardMerge(confirmedClipboard, { polities: d.polities, colors: d.colors, flags: d.flags, tags: d.tags, types: d.types, groups: d.groups });
+      if (d.types.length + initialPlan.types.length > MAX_REGION_TYPES) {
+        await alertDialog(`Cannot paste: this map would contain ${d.types.length + initialPlan.types.length} region types, above the native limit of ${MAX_REGION_TYPES}. Remove unused types or import fewer types before pasting.`);
+        return false;
+      }
+      if (!(await confirmDialog(
+        `Paste ${count} region${count === 1 ? "" : "s"} into this map? Overlapping existing territory will be carved or replaced. One Undo reverses both pasted geometry and newly imported polity/type/group metadata.`,
+      ))) return false;
+      const latest = liveClipboardContextRef.current;
+      const latestApi = latest?.api || api;
+      const latestDoc = latest?.d || d;
+      if (!latestApi || !confirmedClipboard?.regions?.features?.length) return false;
+      // Always paste the exact clipboard snapshot the user confirmed, while
+      // recomputing the merge plan against the latest destination document.
+      const plan = planClipboardMerge(confirmedClipboard, {
+        polities: latestDoc.polities,
+        colors: latestDoc.colors,
+        flags: latestDoc.flags,
+        tags: latestDoc.tags,
+        types: latestDoc.types,
+        groups: latestDoc.groups,
+      });
+      if (latestDoc.types.length + plan.types.length > MAX_REGION_TYPES) {
+        await alertDialog(`Cannot paste: this map would contain ${latestDoc.types.length + plan.types.length} region types, above the native limit of ${MAX_REGION_TYPES}. Remove unused types or import fewer types before pasting.`);
+        return false;
+      }
+      // A paste can contain no usable polygon. Import document-side metadata
+      // only after the native map confirms that at least one region was added.
+      const result = latestApi.pasteRegions(confirmedClipboard.regions, {
+        simplify: latest?.pasteSimplified ?? pasteSimplified,
+        documentStep: clipboardMetadataStep(plan, latestDoc.doc, latestDoc.setDoc, latestDoc.setSaveStatus),
+      });
+      if (!result?.added?.length) {
+        setClipboardResult({ kind: "pasted", added: [], trimmed: result?.trimmed || 0, removed: result?.removed || 0 });
+        return false;
+      }
+      latestApi.zoomToSelection(result.added);
+      setClipboardResult({ kind: "pasted", ...result });
+      return true;
+    } finally {
+      pastingClipboardRef.current = false;
     }
-    setClipboardResult({ kind: "pasted", ...result });
-    return result.added.length > 0;
   };
-  const clipboardKeysRef = useRef({ copy: copySelectionToClipboard, paste: pasteClipboard });
-  clipboardKeysRef.current = { copy: copySelectionToClipboard, paste: pasteClipboard };
+  const clipboardKeysRef = useRef({ copy: copySelectionToClipboard, paste: pasteClipboard, canPaste: () => false });
+  clipboardKeysRef.current = {
+    copy: copySelectionToClipboard,
+    paste: pasteClipboard,
+    canPaste: () => Boolean(api && !pastingClipboardRef.current && (getRegionClipboard()?.regions?.features?.length || clipboardCount) > 0),
+  };
   useEffect(() => {
     // Ctrl/Cmd+C copies the selected regions, Ctrl/Cmd+V pastes — unless the
-    // author is typing in a field or has text selected, which stay the browser's.
+    // author is typing in a field, a modal dialog is open, or text is selected.
     const onKeyDown = (e) => {
+      if (hasOpenUiDialog()) return;
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
       const key = e.key.toLowerCase();
       if (key !== "c" && key !== "v") return;
       const active = document.activeElement;
       if (active && (/^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName) || active.isContentEditable)) return;
-      if (key === "c" && String(window.getSelection?.()?.toString() || "").length) return;
-      const acted = key === "c" ? clipboardKeysRef.current.copy() : clipboardKeysRef.current.paste();
-      if (acted) e.preventDefault();
+      if (key === "c") {
+        if (String(window.getSelection?.()?.toString() || "").length) return;
+        if (clipboardKeysRef.current.copy()) e.preventDefault();
+        return;
+      }
+      if (!clipboardKeysRef.current.canPaste()) return;
+      e.preventDefault();
+      void clipboardKeysRef.current.paste();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const togglePanel = (name) => setOpenPanel((cur) => (cur === name ? null : name));
 
   // ---- the war geography: terrain, fortified lines, climate zones ----------
   // (warGeographyDoc.js) The shape the designer has picked, { kind, id } or
@@ -404,6 +470,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     const step = removeRowStep(warListOf(kind), warSetters[kind], id);
     setWarSelection((current) => (current?.kind === kind && current.id === id ? null : current));
     return step;
+  };
+  const replaceWarPreset = (kind, replacement) => {
+    if (!api || (kind !== "terrain" && kind !== "climate")) return false;
+    const step = replaceRowsStep(warListOf(kind), warSetters[kind], replacement);
+    if (!step) return false;
+    setWarSelection(null);
+    api.pushStep(step);
+    return true;
   };
   // A shape picked is gone once an undo or a delete takes it away.
   const warPickedRow = warSelection ? warListOf(warSelection.kind).find((row) => row.id === warSelection.id) : null;
@@ -441,7 +515,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const scenarioMapList = scenarioMaps(d.doc?.metadata, { scenarioName: d.name });
   const applyMaps = (result) => {
     if (result.refused) {
-      window.alert(result.refused);
+      void alertDialog(result.refused);
       return false;
     }
     const before = d.doc?.metadata?.customBackground ?? null;
@@ -480,17 +554,17 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       }
       return applyMaps(result);
     } catch (e) {
-      window.alert(`Could not add that map: ${e?.message || e}`);
+      await alertDialog(`Could not add that map: ${e?.message || e}`);
       return false;
     }
   };
   // A built-in world map as the starting map of a scenario with a map of its
   // own is asked first: it is most often a slip.
-  const makeStarting = (map) => {
+  const makeStarting = async (map) => {
     const current = scenarioMapList.find((entry) => entry.starting);
     if (map.kind === "builtin" && current && current.kind !== "builtin"
-      && !window.confirm(`${current.name} won't be the starting map any more: players will start on ${map.name}, a map of the real world. ${current.name} stays in this scenario's maps.`)) return;
-    applyMaps(makeStartingMap(d.doc?.metadata, map.key, { scenarioName: d.name }));
+      && !(await confirmDialog(`${current.name} won't be the starting map any more: players will start on ${map.name}, a map of the real world. ${current.name} stays in this scenario's maps.`))) return;
+    applyMaps(makeStartingMap(dRef.current.doc?.metadata, map.key, { scenarioName: dRef.current.name }));
   };
   const removeFromMaps = (key) => applyMaps(removeMap(d.doc?.metadata, key));
   const showDetailedOver = (key, overKey) => applyMaps(setShownOver(d.doc?.metadata, key, overKey, { scenarioName: d.name }));
@@ -725,32 +799,38 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       const raw = await generateFmgWorld(params, fmgLogLine);
       fmgLogLine("Building regions, countries and cities…");
       const seed = fmgToEditorSeed(raw, { groupBy: params.useProvinces ? "province" : "state" });
-      api.loadRegions(seed.regions);
-      d.setFeatures(
-        seed.cities.features
-          .map((f) => ({
-            id: newId("feat"),
-            name: f.properties?.city || "",
-            type: "Coordinate",
-            symbol: "square",
-            coord: Array.isArray(f.geometry?.coordinates) ? f.geometry.coordinates.slice(0, 2) : null,
-            country: "",
-            owner: null,
-            regionId: null,
-            population: f.properties?.population || 0,
-            tags: f.properties?.capital === "primary" ? ["city", "capital"] : ["city"],
-          }))
-          .filter((f) => Array.isArray(f.coord)),
-      );
+      // All new canonical records must be validated before the old map moves.
+      const plan = planGeneratedMapReplacement(seed, d.doc);
+      const newBackground = rebuildPersistedBackground(plan.background, { persisted: false });
+      const confirmText = [
+        "Replace this map with the generated world?",
+        "",
+        "New: " + seed.stats.regions + " regions, " + seed.stats.polities + " polities, " + seed.stats.cities + " cities.",
+        "The old territory, registered polities, groups, flags, units, diplomatic relations and war geography will not be carried into the new world.",
+        "",
+        "Before replacement a complete recovery map will be saved and VERIFIED in Saved maps. This action cannot be undone through the map Undo button.",
+      ].join("\n");
+      if (!(await confirmDialog(confirmText, { danger: true, confirmLabel: "Replace world" }))) {
+        fmgLogLine("World replacement cancelled; the map was not changed.");
+        return;
+      }
+      fmgLogLine("Saving and verifying the full recovery map...");
+      const recovery = await createRecoverySnapshot("world generation");
+      fmgLogLine("Verified recovery in Saved maps: " + recovery.name);
+      // loadRegions validates and parses BEFORE it clears any existing source.
+      // The new document is applied as one canonical state replacement.
+      api.loadRegions(plan.regions);
+      d.setDoc(plan.document);
       d.mergeColors(seed.colors);
-      const savedBg = { kind: "vector", geojson: seed.background.geojson };
-      setCustomBg(rebuildPersistedBackground(savedBg, { persisted: false }));
-      d.patchMetadata({ customBackground: savedBg });
+      setCustomBg(newBackground);
+      d.setSelection([]);
+      // Old authoring ops refer to a different world; they may not be replayed.
+      polityAuthoringOpsRef.current = [];
       // Save the generated biome basemap to "Your basemaps" so it can be reused.
       try {
         const tmpl = params.template && params.template !== "random" ? params.template : "generated";
         const bmName = `${tmpl.charAt(0).toUpperCase()}${tmpl.slice(1)} world basemap`;
-        const bm = await addBackgroundToLibrary(savedBg, bmName, { author: d.author || "" });
+        const bm = await addBackgroundToLibrary(plan.background, bmName, { author: d.author || "" });
         if (bm?.id) fmgLogLine("Saved this basemap to “Your basemaps”.");
       } catch (e) {
         console.warn("[editor] save generated basemap to library failed:", e);
@@ -790,6 +870,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     units: d.units,
     groups: d.groups,
     puppets: d.puppets,
+    // The canonical starting diplomacy baseline and specifically staged edits.
+    // Both are required when reopening a working map before Apply & Play.
+    relations: d.relations,
+    relationEdits: d.relationEdits,
+    actorGovernmentEdits: d.actorGovernmentEdits,
     // What the scenario draws on its map for war (warGeographyDoc.js).
     terrainAreas: d.terrainAreas,
     fortifications: d.fortifications,
@@ -808,6 +893,25 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     ...buildDocumentFields(),
     regions: regions || api?.serializeRegions() || { type: "FeatureCollection", features: [] },
   });
+
+  // Destructive authoring must first persist and verify a DIFFERENT Saved map.
+  const createRecoverySnapshot = async (reason) => {
+    if (!api || (scenarioMode && !hydrated)) {
+      throw new Error("Cannot replace regions while the current scenario map is still loading.");
+    }
+    await runSaveRef.current?.idle();
+    const edits = d.editCount();
+    const checkpoint = await createVerifiedMapRecovery({
+      payload: buildPayload(),
+      reason,
+      save: saveDocument,
+      load: loadDocument,
+    });
+    if (d.editCount() !== edits) {
+      throw new Error("The map changed while its recovery checkpoint was saving. Nothing was replaced; retry after the current edit.");
+    }
+    return checkpoint;
+  };
 
   // Which clean a save is to run, asked of the author each time: "quick"
   // (cracks and slivers up to BORDER_CLEANUP.quickWidth, 500 m), "deep" (up
@@ -863,8 +967,12 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
 
   // Persist the Workshop map into the scenario without forcing a new game.
   // Playing is now an explicit third action instead of the only way to save.
-  const persistScenario = async ({ play = false, closeAfter = false } = {}) => {
+  const persistScenario = async ({ play = false, closeAfter = false, destination = "current", newScenarioName = "" } = {}) => {
     if (!api || !onApplyToScenario || scenarioAction || cleanAnswerRef.current) return false;
+    if (destination === "new" && !generatedWorldReplacementId(d.doc)) {
+      await alertDialog("Generate a world before creating a separate scenario from it.");
+      return false;
+    }
     // Before the scenario's map has loaded the document is empty, and a save
     // then wrote an empty map over the scenario. That was the "save twice" bug:
     // the first click, made while the map was still downloading, wiped it, and
@@ -877,11 +985,16 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     // Quick or deep, before anything is read. Backed out of, the save is off.
     const mode = await chooseClean();
     if (!mode) return false;
-    const action = play ? "play" : closeAfter ? "save-exit" : "save";
+    const action = destination === "new" ? "new-scenario" : play ? "play" : closeAfter ? "save-exit" : "save";
     setScenarioAction(action);
     const note = await cleanBorders({ mode });
+    let canonicalSaved = false;
     try {
       const authoringOps = polityAuthoringOpsRef.current.slice();
+      const startingRelationEdits = d.relationEdits.slice();
+      const actorGovernmentEdits = d.actorGovernmentEdits.slice();
+      const replacementId = generatedWorldReplacementId(d.doc);
+      const authoredAtSnapshot = d.authoredRevision;
       const seed = {
         ...buildGameSeed(
           d.doc,
@@ -890,28 +1003,73 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         ),
         // The polities removed since the last save (removalsForScenario).
         polityAuthoringOps: removalsForScenario(authoringOps),
+        startingRelationEdits,
+        actorGovernmentEdits,
+        generatedWorldReplacement: Boolean(generatedWorldReplacementId(d.doc)),
       };
       // The renames made since the last save, so the scenario's player country
       // and its name-keyed world records follow them (useMapDocument renamePolity).
       const renames = d.polityRenames;
-      await onApplyToScenario(seed, { play, renames });
-      d.settlePolityRenames(renames.length);
-      // The scenario now owns these operations. A second Save from the same
-      // still-open Workshop must not replay one already applied; any made
-      // while the save ran stay for the next one, like the renames above.
-      polityAuthoringOpsRef.current = polityAuthoringOpsRef.current.slice(authoringOps.length);
-      // What the author decided about a suggestion's map changes is kept with
-      // the scenario only now that the map it decided about is saved into it.
-      if (reviewSource) {
-        try { await reviewSource.onSaved?.(review.decisionsForSave()); } catch (e) { console.warn("[editor] could not record the review:", e); }
-      }
-      setScenarioDirty(false);
+      const needsWorkingCopySettlement = Boolean(
+        renames.length || startingRelationEdits.length || actorGovernmentEdits.length || replacementId,
+      );
+      let settlementCompleted = false;
+      const finishAcceptedScenarioSave = async (applied) => {
+        canonicalSaved = true;
+        scenarioSaveSeqRef.current += 1;
+        if (applied?.politicalActors) setSavedPoliticalActors(applied.politicalActors);
+        // All canonical writes have landed. Resolve only these accepted authoring
+        // operations against the latest React document before the next game can
+        // unmount the Workshop. Newer edits made during Save remain queued.
+        flushSync(() => {
+          d.settlePolityRenames(renames.length);
+          d.settleRelationEdits(startingRelationEdits, (api?.listPolityUsage?.() || []).map((row) => row.key));
+          d.settleActorGovernmentEdits(actorGovernmentEdits);
+          if (replacementId) {
+            d.setDoc((current) => settleGeneratedWorldReplacement(current, replacementId));
+          }
+          // Government settlement already marks the working copy dirty. Renames,
+          // relations and generated-world settlement must do so as well.
+          if (needsWorkingCopySettlement && !actorGovernmentEdits.length) {
+            d.setSaveStatus("dirty", { workingCopyOnly: true });
+          }
+        });
+        // These operations now belong to the scenario. Do not replay them on a
+        // later Save if a separate working-map write fails or activation aborts.
+        polityAuthoringOpsRef.current = polityAuthoringOpsRef.current.slice(authoringOps.length);
+        if (needsWorkingCopySettlement && !(await saveNowRef.current())) {
+          throw new Error("The scenario was saved, but its working-map authoring settlement could not be stored. Keep the Workshop open and retry the working-map Save.");
+        }
+        if (reviewSource) {
+          try { await reviewSource.onSaved?.(review.decisionsForSave()); } catch (e) { console.warn("[editor] could not record the review:", e); }
+        }
+        // Housekeeping does not create new scenario authoring, but an actual
+        // user edit during the write must still show as unsaved in the Workshop.
+        setScenarioDirty(dRef.current.authoredRevision !== authoredAtSnapshot);
+        settlementCompleted = true;
+      };
+      const accepted = await onApplyToScenario(seed, {
+        play,
+        renames,
+        destination,
+        newScenarioName,
+        beforePlay: async (applied) => {
+          // Apply & Play activates the game and unmounts us. Persist the local
+          // settlement first, including the explicit null metadata tombstone.
+          await finishAcceptedScenarioSave(applied);
+        },
+      });
+      if (!settlementCompleted) await finishAcceptedScenarioSave(accepted);
       setCleanupNote(note);
       if (!play && closeAfter) onClose?.();
       return true;
     } catch (e) {
-      console.warn("[editor] scenario save failed:", e);
-      window.alert(`Could not save the map into the scenario: ${e?.message || e}`);
+      console.warn("[editor] scenario save/follow-up failed:", e);
+      if (canonicalSaved) {
+        await alertDialog(`The scenario was saved, but the follow-up could not finish: ${e?.message || e}`);
+      } else {
+        await alertDialog(`Could not save the map into the scenario: ${e?.message || e}`);
+      }
       return false;
     } finally {
       // Apply & Play normally unmounts us before this matters; keeping the reset
@@ -997,6 +1155,132 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // victim is the user's last edits. Refs re-point every render instead.
   const dRef = useRef(d);
   dRef.current = d;
+
+  // Country creation/rename is a single authoring transaction across the
+  // canonical document and the native region source. Every prospective
+  // identity is verified before the first region or registry is touched.
+  // The composite history command replays both together.
+  const createCountryAtomically = (plan, selectedIds = []) => {
+    if (!api?.pushStep) return { ok: false, reason: "The native map is not ready." };
+    let regionStep = null;
+    try {
+      const before = dRef.current.doc;
+      const next = planMapPolityCreation(before, plan);
+      const ids = [...new Set(selectedIds)];
+      if (plan.assignSelectedRegions && (!ids.length || ids.some((id) => !api.getRegionSummary?.(id)))) {
+        throw new Error("Starting territory is no longer selected or has disappeared.");
+      }
+      if (plan.assignSelectedRegions) {
+        regionStep = api.setRegionAttrs(ids, { owner: plan.key }, { deferHistory: true });
+        if (!regionStep) throw new Error("The native map rejected the country assignment.");
+      }
+      const createdAtSaveSeq = scenarioSaveSeqRef.current;
+      d.setDoc(next);
+      d.setSaveStatus("dirty");
+      api.pushStep({
+        undo: () => {
+          const reverse = revertMapPolityCreation(dRef.current.doc, plan.key, before);
+          regionStep?.undo();
+          d.setDoc(reverse);
+          d.setSaveStatus("dirty");
+          // If the polity was already persisted to the scenario before Undo,
+          // queue an explicit removal op so the next save cleans up scenario ledgers.
+          if (scenarioMode && scenarioSaveSeqRef.current > createdAtSaveSeq) {
+            polityAuthoringOpsRef.current.push({ op: "remove", key: plan.key });
+            setScenarioDirty(true);
+          }
+        },
+        redo: () => {
+          const forward = planMapPolityCreation(dRef.current.doc, plan);
+          regionStep?.redo();
+          d.setDoc(forward);
+          d.setSaveStatus("dirty");
+          // Cancel the matching pending removal op even if another landless
+          // polity was removed between Undo and Redo.
+          const ops = polityAuthoringOpsRef.current;
+          for (let i = ops.length - 1; i >= 0; i -= 1) {
+            const entry = ops[i];
+            if (entry?.op === "rename" && (samePolityName(entry.from, plan.key) || samePolityName(entry.to, plan.key))) {
+              break;
+            }
+            if (entry?.op === "remove" && samePolityName(entry.key, plan.key)) {
+              ops.splice(i, 1);
+              break;
+            }
+          }
+        },
+      });
+      return { ok: true };
+    } catch (error) {
+      try { regionStep?.undo(); } catch (rollbackError) {
+        console.error("[editor] country creation rollback failed:", rollbackError);
+      }
+      return { ok: false, reason: error?.message || String(error) };
+    }
+  };
+
+  const renameCountryAtomically = (key, nextName) => {
+    const from = String(key || "").trim();
+    const to = String(nextName || "").trim();
+    if (!api?.pushStep || !from || !to || from === to) return false;
+    let regionStep = null;
+    try {
+      const names = [
+        ...Object.keys(dRef.current.doc?.polities || {}),
+        ...(api.listPolityUsage?.() || []).map((row) => row.key),
+      ];
+      const forward = planMapPolityRename(dRef.current.doc, from, to, names);
+      regionStep = api.renameOwner?.(from, to, { deferHistory: true }) || null;
+      d.setDoc(forward);
+      d.setSaveStatus("dirty");
+      const updatePaint = (oldKey, newKey) => {
+        setPaintOwner((current) => samePolityName(current, oldKey) ? newKey : current);
+        setPaintOnlyOwner((current) => current !== "*" && current !== "__unowned__" && samePolityName(current, oldKey) ? newKey : current);
+      };
+      const updateAuthoringOps = (oldKey, newKey) => {
+        const rows = polityAuthoringOpsRef.current;
+        const last = rows[rows.length - 1];
+        if (last?.op === "rename" && samePolityName(last.from, newKey) && samePolityName(last.to, oldKey)) {
+          rows.pop();
+        } else {
+          rows.push({ op: "rename", from: oldKey, to: newKey });
+        }
+      };
+      updatePaint(from, to);
+      updateAuthoringOps(from, to);
+      api.pushStep({
+        undo: () => {
+          const rollback = planMapPolityRename(dRef.current.doc, to, from, [
+            ...Object.keys(dRef.current.doc.polities || {}),
+            ...(api.listPolityUsage?.() || []).map((row) => row.key),
+          ]);
+          regionStep?.undo();
+          d.setDoc(rollback);
+          d.setSaveStatus("dirty");
+          updatePaint(to, from);
+          updateAuthoringOps(to, from);
+        },
+        redo: () => {
+          const repeated = planMapPolityRename(dRef.current.doc, from, to, [
+            ...Object.keys(dRef.current.doc.polities || {}),
+            ...(api.listPolityUsage?.() || []).map((row) => row.key),
+          ]);
+          regionStep?.redo();
+          d.setDoc(repeated);
+          d.setSaveStatus("dirty");
+          updatePaint(from, to);
+          updateAuthoringOps(from, to);
+        },
+      });
+      return true;
+    } catch (error) {
+      try { regionStep?.undo(); } catch (rollbackError) {
+        console.error("[editor] country rename rollback failed:", rollbackError);
+      }
+      void alertDialog(error?.message || String(error));
+      return false;
+    }
+  };
   const saveNowRef = useRef(saveNow);
   saveNowRef.current = saveNow;
 
@@ -1049,8 +1333,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // player chooses to stay, and Back then leaves the Workshop open.
   const requestClose = async ({ confirmed = false } = {}) => {
     if (scenarioMode && scenarioDirty && !confirmed) {
-      const ok = window.confirm(
+      const ok = await confirmDialog(
         "This scenario has Workshop changes that have not been saved into the scenario yet. Close without applying them?",
+        { danger: true, confirmLabel: "Close anyway" },
       );
       if (!ok) return false;
     }
@@ -1062,7 +1347,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     const ok = await settleUnsavedWork({
       status: dRef.current.saveStatus,
       save: saveNow,
-      confirm: (question) => window.confirm(question),
+      confirm: (question) => confirmDialog(question, { danger: true, confirmLabel: "Discard changes" }),
       question: "This map has changes that could not be saved. Close it and lose them?",
     });
     if (ok) onClose();
@@ -1091,7 +1376,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     const ok = await settleUnsavedWork({
       status: dRef.current.saveStatus,
       save: saveNow,
-      confirm: (text) => window.confirm(text),
+      confirm: (text) => confirmDialog(text, { danger: true, confirmLabel: "Continue" }),
       question,
     });
     if (ok) await runSaveRef.current.idle();
@@ -1139,7 +1424,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       background = rebuildPersistedBackground(opened.doc.metadata.customBackground);
     } catch (e) {
       console.warn("[editor] open failed:", e);
-      window.alert(`Could not open this map: ${e?.message || e}. Your current map is unchanged.`);
+      await alertDialog(`Could not open this map: ${e?.message || e}. Your current map is unchanged.`);
       return;
     }
     if (d.editCount() !== editsSettled && !(await settleBeforeReplacing(question))) return;
@@ -1147,7 +1432,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       api?.loadRegions(opened.regions);
     } catch (e) {
       console.warn("[editor] open failed:", e);
-      window.alert(`Could not open this map: ${e?.message || e}. Your current map is unchanged.`);
+      await alertDialog(`Could not open this map: ${e?.message || e}. Your current map is unchanged.`);
       return;
     }
     d.setDoc(opened.doc);
@@ -1176,15 +1461,12 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   }, [api, d.saveStatus, docId, d.doc]);
 
 
-  // Standalone document autosave and scenario persistence are intentionally
-  // separate. Once a hydrated scenario is edited, remember that it still needs
-  // an explicit Save / Save & Exit / Apply & Play even if the editor document
-  // itself has already autosaved.
+  // The scenario warning tracks authoring, NOT the working-map autosave's
+  // dirty/saving/saved status. Settling a successfully applied government edit
+  // changes the local working copy but creates no new scenario mutation.
   useEffect(() => {
-    if (scenarioMode && hydratedRef.current && d.saveStatus === "dirty") {
-      setScenarioDirty(true);
-    }
-  }, [scenarioMode, d.saveStatus]);
+    if (scenarioMode && hydratedRef.current) setScenarioDirty(true);
+  }, [scenarioMode, d.authoredRevision]);
 
   // Don't let the tab close on unsaved work. The autosave debounce means up to
   // two seconds of edits exist only in memory at any moment, and on the website
@@ -1277,6 +1559,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     base.groups = normalizeGroups(initialMap.groups);
     // The scenario's puppet states, as its world has them (scenarioPuppets.js).
     base.puppets = Array.isArray(initialMap.puppets) ? structuredClone(initialMap.puppets) : [];
+    // Keep scenario-authoritative scores without re-generating them on map save.
+    base.relations = Array.isArray(initialMap.relations) ? structuredClone(initialMap.relations) : [];
+    base.relationEdits = [];
+    base.actorGovernmentEdits = [];
     // What it draws on its map for war, as its world has it, so a round trip
     // keeps every shape and every frozen lake (warGeographyDoc.js).
     Object.assign(base, warGeographyOf(initialMap));
@@ -1360,7 +1646,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const typeUsage = useMemo(
     () => (api ? api.countByType() : {}),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [api, d.types, d.selection, d.regionCount],
+    [api, d.types, d.selection, d.regionCount, regionEpoch],
   );
 
   // The polity registry keeps every country that was registered — created in
@@ -1416,10 +1702,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
 
   const scenarioButton = (primary, dim = Boolean(scenarioAction) || !hydrated) => ({
     alignItems: "center",
-    background: primary ? "#2bc1f3" : "rgba(255,255,255,0.06)",
-    border: `1px solid ${primary ? "#2bc1f3" : "rgba(255,255,255,0.12)"}`,
+    background: primary ? "var(--oh-ui-accent, #2bc1f3)" : "var(--oh-ui-raised, rgba(255,255,255,0.06))",
+    border: primary ? "1px solid var(--oh-ui-accent, #2bc1f3)" : "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))",
     borderRadius: 10,
-    color: "#fff",
+    color: primary ? "var(--oh-ui-bg, #fff)" : "var(--oh-ui-text, #fff)",
     cursor: dim ? "default" : "pointer",
     display: "flex",
     fontSize: 12.5,
@@ -1489,6 +1775,64 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       >
         {scenarioAction === "play" ? "Applying…" : "▶ Apply & Play"}
       </button>
+      {generatedWorldReplacementId(d.doc) && !reviewSource && (
+        <div
+          role="group"
+          aria-label="Generated world destination"
+          style={{
+            gridColumn: "1 / -1",
+            display: "grid",
+            gap: 8,
+            marginTop: 5,
+            padding: 11,
+            border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.15))",
+            borderRadius: 11,
+            background: "var(--oh-ui-raised, rgba(255,255,255,0.06))",
+            color: "var(--oh-ui-text, #fff)",
+          }}
+        >
+          <strong style={{ fontSize: 12.5 }}>Generated world: choose a destination</strong>
+          <span style={{ fontSize: 11.5, lineHeight: 1.45, color: "var(--oh-ui-muted, #b0b8c7)" }}>
+            Save or Apply & Play above targets {scenarioName || "the current scenario"} and may be refused
+            when its established history is incompatible. To preserve that history, publish this
+            generated map as a separate scenario instead.
+          </span>
+          <label htmlFor="oh-generated-world-scenario-name" style={{ fontSize: 11.5, fontWeight: 650 }}>
+            New scenario name
+          </label>
+          <input
+            id="oh-generated-world-scenario-name"
+            type="text"
+            maxLength={96}
+            value={newGeneratedScenarioName}
+            onChange={(event) => setNewGeneratedScenarioName(event.target.value)}
+            disabled={Boolean(scenarioAction)}
+            placeholder="Generated World"
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              borderRadius: 8,
+              border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.2))",
+              padding: "9px 10px",
+              background: "var(--oh-ui-bg, #171c26)",
+              color: "var(--oh-ui-text, #fff)",
+              fontSize: 12.5,
+            }}
+          />
+          <button
+            onClick={() => void persistScenario({
+              play: false,
+              destination: "new",
+              newScenarioName: newGeneratedScenarioName,
+            })}
+            disabled={Boolean(scenarioAction) || !hydrated || newGeneratedScenarioName.trim().length < 3}
+            title="Create a separate blank-canon scenario and open it after saving this generated map. The current scenario remains unchanged."
+            style={scenarioButton(true, Boolean(scenarioAction) || !hydrated || newGeneratedScenarioName.trim().length < 3)}
+          >
+            {scenarioAction === "new-scenario" ? "Creating scenario…" : "Create New Scenario from This World"}
+          </button>
+        </div>
+      )}
     </div>
   ) : exitButton);
 
@@ -1532,7 +1876,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       </button>
     </div>
   ) : d.activeTool === "modify" ? (
-    <div style={{ color: d.selection.length ? "rgba(255,255,255,0.7)" : "#fbbf24" }}>
+    <div style={{ color: d.selection.length ? "var(--oh-ui-muted, rgba(255,255,255,0.7))" : "#fbbf24" }}>
       <b>Manual vertex override:</b>{" "}
       {d.selection.length === 0
         ? "select the regions to edit first"
@@ -1541,16 +1885,20 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           : `${d.selection.length} selected regions · drag a vertex · drag an edge to insert · Alt-click a vertex to remove · snap magnet enabled · Ctrl/Cmd+Z undo`}
     </div>
   ) : d.activeTool === "border" ? (
-    <div style={{ color: d.selection.length === 2 ? "rgba(255,255,255,0.74)" : "#fbbf24" }}>
+    <div style={{ color: d.selection.length === 2 ? "var(--oh-ui-muted, rgba(255,255,255,0.74))" : "#fbbf24" }}>
       <b>Shared border precision:</b>{" "}
       {d.selection.length === 2
         ? "drag a border vertex or edge on either selected region; the released point is welded into BOTH regions · cyan halo = shared-border magnet · Alt-click removes the corresponding shared vertex · a 100 m topology check runs after each edit · Ctrl/Cmd+Z undo"
         : `select exactly 2 neighbouring regions first (${d.selection.length} selected)`}
     </div>
   ) : isWarTool(d.activeTool) ? (
-    <div style={{ color: "rgba(255,255,255,0.7)" }}>{WAR_TOOL_HINTS[d.activeTool]}</div>
+    <div style={{ color: "var(--oh-ui-muted, rgba(255,255,255,0.7))" }}>{WAR_TOOL_HINTS[d.activeTool]}</div>
   ) : d.activeTool === "select" ? (
-    <div style={{ color: "rgba(255,255,255,0.7)" }}>Click a region to select it, Shift-click to add more, and double-click to select its whole country.</div>
+    <div style={{ color: "var(--oh-ui-muted, rgba(255,255,255,0.7))" }}>Click a region to select it, Shift-click to add more, and double-click to select its whole polity.</div>
+  ) : d.activeTool === "region-box" ? (
+    <div style={{ color: "var(--oh-ui-muted, rgba(255,255,255,0.7))" }}>Drag a rectangle to select every region touched; hold Shift to add to your current selection. Press M for Rectangle or L for Lasso.</div>
+  ) : d.activeTool === "move" ? (
+    <div style={{ color: "var(--oh-ui-muted, rgba(255,255,255,0.7))" }}>Drag a selected region to move all selected regions together as one Undo step. Drag an unselected region to move it alone; this may create border gaps against unmoved neighbours.</div>
   ) : null;
 
   return (
@@ -1558,10 +1906,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       style={{
         position: "fixed",
         inset: 0,
-        background: "#111113",
+        background: "var(--oh-ui-bg, #111113)",
         overflow: "hidden",
         fontFamily: "sans-serif",
-        color: "white",
+        color: "var(--oh-ui-text, white)",
         "--editor-dock-left": `${dockLeft}px`,
         "--editor-dock-right": `${dockRight}px`,
         "--editor-top": "12px",
@@ -1571,6 +1919,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       <div style={{ position: "absolute", top: 0, right: dockRight, bottom: 0, left: dockLeft }}>
       <OlMap
         basemap={d.basemap}
+        streetReference={streetReference}
         types={d.types}
         colors={d.colors}
         selectionIds={d.selection}
@@ -1586,6 +1935,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onFeatureSelectionChange={setFeatureSelection}
         features={d.features}
         onSelectionChange={d.setSelection}
+        onToolShortcut={d.setActiveTool}
         onRegionCount={d.setRegionCount}
         onRegionsChanged={(count, { loaded = false } = {}) => {
           d.setRegionCount(count);
@@ -1682,6 +2032,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           setTerrainAreas={d.setTerrainAreas}
           setFortifications={d.setFortifications}
           setClimateZones={d.setClimateZones}
+          onReplacePreset={replaceWarPreset}
           selection={warPickedRow ? warSelection : null}
           // A shape picked from the list is shown, and its tool is picked so it
           // can be reshaped at once.
@@ -1708,11 +2059,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         />
       )}
       {openPanel === "regions" && (
-        <RegionsPanel api={api} polities={d.polities} selection={d.selection} setSelection={d.setSelection} onClose={() => setOpenPanel(null)} />
+        <RegionsPanel api={api} polities={d.polities} types={d.types} groups={d.groups}
+          selection={d.selection} setSelection={d.setSelection} regionEpoch={regionEpoch}
+          onClose={() => setOpenPanel(null)} />
       )}
       {openPanel === "polities" && (
         <PolitiesPanel
           api={api}
+          initialCountryKey={selectedCountryFromMap(d.selection, api?.getRegionSummary)}
           polities={d.polities}
           selection={d.selection}
           setSelection={d.setSelection}
@@ -1726,23 +2080,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           // Answers whether the rename happened, so the panel follows only an
           // accepted one. A clash is with a registered polity or an owner or
           // claimant already on the map.
-          renamePolity={(key, nextName) => {
-            const from = String(key || "").trim();
-            const to = String(nextName || "").trim();
-            if (!from || !to || from === to) return false;
-            const names = [...Object.keys(d.polities || {}), ...(api?.listPolityUsage?.() || []).map((row) => row.key)];
-            const clash = names.find((other) => samePolityName(other, to) && !samePolityName(other, from));
-            if (clash) {
-              window.alert(`“${to}” is already the name of another polity (“${clash}”). A rename cannot merge two countries.`);
-              return false;
-            }
-            api?.renameOwner?.(from, to);
-            d.renamePolity(from, to);
-            polityAuthoringOpsRef.current.push({ op: "rename", from, to });
-            if (paintOwner === from) setPaintOwner(to);
-            if (paintOnlyOwner === from) setPaintOnlyOwner(to);
-            return true;
-          }}
+          renamePolity={renameCountryAtomically}
+          commitCountryDraft={createCountryAtomically}
           removePolity={(key) => {
             const stableKey = String(key || "").trim();
             if (!stableKey) return;
@@ -1757,11 +2096,19 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           }}
           puppets={d.puppets}
           setPuppets={d.setPuppets}
+          relations={d.relations}
+          relationEdits={d.relationEdits}
+          setRelationEdit={d.setRelationEdit}
+          governmentActors={savedPoliticalActors?.byPolity || initialMap?.politicalActors?.byPolity || {}}
+          governmentEdits={d.actorGovernmentEdits}
+          setGovernmentEdit={d.setActorGovernmentEdit}
+          polityRenames={d.polityRenames}
           // What its Military fields stand for left empty: the scenario's war
           // settings and era (libraryBar.jsx); none for a map opened on its own.
           militaryDefaults={initialMap?.militaryDefaults ?? null}
           importPolityRoster={d.importPolityRoster}
           setColorOverride={d.setColorOverride}
+          setFlag={d.setFlag}
           setTags={d.setTags}
           onOpenFlagPicker={setFlagPickerFor}
           onPaintPolity={(key) => {
@@ -1778,6 +2125,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           api={api}
           groups={d.groups}
           setGroups={d.setGroups}
+          polities={d.polities}
           selection={d.selection}
           regionEpoch={regionEpoch}
           militaryDefaults={initialMap?.militaryDefaults ?? null}
@@ -1792,6 +2140,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           importPolityRoster={d.importPolityRoster}
           importCityMarkers={d.importCityMarkers}
           currentPointFeatures={d.features}
+          createRecoverySnapshot={createRecoverySnapshot}
           onApplied={() => {
             d.setSelection([]);
             setRegionEpoch((n) => n + 1);
@@ -1799,7 +2148,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           onClose={() => setOpenPanel(null)}
         />
       )}
-      {openPanel === "layers" && <LayersPanel api={api} onClose={() => setOpenPanel(null)} />}
+      {openPanel === "layers" && <LayersPanel streetReference={streetReference}
+          onStreetReferenceChange={setStreetReference}
+          hasCustomBackground={["image", "vector", "raster", "plain"].includes(customBg?.kind)} api={api} onClose={() => setOpenPanel(null)} />}
       {openPanel === "projection" && (
         <ProjectionPanel
           projection={d.metadata?.projection}
@@ -1843,6 +2194,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       )}
       {openPanel === "reference" && (
         <ReferencePanel
+          activeTool={d.activeTool}
           refImage={refImage}
           setRefImage={setRefImage}
           onRecenter={() => setRefPlaceNonce((n) => n + 1)}
@@ -1858,6 +2210,13 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           setSelection={setFeatureSelection}
           activeTool={d.activeTool}
           setActiveTool={d.setActiveTool}
+          onEdit={(id) => {
+            const feature = d.features.find((f) => f.id === id);
+            if (!feature) return;
+            api?.locateFeature?.(feature.coord);
+            setCityPopup({ id, x: Math.round((window.innerWidth || 1200) / 2),
+              y: Math.round((window.innerHeight || 800) / 2) - 160, isNew: false });
+          }}
           onClose={() => {
             setOpenPanel(null);
             if (d.activeTool === "feature-box") d.setActiveTool("select");
@@ -1878,9 +2237,24 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
             api?.locateFeature?.([unit.lng, unit.lat]);
             setUnitPopup({ id, x: Math.round((window.innerWidth || 1200) / 2), y: Math.round((window.innerHeight || 800) / 2) - 160, isNew: false });
           }}
-          onRemove={(id) => d.setUnits((list) => list.filter((u) => u.id !== id))}
-          onRemoveAll={() => {
-            if (window.confirm(`Remove all ${d.units.length} starting units from this map?`)) d.setUnits([]);
+          onRemove={(id) => {
+            const step = removeRowStep(d.units, d.setUnits, id);
+            if (step) api?.pushStep?.(step);
+          }}
+          onRemoveAll={async () => {
+            if (removingAllUnitsRef.current || !d.units.length) return;
+            removingAllUnitsRef.current = true;
+            try {
+              if (!(await confirmDialog(`Remove all ${d.units.length} starting units from this map? The map Undo button can restore them.`, { danger: true, confirmLabel: "Remove all" }))) return;
+              const latest = liveClipboardContextRef.current;
+              const latestDoc = latest?.d || d;
+              const latestApi = latest?.api || api;
+              if (!latestDoc.units.length) return;
+              const step = removeRowsStep(latestDoc.units, latestDoc.setUnits, () => true);
+              if (step) latestApi?.pushStep?.(step);
+            } finally {
+              removingAllUnitsRef.current = false;
+            }
           }}
           onClose={() => {
             setOpenPanel(null);
@@ -1931,6 +2305,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         setSelection={d.setSelection}
         polities={d.polities}
         upsertPolity={d.upsertPolity}
+        commitCountryDraft={createCountryAtomically}
         regionEpoch={regionEpoch}
         onOpenPolities={() => setOpenPanel("polities")}
         groups={d.groups}
@@ -1992,6 +2367,17 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         />
       )}
 
+      <EditorToolDock
+        visible={!isMobile}
+        activeTool={d.activeTool}
+        onToolChange={d.setActiveTool}
+        canUndo={history.canUndo}
+        canRedo={history.canRedo}
+        onUndo={() => api?.undo()}
+        onRedo={() => api?.redo()}
+        onFit={() => api?.fitToData()}
+      />
+
       <EditorSidebar
         name={d.name}
         onNameChange={d.setName}
@@ -2050,11 +2436,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         clipboardCount={clipboardCount}
         suggestionCount={review.active ? review.pendingCount : null}
         openPanel={openPanel}
-        onOpenPanel={togglePanel}
-        basemap={d.basemap}
-        hasCustomBackground={Boolean(customBg)}
+        onSetPanel={setOpenPanel}
         onOpenBasemaps={() => setBasemapPickerOpen(true)}
-        detailedMapLabel={d.doc?.metadata?.tiledBasemap?.name || ""}
+        onOpenGenerator={() => setFmgOpen(true)}
+        generatorAvailable={Boolean(fmgAvailable)}
         saveStatus={d.saveStatus}
         saveError={saveError}
         onRetrySave={() => {
@@ -2063,6 +2448,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         }}
         scenarioDirty={scenarioMode ? scenarioDirty : false}
         actions={scenarioActions}
+        onReviewSave={scenarioMode ? () => persistScenario({ play: false, closeAfter: false }) : () => { void saveNow(); }}
+        onReviewPlay={scenarioMode ? () => persistScenario({ play: true }) : null}
+        reviewBusy={scenarioMode ? (Boolean(scenarioAction) || !hydrated) : !api}
+        reviewScenarioMode={scenarioMode}
         isMobile={isMobile}
         mobileOpen={sidebarOpen}
         onMobileOpenChange={setSidebarOpen}
@@ -2075,11 +2464,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       <FlagPicker
         open={Boolean(flagPickerFor)}
         onClose={() => setFlagPickerFor(null)}
-        ownerCode={flagPickerFor}
-        currentFlag={flagPickerFor ? d.flags?.[flagPickerFor] : null}
+        ownerCode={flagPickerFor?.kind === "country-draft" ? flagPickerFor.name : flagPickerFor}
+        currentFlag={flagPickerFor?.kind === "country-draft" ? flagPickerFor.flag : flagPickerFor ? d.flags?.[flagPickerFor] : null}
         mapFlags={d.flags}
         author={d.author}
-        onPick={(value) => d.setFlag(flagPickerFor, value)}
+        onPick={(value) => {
+          if (flagPickerFor?.kind === "country-draft") flagPickerFor.onPick?.(value);
+          else if (typeof flagPickerFor === "string") d.setFlag(flagPickerFor, value);
+        }}
       />
       <BasemapPicker
         open={basemapPickerOpen}

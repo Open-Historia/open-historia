@@ -54,102 +54,624 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
-    id: "2026-11-native-beta-catch-up",
-    kind: "minor",
-    date: "2026-11-17",
+    "id": "2026-11-interactive-event-history",
+    "kind": "major",
+    "date": "2026-11-21",
+    "channel": "beta",
+    "banners": [
+      {
+        "theme": "campaignRecords",
+        "scene": "history",
+        "title": "Your decisions, remembered",
+        "subtitle": "THE CAMPAIGN ARCHIVE",
+        "lead": "The history you make is now easier to revisit, preserve and share.",
+        "sections": [
+          {
+            "heading": "Interactive Events",
+            "icon": "book",
+            "items": [
+              "Play interactive scenes in a roomier dedicated window.",
+              "Reopen completed new scenes to read the original choices, your decisions and the responses.",
+              "Same-day scenes are grouped with the preceding time skip in Events."
+            ]
+          },
+          {
+            "heading": "Campaign Lore",
+            "icon": "note",
+            "items": [
+              "Open Campaign Lore in the Game menu to select world or player-focused history by date.",
+              "Export or copy retained history as Markdown or JSON without an AI request.",
+              "Choose whether to include private conversations, Actions, and interactive scene transcripts.",
+              "Request an AI-written chronicle with references to actual recorded events."
+            ]
+          },
+          {
+            "heading": "Earlier events",
+            "icon": "eye",
+            "items": [
+              "Browse earlier recorded events beyond the recent-turn picker, with search and category filters.",
+              "Open older event records directly without rewinding your campaign."
+            ]
+          }
+        ]
+      },
+      {
+        "theme": "campaignRecords",
+        "scene": "speech",
+        "title": "Words that reach the world",
+        "subtitle": "OFFICIAL PUBLIC COMMUNICATIONS",
+        "lead": "Ask your advisors to help you address the public, then decide exactly what your government says.",
+        "sections": [
+          {
+            "heading": "Draft and publish",
+            "icon": "phone",
+            "items": [
+              "Ask your chief advisor or a domestic minister to draft an official statement in a single-player campaign.",
+              "Review and edit the issuer, audience, title and wording before explicitly publishing.",
+              "Address your own people, foreign populations, the international community or an institution."
+            ]
+          },
+          {
+            "heading": "A public record",
+            "icon": "people",
+            "items": [
+              "Published statements enter campaign history and can shape the next time skip.",
+              "Discuss or cancel drafts, and withdraw published statements before time advances.",
+              "Advisors can discuss relevant public Rostra posts when social media is enabled."
+            ]
+          }
+        ]
+      },
+      {
+        "theme": "campaignRecords",
+        "scene": "finance",
+        "title": "Finance your projects",
+        "subtitle": "FROM AGREEMENT TO INVESTMENT",
+        "lead": "Turn recorded government loans into real project financing, with separate approval and disbursement.",
+        "sections": [
+          {
+            "heading": "Review the terms",
+            "icon": "book",
+            "items": [
+              "Review signed loan terms and actual disbursements from recorded campaign events.",
+              "Use optional AI-assisted extraction, then confirm the amounts, accounting equivalent and existing debt treatment yourself.",
+              "Available in single-player monetary campaigns; negotiated promises alone do not create funds."
+            ]
+          },
+          {
+            "heading": "Fund and repay",
+            "icon": "gear",
+            "items": [
+              "Earmark finite cash or supplier payments for eligible projects, with interest, repayments and arrears tracked separately.",
+              "Return unused funds and track outstanding loan principal in national debt.",
+              "Project funding and completion estimates account for financing commitments."
+            ]
+          }
+        ]
+      },
+      {
+        "theme": "campaignRecords",
+        "scene": "scenario",
+        "title": "More control over history",
+        "subtitle": "SCENARIO RULES AND EVERYDAY IMPROVEMENTS",
+        "lead": "Give scenario authors more precise starting conditions and make the everyday campaign easier to use.",
+        "sections": [
+          {
+            "heading": "Scripted events",
+            "icon": "flag",
+            "items": [
+              "Require a country to be human-controlled or not human-controlled before an event fires.",
+              "Author actual war declarations, subordinate-state arrangements and capital relocations, including in weighted outcomes.",
+              "Native validation checks these outcomes before accepting a turn."
+            ]
+          },
+          {
+            "heading": "Scenario creation",
+            "icon": "map",
+            "items": [
+              "Create up to 256 Day-one facts instead of 32.",
+              "Manage starting diplomatic scores and descriptions from Scenario Politics, using search and country filters.",
+              "Political World, Institutions and diplomatic relations managers now follow the selected interface theme.",
+              "Opt eligible custom characters into reading authored simulation rules; access is off by default."
+            ]
+          },
+          {
+            "heading": "Map and presence",
+            "icon": "gear",
+            "items": [
+              "Adjust when polity names disappear as you zoom in under Settings, Map, Labels.",
+              "Select units, cities and appropriate structures even on non-interactable territory; water placement rules still apply.",
+              "Discord Rich Presence follows the current campaign date and distinguishes saves with identical names."
+            ]
+          }
+        ],
+        "button": "Return to your world"
+      }
+    ]
+  },
+  {
+    // Beta Map Editor V2 (N022): one player-facing major notice for the
+    // verified P12-P19B creator workflow. Date is the preview's staging date,
+    // to be rechecked against the actual distribution day before publication.
+    id: "2026-11-map-editor-v2",
+    kind: "major",
+    date: "2026-11-21",
+    channel: "beta",
     banners: [
       {
-        title: "Advisor group replies recover from invalid silence",
-        items: [
-          "Group chats can recover when a silent advisor adds private memory by mistake, without asking the other advisors to speak again.",
-          "A silent advisor's private memory is never shown or saved; invalid replies still have to pass validation before joining the meeting.",
+        theme: "mapEditorV2",
+        scene: "draft",
+        title: "A World of Your Making",
+        subtitle: "THE MAP EDITOR, REIMAGINED",
+        lead: "A new cartographer's workshop puts the shape of the world, its borders and its places at your fingertips.",
+        sections: [
+          {
+            heading: "Shape the map",
+            icon: "map",
+            items: [
+              "Draw, split and repaint regions with clearer tools and precise close-up controls.",
+              "Find and select territory across large maps from a dedicated region workspace.",
+              "Cut regions with Scissors and undo the split in one step.",
+              "Zoom from Z1 to Z24 with finer close-up steps and compact mobile controls.",
+            ],
+          },
+          {
+            heading: "Find your tools",
+            icon: "gear",
+            items: [
+              "Dedicated workspaces bring together polities, territory, places, groups and war geography.",
+              "Search and edit from the map or the accompanying lists without hunting through scattered controls.",
+              "View a temporary OpenStreetMap street reference when tracing modern geography.",
+              "Use Hand to pan even while adjusting a reference image; switch to Select to move or resize it.",
+            ],
+          },
         ],
       },
       {
-        title: "More reliable country stats",
-        items: [
-          "Your scenario's starting country figures stay intact when you first open Stats.",
-          "Stats generation handles regional figures from more AI models without losing valid rows.",
-          "Rebuilding country stats still checks the country's territory and requires economic evidence.",
-          "Game Master corrections no longer put standard economy values into custom stats, preventing a Stats refresh validation error.",
+        theme: "mapEditorV2",
+        scene: "polities",
+        title: "Give Every Country a Name",
+        subtitle: "IDENTITY IS MORE THAN A BORDER",
+        lead: "Build countries that are more than coloured land: their identities, governments and place in the world matter.",
+        sections: [
+          {
+            heading: "Polity identities",
+            icon: "flag",
+            items: [
+              "Rename polities, manage their alternative names and keep their identities distinct.",
+              "Create countries before giving them territory, or preserve a polity that has no land.",
+              "Create a polity with selected regions and keep its country roster visible when opening detailed information.",
+            ],
+          },
+          {
+            heading: "Starting politics",
+            icon: "people",
+            items: [
+              "Edit government details and starting relations for the scenario's Political World.",
+              "Review the changes to your scenario separately from the map's working copy.",
+            ],
+          },
         ],
       },
       {
-        title: "Every language plays alike",
+        theme: "mapEditorV2",
+        scene: "publish",
+        title: "Make History. Keep History.",
+        subtitle: "YOUR OLD WORLD STAYS YOURS",
+        lead: "Bring an entirely new world to life without sacrificing the scenario you were already building.",
+        sections: [
+          {
+            heading: "Create another world",
+            icon: "star",
+            items: [
+              "Generate a new world and publish it as its own scenario instead of replacing established historical politics.",
+              "Regions, cities and polity colours are saved with the new scenario.",
+              "Custom worlds retain only their own polity colours, while ordinary stock maps keep the colours they need.",
+            ],
+          },
+          {
+            heading: "Recover and play",
+            icon: "book",
+            items: [
+              "Verified recovery maps give you a way back before major world replacements.",
+              "Save the working map, apply changes to a scenario or start a game from the world you made.",
+              "Paste regions and their newly imported records together, then undo or redo the whole paste in one step.",
+            ],
+          },
+        ],
+        button: "Enter the Workshop",
+      },
+    ],
+  },
+  {
+    id: "2026-11-project-currency-clarity",
+    kind: "minor",
+    date: "2026-11-20",
+    channel: "beta",
+    banners: [
+      {
+        title: "Clearer Project finances",
         items: [
-          "The game no longer looks for English words to decide what happens. It reads what the AI records and the names on your map, so a game in any language plays like one in English.",
-          "Land, armies and buildings move only by places written with their exact map names. A name the map doesn't have is left out and noted, never guessed, and never costs another AI request.",
-          "Peace terms, treaties and puppet states use the game's own record form, so a peace made in French or Chinese changes the map just as one made in English.",
-          "Countries, parties, leaders, wars and agents named in any alphabet are told apart, each country is drawn in a colour of its own, and renaming one written in Cyrillic or Chinese moves its regions with it.",
-          "History, storylines, scripted events, Rostra posts and the Advisor's letters and searches written in Chinese, Japanese or Thai now work like any other.",
-          "Scenario authors: a region type is water only when its Water switch is on, your own structure kinds and seasons are drawn as you pick them, and populations are typed in digits.",
+          "Project allowances, planned costs and recorded spending now display in your selected GDP currency.",
+          "Project planners distinguish the game's accounting amounts from each country's domestic currency.",
+          "Changing your display currency never changes existing Project costs or funding.",
+        ],
+      },
+    ],
+  },
+  {
+    // Four player reports (2026-11-19), each a whole Game Master request failed over one change inside one event: board ops the
+    // projects rework had removed, still in its prompt; a building with no family, refused for the landmark the game itself
+    // writes; a building half nested. One change that cannot be made is now left out and said (answerImpactOps.js).
+    id: "2026-11-gm-one-change",
+    kind: "minor",
+    date: "2026-11-19",
+    channel: "beta",
+    banners: [
+      {
+        title: "Game Master requests that go through",
+        items: [
+          "When one change in a Game Master request is written wrong, only that change is left out, and the preview says so. The rest of the request still goes through.",
+          "Game Master requests that put up a building on the map work again.",
+          "The Game Master now opens, sets back, speeds up and ends projects the way the Projects board works today.",
+          "A building a time skip puts up keeps the kind of icon it was given, and stays under construction when it is still being built.",
+        ],
+      },
+    ],
+  },
+  {
+    // "make it so you can have diplomacy with them like cartels and shit" (the owner, 2026-11-19): a group is a party
+    // to relations and agreements like a country (runtime/groupParties.js), its leadership talks as the group it is,
+    // and the diplomatic map draws it. Then "dont have the numbers be hardcoded ... add a button to diplomacy chat to
+    // propose deal": every agreement's effects written by the AI (runtime/agreementEffects.js), and Propose deal.
+    id: "2026-11-back-channels",
+    kind: "major",
+    date: "2026-11-19",
+    channel: "beta",
+    banners: [
+      {
+        theme: "backChannels",
+        scene: "talk",
+        title: "Back Channels",
+        subtitle: "Talk to the cartels, the rebels and the militias",
+        lead: "Groups are now parties to diplomacy as countries are. Open a conversation with any group on the map, and its leadership answers as what it is.",
+        sections: [
+          {
+            heading: "Talking",
+            icon: "people",
+            items: [
+              "Start a conversation with a group from the Diplomacy panel's list, from its area on the map (Talk to their leadership), or from a country's Groups on its territory.",
+              "A cartel talks like a cartel and a rebel movement like rebels, from what the group is and wants.",
+              "Groups can sit in group chats beside countries, and can write to you after a time skip.",
+            ],
+          },
         ],
       },
       {
-        title: "Unit types of your own",
-        items: [
-          "Scenario authors can create their own unit types under Wars in the scenario editor's Features tab, each with a name, an icon and a kind.",
-          "Set how hard each type hits, how much it can take and how fast it moves: a dragon can be an air unit five times as strong.",
-          "Units of these types fight by their own figures in the air, on land and at sea, and only the countries you choose can raise them.",
+        theme: "backChannels",
+        scene: "deals",
+        title: "Deals Written in Full",
+        subtitle: "Propose any deal in your own words",
+        sections: [
+          {
+            heading: "Proposing a deal",
+            icon: "book",
+            items: [
+              "Every conversation with a country or a group has a parchment beside the message box: Propose deal. Write the deal out in your own words and send it.",
+              "Their leadership answers in the same reply, accepting, refusing or countering, and writes the treaty as the game keeps it: its kind, its parties, its term, its terms and what it does.",
+              "A counter-offer comes as a card you sign or decline. Every deal in force is listed in the conversation and in a country's dossier with what it does, and you can end it there, though breaking it costs what it says.",
+            ],
+          },
+          {
+            heading: "What deals do",
+            icon: "swords",
+            items: [
+              "No deal runs on fixed numbers: what a treaty does when it is signed, every month, when it ends and if it is broken is written by the AI from both sides' economies, their relation, their wars and the terms, and the game carries out exactly that.",
+              "That holds for every agreement, alliances and trade pacts as well as truces, protection money and crackdowns. The game only keeps a single deal from changing a country overnight.",
+              "Countries the AI plays make deals with each other and with groups the same way, in conversations and in the time skip.",
+            ],
+          },
         ],
       },
       {
-        title: "Whole coalitions, steadier records",
+        theme: "backChannels",
+        scene: "map",
+        title: "Groups on the Diplomatic Map",
+        subtitle: "Where every group stands with you",
+        sections: [
+          {
+            heading: "Relations view",
+            icon: "map",
+            items: [
+              "On the Diplomatic map's Relations view, each group's area is drawn in its standing with the focus country, a crackdown in a colour of its own.",
+              "The legend lists the groups apart from the countries, and a group's card shows its relation and its deals with you.",
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
+    // "add a button to edit your submitted actions instead of only being able to delete it" (the owner, 2026-11-19).
+    id: "2026-11-edit-orders",
+    kind: "minor",
+    date: "2026-11-19",
+    channel: "beta",
+    banners: [
+      {
+        title: "Edit your orders",
         items: [
-          "Every member of a coalition now fights on its battlefields with troops of its own: a battlefield used to seat eight a side.",
-          "Treaties, puppet changes, battlefield orders and storylines stay on the event the AI wrote them for, even when it lists a period's events out of date order.",
-          "The map changes only by the region changes an event records, in every language: a capture or annexation told in words alone no longer moves it.",
-          "War news such as rationing, patrols and artillery fire is no longer hidden or thrown out over its English wording, and a country can ration in the same turn its war begins.",
+          "Every order waiting in Your Submitted Actions has an Edit button beside Delete: change its words in place, then Save (or press Enter), or Cancel (or press Esc).",
+          "An edited order keeps its place in the queue and everything it carries, such as a troop move already on the map or whom a conversation invites.",
+          "Orders a time skip has carried out, or is carrying out, cannot be edited. In a shared game, orders are edited while the round is open.",
+        ],
+      },
+    ],
+  },
+  {
+    // After beta 0.0.147 (2026-11-18): the owner's reports of that evening (Start that did nothing, Current that did
+    // nothing, a guest left in a closed game) and his asks (a name to join with, a star on played countries, a
+    // Players menu, the lobby's standing text gone); and the stat sheet refresh moved to Advanced statistics. The
+    // shipped cards keep their words: what changed since is said here. Then the round bar made one slim line with the
+    // host's controls in a dropdown ("make this whole overlay thing not always be on screen"), in the player's theme.
+    id: "2026-11-shared-games-fixes",
+    kind: "minor",
+    date: "2026-11-19",
+    channel: "beta",
+    banners: [
+      {
+        title: "Shared games, smoother",
+        items: [
+          "Pick the name other players see you by when you join a shared game; a star marks every country a person plays (click it to see who), and the game menu has a Players list.",
+          "In a shared game the round bar is one slim line at the top, in your interface theme: the round, its clock, I'm ready and Players. Everything the host can do is under Host, and nothing else stays open over the map.",
+          "Start never waits for good: the lobby says what it waits for, a change the host's game takes more than two minutes over is stopped, and if the game cannot start the host is told why and can press Start again.",
+          "When a shared game ends for you (the host stops it, can no longer be reached, or sends you away), you are taken straight back to the main menu, which tells you why.",
+          "Current on your open shared game takes you back into it, and the lobby shows only what you can do in it.",
+          "The stat sheet refresh is set in a country's Advanced statistics: every 6 months of game time by default, or Off.",
+        ],
+      },
+    ],
+  },
+  {
+    // "build C and D, and the host can choose, but no sending api keys" (the owner, 2026-11-15): who answers a player's message to a
+    // country the AI plays is the host's choice (multiplayer/host/settings.js `replies`): the host's AI, or each player's own device.
+    // "any issues should not be roughly patched or whackamoled, the core of the issue should be fixed archetecturally" (the owner,
+    // 2026-11-15): the shared game's middle rebuilt: checked views, one order for every change, and the session saved with the game.
+    // 2026-11-18, "is multiplayer ready now?": the rest of the redesign map (multiplayer-map/REMAINING.md) closed, which made this a
+    // major update of its own look (themes/SharedWorlds.jsx).
+    id: "2026-11-shared-game-replies",
+    kind: "major",
+    date: "2026-11-18",
+    channel: "beta",
+    banners: [
+      {
+        theme: "sharedWorlds",
+        scene: "table",
+        title: "Shared Worlds",
+        subtitle: "One world, every player in it",
+        lead: "Shared games are rebuilt so that everyone plays in the same world, each with their own country, their own secrets and their own say.",
+        sections: [
+          {
+            heading: "Your seat",
+            icon: "people",
+            items: [
+              "A shared game remembers who plays which country: share it again days later and every player gets their own country back.",
+              "Your country stays yours while you are away: after the minutes the lobby states, the AI plays it until you return.",
+              "Once the game has started, changing country needs the host's say. A player whose country is gone takes a free one or watches.",
+              "A player the host releases cannot take that country back, and their queued orders, goal, advice, letters and open offers go with them.",
+            ],
+          },
+          {
+            heading: "Rounds",
+            icon: "star",
+            items: [
+              "The round bar shows today's date and the day the round lands, and the Timeline panel shows the round.",
+              "After a round the map shows its events one at a time as you read them, as a single-player skip does.",
+              "Orders sent while a round is played count for the next one. An order left unanswered is marked overdue and no longer counts against the round.",
+              "A round that fails waits for the host, who can try it again or cancel one that hangs. Nothing is ever made up.",
+            ],
+          },
+          {
+            heading: "One map on every screen",
+            icon: "map",
+            items: [
+              "Every screen draws the host's map, its seas and projection included, and a copy of the scenario that differs is caught when you join.",
+              "The host's settings, difficulty and the language the world is written in apply to every player, and the lobby says what decides each round.",
+              "Joining no longer adds a copy of the game to your library, and your library stays as it was while the game is open.",
+              "Players on the website and the Android app can join a game hosted on the desktop app again.",
+            ],
+          },
         ],
       },
       {
-        title: "Sturdier wars",
-        items: [
-          "A war that ends and flares up again is now a new war, so the first keeps its history, treaty and reparations.",
-          "Every member of a coalition counts, however large it is: a front opens wherever any of them borders the enemy.",
-          "Ongoing wars, open peace offers, unanswered calls to arms and unpaid reparations are never dropped from the record.",
-          "A time skip no longer asks the AI again over a war record that does not fit: it is fixed or left out, and the next turn is told.",
-          "A pre-game history is no longer thrown away over one war, and a war already being fought is never set up twice.",
+        theme: "sharedWorlds",
+        scene: "ledger",
+        title: "Who Pays",
+        subtitle: "No key ever leaves your device",
+        lead: "The host decides whose AI does what, and the lobby says plainly what each choice means for every player.",
+        sections: [
+          {
+            heading: "Answers",
+            icon: "book",
+            items: [
+              "The host chooses whose AI answers messages to countries the AI plays, the host's or each player's own, and how many a round the host's answers.",
+              "With each player's own AI, the host sets how many messages a round its AI answers for governments that can act, such as one at war with you.",
+              "A country's figures, parties and military ratings are written once for everyone, and cannot be rebuilt from scratch.",
+              "No API key is ever sent to the host or to anyone else.",
+            ],
+          },
+          {
+            heading: "Taking turns",
+            icon: "gear",
+            items: [
+              "The host can let players take turns to pay for each round's AI request, each on their own AI.",
+              "The lobby warns that the paying player's device sees that round's whole request, every player's orders and secrets included, and could change what happens in it.",
+              "If the paying player's AI fails or they leave, the round waits: the host can try again or pay for it.",
+              "A player whose device has no AI that can pay is passed over, and each player's own AI settings decide what their turn spends.",
+            ],
+          },
+          {
+            heading: "Game Master",
+            icon: "eye",
+            items: [
+              "The host can allow the Game Master in a shared game, and every player sees that it is on.",
+              "Everyone is told of each change it makes, and can read the list of its changes.",
+            ],
+          },
         ],
       },
       {
-        title: "Political World and starting history",
-        items: [
-          "Small parties now stay individually visible in the Political World party list, even when the chart groups them together.",
-          "Parties now use freeform Ideology and Political position fields in the Scenario Editor and Country Editor.",
-          "Generated political parties can use more flexible ideology and political-position descriptions.",
-          "Create and edit starting relationships, agreements and ongoing storylines without generating pre-game history.",
-          "Set relationship scores, treaty signatories, guarantees and access rights, and storyline participants, pressure and status.",
-          "Existing treaties generated with Political World can now be edited or removed from your scenario's starting history.",
+        theme: "sharedWorlds",
+        scene: "secrets",
+        title: "Yours Alone",
+        subtitle: "What you plan stays yours",
+        lead: "What a player plans, writes and learns is their own until the world sees it happen.",
+        sections: [
+          {
+            heading: "Orders",
+            icon: "eye",
+            items: [
+              "What another player has only ordered stays theirs until the round is played: forces being raised, convoys, lines being fortified and a fleet's new orders.",
+              "What already stands on the map is seen by everyone.",
+              "Your Projects board changes only through your own panel and advisor, and your projects act on your own country, never on another player's.",
+            ],
+          },
+          {
+            heading: "Counsel",
+            icon: "book",
+            items: [
+              "Your advisor remembers your talks, after a new invite code too.",
+              "Your advisor's three suggested orders for each round are under Suggested Actions, and your standing goal guides your own government.",
+              "Papers that reach your government arrive in your own correspondence, and your advisor flags each one.",
+            ],
+          },
+          {
+            heading: "Spies",
+            icon: "eye",
+            items: [
+              "Every player's agents report, steal documents and run operations for their own service, and what they bring back is theirs alone.",
+              "Each time skip knows every player's spies, and who spies on each player.",
+              "Another player's spies never stall your projects, and nothing on your board gives their agents away.",
+            ],
+          },
         ],
       },
       {
-        title: "War music only in war",
-        items: [
-          "Opening the War Room on troops gathered at a border in peacetime no longer plays the war music; it plays only while your country is in a conflict.",
+        theme: "sharedWorlds",
+        scene: "envoys",
+        title: "Between Players",
+        subtitle: "Peace, treaties and votes",
+        lead: "Players make peace, sign treaties and vote together, and the world's governments write to every one of them.",
+        sections: [
+          {
+            heading: "Peace and treaties",
+            icon: "flag",
+            items: [
+              "Offer peace to another player in your chat with them: each country makes its own peace, and the war goes on for the rest.",
+              "Two players can sign a treaty there, and it holds like any treaty in the world.",
+              "Terms between two players are theirs alone until accepted, and a peace or treaty made between rounds is shown to everyone with the borders it moved.",
+            ],
+          },
+          {
+            heading: "Letters",
+            icon: "book",
+            items: [
+              "Every player gets letters from other governments, and an ally's call for help reaches the player it calls on.",
+              "Writing to a player who is away tells you so; once the AI plays their country, its government answers.",
+              "Retry on an unanswered message asks for the answer again without sending your message twice.",
+              "Renaming a conversation, adding a country to it or closing it applies for everyone in it.",
+            ],
+          },
+          {
+            heading: "Votes and institutions",
+            icon: "people",
+            items: [
+              "Call a vote in a group conversation and its governments vote in it; each country votes once, for itself.",
+              "In institutions every player casts their own vote, and the AI never votes for another player.",
+              "An invitation to an institution reaches the player it is for, in a conversation of its own with an Accept button.",
+            ],
+          },
+          {
+            heading: "Rostra and demands",
+            icon: "note",
+            items: [
+              "The host sets how many Rostra posts each player may make a round.",
+              "Demands between an overlord and its puppet are made and answered from their cards.",
+            ],
+          },
         ],
       },
       {
-        title: "Steadier advisers and country tools",
+        theme: "sharedWorlds",
+        scene: "fronts",
+        title: "Fair Fronts",
+        subtitle: "One war, fought by the same rules",
+        lead: "Wars between players are fought on the same map, by the same rules, with every refusal explained.",
+        sections: [
+          {
+            heading: "Forces",
+            icon: "swords",
+            items: [
+              "Two players fighting on one front can both order air strikes there without replacing each other's.",
+              "You raise formations on your own land or the sea off it, and the limit of 15 counts only those you raised yourself.",
+              "Releasing a colony or a puppet from your own land no longer moves you onto it: you keep your country and its army.",
+              "When your people found a new country and the old one ends, your armies and air strikes go with you, and so do the structures on your new land.",
+            ],
+          },
+          {
+            heading: "Fair play",
+            icon: "chess",
+            items: [
+              "Difficulty weighs each player against the countries the AI plays, and never favours one player over another.",
+              "The host refuses an order for anything its game has switched off, and says why beside it. Its other words to you stay listed under Players.",
+              "A structure can be moved only onto its own country's land or the sea off it.",
+              "The military ranking and each country's Military card fill in during shared games.",
+            ],
+          },
+        ],
+        button: "Into the shared world",
+      },
+    ],
+  },
+  {
+    // "readd the background ai for refreshing the stats where you could set how often it runs" and "there should be
+    // an off choise in the thing where you pick how often it refreshes" (the owner, 2026-11-18): removed on
+    // 2026-11-09 with the Background AI switch (bb37bd1e6); back with no setting of its own: "JUST IN THE ADVANCED
+    // STATS MENU YOU CAN CHOOSE WHAT INTERVAL IT CHECKS AT AND YOU CAN SET THE INTERVAL TO OFF. BY DEFAULT ITS 6 MONTHS".
+    // (Its card keeps the words it shipped with; the card above says how it is now.)
+    id: "2026-11-stats-refresh",
+    kind: "minor",
+    date: "2026-11-18",
+    channel: "beta",
+    banners: [
+      {
+        title: "Stat sheets that keep up",
         items: [
-          "Advisers keep earlier conversations intact, and new Action proposals still need your review instead of changing orders already completed.",
-          "Interactive Events now show the ending of the scene you played, even when other events occur during the same time skip.",
-          "Scenario-defined national Stats can be edited without a territorial baseline, while unset values remain unset.",
-          "Country Editor and Game Master can correct intelligence, military capability, war weariness and resources without overriding calculated Military Power.",
-          "Choose GDP display currency in scenarios, new games or Settings: dollars, euros, pounds, rubles, rupees or yuan.",
-          "Invalid battle records are rejected instead of being silently accepted as the result of a war.",
+          "Settings, AI requests, can keep countries' stat sheets up to date for you: pick Off, after every time skip, or every 2, 3, 5 or 10.",
+          "After a time skip has finished, one background request brings up to date the sheets its news has changed, your own country's first, for up to 6 countries.",
+          "It costs about one request every so many time skips, and stops at the day's cap of requests nobody pressed a button for. Off is the default.",
+          "In a shared game it runs only on the host, while the host's AI answers for every player.",
         ],
       },
+    ],
+  },
+  {
+    // The review of everything (2026-11-18) found these in the game's own code while fixing shared games: planted
+    // intelligence ran as another country's real work, a doubt stalled real work for good, an accepted invitation
+    // never admitted the player, a structure moved across the date line went nowhere.
+    id: "2026-11-intelligence-and-fixes",
+    kind: "minor",
+    date: "2026-11-18",
+    channel: "beta",
+    banners: [
       {
-        title: "Stats in dollars",
+        title: "Intelligence you can trust",
         items: [
-          "GDP and GDP per person are now counted and shown in 2026 US dollars instead of euros. Figures in games already under way keep their numbers.",
-        ],
-      },
-      {
-        title: "Switched-off features left out",
-        items: [
-          "The AI is no longer told about what a scenario switched off: no spies or intelligence rating without espionage, and no aircraft or fleets without air units or navies.",
+          "A programme you hear of through an agent who was turned against you is only what your service believes: it never becomes real.",
+          "Doubtful intelligence now settles: once a new agent of yours reports from that country, the entry is marked Confirmed or Fabricated.",
+          "Another country's real programme is no longer stopped because your service doubted the news, and an operation your agent reported shows on the battlefield.",
+          "When you accept an invitation to join an institution, you become a member as soon as its members vote you in.",
+          "Another country's project can no longer take your regions, and moving a building across the date line now works.",
         ],
       },
     ],
@@ -172,6 +694,107 @@ const NEW_UPDATES = [
         "Project budgets now distinguish planned costs from payments, while historical scenarios can use time and effort instead of GDP.",
       ],
     }],
+  },
+  {
+    "id": "2026-11-native-beta-catch-up",
+    "kind": "minor",
+    "date": "2026-11-17",
+    "banners": [
+      {
+        "title": "Advisor group replies recover from invalid silence",
+        "items": [
+          "Group chats can recover when a silent advisor adds private memory by mistake, without asking the other advisors to speak again.",
+          "A silent advisor's private memory is never shown or saved; invalid replies still have to pass validation before joining the meeting.",
+        ],
+      },
+      {
+        "title": "More reliable country stats",
+        "items": [
+          "Your scenario's starting country figures stay intact when you first open Stats.",
+          "Stats generation handles regional figures from more AI models without losing valid rows.",
+          "Rebuilding country stats still checks the country's territory and requires economic evidence.",
+          "Game Master corrections no longer put standard economy values into custom stats, preventing a Stats refresh validation error.",
+        ],
+      },
+      {
+        "title": "Every language plays alike",
+        "items": [
+          "The game no longer looks for English words to decide what happens. It reads what the AI records and the names on your map, so a game in any language plays like one in English.",
+          "Land, armies and buildings move only by places written with their exact map names. A name the map doesn't have is left out and noted, never guessed, and never costs another AI request.",
+          "Peace terms, treaties and puppet states use the game's own record form, so a peace made in French or Chinese changes the map just as one made in English.",
+          "Countries, parties, leaders, wars and agents named in any alphabet are told apart, each country is drawn in a colour of its own, and renaming one written in Cyrillic or Chinese moves its regions with it.",
+          "History, storylines, scripted events, Rostra posts and the Advisor's letters and searches written in Chinese, Japanese or Thai now work like any other.",
+          "Scenario authors: a region type is water only when its Water switch is on, your own structure kinds and seasons are drawn as you pick them, and populations are typed in digits.",
+        ],
+      },
+      {
+        "title": "Unit types of your own",
+        "items": [
+          "Scenario authors can create their own unit types under Wars in the scenario editor's Features tab, each with a name, an icon and a kind.",
+          "Set how hard each type hits, how much it can take and how fast it moves: a dragon can be an air unit five times as strong.",
+          "Units of these types fight by their own figures in the air, on land and at sea, and only the countries you choose can raise them.",
+        ],
+      },
+      {
+        "title": "Whole coalitions, steadier records",
+        "items": [
+          "Every member of a coalition now fights on its battlefields with troops of its own: a battlefield used to seat eight a side.",
+          "Treaties, puppet changes, battlefield orders and storylines stay on the event the AI wrote them for, even when it lists a period's events out of date order.",
+          "The map changes only by the region changes an event records, in every language: a capture or annexation told in words alone no longer moves it.",
+          "War news such as rationing, patrols and artillery fire is no longer hidden or thrown out over its English wording, and a country can ration in the same turn its war begins.",
+        ],
+      },
+      {
+        "title": "Sturdier wars",
+        "items": [
+          "A war that ends and flares up again is now a new war, so the first keeps its history, treaty and reparations.",
+          "Every member of a coalition counts, however large it is: a front opens wherever any of them borders the enemy.",
+          "Ongoing wars, open peace offers, unanswered calls to arms and unpaid reparations are never dropped from the record.",
+          "A time skip no longer asks the AI again over a war record that does not fit: it is fixed or left out, and the next turn is told.",
+          "A pre-game history is no longer thrown away over one war, and a war already being fought is never set up twice.",
+        ],
+      },
+      {
+        "title": "Political World and starting history",
+        "items": [
+          "Small parties now stay individually visible in the Political World party list, even when the chart groups them together.",
+          "Parties now use freeform Ideology and Political position fields in the Scenario Editor and Country Editor.",
+          "Generated political parties can use more flexible ideology and political-position descriptions.",
+          "Create and edit starting relationships, agreements and ongoing storylines without generating pre-game history.",
+          "Set relationship scores, treaty signatories, guarantees and access rights, and storyline participants, pressure and status.",
+          "Existing treaties generated with Political World can now be edited or removed from your scenario's starting history.",
+        ],
+      },
+      {
+        "title": "War music only in war",
+        "items": [
+          "Opening the War Room on troops gathered at a border in peacetime no longer plays the war music; it plays only while your country is in a conflict.",
+        ],
+      },
+      {
+        "title": "Steadier advisers and country tools",
+        "items": [
+          "Advisers keep earlier conversations intact, and new Action proposals still need your review instead of changing orders already completed.",
+          "Interactive Events now show the ending of the scene you played, even when other events occur during the same time skip.",
+          "Scenario-defined national Stats can be edited without a territorial baseline, while unset values remain unset.",
+          "Country Editor and Game Master can correct intelligence, military capability, war weariness and resources without overriding calculated Military Power.",
+          "Choose GDP display currency in scenarios, new games or Settings: dollars, euros, pounds, rubles, rupees or yuan.",
+          "Invalid battle records are rejected instead of being silently accepted as the result of a war.",
+        ],
+      },
+      {
+        "title": "Stats in dollars",
+        "items": [
+          "GDP and GDP per person are now counted and shown in 2026 US dollars instead of euros. Figures in games already under way keep their numbers.",
+        ],
+      },
+      {
+        "title": "Switched-off features left out",
+        "items": [
+          "The AI is no longer told about what a scenario switched off: no spies or intelligence rating without espionage, and no aircraft or fleets without air units or navies.",
+        ],
+      },
+    ],
   },
   {
     // "the diplomatic map is shit, redesign it and make it have full integration with the political world", then "only on
@@ -418,26 +1041,26 @@ const NEW_UPDATES = [
     ],
   },
   {
-    id: "2026-11-native-android-community-keeps-answering",
-    kind: "minor",
-    date: "2026-11-15",
-    banners: [
+    "id": "2026-11-native-android-community-keeps-answering",
+    "kind": "minor",
+    "date": "2026-11-15",
+    "banners": [
       {
-        title: "The Community tab keeps answering on Android",
-        items: [
+        "title": "The Community tab keeps answering on Android",
+        "items": [
           "On Android, the Community tab shows its first scenarios at once and adds the rest a few at a time, so the screen keeps answering taps while the list fills.",
         ],
       },
     ],
   },
   {
-    id: "2026-11-native-android-lighter-community",
-    kind: "minor",
-    date: "2026-11-15",
-    banners: [
+    "id": "2026-11-native-android-lighter-community",
+    "kind": "minor",
+    "date": "2026-11-15",
+    "banners": [
       {
-        title: "A lighter Community tab on Android",
-        items: [
+        "title": "A lighter Community tab on Android",
+        "items": [
           "On Android, the Community tab loads a scenario's picture only as it scrolls into view, and at the size the screen shows it, so it takes far less of the phone's memory.",
           "On Android, Copy log in Settings → Advanced → Diagnostics also copies the app's own record: the phone, its memory, and any moment the screen froze.",
         ],
@@ -636,13 +1259,13 @@ const NEW_UPDATES = [
     ],
   },
   {
-    id: "2026-11-native-android",
-    kind: "minor",
-    date: "2026-11-12",
-    banners: [
+    "id": "2026-11-native-android",
+    "kind": "minor",
+    "date": "2026-11-12",
+    "banners": [
       {
-        title: "Open Historia Native on Android",
-        items: [
+        "title": "Open Historia Native on Android",
+        "items": [
           "Open Historia Native now runs on Android phones and tablets. Its APKs are on the native-experimental release page, beside the Windows, macOS and Linux apps.",
           "A time skip keeps running with the screen off, under a notification that shows how far it has got and says when it has finished.",
           "The on-screen keyboard opens on every text field, and the field moves up above it.",
@@ -653,8 +1276,8 @@ const NEW_UPDATES = [
         ],
       },
       {
-        title: "Soft weather on the map",
-        items: [
+        "title": "Soft weather on the map",
+        "items": [
           "The weather's speckle on the map is drawn soft, as on the beta, instead of as hard white specks.",
         ],
       },
@@ -945,13 +1568,13 @@ const NEW_UPDATES = [
     ],
   },
   {
-    id: "2026-11-native-card-badges",
-    kind: "minor",
-    date: "2026-11-10",
-    banners: [
+    "id": "2026-11-native-card-badges",
+    "kind": "minor",
+    "date": "2026-11-10",
+    "banners": [
       {
-        title: "Game cards keep their labels in place",
-        items: [
+        "title": "Game cards keep their labels in place",
+        "items": [
           "A long scenario name on a game card no longer runs over the card beside it: it moves to a line of its own and is cut short, and pointing at it shows the whole name.",
           "The labels at the top of each game card are back to their usual height, with their text centred.",
         ],
@@ -1565,6 +2188,38 @@ const NEW_UPDATES = [
     ],
   },
   {
+    "id": "2026-11-native-slower-welcome",
+    "kind": "minor",
+    "date": "2026-11-06",
+    "banners": [
+      {
+        "title": "A slower welcome",
+        "items": [
+          "The first-time setup's greeting now stays on each language for about four seconds, and fades one out before the next fades in.",
+          "The Diplomatic map mode's button turns blue when it is chosen, like the other map modes.",
+        ],
+      },
+    ],
+  },
+  {
+    // A player's report (2026-11-06, 1836 France): every time skip fell back to the stand-in events, "Storyline
+    // storyline-fr-franchise-1836 lowers pressure by 47 point(s), but its linked event(s) contain escalation/failure
+    // cues": reforms that passed over a bloc that "rejects" them. The check read the events for words; "dont do
+    // keywording its super unreliable" (the owner, 2026-11-06), so it is gone (AI/nativeWorldDirector.js).
+    id: "2026-11-storyline-pressure-held",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Easing storylines no longer cost a time skip",
+        items: [
+          "A time skip that eases a storyline's pressure is no longer thrown away for the stand-in events because of the words in its events: the pressure the skip gives it stands.",
+        ],
+      },
+    ],
+  },
+  {
     // "the hello welcome introduction switches languages about 2 times too fast. also it should fade out the last
     // language and fade in the new one" (the owner, 2026-11-06, of the native app), then: "make the greeting thing on
     // the electron apps be the same as on native": a greeting every 4.4 s, 0.6 s in and 0.6 s out (FirstSetup.jsx).
@@ -1593,57 +2248,6 @@ const NEW_UPDATES = [
         title: "A new song in a game",
         items: [
           "“A Kind Of Hope” by Scott Buckley now plays in a game, in turn with the others, as it was recorded.",
-        ],
-      },
-    ],
-  },
-  {
-    // Opus-MT en-bat (Latvian, Lithuanian), en-sk, en-et, en-el, en-he, en-ga, en-mt and en-gmq (Swedish), converted
-    // for the game from Helsinki-NLP's models (none had a Transformers.js copy) and tried on the game's own kind of
-    // text, 2026-11-06. Nobody publishes them on Hugging Face: they are read from the scenario repository's
-    // translation-models branch (runtime/translationModels.js MIRROR, modelSources).
-    id: "2026-11-nine-languages",
-    kind: "minor",
-    date: "2026-11-06",
-    channel: "beta",
-    banners: [
-      {
-        title: "Translation in nine more languages",
-        items: [
-          "You can now play in Latvian, Lithuanian, Slovak, Estonian, Greek, Hebrew, Irish and Maltese: a translation model, downloaded once, translates the game on your device.",
-          "In Swedish, a translation model on your device now also translates the names and descriptions of scenarios and maps.",
-        ],
-      },
-    ],
-  },
-  {
-    id: "2026-11-native-slower-welcome",
-    kind: "minor",
-    date: "2026-11-06",
-    banners: [
-      {
-        title: "A slower welcome",
-        items: [
-          "The first-time setup's greeting now stays on each language for about four seconds, and fades one out before the next fades in.",
-          "The Diplomatic map mode's button turns blue when it is chosen, like the other map modes.",
-        ],
-      },
-    ],
-  },
-  {
-    // A player's report (2026-11-06, 1836 France): every time skip fell back to the stand-in events, "Storyline
-    // storyline-fr-franchise-1836 lowers pressure by 47 point(s), but its linked event(s) contain escalation/failure
-    // cues": reforms that passed over a bloc that "rejects" them. The check read the events for words; "dont do
-    // keywording its super unreliable" (the owner, 2026-11-06), so it is gone (AI/nativeWorldDirector.js).
-    id: "2026-11-storyline-pressure-held",
-    kind: "minor",
-    date: "2026-11-05",
-    channel: "beta",
-    banners: [
-      {
-        title: "Easing storylines no longer cost a time skip",
-        items: [
-          "A time skip that eases a storyline's pressure is no longer thrown away for the stand-in events because of the words in its events: the pressure the skip gives it stands.",
         ],
       },
     ],
@@ -1686,6 +2290,25 @@ const NEW_UPDATES = [
         title: "Assassinations take effect",
         items: [
           "A leader your agents assassinate is now gone for good: a successor takes their office in the same event.",
+        ],
+      },
+    ],
+  },
+  {
+    // Opus-MT en-bat (Latvian, Lithuanian), en-sk, en-et, en-el, en-he, en-ga, en-mt and en-gmq (Swedish), converted
+    // for the game from Helsinki-NLP's models (none had a Transformers.js copy) and tried on the game's own kind of
+    // text, 2026-11-06. Nobody publishes them on Hugging Face: they are read from the scenario repository's
+    // translation-models branch (runtime/translationModels.js MIRROR, modelSources).
+    id: "2026-11-nine-languages",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "Translation in nine more languages",
+        items: [
+          "You can now play in Latvian, Lithuanian, Slovak, Estonian, Greek, Hebrew, Irish and Maltese: a translation model, downloaded once, translates the game on your device.",
+          "In Swedish, a translation model on your device now also translates the names and descriptions of scenarios and maps.",
         ],
       },
     ],
@@ -2048,13 +2671,13 @@ const NEW_UPDATES = [
     ],
   },
   {
-    id: "2026-11-native-fits-the-window",
-    kind: "minor",
-    date: "2026-11-05",
-    banners: [
+    "id": "2026-11-native-fits-the-window",
+    "kind": "minor",
+    "date": "2026-11-05",
+    "banners": [
       {
-        title: "In proportion to the window",
-        items: [
+        "title": "In proportion to the window",
+        "items": [
           "The game now grows with its window: make the window larger and everything in it grows in the same proportion, on a laptop as on a 4K monitor. In a window smaller than usual, everything keeps its usual size.",
           "Rounded cards and buttons, and the arrows of these notices, no longer show a bright rim along their curves.",
           "The message that the game was updated now shows once, after the update, and names the day of the new build.",
@@ -2161,32 +2784,32 @@ const NEW_UPDATES = [
     ],
   },
   {
-    id: "2026-11-native-sharp-at-any-size",
-    kind: "minor",
-    date: "2026-11-04",
-    banners: [
+    "id": "2026-11-native-sharp-at-any-size",
+    "kind": "minor",
+    "date": "2026-11-04",
+    "banners": [
       {
-        title: "Sharp at any size",
-        items: [
+        "title": "Sharp at any size",
+        "items": [
           "The vault door, the round flags on the war map and the dot that marks an unread chat now grow with the rest of the interface on large screens, and stay sharp.",
         ],
       },
       {
-        title: "The Country drawer and the Advisor, redrawn",
-        items: [
+        "title": "The Country drawer and the Advisor, redrawn",
+        "items": [
           "The Country drawer is laid out anew: the whole flag in its header, tabs that stay in view as you scroll, relations you can search and sort, compact index cards, a leaderboard for each ranking, and a country's parties and its power blocs shown apart.",
           "The Advisor's conversations look new too: replies read as open text beside a narrow rail, your own messages stay compact on the right, and the contact list is a tidy ledger.",
         ],
       },
       {
-        title: "Map pictures keep their edges",
-        items: [
+        "title": "Map pictures keep their edges",
+        "items": [
           "A picture you add to a scenario's maps in the Workshop now keeps the edges its setup gave it, Q-BAM's exact ones included, so it stays lined up with the coastlines in the Workshop and in the game.",
         ],
       },
       {
-        title: "Strike targets by name",
-        items: [
+        "title": "Strike targets by name",
+        "items": [
           "In the War Room, an air strike sent at troops names the town nearest them plainly, without \"city:\" in front of it.",
         ],
       },
@@ -2194,20 +2817,20 @@ const NEW_UPDATES = [
   },
   {
     // The interface as large against any screen as on 1080p (Hotkeys.resolution_scale, DPITexture icons), Advisor M2-M3C, the standing goal's progress and the war room's button beside a narrower dock, as the native app has them since lab native/godot-app took beta e07fb83e (2026-11-04).
-    id: "2026-11-native-advisor-contacts",
-    kind: "minor",
-    date: "2026-11-04",
-    banners: [
+    "id": "2026-11-native-advisor-contacts",
+    "kind": "minor",
+    "date": "2026-11-04",
+    "banners": [
       {
-        title: "The same size on every screen",
-        items: [
+        "title": "The same size on every screen",
+        "items": [
           "On a 1440p, 4K or larger screen, the game is now as large against the screen as on a 1080p one, with sharp text and icons. Screens of 1080p or smaller look as before.",
           "Move the window to a screen of another size and it rescales to match. Ctrl and + or − still make it larger or smaller.",
         ],
       },
       {
-        title: "Advisors and contacts",
-        items: [
+        "title": "Advisors and contacts",
+        "items": [
           "Rename your chief advisor and give them a new title with Edit beside them in the list of contacts. Restore scenario defaults brings the original back and keeps the conversation.",
           "Each contact has a type: Advisor / Minister, Citizen / Civilian, Foreign Official or Other Character. A minister can open Projects and propose Actions; any other contact knows only what is public.",
           "An Action your advisor proposes now waits on a card in the conversation: Discuss talks it over first, and Proceed / Queue puts it on your list.",
@@ -2215,15 +2838,15 @@ const NEW_UPDATES = [
         ],
       },
       {
-        title: "How far your goal has come",
-        items: [
+        "title": "How far your goal has come",
+        "items": [
           "Under your standing goal in Actions, Assess progress asks how far it has come: a score out of 100, the change since the last reading, what was reached, what is in the way and the next steps.",
           "Each reading is one request, so it is made only when you ask. A reworded goal starts again.",
         ],
       },
       {
-        title: "Also in this update",
-        items: [
+        "title": "Also in this update",
+        "items": [
           "A scenario's events set for its first day now happen in the first time skip, and several set for the same day all happen.",
           "With Social media off, the War Room button stands right beside the dock.",
         ],
@@ -2864,13 +3487,13 @@ const NEW_UPDATES = [
     ],
   },
   {
-    id: "2026-11-native-editor-map",
-    kind: "minor",
-    date: "2026-11-01",
-    banners: [
+    "id": "2026-11-native-editor-map",
+    "kind": "minor",
+    "date": "2026-11-01",
+    "banners": [
       {
-        title: "A clearer map in the map editor",
-        items: [
+        "title": "A clearer map in the map editor",
+        "items": [
           "The map in the map editor now looks and works as it does in the desktop app: every region is outlined, filled as its region type says, over the plain basemap you chose.",
           "Zoom out until the whole world fills the window, or much closer in, with the + and − buttons in the corner, a double-click, or a box drawn with Shift held.",
           "Each turn of the mouse wheel zooms a third of a level, smoothly, and the map glides on for a moment after you drag it.",
@@ -2996,30 +3619,6 @@ const NEW_UPDATES = [
     ],
   },
   {
-    // The time skip was never shown the regions nobody rules, so an order to take the wild land next door could not
-    // be carried out; and a week's reason for a change to a country replaced that country's whole description
-    // (Discord spike, 2026-10-28). Then (2026-10-29): wild land one sea away counts as within reach by ship, a
-    // patrol keeps to its own ground (a fleet was drifting onto the coast), and in a shared game a player's letter
-    // carries the game date, a letter to an AI government waits while a week is played, and each player has an
-    // advisor of their own government who brings them its secrets.
-    id: "2026-10-unruled-land",
-    kind: "minor",
-    date: "2026-10-29",
-    banners: [
-      {
-        title: "Wild land and a confidant",
-        items: [
-          "On maps with land no country rules, the story now knows which of it lies beside each country, or across a strait or a bay from its coast, so an order to settle or take it can be carried out.",
-          "A country's description from the scenario now stays as written when the story changes something about it, instead of being replaced by a one-line note.",
-          "Fleets on patrol now stay at sea, and armies on patrol stay on land, instead of drifting onto the coast or into the water.",
-          "In shared games, each player has an advisor from their own government, who brings them in Diplomacy what it learns in secret.",
-          "In shared games, letters between players now show the game date.",
-          "In shared games, letters to countries the AI plays, and new goals, can't be sent while a week is being played: send them once its news is in. Letters between players still go through.",
-        ],
-      },
-    ],
-  },
-  {
     id: "2026-10-renamed-regions",
     kind: "minor",
     date: "2026-10-28",
@@ -3082,6 +3681,30 @@ const NEW_UPDATES = [
         items: [
           "Foreign agents in your country now come from those with a reason to send them: your enemies and rivals, and powers with a real stake in your affairs.",
           "A country with no interest in you, or no spy service to speak of, no longer plants agents in your country.",
+        ],
+      },
+    ],
+  },
+  {
+    // The time skip was never shown the regions nobody rules, so an order to take the wild land next door could not
+    // be carried out; and a week's reason for a change to a country replaced that country's whole description
+    // (Discord spike, 2026-10-28). Then (2026-10-29): wild land one sea away counts as within reach by ship, a
+    // patrol keeps to its own ground (a fleet was drifting onto the coast), and in a shared game a player's letter
+    // carries the game date, a letter to an AI government waits while a week is played, and each player has an
+    // advisor of their own government who brings them its secrets.
+    id: "2026-10-unruled-land",
+    kind: "minor",
+    date: "2026-10-29",
+    banners: [
+      {
+        title: "Wild land and a confidant",
+        items: [
+          "On maps with land no country rules, the story now knows which of it lies beside each country, or across a strait or a bay from its coast, so an order to settle or take it can be carried out.",
+          "A country's description from the scenario now stays as written when the story changes something about it, instead of being replaced by a one-line note.",
+          "Fleets on patrol now stay at sea, and armies on patrol stay on land, instead of drifting onto the coast or into the water.",
+          "In shared games, each player has an advisor from their own government, who brings them in Diplomacy what it learns in secret.",
+          "In shared games, letters between players now show the game date.",
+          "In shared games, letters to countries the AI plays, and new goals, can't be sent while a week is being played: send them once its news is in. Letters between players still go through.",
         ],
       },
     ],

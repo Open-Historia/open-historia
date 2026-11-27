@@ -395,8 +395,10 @@ export const operationsOn = ({ record, side, projects, cities, player = "", peop
   const found = [];
   for (const entry of Array.isArray(projects) ? projects : []) {
     if (!entry || entry.kind !== "operation" || !OPEN_STATUSES.includes(entry.status)) continue;
-    if (Array.isArray(entry.linkedSpyIds) && entry.linkedSpyIds.length > 0) continue;
     const owner = clean(entry.ownerCode) || clean(player);
+    // An agent IS a person's own covert operation (projects.js spyOperationOps);
+    // on another country's work linkedSpyIds is only who told of it.
+    if (own.has(fold(owner)) && Array.isArray(entry.linkedSpyIds) && entry.linkedSpyIds.length > 0) continue;
     if (!owner || !members.includes(fold(owner))) continue;
     const lng = Number(entry.focus?.lng);
     const lat = Number(entry.focus?.lat);

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { humanCountriesOf, setHostingSharedGame } from "../../runtime/humanPolities.js";
 import { firstSkipIncludesScriptedOrigin, scriptedBeatsInSpan } from "./worldDirection.js";
 import {
   commitScriptedEventPlan,
@@ -7,6 +8,7 @@ import {
   evaluateScriptedEventConditions,
   normalizeScriptedEventState,
   planScriptedEvents,
+  replanAfterSkippedScriptedBeats,
 } from "./scriptedEventResolution.js";
 
 const event = (id, trigger = { mode: "rules", operator: "all", conditions: [], percent: 100 }, date = "1914-03-21") => ({
@@ -300,4 +302,134 @@ test("a branch with no positive-weight outcome fails closed", () => {
   const plan = planScriptedEvents([branched], { world, random: () => 0 });
   assert.deepEqual(plan.eligible, []);
   assert.equal(plan.resolutions[0].outcome, "skipped");
+});
+
+test("N031 player-control conditions use canonical identities and fail closed",()=>{
+ const positive={type:"polity_player_controlled",polityId:"GER"};
+ const negative={...positive,type:"polity_not_player_controlled"};
+ const match=(condition,playerPolities)=>evaluateScriptedEventCondition(condition,world,{playerPolities}).matched;
+ assert.equal(match(positive,["German Empire"]),true);
+ assert.equal(match(negative,["German Empire"]),false);
+ assert.equal(match(negative,["France"]),true);
+ for(const seats of [undefined,[],["unknown-country"],["France","unknown-country"]]){
+  assert.equal(match(positive,seats),false);
+  assert.equal(match(negative,seats),false);
+ }
+ for(const polityId of ["","invented","GONE"]){
+  assert.equal(match({...negative,polityId},["France"]),false);
+  assert.equal(match({...positive,polityId},["France"]),false);
+ }
+ const custom={...world,customRegions:true};
+ assert.equal(evaluateScriptedEventCondition({...negative,polityId:"Japan"},custom,{playerPolities:["France"]}).matched,false);
+});
+test("N031 uses real shared host seats, not a saved stale multiplayer roster; skipped elections stay skipped",()=>{
+ const game={country:"France",humanCountries:["France","German Empire"]};
+ const beat=event("election",{mode:"rules",operator:"all",conditions:[{type:"polity_not_player_controlled",polityId:"GER"}],percent:100});
+ setHostingSharedGame(false);
+ assert.equal(planScriptedEvents([beat],{world,playerPolities:humanCountriesOf(game)}).eligible.length,1);
+ try{
+  setHostingSharedGame(true,{host:"France"});
+  const plan=planScriptedEvents([beat],{world,playerPolities:humanCountriesOf(game)});
+  assert.equal(plan.eligible.length,0);
+  const receipt=commitScriptedEventPlan({},plan,{throughDate:beat.date});
+  assert.equal(receipt.state.election.outcome,"skipped");
+  assert.equal(planScriptedEvents([beat],{world,playerPolities:["France"],resolvedState:receipt.state}).eligible.length,0);
+ }finally{setHostingSharedGame(false);}
+ const war=event("war",{mode:"rules",operator:"all",conditions:[
+  {type:"polity_not_player_controlled",polityId:"GER"},{type:"polity_not_player_controlled",polityId:"GBR"}],percent:100});
+ assert.equal(planScriptedEvents([war],{world,playerPolities:["FRA"]}).eligible.length,1);
+ assert.equal(planScriptedEvents([war],{world,playerPolities:["GBR"]}).eligible.length,0);
+});
+
+test("N031 exact owner identities work on legacy custom maps; dissolved and ambiguous registry identities fail closed",()=>{
+ const legacy={customRegions:true,ownerCodes:["Hill Kingdom","Valley Republic"],regionOwnershipOverrides:{"hill-1":"Hill Kingdom"}};
+ const condition={type:"polity_not_player_controlled",polityId:"Hill Kingdom"};
+ assert.equal(evaluateScriptedEventCondition(condition,legacy,{playerPolities:["Valley Republic"]}).matched,true);
+ assert.equal(evaluateScriptedEventCondition(condition,legacy,{playerPolities:["Hill Kingdom"]}).matched,false);
+ const dissolved={...legacy,polityOverrides:{"Hill Kingdom":{code:"Hill Kingdom",name:"Hill Kingdom",status:"dissolved"}}};
+ assert.equal(evaluateScriptedEventCondition(condition,dissolved,{playerPolities:["Valley Republic"]}).matched,false);
+ const ambiguous={...world,polityOverrides:{...world.polityOverrides,A:{name:"Shared name",status:"active"},B:{name:"Shared name",status:"active"}}};
+ assert.equal(evaluateScriptedEventCondition({...condition,polityId:"Shared name"},ambiguous,{playerPolities:["France"]}).matched,false);
+});
+
+test("N031 a known dissolved human seat in MP does not break player-control checks for surviving polities", () => {
+  const mpWorld = {
+    polityOverrides: {
+      GER: { code: "GER", name: "German Empire", status: "active" },
+      FRA: { code: "FRA", name: "France", status: "active" },
+      GONE: { code: "GONE", name: "Dissolved Seat", status: "dissolved" },
+    },
+  };
+  assert.equal(
+    evaluateScriptedEventCondition({ type: "polity_player_controlled", polityId: "FRA" }, mpWorld, { playerPolities: ["FRA", "GONE"] }).matched,
+    true,
+  );
+  assert.equal(
+    evaluateScriptedEventCondition({ type: "polity_not_player_controlled", polityId: "GER" }, mpWorld, { playerPolities: ["FRA", "GONE"] }).matched,
+    true,
+  );
+  assert.equal(
+    evaluateScriptedEventCondition({ type: "polity_player_controlled", polityId: "GER" }, mpWorld, { playerPolities: ["FRA", "GONE"] }).matched,
+    false,
+  );
+});
+
+test("replanAfterSkippedScriptedBeats clears stale dirty pending entries before Phase 2 for out-of-order [A, C, B] chains", () => {
+  const beatA = event("A", { mode: "rules", operator: "all", conditions: [], percent: 100 }, "1914-03-21");
+  const beatB = event("B", { mode: "rules", operator: "all", conditions: [{ type: "scripted_event_fired", eventId: "A" }], percent: 100 }, "1914-03-21");
+  const beatC = event("C", { mode: "rules", operator: "all", conditions: [{ type: "scripted_event_fired", eventId: "B" }], percent: 100 }, "1914-03-21");
+  const outOfOrder = [beatA, beatC, beatB];
+
+  // Cached pendingState already holds { A: fired, B: fired, C: fired } while
+  // the same-date input array places C before B.
+  const cachedAllFired = {
+    A: { outcome: "fired" },
+    B: { outcome: "fired" },
+    C: { outcome: "fired" },
+  };
+  const initialPlan = planScriptedEvents(outOfOrder, { world, pendingState: cachedAllFired, random: () => 0 });
+  assert.deepEqual(
+    initialPlan.resolutions.map((r) => [r.event.id, r.outcome]),
+    [["A", "fired"], ["C", "fired"], ["B", "fired"]],
+  );
+
+  // If A is later skipped while preservedPending still holds { A: fired, B: fired, C: fired },
+  // C must not read stale nextPending.B = fired and survive as fired.
+  const replanned = replanAfterSkippedScriptedBeats(
+    outOfOrder,
+    initialPlan,
+    [{ beat: beatA, reason: "impact skipped" }],
+    { world, random: () => 0, preservedPending: cachedAllFired },
+  );
+  const outcomesById = Object.fromEntries(replanned.resolutions.map((r) => [r.event.id, r.outcome]));
+  assert.deepEqual(outcomesById, { A: "skipped", B: "skipped", C: "skipped" });
+
+  // Conversely, when preservedPending already matches the post-skip chain
+  // (B requires A skipped; C requires B fired), fixpoint Phase 2 restores C's cached branch.
+  const altB = event("B", { mode: "rules", operator: "all", conditions: [{ type: "scripted_event_skipped", eventId: "A" }], percent: 100 }, "1914-03-21");
+  const altC = {
+    ...event("C", { mode: "rules", operator: "all", conditions: [{ type: "scripted_event_fired", eventId: "B" }], percent: 100 }, "1914-03-21"),
+    outcomes: [
+      { id: "branch-1", text: "Branch 1", weight: 50 },
+      { id: "branch-2", text: "Branch 2", weight: 50 },
+    ],
+  };
+  const altChain = [beatA, altC, altB];
+  const preservedAfterSkip = {
+    A: { outcome: "skipped", reason: "impact skipped" },
+    B: { outcome: "fired" },
+    C: { outcome: "fired", selectedOutcomeId: "branch-2" },
+  };
+  const altInitial = planScriptedEvents(altChain, { world, random: () => 0 });
+  const restoredPlan = replanAfterSkippedScriptedBeats(
+    altChain,
+    altInitial,
+    [{ beat: beatA, reason: "impact skipped" }],
+    { world, random: () => 0, preservedPending: preservedAfterSkip },
+  );
+  const restoredById = Object.fromEntries(restoredPlan.resolutions.map((r) => [r.event.id, r]));
+  assert.equal(restoredById.A.outcome, "skipped");
+  assert.equal(restoredById.B.outcome, "fired");
+  assert.equal(restoredById.C.outcome, "fired");
+  assert.equal(restoredById.C.selectedOutcomeId, "branch-2");
 });

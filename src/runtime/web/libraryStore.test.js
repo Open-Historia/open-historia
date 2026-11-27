@@ -1590,6 +1590,59 @@ test("a bundle carries the language packs out and back in, a clone keeps them, a
   assert.equal("languages" in ok(await scenarios("GET", copy)).scenario, false, "a version without packs keeps none of the old");
 });
 
+// A shared game's host states its map's checksum and each guest checks its own copy by it. The website and the
+// Android app had no way to give one, and the desktop's was a checksum of its files' bytes, which records in
+// IndexedDB never hold: every website or Android guest was told its copy of the host's map differs (the gap audit
+// of 2026-11-18). Both stores now apply one rule to the map as each serves it (server/mapLogicFingerprint.js).
+test("a scenario's map has the desktop's checksum for the same map, so a website or Android guest can join a desktop host", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const { scenarioFilesFingerprint } = await import("../../../server/scenarioFingerprint.js");
+  await reset();
+  const id = ok(await scenarios("POST", "import", scenarioBundle("Hub Map"))).scenario.id;
+  const asked = ok(await scenarios("GET", `${id}/fingerprint`));
+  assert.match(asked.fingerprint, /^[0-9a-f]{64}$/);
+  // The desktop's reader, on files that hold the same documents written another way (indented, keys reordered).
+  const dir = mkdtempSync(path.join(tmpdir(), "oh-web-fingerprint-"));
+  const reordered = (value) => (Array.isArray(value) ? value.map(reordered)
+    : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).reverse().map((key) => [key, reordered(value[key])])) : value);
+  const file = (name, value) => {
+    const full = path.join(dir, name);
+    writeFileSync(full, JSON.stringify(reordered(value), null, 2));
+    return full;
+  };
+  const desktop = scenarioFilesFingerprint({
+    files: { regions: file("regions.geojson", { features: REGIONS.features, type: "FeatureCollection" }), cities: file("cities.geojson", CITIES), background: file("background.json", BACKGROUND), ownBasemaps: null },
+    tiles: {},
+  });
+  assert.equal(asked.fingerprint, desktop, "one map, one checksum, on either store");
+  // A region the desktop's copy has more is another map.
+  const split = scenarioFilesFingerprint({
+    files: { regions: file("split.geojson", { ...REGIONS, features: [...REGIONS.features, { type: "Feature", properties: { id: "reg_2" }, geometry: null }] }), cities: file("cities2.geojson", CITIES), background: file("background2.json", BACKGROUND), ownBasemaps: null },
+    tiles: {},
+  });
+  assert.notEqual(asked.fingerprint, split);
+  assert.equal((await scenarios("GET", "no-such-map/fingerprint")).status, 404);
+});
+
+// A shared game's stand-in (server/sharedGameStandIn.js) is made again at every sitting and held nothing of the
+// player's. In the trash it was one entry a sitting, and the trash keeps only five: five sittings pushed out every game
+// the player had deleted. Its record says what it is; the library lists it apart, and its delete is for good.
+test("a shared game's stand-in is listed as one, and deleting it is for good, leaving the trash as it was", async () => {
+  await reset();
+  const mine = await newGame("Mine");
+  ok(await games("DELETE", await newGame("Deleted earlier")));
+  const standIn = ok(await games("POST", "", { name: "Shared game: Friday", scenarioId: "default", gamePatch: { country: "", sharedGameStandIn: { returnTo: mine } } })).game.id;
+  const listed = (await library()).games;
+  assert.deepEqual(listed.find((game) => game.id === standIn).standIn, { returnTo: mine });
+  assert.equal("standIn" in listed.find((game) => game.id === mine), false, "a game of the player's says nothing");
+  ok(await games("DELETE", standIn));
+  assert.equal((await library()).games.some((game) => game.id === standIn), false);
+  const kept = ok(await trash("GET", "")).entries;
+  assert.deepEqual(kept.map((entry) => entry.name), ["Deleted earlier"]);
+});
+
 test("web/Android game recovery clones a 121-active Projects save without losing the original or its restore points", async () => {
   const { inspectProjectRecovery, prepareProjectRecoveryBundle } = await import("../projectRecovery.js");
   await reset();

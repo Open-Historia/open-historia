@@ -67,6 +67,27 @@ test("the intelligence line names the player's service and the others the AI has
   assert.equal(describeIntelligenceStanding(WORLD, ""), "");
 });
 
+// Rule 9 of a shared game (the review of 2026-11-18, simulation 4): a guest's reputation and service were told only
+// if already among the recorded few, so a guest who built a spy academy for years was shown no rating to move.
+test("with several people every player's reputation and service are told by name; with one, as before", () => {
+  const people = [PLAYER, "Spain", "Kingdom of Italy"];
+  assert.equal(describeReputationStanding(WORLD, PLAYER, { people }), [
+    "International reputation of the players' polities: French Republic 72/100 (well-regarded), Spain 50/100 (mixed), Kingdom of Italy 18/100 (poor).",
+    "Other recorded reputations: German Empire 90/100, Portugal 61/100. Every polity not listed stands at 50.",
+  ].join("\n"));
+  assert.equal(describeIntelligenceStanding(WORLD, PLAYER, { people }), [
+    "French Republic's intelligence service: 64/100 (capable).",
+    "Spain's intelligence service: 40/100 (ordinary).",
+    "Kingdom of Italy's intelligence service: 40/100 (ordinary).",
+    "Other rated services: German Empire 80/100.",
+  ].join("\n"));
+  for (const one of [[], [PLAYER]]) {
+    assert.equal(describeReputationStanding(WORLD, PLAYER, { people: one }), describeReputationStanding(WORLD, PLAYER));
+    assert.equal(describeIntelligenceStanding(WORLD, PLAYER, { people: one }), describeIntelligenceStanding(WORLD, PLAYER));
+  }
+  assert.equal(describeReputationStanding(WORLD, PLAYER, { people: [PLAYER] }), "International reputation: 72/100 (well-regarded).\nOther recorded reputations: German Empire 90/100, Kingdom of Italy 18/100, Portugal 61/100. Every polity not listed stands at 50.");
+});
+
 // ---- The Stats sheet ---------------------------------------------------------
 
 const SHEET = {

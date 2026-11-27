@@ -36,10 +36,17 @@ export const buildSharedGameDirective = (game) => {
     `- Where this prompt names them together ("${joinPolityNames(people)}"), it means each of them on its own. They are separate polities with separate governments, territories, armies and aims, played by different people; they may be friends, rivals or at war with each other.`,
     "- Every queued order is marked with the polity that gave it, and speaks only for that polity's own government. An order can never make another player's polity choose, agree, sign, pay, cede or reply: what one player asks of another is a proposal, answered only by that player's own orders or messages.",
     "- The world acts on every player's polity as on any other — pressure, incidents, reactions, attacks — and never decides a player polity's own reply.",
+    // One difficulty for every seat (the host's game's, stated in the lobby:
+    // multiplayer/host/hostRules.js). It weighs each player against the AI's
+    // world and never one player against another, as the battlefields already
+    // do (runtime/fronts/handicap.js weighs no side with a person on both).
+    "- The difficulty this prompt sets holds for each player alike against the polities you simulate. Where two players' polities meet each other — a war, a deal, a dispute between them — it favours neither: decide it from their orders, their strength and the record alone.",
     "- A player polity's choice with no order or message of its own behind it is withdrawn by the engine: write each player's outcomes from their own orders.",
     "- Share the period between the players: every player's orders get their outcomes, and no one player's polity is the whole story.",
     // Each letter is one person's thread (AI/sharedLetters.js, multiplayer/host/projection.js).
-    "- Every chat you open (createdChats, diplomaticOutreach) is a letter to ONE player: name that player's polity in `to`, and in countries only the governments writing, never a player's polity. A government with something to say to two players writes two letters.",
+    "- Every chat you open (createdChats, diplomaticOutreach) is a letter to ONE player: name that player's polity in `to`, and in countries only the governments writing, never a player's polity. A government with something to say to two players writes two letters. A letter that names no player in `to` is not sent.",
+    // The skip is every player's only unprompted contact (no request is made between rounds): its cap is each one's.
+    "- The world reaches out to each player as it would to the only one: where this prompt caps the new chats a period may open, that many may be written to EACH player, by the governments with reason to write to them, so no player hears only from those they wrote to first.",
     `- Each conversation under [Diplomacy So Far] says whose it is. A player's message there that no government has answered yet is answered in this period: the governments in that conversation reply with a chat naming the same countries and that player in \`to\`, and the reply lands in the same conversation. What a player writes binds only their own government.`,
     // Each player is shown only the events they may read (multiplayer/host/projection.js readableBy).
     "- Each player sees only the events their government would know of. An event that is secret - a covert order's outcome, a hidden meeting, a plot not yet found out - lists in its audience the polities that know of it (the one that acted, and anyone in on it or who uncovered it); everyone else is never shown it. Leave audience out of anything public. What others can observe of a secret act (ships sailing, a minister dismissed) may be its own public event, without the secret.",

@@ -194,3 +194,30 @@ test("missing real map region rejects project territory after in-memory effects,
   }), /region missing from rendered map/);
   assert.equal(source.projects[0].effectsAppliedAt, "", "no latch published to original world");
 });
+
+// A region or polity a person plays is theirs to give (runtime/projectCessions.js):
+// what that rule leaves out is a refusal, not a failure of the settlement.
+test("what a rule leaves out of a completion is settled before the world is written, and the rest is verified", async () => {
+  const both = {
+    ...project,
+    regionTransfers: [{ regionId: "region-A", toCode: "France" }, { regionId: "region-B", toCode: "France" }],
+    polityChanges: [{ code: "Germany", name: "New Germany" }],
+  };
+  let written = null;
+  const settled = await settleProjectTerritoryWorld({
+    entries: [both], world: original, colors: {},
+    resolveTransfers: unchangedResolver,
+    keepTerritory: async ({ entries, containers }) => {
+      containers[0].impacts.regionTransfers = containers[0].impacts.regionTransfers.filter((transfer) => transfer.regionId !== "region-B");
+      entries[0].polityChanges = [];
+    },
+    applyWorldImpacts: ({ world, colors, events }) => {
+      written = events[0].impacts;
+      return applyToFrance({ world, colors });
+    },
+  });
+  assert.deepEqual(written.regionTransfers.map((transfer) => transfer.regionId), ["region-A"]);
+  assert.deepEqual(written.polityChanges, []);
+  assert.equal(settled.world.regionOwnershipOverrides["region-A"], "France");
+  assert.deepEqual(both.polityChanges, [{ code: "Germany", name: "New Germany" }], "the engine's own entry is not changed");
+});

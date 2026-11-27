@@ -15,6 +15,7 @@ import {
 } from "../AI/gameplayPrompts.js";
 import { guidanceSegmentsFor, promptCharCount } from "../AI/promptGuidance.js";
 import { promptTranslationsVersion, subscribePromptTranslations } from "../../runtime/promptTranslations.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
 import {
   activateGame,
   clearGameAsset,
@@ -53,6 +54,9 @@ import { groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtim
 import FeaturesSectionEditor from "./FeaturesSectionEditor.jsx";
 import StatsSheetEditor, { normalizeStatsEditorValue } from "./StatsSheetEditor.jsx";
 import InstitutionAuthoringPanel from "./InstitutionAuthoringPanel.jsx";
+import DiplomaticRelationsAuthoringPanel from "./DiplomaticRelationsAuthoringPanel.jsx";
+import { authoringCardStyle } from "./scenarioAuthoringStyles.js";
+import { confirmDialog } from "../../runtime/uiDialog.js";
 import PrehistoryPanel from "./PrehistoryPanel.jsx";
 import ScenarioFrontsPanel from "./ScenarioFrontsPanel.jsx";
 import ScenarioWarSettings from "./ScenarioWarSettings.jsx";
@@ -91,6 +95,10 @@ import { changedFields, followSavedFields, formDiffers } from "../../runtime/edi
 import { createActivationHandOff } from "../../runtime/afterActivation.js";
 import { createWorkInProgress } from "../../runtime/workInProgress.js";
 import { buildScenarioCountryOptions, isOfferedCountry, seededWorldOf, worldWithFaction, worldWithPlayerGroup } from "../../runtime/newGameWorld.js";
+import { applyStartingRelationEdits, withoutStartingRelations } from "../../Editor/scenarioStartingRelations.js";
+import { applyGovernmentEdits } from "../../Editor/scenarioGovernmentEdits.js";
+import { assertGeneratedWorldScenarioSaveAllowed } from "../../Editor/scenarioWorldReplacement.js";
+import { createFreshScenarioFromGeneratedMap } from "../../Editor/generatedScenarioDestination.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave, scenarioAfterWorkshopRenames } from "../../Editor/playerCountryAfterSave.js";
@@ -108,6 +116,7 @@ import {
   openSuggestionsOf,
 } from "./ScenarioSuggestions.jsx";
 import { CommunitySkeleton, LobbiesSkeleton, MenuCardSkeletons } from "./menuSkeleton.jsx";
+import { gameCardActions } from "./gameCardMenu.js";
 
 const UNIT_TYPE_LABELS = {
   infantry: "Infantry",
@@ -1354,6 +1363,16 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
 // face of the card. Three verbs compete for width with Play, and Play is the one a
 // player came to press; the other three are occasional, and none of them is
 // destructive, which is why Archive stays out here on its own.
+// Leaving the shared game a guest's stand-in card stands for, from the menu:
+// as its own Leave does (multiplayer/ui/SharedGameOverlay.jsx), every cache
+// back to this device's own game. Loaded only when pressed; the card is listed
+// only while a shared game is open, its code loaded already.
+const leaveSharedGameFromCard = async () => {
+  const { leaveSharedGame } = await import("../../multiplayer/client/sharedGame.js");
+  await leaveSharedGame();
+  window.location.reload();
+};
+
 const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete = null, onEdit, onExport, onRecover }) => {
   const cardImageUrl = game.coverImageUrl || DEFAULT_SCENARIO_COVER;
   const touch = useTouchPrimary();
@@ -1405,15 +1424,19 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
     }
   };
 
-  const cardMenuItems = [
-    ["Edit", () => { setCardMenuOpen(false); onEdit(game.id); }, false],
-    ["Clone", () => { setCardMenuOpen(false); onClone(game); }, false],
-    ["Recover Projects…", () => { setCardMenuOpen(false); onRecover(game); }, false],
-    [game.archived ? "Unarchive" : "Archive", () => { setCardMenuOpen(false); onArchive(game); }, false],
+  const cardMenuItemFor = {
+    edit: ["Edit", () => { setCardMenuOpen(false); onEdit(game.id); }, false],
+    clone: ["Clone", () => { setCardMenuOpen(false); onClone(game); }, false],
+    recover: ["Recover Projects…", () => { setCardMenuOpen(false); onRecover(game); }, false],
+    archive: [game.archived ? "Unarchive" : "Archive", () => { setCardMenuOpen(false); onArchive(game); }, false],
     // Offered everywhere, the Android app included: runtime/saveFile.js saves
     // the zip into Downloads/Open Historia there (runtime/native/fileSave.js).
-    [exporting ? "Exporting…" : "Export", runExport, exporting],
-  ];
+    export: [exporting ? "Exporting…" : "Export", runExport, exporting],
+    // A guest's stand-in: the shared game left, as its own Leave leaves it.
+    leave: ["Leave the shared game", () => { setCardMenuOpen(false); void leaveSharedGameFromCard(); }, false],
+  };
+  // What works on this card (gameCardMenu.js): a guest's stand-in offers only leaving.
+  const cardMenuItems = gameCardActions(game).map((action) => cardMenuItemFor[action]);
 
   return (
     <div
@@ -1967,13 +1990,7 @@ const EDITOR_SECTION_BLURBS = Object.freeze({
 
 const EDITOR_PANEL = "var(--oh-ui-surface, #12141a)";
 const EDITOR_NAV = "var(--oh-ui-header, #0d0f14)";
-const editorCardStyle = {
-  background: "var(--oh-ui-raised, #171a22)",
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: "16px",
-  marginBottom: "0.95rem",
-  padding: "1rem 1.05rem",
-};
+const editorCardStyle = authoringCardStyle;
 const editorCardTitleStyle = { color: "#fff", fontSize: "0.92rem", fontWeight: 800, letterSpacing: "-0.01em", marginBottom: "0.75rem" };
 
 const EditorSectionIcon = ({ kind, size = 17 }) => {
@@ -2511,6 +2528,7 @@ const EditorDrawer = ({
             details={details}
             onDetailsChange={onDetailsChange}
           />
+          <DiplomaticRelationsAuthoringPanel key={details?.scenario?.id} details={details} onDetailsChange={onDetailsChange} />
         </>
       )}
 
@@ -2965,7 +2983,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // itself: patched in a second request, after `setActive` had switched to
       // the game, the opening cover and the HUD named the scenario's default
       // country until it landed.
-      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
+      const canonicalCountry = toCountryName(countryCode);
+      const gamePatch = { ...(canonicalCountry ? { country: canonicalCountry } : null), ...(difficulty ? { difficulty } : null) };
       await createGame({
         name: `${scenario.name} Session`,
         scenarioId: scenario.id,
@@ -4203,6 +4222,10 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         markers: Array.isArray(world.markers) ? world.markers : [],
         // Its puppet states, for the Countries panel.
         puppets: Array.isArray(world.puppets) ? world.puppets : [],
+        // Read the existing diplomatic climate; writing the map must not
+        // silently reset historical bilateral scores.
+        relations: Array.isArray(world.relations) ? world.relations : [],
+        politicalActors: world.politicalActors && typeof world.politicalActors === "object" ? world.politicalActors : null,
         // Its region types, for the Region Types panel; null for a scenario
         // saved before they were, which opens with the default Land and Coastal.
         regionTypes: Array.isArray(world.regionTypes) && world.regionTypes.length ? world.regionTypes : null,
@@ -4294,26 +4317,74 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // player SEES the map right away — the stock country-level renderer can't show
   // per-region ownership, so every applied map ships its geometry and renders via
   // the custom GeoJSON layer.
-  const applyMapToScenario = async (scenario, seed, { play = true, renames = [] } = {}) => {
+  const applyMapToScenario = async (scenario, seed, {
+    play = true, renames = [], beforePlay = null,
+    destination = "current", newScenarioName = "",
+  } = {}) => {
     if (!scenario || !seed) return;
+    if (destination === "new") {
+      // New-world generation cannot silently reuse an established scenario's
+      // Political Actors, wars, institutions, treaties or scripted history.
+      // The same native writeMapToScenario path publishes into a *new*, blank
+      // scenario. The source scenario and active game are never selected or
+      // mutated as part of this creation.
+      if (mapEditorReview) throw new Error("Finish the existing suggestion review before creating a separate scenario.");
+      const sourceEditorHasUnsavedForm = Boolean(editorKind === "scenario" && editorDetails && editorState) && (
+        formDiffers(editorState, buildScenarioEditorState(editorDetails))
+        || formDiffers(editorStats, editorStatsSavedRef.current)
+      );
+      if (sourceEditorHasUnsavedForm && !(await confirmDialog(
+        "Your existing scenario editor form has unsaved changes that cannot be copied into the new scenario. Continue without those form edits?",
+      ))) {
+        throw new Error("New scenario creation cancelled. The original scenario was not changed.");
+      }
+      return createFreshScenarioFromGeneratedMap({
+        seed,
+        name: newScenarioName,
+        createScenario,
+        saveMap: (newId, freshSeed) =>
+          withSingleLibraryRefresh(() => writeMapToScenario(newId, freshSeed, [])),
+        // This is the same pre-unmount settlement used by Apply & Play.
+        settleSource: beforePlay,
+        openScenarioEditor: async (newId) => {
+          // Switch selection only after the new world and local settlement
+          // succeeded. Creation/publishing failures leave the historical
+          // scenario selected and its canonical records untouched.
+          await selectScenario(newId);
+          await openScenarioEditor(newId);
+          mapEditorRequest.cancel();
+          setIsMapEditorOpen(false);
+          setMapEditorScenario(null);
+          setMapEditorSeed(null);
+          setMapEditorReview(null);
+        },
+      });
+    }
+    if (destination !== "current") throw new Error("Unknown map scenario destination.");
     const scenarioId = scenario.id;
 
     // A save is a scenario save and up to six asset writes. Each used to rebuild
     // the library catalog on its own (and could rotate the running map's asset
     // token half-way through the save); now the catalog is rebuilt once, after
     // the last write.
-    const scenarioCountry = await withSingleLibraryRefresh(() => writeMapToScenario(scenarioId, seed, renames));
+    const applied = await withSingleLibraryRefresh(() => writeMapToScenario(scenarioId, seed, renames));
 
-    // A Workshop save is complete by itself; Apply & Play opts into the fresh-game
-    // flow below.
-    if (!play) return { saved: true, scenarioId };
-    await playAppliedMap(scenario, scenarioId, seed, scenarioCountry);
+    // Return the persisted canonical actor baseline for the still-open Workshop:
+    // only NEW authored transitions should remain queued for a later Save.
+    if (!play) return { saved: true, scenarioId, politicalActors: applied.politicalActors };
+    // Play activates a new game and unmounts the Workshop. Give its authoring
+    // bookkeeping a chance to persist locally BEFORE that transition.
+    await beforePlay?.(applied);
+    await playAppliedMap(scenario, scenarioId, seed, applied.scenarioCountry);
   };
 
   // Returns the scenario's player country as saved, for Apply & Play.
   const writeMapToScenario = async (scenarioId, seed, renames) => {
     const details = await loadScenarioDetails(scenarioId);
     const currentWorld = details?.data?.world ?? {};
+    // A generated map does not confer authority to erase or silently reuse
+    // independent political/history canon. Refuse before ANY scenario writes.
+    assertGeneratedWorldScenarioSaveAllowed(currentWorld, seed.generatedWorldReplacement);
     // The Workshop edits the polity registry, while Political World and several
     // other canonical ledgers live outside its map document. Its identity
     // operations are replayed onto the scenario's own world and game before the
@@ -4343,11 +4414,45 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       throw new Error("The map in the editor is empty while this scenario has territory — its map had not finished loading. Wait for it to appear, then save again.");
     }
 
+    // Only explicitly authored bilateral-score changes are applied to the
+    // scenario's latest canonical diplomacy ledger, after native polity renames.
+    // Unchanged treaties, relation metadata and unknown legacy rows survive.
+    const editedRelations = Array.isArray(seed.startingRelationEdits) ? seed.startingRelationEdits : [];
+    const removedKeys = (Array.isArray(seed.polityAuthoringOps) ? seed.polityAuthoringOps : [])
+      .filter((operation) => operation?.op === "remove")
+      .map((operation) => String(operation.key || "").trim()).filter(Boolean);
+    const previousChoices = Object.entries(currentWorld.polityOverrides || {})
+      .map(([key, record]) => ({ key, ...(record || {}) }));
+    const currentChoices = [...new Set([
+      ...Object.keys(reconciledWorld.polityOverrides || {}),
+      ...Object.keys(seed.world?.polityOverrides || {}),
+      ...Object.values(seed.world?.regionOwnershipOverrides || {}),
+      ...(Array.isArray(reconciledWorld.ownerCodes) ? reconciledWorld.ownerCodes : []),
+    ])].map((key) => ({
+      key,
+      ...(reconciledWorld.polityOverrides?.[key] || {}),
+      ...(seed.world?.polityOverrides?.[key] || {}),
+    }));
+    const relationPlan = applyStartingRelationEdits(
+      withoutStartingRelations(reconciledWorld.relations, removedKeys, previousChoices),
+      editedRelations,
+      currentChoices,
+    );
+    if (!relationPlan.ok) throw new Error(relationPlan.reason);
+    // Political World is still the sole canonical owner of government state:
+    // apply explicit government transitions to the scenario's latest actor
+    // records, after identity renames and before the scenario is persisted.
+    const governmentWorld = applyGovernmentEdits(reconciledWorld, seed.actorGovernmentEdits, {
+      polityNames: currentChoices.map((row) => row.key),
+    });
+
     // The author's player country, not the seed's first owner (playerCountryAfterSave.js).
     const scenarioCountry = playerCountryAfterSave(currentGame.country, seed);
     const savedScenarioDetails = await saveScenario(scenarioId, {
       world: {
-        ...reconciledWorld,
+        ...governmentWorld,
+        // No new score edits: preserve absence and every unchanged source row.
+        ...(editedRelations.length || removedKeys.length ? { relations: relationPlan.relations } : {}),
         regionOwnershipOverrides: seed.world?.regionOwnershipOverrides ?? {},
         // The Workshop is authoritative for the polity registry: it hydrated the
         // full current registry (landless polities included) before editing, so
@@ -4497,7 +4602,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     } else {
       await clearScenarioAsset(scenarioId, "ownBasemapsData", { refresh: false });
     }
-    return scenarioCountry;
+    return { scenarioCountry, politicalActors: savedScenarioDetails?.data?.world?.politicalActors };
   };
 
   const playAppliedMap = async (scenario, scenarioId, seed, scenarioCountry) => {
@@ -4612,7 +4717,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     if (!gid) return;
     setMenuOpen(false);
     try {
-      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
+      const canonicalCountry = toCountryName(countryCode);
+      const gamePatch = { ...(canonicalCountry ? { country: canonicalCountry } : null), ...(difficulty ? { difficulty } : null) };
       if (Object.keys(gamePatch).length) {
         await saveGame(gid, { gamePatch });
       }

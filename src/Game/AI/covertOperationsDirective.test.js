@@ -56,6 +56,19 @@ test("the countries an untraced operation took place in", () => {
   ]), ["Germany", "Italy", "Spain"]);
 });
 
+// The review of 2026-11-18, simulation 2: a guest's untraced operation hid the
+// host's roster line in that country, and left the guest's own in.
+test("each service's own untraced operations, for its own brief", () => {
+  const operations = [
+    op({ owner: "Spain", target: "Morocco" }),
+    op({ owner: "France", target: "Morocco", caught: true, identified: true }),
+    op({ owner: "France", target: "Italy" }),
+  ];
+  assert.deepEqual(untracedTargets(operations, { owner: "spain" }), ["Morocco"]);
+  assert.deepEqual(untracedTargets(operations, { owner: "France" }), ["Italy"]);
+  assert.deepEqual(untracedTargets(operations, { owner: "Portugal" }), []);
+});
+
 test("a report follows the agent's collection orders and its sources", () => {
   assert.equal(collectionOrders({ target: "Germany" }), "");
   assert.equal(collectionOrders({ target: "Germany", focus: "diplomacy" }), "");

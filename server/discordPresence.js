@@ -74,10 +74,10 @@ export const MIN_UPDATE_MS = 4000;
 // player's friends for as long as it did.
 export const PRESENCE_STALE_MS = 3 * 60 * 1000;
 
-// Which game the elapsed timer belongs to: a new scene, scenario or player
-// starts it again, a new in-game date does not.
+// Which campaign the elapsed timer belongs to: a new save, scene, scenario or
+// player restarts it; a time skip within the same save does not.
 const sessionOf = (presence) => (presence
-  ? JSON.stringify([presence.scene, presence.scenario ?? "", presence.player ?? ""])
+  ? JSON.stringify([presence.scene, presence.gameId ?? "", presence.scenario ?? "", presence.player ?? ""])
   : null);
 
 // Discord's limits: details and state 2 to 128 characters.
@@ -105,8 +105,12 @@ export const normalizePresence = (body) => {
   if (!body || typeof body !== "object") return null;
   const party = normalizeParty(body.party);
   if (body.scene === "game") {
+    // A local session discriminator only: never include it in activityFor(),
+    // so a different save with identical public labels still resets elapsed.
+    const gameId = clip(body.gameId, 128);
     return {
       scene: "game",
+      ...(gameId ? { gameId } : {}),
       player: clip(body.player, 60),
       scenario: clip(body.scenario, 60),
       date: clip(body.date, 40),
@@ -131,7 +135,9 @@ export const activityFor = (presence, { startedAt } = {}) => {
     assets: { large_image: PRESENCE_IMAGE, large_text: "Open Historia" },
     buttons: [PRESENCE_BUTTON],
   };
-  if (Number.isFinite(startedAt)) activity.timestamps = { start: Math.floor(startedAt) };
+  // now() is Date.now() in milliseconds; the raw Discord SET_ACTIVITY RPC
+  // examples use Unix seconds (time(nullptr)), unlike the Social SDK types.
+  if (Number.isFinite(startedAt)) activity.timestamps = { start: Math.floor(startedAt / 1000) };
   if (presence.scene === "game") {
     const details = presence.player ? clip(`Playing as ${presence.player}`) : clip(presence.scenario);
     const state = clip([presence.player ? presence.scenario : "", presence.date].filter(Boolean).join(" · "));

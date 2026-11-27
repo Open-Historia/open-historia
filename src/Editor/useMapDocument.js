@@ -16,7 +16,12 @@ import { findPolityKey, renamePolityInDocument } from "../../server/polityRename
 import { mergeCityMarkers } from "./cityMarkers.js";
 import { mergePolityRoster } from "./polityRoster.js";
 import { withoutPolities } from "./scenarioPuppets.js";
+import { mergeStartingRelationEdit, rekeyStartingRelations, settleStartingRelationEdits, withoutStartingRelations } from "./scenarioStartingRelations.js";
 import { warGeographyOf } from "./warGeographyDoc.js";
+import {
+  stageGovernmentEdit, rekeyGovernmentEdits, removeGovernmentEdits,
+  settleGovernmentEditRows,
+} from "./scenarioGovernmentEdits.js";
 
 // The official editor ships a handful of region "types" carrying render +
 // gameplay settings. We seed the two core ones (Land / Coastal); users add more.
@@ -117,6 +122,12 @@ export const createDocument = ({ name = "Untitled Map", kind = "import-world" } 
     // Puppet states the scenario starts with, as world.puppets rows
     // (scenarioPuppets.js); set in the Countries panel.
     puppets: [],
+    // Canonical starting relationship snapshot plus only explicitly staged edits.
+    // The scenario world.relations ledger remains authoritative at Apply & Play.
+    relations: [],
+    relationEdits: [],
+    // Explicit government edits, not a duplicate Political World registry.
+    actorGovernmentEdits: [],
     // What the scenario draws on its map for war, in the world's own form
     // (warGeographyDoc.js): the Terrain, Fortified line and Climate zone tools'
     // shapes, and the water regions marked Can freeze.
@@ -157,6 +168,9 @@ export const openStoredDocument = (stored) => {
       units: Array.isArray(doc.units) ? doc.units : [],
       groups: doc.groups && typeof doc.groups === "object" ? doc.groups : {},
       puppets: Array.isArray(doc.puppets) ? doc.puppets : [],
+      relations: Array.isArray(doc.relations) ? doc.relations : [],
+      relationEdits: Array.isArray(doc.relationEdits) ? doc.relationEdits : [],
+      actorGovernmentEdits: Array.isArray(doc.actorGovernmentEdits) ? doc.actorGovernmentEdits : [],
       // Cleaned as the game cleans them; empty for a map saved before them.
       ...warGeographyOf(doc),
     },
@@ -177,8 +191,15 @@ export const useMapDocument = (initial) => {
   // count has not moved, so an edit made while a save is in flight stays unsaved
   // rather than being covered by a "saved" it was never part of.
   const editsRef = useRef(0);
-  const setSaveStatus = useCallback((status) => {
-    if (status === "dirty") editsRef.current += 1;
+  // A working-map reconciliation must be persisted locally without declaring
+  // a NEW scenario edit. Keep the authored revision separate from the
+  // document autosave's broader dirty counter.
+  const [authoredRevision, setAuthoredRevision] = useState(0);
+  const setSaveStatus = useCallback((status, { workingCopyOnly = false } = {}) => {
+    if (status === "dirty") {
+      editsRef.current += 1;
+      if (!workingCopyOnly) setAuthoredRevision((version) => version + 1);
+    }
     setSaveStatusState(status);
   }, []);
   const editCount = useCallback(() => editsRef.current, []);
@@ -299,7 +320,13 @@ export const useMapDocument = (initial) => {
       try {
         const renamed = renamePolityInDocument(d, from, to);
         const fromKey = findPolityKey(d.polities, from) || from;
-        return { ...renamed, polityRenames: [...(Array.isArray(d.polityRenames) ? d.polityRenames : []), { from: fromKey, to }] };
+        return {
+          ...renamed,
+          relations: rekeyStartingRelations(d.relations, fromKey, to),
+          relationEdits: rekeyStartingRelations(d.relationEdits, fromKey, to),
+          actorGovernmentEdits: rekeyGovernmentEdits(d.actorGovernmentEdits, fromKey, to),
+          polityRenames: [...(Array.isArray(d.polityRenames) ? d.polityRenames : []), { from: fromKey, to }],
+        };
       } catch (error) {
         console.warn("[editor] polity rename refused:", error);
         return d;
@@ -327,7 +354,11 @@ export const useMapDocument = (initial) => {
       delete colorOverrides[stableKey];
       delete flags[stableKey];
       delete tags[stableKey];
-      return { ...d, polities, colorOverrides, flags, tags, puppets: withoutPolities(d.puppets, stableKey) };
+      return { ...d, polities, colorOverrides, flags, tags, puppets: withoutPolities(d.puppets, stableKey),
+        relations: withoutStartingRelations(d.relations, stableKey,
+          Object.entries(d.polities || {}).map(([key, record]) => ({ key, ...record }))),
+        relationEdits: withoutStartingRelations(d.relationEdits, stableKey),
+        actorGovernmentEdits: removeGovernmentEdits(d.actorGovernmentEdits, stableKey) };
     });
     setSaveStatus("dirty");
   }, [setSaveStatus]);
@@ -346,7 +377,11 @@ export const useMapDocument = (initial) => {
         delete flags[stableKey];
         delete tags[stableKey];
       }
-      return { ...d, polities, colorOverrides, flags, tags, puppets: withoutPolities(d.puppets, stableKeys) };
+      return { ...d, polities, colorOverrides, flags, tags, puppets: withoutPolities(d.puppets, stableKeys),
+        relations: withoutStartingRelations(d.relations, stableKeys,
+          Object.entries(d.polities || {}).map(([key, record]) => ({ key, ...record }))),
+        relationEdits: withoutStartingRelations(d.relationEdits, stableKeys),
+        actorGovernmentEdits: removeGovernmentEdits(d.actorGovernmentEdits, stableKeys) };
     });
     setSaveStatus("dirty");
   }, [setSaveStatus]);
@@ -405,6 +440,41 @@ export const useMapDocument = (initial) => {
     setDoc((d) => ({ ...d, puppets: typeof updater === "function" ? updater(d.puppets || []) : (updater || []) }));
     setSaveStatus("dirty");
   }, [setSaveStatus]);
+  const setActorGovernmentEdit = useCallback((key, fields) => {
+    // Validate synchronously: do not schedule a React mutation that may
+    // throw later or mark an invalid edit as saved.
+    stageGovernmentEdit(doc.actorGovernmentEdits, key, fields);
+    setDoc((current) => ({
+      ...current,
+      actorGovernmentEdits: stageGovernmentEdit(current.actorGovernmentEdits, key, fields),
+    }));
+    setSaveStatus("dirty");
+  }, [doc.actorGovernmentEdits, setSaveStatus]);
+  const settleActorGovernmentEdits = useCallback((savedRows) => {
+    if (!Array.isArray(savedRows) || !savedRows.length) return;
+    setDoc((current) => ({
+      ...current,
+      actorGovernmentEdits: settleGovernmentEditRows(current.actorGovernmentEdits, savedRows, current.polityRenames),
+    }));
+    // Autosave the reconciled working copy, but never count this housekeeping
+    // as a newly authored scenario change after a successful scenario Save.
+    setSaveStatus("dirty", { workingCopyOnly: true });
+  }, [setSaveStatus]);
+  const setRelationEdit = useCallback((edit) => {
+    setDoc((d) => ({ ...d, relationEdits: mergeStartingRelationEdit(d.relationEdits, edit) }));
+    setSaveStatus("dirty");
+  }, [setSaveStatus]);
+  const settleRelationEdits = useCallback((savedEdits, extraKeys = []) => {
+    if (!Array.isArray(savedEdits) || !savedEdits.length) return;
+    setDoc((d) => {
+      const settled = settleStartingRelationEdits(d, savedEdits, extraKeys);
+      if (!settled.ok) {
+        console.warn("[editor] could not settle authored starting relations:", settled.reason);
+        return d;
+      }
+      return settled.document;
+    });
+  }, []);
   const setUnits = useCallback((updater) => {
     setDoc((d) => ({ ...d, units: typeof updater === "function" ? updater(d.units || []) : (updater || []) }));
     setSaveStatus("dirty");
@@ -467,6 +537,13 @@ export const useMapDocument = (initial) => {
     setGroups,
     puppets: doc.puppets || [],
     setPuppets,
+    relations: doc.relations || [],
+    relationEdits: doc.relationEdits || [],
+    actorGovernmentEdits: doc.actorGovernmentEdits || [],
+    setActorGovernmentEdit,
+    settleActorGovernmentEdits,
+    setRelationEdit,
+    settleRelationEdits,
     terrainAreas: doc.terrainAreas || NO_ROWS,
     setTerrainAreas,
     fortifications: doc.fortifications || NO_ROWS,
@@ -492,6 +569,7 @@ export const useMapDocument = (initial) => {
     saveStatus,
     setSaveStatus,
     editCount,
+    authoredRevision,
     counts: {
       regions: regionCount,
       features: doc.features.length,

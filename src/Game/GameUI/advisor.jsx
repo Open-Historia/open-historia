@@ -1,5 +1,5 @@
 /*! Open Historia — portions (drawer close/slide + mobile layout) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useSyncExternalStore } from "react";
 import { Chart, registerables } from "chart.js";
 import { sendMessage, sendAdvisorGroupMessage, startChat, loadHistory, checkAdvisorActionCompleteness } from "../AI/main.jsx";
 import { completedSilentGroupTurnIndices } from "../AI/advisorGroupMeetings.js";
@@ -12,7 +12,7 @@ import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from ".
 import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { chatLanguageDiffersFromUi, chatTextDirection } from "../../runtime/i18n.js";
 import { uiString } from "../../runtime/translator.js";
-import { applyProjectOpsToWorld, mutateActionsState, mutateAdvisorState, mutateWorldState, normalizeActionEntry, readAdvisorMessages, viewAsSeen } from "../../runtime/gameState.js";
+import { applyProjectOpsToWorld, mutateActionsState, mutateAdvisorState, mutateWorldState, normalizeActionEntry, readActionsState, readAdvisorMessages, viewAsSeen } from "../../runtime/gameState.js";
 import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorGroupForReply, advisorGroups, advisorMessagesFor, advisorOfficeStatus, advisorRecipientType, archiveAdvisorContact, archiveAdvisorGroup, createAdvisorGroup, reviseAdvisorGroup, chiefAdvisorProfile, createAdvisorContact, politicalAdvisorOffices, reorderAdvisorContact, replaceAdvisorThread, resetChiefAdvisorProfile, reviseAdvisorContact, saveChiefAdvisorProfile, withSavedActionReceipts } from "../../runtime/advisorThreads.js";
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import StorageProblemNotice from "./storageProblemNotice.jsx";
@@ -26,6 +26,8 @@ import { draftIdOf, sentLetterDate, splitAtBlockquotes } from "./advisorDrafts.j
 import { repeatedOrder } from "../AI/playerFocus.js";
 import { institutionDraftButtonLabel } from "./advisorInstitutionDrafts.js";
 import { parseAdvisorReply } from "./advisorReply.js";
+import { permitsPublicDraft } from "../../runtime/publicCommunications.js";
+import { PublicStatementCard } from "./publicStatement.jsx";
 import { completeAdvisorActionReply } from "./advisorActionCompleteness.js";
 import { prepareAdvisorGroupMemberReply, stageAdvisorGroupBatch } from "./advisorGroupOrders.js";
 import { applyAdvisorGroupProjectBatch } from "./advisorProjectRouting.js";
@@ -45,7 +47,7 @@ import { commitInstitutionLifecycleCommand } from "../../runtime/institutionLife
 import { getLibraryState } from "../../runtime/library.js";
 import { campaignChanged } from "../../runtime/campaignGuard.js";
 import { TURN_RUNNING_NOTE, assertNoTurnRunning, isSimulationBusy } from "../AI/simulationStatus.js";
-import { inSharedGame } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame, isSharedMultiplayerSession, requestFromHost, sharedAdvisorRefusal, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 
 Chart.register(...registerables);
 
@@ -211,7 +213,9 @@ const AdvisorProjectsProblem = ({ kind, detail, excerpt, onRetry }) => {
             ? "That reply was cut off before a single entry finished, so nothing could be added. Ask again for a shorter batch — around ten at a time works."
             : kind === "partial"
                 ? "Most of that batch went on the board. A few entries were written in a way that could not be read and were skipped — ask for those again."
-                : "The advisor tried to change the board but its instructions could not be read, so nothing was applied. Asking again usually fixes it.";
+                : kind === "refused"
+                    ? "The host did not take these changes to the board, so they were not applied. The host's reason:"
+                    : "The advisor tried to change the board but its instructions could not be read, so nothing was applied. Asking again usually fixes it.";
 
     return (
         <div style={{ marginTop: "0.75rem", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.35)", borderRadius: "10px", padding: "0.65rem 0.8rem" }}>
@@ -810,8 +814,8 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment }) => {
-    const { text, chartConfig, chartProblem, messageDrafts: parsedDrafts, institutionDrafts, deployments } = msg.role === "advisor"
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, canDraft = true, canReviewActions = true, canReviewPublicStatements = false, threadId, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussPublicStatement, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment }) => {
+    const { text, chartConfig, chartProblem, messageDrafts: parsedDrafts, publicDrafts, publicProblems, institutionDrafts, deployments } = msg.role === "advisor"
         ? parseAdvisorReply(msg.text, { allowedUnitTypes: allowedUnitTypes ? allowedUnitTypes.split(",") : null, streaming: Boolean(msg.streaming) })
         : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, institutionDrafts: null, deployments: null };
     // Each letter's own id (advisorDrafts.js draftIdOf), which the message sent
@@ -845,6 +849,8 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
             onDraftMessage={canDraft ? onDraftMessage : undefined}
             />
         )}
+        {canReviewPublicStatements && !msg.streaming && publicDrafts?.map((draft,index)=>draft&&<PublicStatementCard key={msg.id+":public:"+index} draft={draft} replyId={msg.id} threadId={threadId} index={index} onDiscuss={onDiscussPublicStatement}/>)}
+        {canReviewPublicStatements && !msg.streaming && publicProblems?.length>0 && <div role="status" style={{fontSize:"0.74rem",opacity:0.75}}>{publicProblems.join(" ")}</div>}
         {chartConfig && <AdvisorChart config={chartConfig} />}
         {/* Not while streaming: a chart still arriving is not a broken one. */}
         {chartProblem && !msg.streaming && (
@@ -986,7 +992,7 @@ const ADVISOR_RENDER_WINDOW_STEP = 20;
 // Only the last `visibleLimit` messages are drawn. `i` stays the index into
 // the WHOLE transcript: placedDeployments and completedInstitutionDrafts are
 // written back through it.
-const AdvisorMessageList = React.memo(({ messages, groupMemberIds = [], visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", speakerNameFor = null, emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => {
+const AdvisorMessageList = React.memo(({ messages, groupMemberIds = [], visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", speakerNameFor = null, emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, canReviewActions = true, canReviewPublicStatements = false, threadId, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussPublicStatement, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => {
     // Silent group-participation markers are persisted for resume/idempotence,
     // but never consume visible history slots or display empty bubbles.
     const silentTurnEnds = new Set(completedSilentGroupTurnIndices(messages, groupMemberIds));
@@ -1025,7 +1031,7 @@ const AdvisorMessageList = React.memo(({ messages, groupMemberIds = [], visibleL
             {uiString("All group members passed on this turn. No answer or execution was recorded.")}
           </div>
         : (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerNameFor ? speakerNameFor(msg) : speakerName} canExecute={canExecute} canDraft={canDraft} canReviewActions={canReviewActions} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} actionStates={actionStates} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={i === visibleLastIndex && msg.projectsProblem ? onRetryProjects : undefined} onDraftMessage={onDraftMessage} onDiscussAction={onDiscussAction} onProceedAction={onProceedAction} onCancelAction={onCancelAction} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerNameFor ? speakerNameFor(msg) : speakerName} canExecute={canExecute} canDraft={canDraft} canReviewActions={canReviewActions} canReviewPublicStatements={canReviewPublicStatements} threadId={threadId} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} actionStates={actionStates} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={i === visibleLastIndex && msg.projectsProblem ? onRetryProjects : undefined} onDraftMessage={onDraftMessage} onDiscussPublicStatement={onDiscussPublicStatement} onDiscussAction={onDiscussAction} onProceedAction={onProceedAction} onCancelAction={onCancelAction} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
         onRetry={i === visibleLastIndex && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
     )))}
 
@@ -1127,6 +1133,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const [hasBootstrapped, setHasBootstrapped] = useState(false);
     const [loadFailed, setLoadFailed] = useState(false);
     const [saveFailed, setSaveFailed] = useState(false);
+    // In a shared game the host keeps this conversation with the player's seat:
+    // a change it did not keep is said here, with its reason, until one is kept.
+    const hostRefusal = useSyncExternalStore(subscribeSharedGameRole, sharedAdvisorRefusal, sharedAdvisorRefusal);
     const [storageRetrying, setStorageRetrying] = useState(false);
     useEffect(() => {
         onAdvisorSaveResult = (ok) => setSaveFailed(!ok);
@@ -1136,6 +1145,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const [isResizing, setIsResizing] = useState(false);
     const [handleHover, setHandleHover] = useState(false);
     const isMobile = useIsMobile();
+    const sharedSession = useSyncExternalStore(subscribeSharedGameRole, isSharedMultiplayerSession, () => false);
     // On a touch screen the 🗑 sits a thumb's width from the ✕, and one stray
     // tap would wipe the whole conversation, so there the first tap only asks
     // (the way deleting a chat does, chat.jsx). A mouse keeps the one click.
@@ -1601,18 +1611,24 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                             || Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 14)),
                     });
                     if (leftCampaign()) throw new Error("Campaign changed before group Project validation.");
+                    // In a shared game the host may refuse a speaker's changes:
+                    // said on that speaker's reply, the replies kept.
+                    const refusedBySpeaker = new Map();
                     const projectsBySpeaker = await applyAdvisorGroupProjectBatch({
                         entries: staged.map((record) => ({
                             speakerId: record.speakerId, proposal: record.projectOps,
                         })),
                         gameDate, round: gameRound, mutateWorldState, applyProjectOpsToWorld,
+                        onRefused: (speakerId, reason) => refusedBySpeaker.set(speakerId, reason),
                     });
                     const at = new Date().toISOString();
                     const completed = staged.map(({ projectOps, ...record }) => {
                         const summary = projectsBySpeaker.get(record.speakerId);
+                        const refused = refusedBySpeaker.get(record.speakerId);
                         return {
                             ...record, time: askedOn, at,
                             ...(summary?.length ? { projectsSummary: summary } : {}),
+                            ...(refused ? { projectsProblem: "refused", projectsDetail: refused } : {}),
                         };
                     });
                     if (leftCampaign()) throw new Error("Campaign changed before saving group replies.");
@@ -1649,9 +1665,11 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             const completion = await completeAdvisorActionReply({
                 reply: rawReply,
                 canPropose: canProposeActions,
-                check: () => checkAdvisorActionCompleteness({
+                allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
+                check: ({ delivered }) => checkAdvisorActionCompleteness({
                     playerRequest: text,
                     advisorReply: parseAdvisorReply(rawReply).text,
+                    delivered,
                 }),
             });
             if (leftCampaign()) return;
@@ -1685,6 +1703,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 dropped: projectsDropped, excerpt: projectsExcerpt } =
                 extractFencedJson(reply, "projects", { salvageTruncated: true });
             const canApplyProjects = canAdvisorApplyProjectOps(threadId, recipient);
+            // In a shared game the host's refusal, in its words: it was told as
+            // a reply whose entries named no project on the board.
+            let projectsRefusal = "";
             const projectsSummary = canApplyProjects
                 ? await applyAdvisorProjectProposal({
                     proposal: projectsProposal,
@@ -1693,7 +1714,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                     mutateWorldState,
                     applyProjectOpsToWorld,
                 }).catch((error) => {
-                    console.error("Failed to apply advisor-proposed projects:", error);
+                    if (error?.refusedByHost) projectsRefusal = String(error.message || "");
+                    else console.error("Failed to apply advisor-proposed projects:", error);
                     return null;
                 }) : null;
             // Every way this can fail used to look identical to the player: a wall
@@ -1702,6 +1724,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             // "Some of it landed" is its own outcome, and the most common one now
             // that a single malformed entry no longer costs the batch.
             const projectsProblem = !canApplyProjects ? ""
+                : projectsRefusal ? "refused"
                 : projectsSummary
                     ? (projectsTruncated ? "truncated" : (projectsDropped > 0 ? "partial" : ""))
                     : (looksLikeProjectOps(reply) ? (projectsTruncated ? "truncated-empty" : "unusable") : "");
@@ -1709,7 +1732,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             // read them": the block parsed fine and every op named a project that
             // does not exist. Telling them apart is the difference between "ask
             // again" and "it is trying to update something that was never opened".
-            const projectsDetail = projectsProblem === "partial"
+            const projectsDetail = projectsProblem === "refused" ? projectsRefusal
+                : projectsProblem === "partial"
                 ? `${projectsDropped} entr${projectsDropped === 1 ? "y was" : "ies were"} malformed and skipped.`
                 : projectsProblem === "unusable"
                     ? (projectsReason || "every entry referred to a project that is not on the board")
@@ -1850,6 +1874,13 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
 
     // Discuss is a local composer handoff: it neither sends a message nor
     // writes an Action. Preserve any draft the player was already typing.
+    const handleDiscussPublicStatement = React.useCallback((draft) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current) return;
+        const subject = String(draft?.title || "this statement").trim().slice(0,180);
+        const prompt = "Let's discuss the proposed public statement "+JSON.stringify(subject)+" before publication. Prepare a fresh draft if we agree on revisions.";
+        setInput(current => current.trim() ? current.trimEnd()+"\n\n"+prompt : prompt);
+        inputRef.current?.focus();
+    }, []);
     const handleDiscussAction = React.useCallback((_messageId, proposal, needsNewAction = false) => {
         if (turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current) return;
         const subject = String(proposal?.title || proposal?.text || "this Action").trim().slice(0, 240);
@@ -1880,6 +1911,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 threadId, messageId, proposalId,
                 readAdvisorMessages, mutateActionsState, mutateAdvisorState,
                 sharedGame: inSharedGame(),
+                readActions: () => readActionsState({ force: true }),
+                requestFromHost,
                 assertReady: assertNoTurnRunning,
             });
             if (campaignChanged(campaignId, getLibraryState()?.activeGameId)) {
@@ -1922,6 +1955,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 normalizeAction: normalizeActionEntry,
                 repeatOf: (queue, title) => repeatedOrder(queue, title, { round: Number(round) || 0 }),
                 sharedGame: inSharedGame(),
+                readActions: () => readActionsState({ force: true }),
+                requestFromHost,
                 assertReady: assertNoTurnRunning,
             });
             if (campaignChanged(campaignId, getLibraryState()?.activeGameId)) {
@@ -2250,6 +2285,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             <StorageProblemNotice title="Could not load your conversation with the advisor." detail="Nothing new is saved until it loads." onRetry={retryLoad} retrying={storageRetrying} retryIcon={<RetryIcon />} />
         ) : saveFailed ? (
             <StorageProblemNotice title="Your latest messages were not saved." detail="They are kept here until a save works." onRetry={retrySave} retrying={storageRetrying} retryIcon={<RetryIcon />} />
+        ) : hostRefusal ? (
+            <StorageProblemNotice title="The host did not keep your latest change to this conversation." detail={hostRefusal} />
         ) : null}
 
         <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
@@ -2263,6 +2300,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         speakerNameFor={speakerNameFor}
         emptyMessage={selectedGroup ? "No group conversation yet. Ask the participants a question to start." : selectedContact && advisorRecipientType(selectedContact) !== ADVISOR_RECIPIENT_TYPES.MINISTER ? "No messages yet. Start your conversation." : "No messages yet. Ask your advisor something!"}
         canExecute={activeThreadId === CHIEF_ADVISOR_THREAD}
+        canReviewPublicStatements={!recipientLocked && permitsPublicDraft(activeThreadId, selectedContact, { meetingMode: Boolean(selectedGroup), sharedGame: sharedSession })}
+        threadId={activeThreadId}
         canDraft={Boolean(selectedGroup) || activeThreadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(selectedContact) === ADVISOR_RECIPIENT_TYPES.MINISTER}
         canReviewActions={!recipientLocked && (Boolean(selectedGroup) || activeThreadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(selectedContact) === ADVISOR_RECIPIENT_TYPES.MINISTER)}
         visibleLimit={visibleMessageLimit}
@@ -2278,6 +2317,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         onRetry={handleRetryTurn}
         retrying={isLoading}
         onDraftMessage={handleDraftMessage}
+        onDiscussPublicStatement={handleDiscussPublicStatement}
         onDiscussAction={handleDiscussAction}
         onProceedAction={handleProceedAction}
         onCancelAction={handleCancelAction}

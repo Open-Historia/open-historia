@@ -71,14 +71,16 @@ import {
     getStoredLanguage,
     setStoredChatLanguage,
 } from "../../runtime/i18n.js";
-import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSetting, useMapSettingDefaultOn, useMapSettingValue, useSystemReducedMotion } from "../../runtime/mapSettings.js";
+import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSetting, useMapSettingDefaultOn, useMapSettingValue, useSystemReducedMotion, usePolityLabelMaxZoom, setPolityLabelMaxZoom } from "../../runtime/mapSettings.js";
+import { POLITY_LABEL_MIN_ZOOM, POLITY_LABEL_MAX_ZOOM, POLITY_LABEL_DEFAULT_MAX_ZOOM, POLITY_LABEL_ZOOM_STEP } from "../../runtime/polityLabelVisibility.js";
 import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
 // The Map Editor's basemap window, opened here to browse, download and manage
 // maps without opening the editor. Loaded on first use: it brings the editor's
 // file readers with it.
 const BasemapPicker = lazy(() => import("../../Editor/BasemapPicker.jsx"));
 import { getLibraryState, saveGame, useLibraryState } from "../../runtime/library.js";
-import { readGameData } from "../../runtime/gameState.js";
+import { mutateGameData, readGameData } from "../../runtime/gameState.js";
+import { refreshRuntimeState } from "../../runtime/runtimeStore.js";
 import { ECONOMIC_DISPLAY_CURRENCIES, getActiveEconomicDisplayCurrency, normalizeEconomicDisplayCurrency, setActiveEconomicDisplayCurrency, subscribeEconomicDisplayCurrency } from "../../runtime/economicDisplayCurrency.js";
 import { DISCORD_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { CommunityTile, DISCORD_BLURPLE, DiscordMark, REDDIT_ORANGERED, RedditMark } from "./communityLogos.jsx";
@@ -122,6 +124,7 @@ import { MUSIC_CREDIT, MUSIC_TRACKS, getNowPlaying, musicVolumeOf, subscribeNowP
 import { creditSiteOf } from "../../runtime/scenarioMusic.js";
 import { clearKeptMusic, keptMusicUsage } from "../../runtime/keptMusic.js";
 import { setVisitConsent, useVisitConsent } from "../../runtime/visitConsent.js";
+import { inSharedGame, sharedGameRole, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 import {
     APP_UPDATE_MANUAL_CHECK_RESULT_EVENT,
     appUpdateCheckDescription,
@@ -1524,6 +1527,10 @@ const RequestBudgetSection = () => {
     const lookupsOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
     // Idle diplomacy has a switch of its own, outside that cap (2026-11-09).
     const idleDiplomacyOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.idleDiplomacy);
+    // Never in a shared game, whatever the switch says (GameUI/main.jsx): each
+    // attempt would be a request nobody set a number for, on whichever key
+    // (the map's rule 10). Its governments write in the round's one request.
+    const sharedNow = Boolean(useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole));
     const [groupAi, setGroupAi] = useState(() => readAdvisorGroupSettings());
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
 
@@ -1689,6 +1696,7 @@ const RequestBudgetSection = () => {
             <div style={settingsHelper}>
                 Off: between time skips, no country writes to you unless you write first.
             </div>
+            {sharedNow ? <div style={settingsHelper}>In a shared game countries write only with each round, never between rounds.</div> : null}
 
             <Toggle
             label="Individual AI responses in group chats"
@@ -1778,14 +1786,19 @@ const SocialLinks = ({ discordUrl, redditUrl, githubUrl }) => {
 // in the glass finish and with the menu glyph.
 // `hidden` while the menu is open: the menu grows out of this button and
 // shrinks back into it, so the button itself steps aside meanwhile.
-const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false }) => {
+// `expanded`, in a shared game, says whether its drop-down is open
+// (GameMenuDropdown.jsx); undefined where the button opens the menu itself.
+const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false, expanded }) => {
     const isMobile = useIsMobile();
     return (
         <button
         type="button"
         aria-label="Open game menu"
         title="Game menu"
+        aria-haspopup={expanded === undefined ? undefined : "menu"}
+        aria-expanded={expanded}
         data-oh-theme-hud=""
+        data-oh-game-menu-button=""
         onClick={onToggle}
         style={{
             ...baseStyle,
@@ -2590,11 +2603,16 @@ const PlayerFocusSetting = () => {
     const library = useLibraryState();
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState("");
+    // In a shared game it is a rule of the game, the host's, stated in its
+    // lobby with the game's features (runtime/gameFeatures.js): shown, the
+    // same for every player, and not set here. A guest's choice used to be
+    // saved into its stand-in, where nothing read it.
+    const shared = Boolean(useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole));
     const gameId = library.activeGameId;
     const scenarioLevel = normalizePlayerFocus(playerFocusOf(library.runtimeScenario?.features));
     const override = library.activeGame?.features?.playerFocus?.level;
     const focus = normalizePlayerFocus(getActivePlayerFocus());
-    const following = !override;
+    const following = !override && !shared;
 
     const choose = async (value) => {
         if (!gameId) { setError("No game is open, so there is nothing to set it on."); return; }
@@ -2619,7 +2637,7 @@ const PlayerFocusSetting = () => {
         <div style={fieldGroupStyle}>
         <label style={{ ...labelStyle, fontWeight: 700 }}>Player focus — for this game</label>
         <select
-        disabled={saving || !gameId}
+        disabled={saving || !gameId || shared}
         value={following ? "" : focus}
         onChange={(event) => choose(event.target.value || null)}
         style={{ ...inputStyle, cursor: "pointer" }}
@@ -2642,6 +2660,7 @@ const PlayerFocusSetting = () => {
         <div style={{ marginTop: 6 }}>
         It never invents events for you: in a quiet stretch the world fills the skip as usual, and what you have going on — orders, milestones due, wars, open threads — is what the share is measured against.
         </div>
+        {shared ? <div style={{ marginTop: 6 }}>In this shared game the host&apos;s game sets it, for every player.</div> : null}
         {error ? <div style={{ color: "#fca5a5", marginTop: 6 }}>{error}</div> : null}
         </div>
         </div>
@@ -2737,6 +2756,46 @@ const DownloadedMusic = () => {
 // translated: every piece the game ships, so a new one is credited by being
 // added to MUSIC_TRACKS.
 const MUSIC_WORKS = Object.values(MUSIC_TRACKS).filter(Boolean).map((track) => `“${track.work}”`).join(", ");
+
+const PolityLabelVisibilitySetting = ({ hidden }) => {
+    const cutoff = usePolityLabelMaxZoom();
+    const atDefault = cutoff === POLITY_LABEL_DEFAULT_MAX_ZOOM;
+    return (
+        <div style={{ ...fieldGroupStyle, opacity: hidden ? 0.55 : 1 }}>
+            <label style={labelStyle} htmlFor="game-polity-label-zoom">Polity name visibility</label>
+            <input
+                id="game-polity-label-zoom"
+                type="range"
+                min={POLITY_LABEL_MIN_ZOOM}
+                max={POLITY_LABEL_MAX_ZOOM}
+                step={POLITY_LABEL_ZOOM_STEP}
+                value={cutoff}
+                disabled={hidden}
+                onChange={(event) => setPolityLabelMaxZoom(event.target.value)}
+                aria-describedby="game-polity-label-zoom-help"
+                aria-valuetext={Math.round((cutoff - POLITY_LABEL_MIN_ZOOM) / (POLITY_LABEL_MAX_ZOOM - POLITY_LABEL_MIN_ZOOM) * 100) + "%"}
+                style={{ accentColor: "var(--oh-ui-accent, #3b82f6)", width: "100%" }}
+            />
+            <div style={{ ...helperStyle, display: "flex", justifyContent: "space-between", gap: "0.75rem", marginTop: "0.1rem" }}>
+                <span>Hide sooner</span>
+                <span>Hide later</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
+                <div id="game-polity-label-zoom-help" style={{ ...helperStyle, marginTop: 0, flex: "1 1 14rem" }}>Keep names visible as you zoom in. Large or overlapping names may still fade out.</div>
+                <button
+                    type="button"
+                    className="oh-tap-row"
+                    disabled={hidden || atDefault}
+                    onClick={() => setPolityLabelMaxZoom(POLITY_LABEL_DEFAULT_MAX_ZOOM)}
+                    style={{ ...smallButtonStyle, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "0.4rem", flexShrink: 0, opacity: hidden || atDefault ? 0.5 : 1, cursor: hidden || atDefault ? "default" : "pointer" }}
+                >
+                    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 1 3 6.7M3 4v8h8" /></svg>
+                    Restore default
+                </button>
+            </div>
+        </div>
+    );
+};
 
 const SoundSection = ({ musicOn, onToggleMusic, effectsOn, onToggleEffects }) => {
     const stored = useMapSettingValue(MAP_SETTING_KEYS.musicVolume, "");
@@ -2921,7 +2980,15 @@ const EconomicDisplayCurrencySetting = () => {
         setSaving(true);
         setError("");
         try {
-            await saveGame(activeGameId, { gamePatch: { economicDisplayCurrency: next } });
+            // A display preference: in a shared game this device's own, laid
+            // over the host's game for as long as the game is open
+            // (multiplayer/client/seatWrites.js DEVICE_GAME_KEYS), and never
+            // written into the game the host keeps, nor into the stand-in.
+            if (inSharedGame()) await mutateGameData((game) => ({ ...game, economicDisplayCurrency: next }));
+            else {
+                await saveGame(activeGameId, { gamePatch: { economicDisplayCurrency: next } });
+                await refreshRuntimeState("game").catch(() => {});
+            }
             setActiveEconomicDisplayCurrency(next);
             logSettingChange("GDP display currency", next);
         } catch (reason) {
@@ -3184,6 +3251,7 @@ const SettingsWorkspace = ({
                         <div style={helperStyle}>Empty uses the font the scenario author chose. Any font installed on this computer works; overrides apply immediately.</div>
                     </div>
                     <Toggle label="Hide country labels" enabled={mapSettings.hideCountryLabels} onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)} />
+                    <PolityLabelVisibilitySetting hidden={mapSettings.hideCountryLabels} />
                     <Toggle label="Seasons and weather" enabled={mapSettings.seasonsWeather} onToggle={() => updateMapSetting("seasonsWeather", MAP_SETTING_KEYS.seasonsWeather, !mapSettings.seasonsWeather)} />
                     <div style={settingsHelper}>
                     On (default): the map is tinted by the season and shows its weather. Frozen water is drawn as ice either way.
@@ -3415,6 +3483,7 @@ const SettingsMenu = ({
     onOpenDebugConsole,
     onOpenEvents,
     onOpenGameManagement,
+    onOpenCampaignLore,
     onClose,
     discordUrl,
     redditUrl,
@@ -3594,6 +3663,9 @@ const SettingsMenu = ({
                 <ContextSummaryCard context={context} />
                 {typeof onOpenGameManagement === "function" && (
                     <QuickAction title="Game Management" description="Switch, duplicate, import or manage campaigns" symbol="▦" onClick={() => runAndClose(onOpenGameManagement)} />
+                )}
+                {typeof onOpenCampaignLore === "function" && (
+                    <QuickAction title="Campaign Lore" description="Read and export your campaign’s recorded history" symbol="▤" onClick={() => runAndClose(onOpenCampaignLore)} />
                 )}
             </QuickMenuPanel>
         );

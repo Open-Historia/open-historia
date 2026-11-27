@@ -1,86 +1,171 @@
 /*!
- * Open Historia Map Editor
- * Copyright (c) 2026 Nicholas Krol - AGPL-3.0-or-later (see LICENSE).
+ * Open Historia Map Editor - scenario starting forces workspace.
+ * Source of truth: the existing editor units list -> world.units.
  */
-
-// The scenario's starting units: everything placed with the Unit tool, listed
-// by owner, with locate / edit / delete. A unit placed here ships in the
-// scenario's world.units and stands on the map from round one.
-
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Panel from "./Panel.jsx";
-import Icon from "./Icon.jsx";
-import { inputStyle, pillButton } from "./editorStyles.js";
+import { pillButton } from "./editorStyles.js";
+import { filterUnitsForWorkspace, pageOf, WORKSPACE_PAGE_SIZE } from "./editorWorkspaceFilters.js";
+import {
+  WorkspaceActions, WorkspaceEmpty, WorkspaceHeading, WorkspaceMore, WorkspaceSearch,
+  WorkspaceSelect, WorkspaceStats, workspaceCard, workspaceMuted, workspaceRow,
+} from "./EditorWorkspaceControls.jsx";
+import { confirmDialog } from "../runtime/uiDialog.js";
 
 const TYPE_LABELS = { infantry: "Infantry", armor: "Armour", air: "Air", naval: "Naval", artillery: "Artillery", garrison: "Garrison" };
 
-const UnitsPanel = ({ units = [], unitTypes = [], polityName = (key) => key, activeTool, setActiveTool, onLocate, onEdit, onRemove, onRemoveAll, onClose }) => {
+const UnitsPanel = ({
+  units = [], unitTypes = [], polityName = (key) => key,
+  activeTool, setActiveTool, onLocate, onEdit, onRemove, onRemoveAll, onClose,
+}) => {
   const [query, setQuery] = useState("");
-  // The scenario's own unit type a unit is of (runtime/unitTypes.js), or null.
-  const ownTypeOf = (unit) => (unit?.unitType ? unitTypes.find((type) => type.id === unit.unitType) ?? null : null);
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const named = (u) => unitTypes.find((type) => type.id === u.unitType)?.name || "";
-    const list = q
-      ? units.filter((u) => `${u.name} ${u.type} ${named(u)} ${u.ownerCode} ${polityName(u.ownerCode)} ${u.composition || ""}`.toLowerCase().includes(q))
-      : units;
-    return [...list].sort((a, b) => polityName(a.ownerCode).localeCompare(polityName(b.ownerCode)) || String(a.name).localeCompare(String(b.name)));
-  }, [units, unitTypes, query, polityName]);
+  const [owner, setOwner] = useState("*");
+  const [kind, setKind] = useState("*");
+  const [shown, setShown] = useState(WORKSPACE_PAGE_SIZE);
+  const [focused, setFocused] = useState("");
+  const confirmingRef = useRef(false);
+
+  const filtered = useMemo(() => filterUnitsForWorkspace(units, {
+    query, owner, kind, unitTypes, polityName,
+  }), [units, query, owner, kind, unitTypes, polityName]);
+  const visible = useMemo(() => pageOf(filtered, shown), [filtered, shown]);
+  const ownerKeys = useMemo(() => [...new Set(units.map((u) => String(u.ownerCode || "")))]
+    .sort((a, b) => polityName(a).localeCompare(polityName(b))), [units, polityName]);
+  const kinds = useMemo(() => [...new Set(units.map((u) => String(u.type || "")))]
+    .filter(Boolean).sort(), [units]);
+  const uniqueOwners = ownerKeys.filter(Boolean).length;
+  const focusedUnit = units.find((u) => u.id === focused);
   const placing = activeTool === "unit";
+
+  const labelOf = (u) => {
+    const custom = unitTypes.find((t) => t.id === u.unitType);
+    return custom ? custom.name : TYPE_LABELS[u.type] || u.type || "Unspecified type";
+  };
+  const coords = (u) => {
+    const lng = Number(u.lng);
+    const lat = Number(u.lat);
+    return Number.isFinite(lng) && Number.isFinite(lat) ? `${lng.toFixed(3)}°, ${lat.toFixed(3)}°` : "Position not specified";
+  };
 
   return (
     <Panel
-      title="Units"
+      title="Starting units"
       icon="unit"
+      width={490}
       onClose={onClose}
-      width={340}
       footer={
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12 }}>
-          <span style={{ color: "rgba(255,255,255,0.5)" }}>{units.length} unit{units.length === 1 ? "" : "s"} at the start of the scenario</span>
+        <WorkspaceActions>
+          <span style={{ ...workspaceMuted, flex: 1 }}>{units.length.toLocaleString()} units at scenario start</span>
           {units.length > 0 && (
-            <button onClick={onRemoveAll} style={{ ...pillButton(false), color: "#f87171" }}>Delete All</button>
+            <button
+              type="button"
+              style={{ ...pillButton(false), color: "#f87171" }}
+              onClick={() => onRemoveAll?.()}
+            >
+              Delete all…
+            </button>
           )}
-        </div>
+        </WorkspaceActions>
       }
     >
+      <WorkspaceHeading
+        title="Starting military deployment"
+        detail="Place and inspect the units physically present when a new campaign begins. Country military statistics are edited separately."
+      />
+      <WorkspaceStats items={[
+        { label: "Starting units", value: units.length },
+        { label: "Polities fielding units", value: uniqueOwners },
+        { label: "Matching", value: filtered.length },
+      ]} />
       <button
         type="button"
         onClick={() => setActiveTool?.(placing ? "select" : "unit")}
-        style={{ ...pillButton(placing), display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
-        title="Click the map to place a unit; click an existing unit to edit it"
+        style={{ ...pillButton(placing), padding: 10, textAlign: "left" }}
       >
-        <Icon name="unit" size={14} /> {placing ? "Placing units — click the map (click again to stop)" : "Place units on the map"}
+        {placing ? "✓ Placement active — click the map to add a unit; click here to stop" : "+ Place a starting unit on the map"}
       </button>
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <Icon name="search" size={15} style={{ opacity: 0.6 }} />
-        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name, type, owner…" style={{ ...inputStyle, padding: "6px 8px" }} />
+      <div style={workspaceMuted}>
+        The native unit editor lets you choose its owner, infantry/armour/air/naval/artillery/garrison type, strength, name, composition and orders. This list shows units already placed, not estimated national armed forces.
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-        {filtered.length === 0 && (
-          <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.5)", padding: "6px 2px" }}>
-            {units.length ? "No unit matches that search." : "No units yet."}
+      {units.length === 0 ? (
+        <WorkspaceEmpty
+          title="No units placed yet"
+          description="This scenario has no explicitly positioned starting units. It does not mean that every polity has zero military forces. Select Place a starting unit, then click a location on the map."
+        />
+      ) : (
+        <>
+          <WorkspaceSearch value={query} onChange={(value) => { setQuery(value); setShown(WORKSPACE_PAGE_SIZE); }} placeholder="Find unit, country, type or composition…" />
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+            <WorkspaceSelect
+              label="Polity"
+              value={owner}
+              onChange={(value) => { setOwner(value); setShown(WORKSPACE_PAGE_SIZE); }}
+              options={[{ value: "*", label: "All polities" }, ...ownerKeys.map((key) => ({ value: key, label: key ? polityName(key) : "Unassigned" }))]}
+            />
+            <WorkspaceSelect
+              label="Unit type"
+              value={kind}
+              onChange={(value) => { setKind(value); setShown(WORKSPACE_PAGE_SIZE); }}
+              options={[{ value: "*", label: "All types" }, ...kinds.map((key) => ({ value: key, label: TYPE_LABELS[key] || key }))]}
+            />
           </div>
-        )}
-        {filtered.map((u) => {
-          const own = ownTypeOf(u);
-          return (
-            <div key={u.id} style={{ border: "1px solid rgba(255,255,255,0.09)", borderRadius: 8, display: "flex", alignItems: "center", gap: 6, padding: "6px 8px" }}>
-              <button onClick={() => onEdit?.(u.id)} title="Edit" style={{ background: "transparent", border: "none", color: "white", cursor: "pointer", flex: 1, textAlign: "left", padding: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{u.name || "Unit"}</div>
-                <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.5)" }}>
-                  {own ? (own.icon ? `${own.icon} ${own.name}` : own.name) : TYPE_LABELS[u.type] || u.type} · {polityName(u.ownerCode) || "no owner"} · {u.strength ?? 100}%{u.composition ? ` · ${u.composition}` : ""}
-                </div>
-              </button>
-              <button onClick={() => onLocate?.(u)} title="Locate" style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.7)", cursor: "pointer" }}>
-                <Icon name="fit" size={14} />
-              </button>
-              <button onClick={() => onRemove?.(u.id)} title="Delete" style={{ background: "transparent", border: "none", color: "#f87171", cursor: "pointer" }}>
-                <Icon name="trash" size={14} />
-              </button>
-            </div>
-          );
-        })}
-      </div>
+          <WorkspaceHeading title="Deployment roster" detail={`Showing ${visible.length} of ${filtered.length} matching (${units.length} total)`} />
+          {!filtered.length && <WorkspaceEmpty title="No matching deployments" description="Change the search or filters; placed units are untouched." />}
+          <div role="list" aria-label="Starting unit roster" style={{ display: "grid", gap: 5 }}>
+            {visible.map((u) => (
+              <div role="listitem" key={u.id}>
+                <button
+                  type="button"
+                  onClick={() => { setFocused(u.id); onLocate?.(u); }}
+                  style={{ ...workspaceRow(focused === u.id), width: "100%", cursor: "pointer", color: "var(--oh-ui-text, white)", textAlign: "left", display: "flex", gap: 8, alignItems: "center" }}
+                >
+                  <span style={{ flex: 1, display: "grid", gap: 4 }}>
+                    <strong style={{ fontSize: 12.5 }}>{u.name || "Unnamed unit"}</strong>
+                    <span style={workspaceMuted}>{labelOf(u)} · {polityName(u.ownerCode) || "Unassigned"} · {u.strength ?? 100}% strength</span>
+                    <span style={workspaceMuted}>{coords(u)}{u.composition ? ` · ${u.composition.slice(0, 95)}` : ""}</span>
+                  </span>
+                  <span aria-hidden="true">›</span>
+                </button>
+              </div>
+            ))}
+          </div>
+          <WorkspaceMore shown={visible.length} total={filtered.length} onMore={() => setShown((n) => n + WORKSPACE_PAGE_SIZE)} />
+        </>
+      )}
+      {focusedUnit && (
+        <section style={{ ...workspaceCard, display: "grid", gap: 8 }} aria-label="Unit inspector">
+          <WorkspaceHeading title={focusedUnit.name || "Unnamed unit"} detail="Selected starting formation" />
+          <div style={workspaceMuted}>
+            <div>Deployed by: {polityName(focusedUnit.ownerCode) || "Unassigned"}</div>
+            <div>Type: {labelOf(focusedUnit)} · Strength: {focusedUnit.strength ?? 100}%</div>
+            <div>Coordinates: {coords(focusedUnit)}</div>
+            {focusedUnit.composition && <div>Composition: {focusedUnit.composition}</div>}
+            {focusedUnit.note && <div>Orders: {focusedUnit.note}</div>}
+          </div>
+          <WorkspaceActions>
+            <button type="button" style={pillButton(true)} onClick={() => onEdit?.(focusedUnit.id)}>Edit formation</button>
+            <button type="button" style={pillButton(false)} onClick={() => onLocate?.(focusedUnit)}>Locate on map</button>
+            <button
+              type="button"
+              style={{ ...pillButton(false), color: "#f87171", marginLeft: "auto" }}
+              onClick={async () => {
+                if (confirmingRef.current) return;
+                confirmingRef.current = true;
+                try {
+                  if (await confirmDialog(`Delete "${focusedUnit.name || focusedUnit.id}" from this scenario's starting units?`, { danger: true, confirmLabel: "Delete" })) {
+                    onRemove?.(focusedUnit.id);
+                    setFocused("");
+                  }
+                } finally {
+                  confirmingRef.current = false;
+                }
+              }}
+            >
+              Delete unit
+            </button>
+          </WorkspaceActions>
+        </section>
+      )}
     </Panel>
   );
 };

@@ -17,6 +17,7 @@ import {
   getPlayerCode,
   disbandUnit,
   requestUnitOrders,
+  unitOrderRoom,
   ORDER_NOT_SAVED,
 } from "../Map/unitsController.js";
 import { useEventsById } from "./eventLookup.js";
@@ -318,20 +319,21 @@ const UnitPopup = () => {
     else setOrderError(result?.error || ORDER_NOT_SAVED);
   };
 
-  // A request that could not be saved keeps its text in the box, to try again.
+  // A request that could not be saved keeps its text in the box, to try again,
+  // and says why: in a shared game, the host's own reason.
   const sendRequest = async () => {
     if (!request.trim() || requestState === "sending") return;
     setOrderError("");
     setRequestState("sending");
-    let queued = false;
+    let result = null;
     try {
-      queued = await requestUnitOrders(unit.id, request);
+      result = await requestUnitOrders(unit.id, request);
     } catch (error) {
       console.error("Failed to request unit orders:", error);
     }
-    setRequestState(queued ? "queued" : "idle");
-    if (queued) setRequest("");
-    else setOrderError(ORDER_NOT_SAVED);
+    setRequestState(result?.ok ? "queued" : "idle");
+    if (result?.ok) setRequest("");
+    else setOrderError(result?.error || ORDER_NOT_SAVED);
   };
 
   return createPortal(
@@ -466,6 +468,9 @@ const UnitPopup = () => {
                   the next jump. Nothing on the map moves now. */}
               <textarea
                 value={request}
+                // A shared game's order is held to what the host's request
+                // takes, here as there (unitsController.js unitOrderRoom).
+                maxLength={unitOrderRoom(unit.id) ?? undefined}
                 onChange={(e) => {
                   setRequest(e.target.value);
                   if (requestState === "queued") setRequestState("idle");

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { institutionLogoUrl } from "../../runtime/institutionLogos.js";
 import { INSTITUTION_KINDS } from "../../runtime/institutions.js";
 import { commitInstitutionLifecycleCommand, ensureInstitutionLifecycleNegotiationChat, institutionLifecycleCasesForPolity } from "../../runtime/institutionLifecycle.js";
@@ -26,6 +26,7 @@ import { useBackToClose } from "../../runtime/backToClose.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import { institutionMembershipDisplayLabel } from "./institutionMembershipPresentation.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
+import { sharedRequestsHeld, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLowerCase();
@@ -305,10 +306,10 @@ export const PolityMultiPicker = ({ value = "", onChange, polities = [], label =
   };
 
   return <div data-polity-multi-picker="true" style={{ position: "relative" }}>
-    <div style={{ display: "flex", flexWrap: "wrap", gap: ".3rem", minHeight: "2.15rem", alignItems: "center", border: "1px solid rgba(255,255,255,.1)", borderRadius: 8, background: "rgba(8,8,12,.72)", padding: ".28rem .36rem" }}>
-      {selected.map((polity) => <span key={polity} data-selected-polity={polity} style={{ display: "inline-flex", alignItems: "center", gap: ".28rem", maxWidth: "15rem", border: "1px solid var(--oh-grey-border)", borderRadius: 999, background: "rgba(255,255,255,.055)", color: "var(--oh-grey-text)", padding: ".22rem .38rem .22rem .46rem", fontSize: ".6rem", fontWeight: 720 }}>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: ".3rem", minHeight: "2.15rem", alignItems: "center", border: "1px solid var(--oh-grey-border)", borderRadius: 8, background: "var(--oh-grey-raised)", padding: ".28rem .36rem" }}>
+      {selected.map((polity) => <span key={polity} data-selected-polity={polity} style={{ display: "inline-flex", alignItems: "center", gap: ".28rem", maxWidth: "15rem", border: "1px solid var(--oh-grey-border)", borderRadius: 999, background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", padding: ".22rem .38rem .22rem .46rem", fontSize: ".6rem", fontWeight: 720 }}>
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{polity}</span>
-        <button className="oh-tap" type="button" aria-label={`Remove ${polity}`} onClick={() => remove(polity)} style={{ border: 0, background: "transparent", color: "rgba(255,255,255,.5)", padding: 0, cursor: "pointer", fontSize: ".7rem", lineHeight: 1 }}>×</button>
+        <button className="oh-tap" type="button" aria-label={`Remove ${polity}`} onClick={() => remove(polity)} style={{ border: 0, background: "transparent", color: "var(--oh-grey-muted)", padding: 0, cursor: "pointer", fontSize: ".7rem", lineHeight: 1 }}>×</button>
       </span>)}
       <input
         value={query}
@@ -321,16 +322,16 @@ export const PolityMultiPicker = ({ value = "", onChange, polities = [], label =
           if (event.key === "Backspace" && !query && selected.length) remove(selected[selected.length - 1]);
         }}
         placeholder={selected.length ? (multiple ? "Add another government…" : "Change government…") : label}
-        style={{ flex: "1 1 12rem", minWidth: "9rem", border: 0, outline: 0, background: "transparent", color: "rgba(255,255,255,.86)", padding: ".2rem .22rem", fontSize: ".64rem" }}
+        style={{ flex: "1 1 12rem", minWidth: "9rem", border: 0, outline: 0, background: "transparent", color: "var(--oh-grey-text)", padding: ".2rem .22rem", fontSize: ".64rem" }}
       />
     </div>
-    {open && matches.length > 0 && <div data-polity-picker-results="true" style={{ position: "absolute", zIndex: 30, left: 0, right: 0, top: "calc(100% + .28rem)", maxHeight: "12.5rem", overflowY: "auto", border: "1px solid var(--oh-grey-border)", borderRadius: 9, background: "rgba(20,20,25,.985)", boxShadow: "0 12px 30px rgba(0,0,0,.35)", padding: ".28rem" }}>
-      {matches.map((polity) => <button className="oh-tap-row" key={polity} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => choose(polity)} style={{ width: "100%", display: "flex", alignItems: "center", gap: ".45rem", border: 0, borderRadius: 7, background: "transparent", color: "rgba(255,255,255,.82)", padding: ".42rem .48rem", textAlign: "left", cursor: "pointer", fontSize: ".62rem" }} onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(255,255,255,.07)"; }} onMouseLeave={(event) => { event.currentTarget.style.background = "transparent"; }}>        <span style={{ width: ".42rem", height: ".42rem", borderRadius: 999, background: "rgba(231,231,234,.58)", flex: "0 0 auto" }} />
+    {open && matches.length > 0 && <div data-polity-picker-results="true" style={{ position: "absolute", zIndex: 30, left: 0, right: 0, top: "calc(100% + .28rem)", maxHeight: "12.5rem", overflowY: "auto", border: "1px solid var(--oh-grey-border)", borderRadius: 9, background: "var(--oh-grey-surface)", boxShadow: "0 12px 30px rgba(0,0,0,.35)", padding: ".28rem" }}>
+      {matches.map((polity) => <button className="oh-tap-row" key={polity} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => choose(polity)} style={{ width: "100%", display: "flex", alignItems: "center", gap: ".45rem", border: 0, borderRadius: 7, background: "transparent", color: "var(--oh-grey-text)", padding: ".42rem .48rem", textAlign: "left", cursor: "pointer", fontSize: ".62rem" }} onMouseEnter={(event) => { event.currentTarget.style.background = "var(--oh-ui-hover, var(--oh-grey-raised))"; }} onMouseLeave={(event) => { event.currentTarget.style.background = "transparent"; }}>        <span style={{ width: ".42rem", height: ".42rem", borderRadius: 999, background: "var(--oh-grey-muted)", flex: "0 0 auto" }} />
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{polity}</span>
-        {notes?.[lower(polity)] && <span data-polity-picker-note="true" style={{ marginLeft: "auto", flex: "0 0 auto", border: "1px solid var(--oh-grey-border)", borderRadius: 999, color: "rgba(255,255,255,.6)", padding: ".08rem .4rem", fontSize: ".6rem", fontWeight: 720 }}>{notes[lower(polity)]}</span>}
+        {notes?.[lower(polity)] && <span data-polity-picker-note="true" style={{ marginLeft: "auto", flex: "0 0 auto", border: "1px solid var(--oh-grey-border)", borderRadius: 999, color: "var(--oh-grey-muted)", padding: ".08rem .4rem", fontSize: ".6rem", fontWeight: 720 }}>{notes[lower(polity)]}</span>}
       </button>)}
     </div>}
-    {open && query && matches.length === 0 && <div style={{ position: "absolute", zIndex: 30, left: 0, right: 0, top: "calc(100% + .28rem)", border: "1px solid rgba(255,255,255,.08)", borderRadius: 9, background: "rgba(20,20,25,.985)", color: "rgba(255,255,255,.38)", padding: ".55rem .6rem", fontSize: ".6rem" }}>{allowUnlisted ? `No polity in this scenario matches “${query}”. Press Enter to add it as written.` : <>No canonical polity matches “{query}”.</>}</div>}
+    {open && query && matches.length === 0 && <div style={{ position: "absolute", zIndex: 30, left: 0, right: 0, top: "calc(100% + .28rem)", border: "1px solid var(--oh-grey-border)", borderRadius: 9, background: "var(--oh-grey-surface)", color: "var(--oh-grey-muted)", padding: ".55rem .6rem", fontSize: ".6rem" }}>{allowUnlisted ? `No polity in this scenario matches “${query}”. Press Enter to add it as written.` : <>No canonical polity matches “{query}”.</>}</div>}
   </div>;
 };
 
@@ -395,6 +396,12 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
   const compact = useIsMobile();
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  // In a shared game, business asked while a round is resolved waits for the
+  // round (host/requestWaits.js): said while the button waits, so nobody takes
+  // the wait for a failure and does it twice.
+  const heldRequests = useSyncExternalStore(subscribeSharedGameRole, sharedRequestsHeld, sharedRequestsHeld);
+  const waitsForRound = Boolean(busy) && heldRequests.includes("institution");
+  const roundNote = waitsForRound ? <div data-institution-waits-for-round="true" style={{ margin: ".5rem 1rem 0", padding: ".45rem .6rem", borderRadius: 8, background: "rgba(255,255,255,.04)", border: "1px solid var(--oh-grey-border)", color: "rgba(255,255,255,.7)", fontSize: ".62rem", flexShrink: 0 }}>{"The host does this as soon as the round being resolved has landed."}</div> : null;
   const [proposalTitle, setProposalTitle] = useState("");
   const [proposalSummary, setProposalSummary] = useState("");
   const [foundingOpen, setFoundingOpen] = useState(false);
@@ -715,6 +722,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
         {pending > 0 && <SmallPill tone="live">{pending} awaiting you</SmallPill>}
         <button className="oh-tap-row" type="button" onClick={() => { setFoundingOpen(true); setError(""); }} style={{ marginLeft: "auto", border: "1px solid var(--oh-grey-border-strong)", borderRadius: 8, background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", padding: ".32rem .58rem", fontSize: ".64rem", fontWeight: 780, cursor: "pointer" }}>＋ Found institution</button>      </div>
       {error && <div style={{ margin: ".5rem 1rem 0", padding: ".45rem .6rem", borderRadius: 8, background: "rgba(239,68,68,.08)", border: "1px solid rgba(239,68,68,.2)", color: "#fca5a5", fontSize: ".62rem", flexShrink: 0 }}>{error}</div>}
+      {roundNote}
       {foundingOpen ? <FoundInstitutionForm value={founding} onChange={setFounding} onCancel={() => setFoundingOpen(false)} onSubmit={foundInstitution} busy={busy === "found"} polities={allPolities} /> : <div style={{ flex: 1, overflowY: "auto", padding: ".75rem 1rem", display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(15rem,1fr))", alignContent: "start", gap: ".55rem" }}>
         {rows.length ? rows.map((row) => { const channel = channelByInstitution.get(clean(row.institution.id)); return <InstitutionRow key={row.institution.id} row={row} unread={channel ? unreadIds.has(String(channel.id)) : false} onClick={() => { setSelectedId(row.institution.id); setSection("overview"); setError(""); }} />; }) : <div style={{ gridColumn: "1 / -1", margin: "auto", color: "rgba(255,255,255,.3)", fontSize: ".78rem", textAlign: "center", padding: "2rem" }}>{showAll ? "No institutions exist in this world yet." : "Your government is not part of any institution and has no pending invitation or application."}</div>}
       </div>}
@@ -736,6 +744,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
     <div data-institution-facts="persistent" style={{ padding: compact ? ".4rem .7rem .45rem" : ".65rem 1rem .7rem", flexShrink: 0 }}><Facts view={selectedView} compact={compact} /></div>
     {/* On a phone the sections are one row that scrolls sideways, not three rows of wrapped tabs. */}
     <div data-institution-tabs="persistent" style={{ display: "flex", flexWrap: compact ? "nowrap" : "wrap", overflowX: compact ? "auto" : undefined, gap: ".08rem", padding: compact ? "0 .45rem" : "0 .78rem", borderBottom: "1px solid rgba(255,255,255,.06)", flexShrink: 0, ...(compact ? { scrollbarWidth: "none", WebkitOverflowScrolling: "touch" } : {}) }}>{tabs.map(([key, label]) => <button className="oh-tap-row" key={key} onClick={() => key === "council" && selectedRow.member ? openCouncil() : setSection(key)} disabled={key === "council" && Boolean(busy)} style={{ flex: "0 0 auto", whiteSpace: "nowrap", border: 0, borderBottom: `2px solid ${section === key ? "rgba(231,231,234,.72)" : "transparent"}`, background: "transparent", color: section === key ? "var(--oh-grey-text)" : "rgba(255,255,255,.52)", padding: ".58rem .68rem .62rem", fontSize: ".68rem", fontWeight: 730, cursor: key === "council" && busy ? "wait" : "pointer" }}>{key === "council" && busy === "council" ? "Opening…" : label}</button>)}</div>    {error && <div style={{ margin: ".5rem 1rem 0", padding: ".45rem .6rem", borderRadius: 8, background: "rgba(239,68,68,.08)", border: "1px solid rgba(239,68,68,.2)", color: "#fca5a5", fontSize: ".62rem", flexShrink: 0 }}>{error}</div>}
+    {roundNote}
     {section === "council" && selectedPendingActions > 0 && <button className="oh-tap-row" type="button" onClick={() => setSection("agenda")} style={{ margin: ".55rem 1rem 0", padding: ".58rem .7rem", display: "flex", alignItems: "center", gap: ".7rem", border: "1px solid rgba(245,158,11,.28)", borderRadius: 10, background: "rgba(245,158,11,.08)", color: "#fde68a", cursor: "pointer", textAlign: "left", flexShrink: 0 }}>
       <span style={{ flex: 1 }}><span style={{ display: "block", fontSize: ".59rem", fontWeight: 850, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(253,230,138,.7)" }}>Action required</span><span style={{ display: "block", marginTop: ".12rem", fontSize: ".62rem", fontWeight: 700 }}>{selectedPendingBallots ? `${selectedPendingBallots} ballot${selectedPendingBallots === 1 ? "" : "s"} awaiting you` : ""}{selectedPendingBallots && selectedPendingAmendments ? " · " : ""}{selectedPendingAmendments ? `${selectedPendingAmendments} amendment review${selectedPendingAmendments === 1 ? "" : "s"}` : ""}</span></span>
       <strong style={{ fontSize: ".64rem" }}>Review agenda →</strong>    </button>}

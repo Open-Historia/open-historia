@@ -8,6 +8,9 @@
 // IMPORT-FREE, the same trick eventFocus.js uses, so its tests run in a bare
 // checkout — which is also why the repairs below are reimplemented here rather
 // than imported from gameplay.js's lenientJsonParse, whose behaviour they mirror.
+//
+// Its one import, actionEdit.js, is import-free itself.
+import { rewordAction } from "../../runtime/actionEdit.js";
 
 const maybeJsonParse = (value) => {
   try {
@@ -324,13 +327,23 @@ export const excerptAroundError = (body, message, radius = 140) => {
 //
 // Returns `reason` describing why nothing came back, so the UI can say something
 // better than "it didn't work" and a bug report has something to go on.
+// Every structured channel an advisor reply carries (advisorReply.js reads each
+// with extractFencedJson): the openers a fused closing fence may run into. One
+// list, so a new channel gets the same recovery (advisorBlocks.test.js checks
+// advisorReply.js reads none outside it).
+export const ADVISOR_FENCE_LANGS = Object.freeze(["chart", "actions", "senddraft", "institutiondraft", "deploy", "projects", "publicstatement"]);
+
 export const extractFencedJson = (text, lang, { salvageTruncated = false, streaming = false } = {}) => {
   // Markdown fences are block constructs, not arbitrary backtick runs in
   // prose. An advisor can mention \`\`\`actions when explaining a past error;
   // interpreting that inline mention as the opener consumes the *real* block
   // later in the reply and silently discards otherwise valid proposals.
   const opening = "(^|\\r?\\n)[ \\t]{0,3}```" + lang + "[ \\t]*\\r?\\n";
-  const closing = "^[ \\t]{0,3}```[ \\t]*(?:\\r?\\n|$)";
+  // A provider may fuse a closing fence with the next known structured opener,
+  // e.g. \`\`\`"\`\`\`senddraft. Consume only the closing backticks and
+  // stray quote; extracting the prior block leaves the next opener on its own
+  // line. The complete payload must still pass normal JSON validation.
+  const closing = "^[ \\t]{0,3}```[ \\t]*(?:\\r?\\n|$|[\"'](?=\\r?\\n|$)|[\"']?(?=```(?:" + ADVISOR_FENCE_LANGS.join("|") + ")[ \\t]*\\r?\\n))";
   const regex = new RegExp(opening + "([\\s\\S]*?)" + closing, "m");
   const match = text.match(regex);
 
@@ -513,6 +526,8 @@ export const describeReplyProblems = (message) => {
   switch (String(message.projectsProblem ?? "")) {
     case "partial": problems.push(`in your projects block, ${detail || "some entries were malformed and skipped"}`); break;
     case "unusable": problems.push(`your projects block could not be used: ${detail || "nothing in it applied"}`); break;
+    // In a shared game: the host's own reason for not taking it.
+    case "refused": problems.push(`the host of this shared game refused your projects block, so nothing in it applied: ${detail || "it gave no reason"}`); break;
     case "truncated": problems.push("your projects block was cut off by the reply's length limit, so its last entries may be missing"); break;
     case "truncated-empty": problems.push("your projects block was cut off before any entry finished, so nothing on the board changed"); break;
     default: break;
@@ -577,12 +592,12 @@ export const planAdvisorActionEdits = (current, proposal, normalize, { repeatOf 
     const existingIndex = id ? next.findIndex((action) => action.id === id) : -1;
     if (existingIndex !== -1) {
       const existing = next[existingIndex];
-      const updated = {
-        ...existing,
+      // Given other words as the player's own Edit gives them (runtime/actionEdit.js).
+      const reworded = rewordAction(existing, {
         ...(raw.title ? { title: String(raw.title) } : {}),
         ...(raw.text ? { text: String(raw.text) } : {}),
-        ...(raw.kind === "chat" || raw.kind === "action" ? { kind: raw.kind } : {}),
-      };
+      });
+      const updated = raw.kind === "chat" || raw.kind === "action" ? { ...reworded, kind: raw.kind } : reworded;
       next[existingIndex] = updated;
       items.push({ change: "updated", title: updated.title });
       continue;

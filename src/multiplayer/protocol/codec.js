@@ -23,6 +23,14 @@ const PART_BUDGET = FRAME_LIMIT - 256;
 // fewer characters than this, which bounds how many parts a message can take.
 const MIN_PART = Math.floor(PART_BUDGET / 6);
 export const MESSAGE_LIMIT = 32 * 1024 * 1024;
+// The most a player's message may be, as the host's session reads it (its JSON
+// text, session/host.js maxMessageChars): one larger is dropped there with a
+// strike, and never answered. The largest a player sends is the answer its own
+// AI gave to a round it pays for (game/messages.js "paid", at most
+// PAID_ANSWER_MAX characters of text and as many of a function call's input,
+// escaped once more inside the message). A player's page refuses one larger
+// before it is sent (client/gameClient.js).
+export const PLAYER_MESSAGE_MAX_CHARS = 3 * 1024 * 1024;
 const partsFor = (length) => Math.ceil(length / MIN_PART) + 1;
 
 const PART = obj({

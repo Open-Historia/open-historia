@@ -53,6 +53,7 @@ const looksTechnical = (text) => {
   if (/^(?:https?:|data:|blob:|mailto:|\/|\.\/|\.\.\/|#)/i.test(t)) return true; // urls, paths, anchors
   if (/(?:^|\s)(?:-?\d*\.?\d+(?:px|rem|em|vh|vw|%|ms|s|deg|fr)\b)/.test(t) && !/[a-z]{4,}\s+[a-z]{3,}/i.test(t.replace(/-?\d*\.?\d+(?:px|rem|em|vh|vw|%|ms|s|deg|fr)\b/g, ""))) return true;
   if (/rgba?\(|hsla?\(|#[0-9a-f]{3,8}\b|var\(--|calc\(|color-mix\(|linear-gradient|cubic-bezier|translate[XY]?\(|scale\(|rotate\(/i.test(t)) return true;
+  if (/,\s*(?:ui-monospace|monospace|sans-serif|serif|system-ui|cursive|fantasy)\s*$/i.test(t)) return true; // CSS font-family stacks
   if (CSS_WORD.test(t)) return true;
   if (/^[\w.-]+(?:\s+[\w.-]+)*$/.test(t) && t.split(/\s+/).every((w) => CSS_WORD.test(w) || /^-?\d*\.?\d+$/.test(w))) return true; // "0 1 auto"
   if (/^[\w.-]+\.(?:js|jsx|mjs|json|png|jpg|webp|svg|geojson|pmtiles|css|html|zip)$/i.test(t)) return true;
@@ -731,9 +732,21 @@ const PROSE_FILES = [
   "src/multiplayer/client/joinProgress.js", "src/multiplayer/client/gameClient.js",
   "src/multiplayer/client/remoteRuntime.js", "src/multiplayer/client/sharedGame.js",
   "src/multiplayer/client/sharedGameBridge.js", "src/multiplayer/host/gameHost.js",
+  // A guest cut off from its host, what the host's game is still busy with, who plays what.
+  "src/multiplayer/client/hostGone.js", "src/multiplayer/ui/hostBusy.js", "src/multiplayer/client/seatRoster.js",
   "src/multiplayer/host/institutions.js", "src/multiplayer/host/agents.js", "src/multiplayer/host/forces.js",
+  "src/multiplayer/host/featureGates.js",
+  "src/multiplayer/host/orderCap.js",
   "src/multiplayer/host/engineMain.js", "src/multiplayer/host/settings.js", "src/multiplayer/host/advisorDesk.js",
   "src/multiplayer/signaling/publicServers.js",
+  // Who pays for what, the host's answers a round, the Game Master and the round's payer.
+  "src/multiplayer/costRules.js", "src/multiplayer/host/hostAnswers.js", "src/multiplayer/host/gameMaster.js",
+  "src/multiplayer/host/roundPayers.js", "src/multiplayer/client/roundPayer.js",
+  // A peace or a treaty players make between rounds: its event, which the host
+  // writes in the world's language from the packs (host/worldWords.js), and its notice.
+  "src/multiplayer/host/landings.js",
+  // The round bar's words, split out of the overlay so node can test them.
+  "src/multiplayer/ui/roundBar.js",
   // The local server's refusals the Workshop, the hub and Settings show.
   "server/tiledBasemaps.js", "server/musicLibrary.js", "server/flagValidation.js", "server/polityRename.js",
   "server/hubProvenance.js", "server/officialBasemaps.js", "server/hubCache.js", "server/basemapStore.js",

@@ -4,6 +4,7 @@ import {
   CHIEF_ADVISOR_THREAD,
   ADVISOR_RECIPIENT_TYPES,
   advisorRecipientType,
+  characterMayReadSimulationRules,
   assertAdvisorRecipientCanReply,
   advisorRecipientForReply,
   chiefAdvisorProfile,
@@ -399,4 +400,25 @@ test("the panel's copy takes its Action receipts from the saved conversation", (
   assert.equal(withSavedActionReceipts(streaming, []), streaming);
   // And a save of the synced copy goes through.
   assert.equal(replaceAdvisorThread([note, verifiedReply], CHIEF_ADVISOR_THREAD, undone)[1].actionReceipts, undefined);
+});
+
+test("N036 per-contact opt-in is default-off, strict and stored-recipient bound",()=>{
+ const base={id:"advisor-n036-foreign",name:"George V",title:"King",recipientType:ADVISOR_RECIPIENT_TYPES.FOREIGN_OFFICIAL};
+ for(const flag of [undefined,false,"true",1,null,{}]){
+  const rows=createAdvisorContact([], {...base,canReadSimulationRules:flag});
+  assert.equal(characterMayReadSimulationRules(rows[0]),false);
+  assert.equal(characterMayReadSimulationRules(advisorRecipientForReply(rows,base.id,{...rows[0],canReadSimulationRules:true})),false);
+ }
+ for(const type of [ADVISOR_RECIPIENT_TYPES.CIVILIAN,ADVISOR_RECIPIENT_TYPES.FOREIGN_OFFICIAL,ADVISOR_RECIPIENT_TYPES.OTHER_CHARACTER]){
+  let rows=createAdvisorContact([], {...base,recipientType:type,canReadSimulationRules:true});
+  rows=JSON.parse(JSON.stringify(rows));
+  assert.equal(characterMayReadSimulationRules(rows[0]),true);
+  assert.equal(characterMayReadSimulationRules(advisorRecipientForReply(rows,base.id,{...rows[0],canReadSimulationRules:false})),true);
+  rows.push(m("user","Earlier dialogue",base.id));
+  rows=reviseAdvisorContact(rows,base.id,{name:base.name,title:base.title,canReadSimulationRules:false});
+  assert.equal(characterMayReadSimulationRules(rows[0]),false);
+  assert.equal(rows[1].text,"Earlier dialogue");
+  assert.throws(()=>reviseAdvisorContact(rows,base.id,{...base,recipientType:ADVISOR_RECIPIENT_TYPES.MINISTER}),/existing conversation history/);
+ }
+ assert.equal(characterMayReadSimulationRules(createAdvisorContact([], {...base,recipientType:ADVISOR_RECIPIENT_TYPES.MINISTER,canReadSimulationRules:true})[0]),false);
 });

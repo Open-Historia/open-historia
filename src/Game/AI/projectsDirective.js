@@ -67,6 +67,9 @@ export const buildJumpProjectsRules = ({ folded = false } = {}) => (folded
       + "a breakthrough, a windfall). It takes hold from the next period.",
     "• End one only when an event ends it: {\"op\":\"cancel | fail\",\"name\":\"\",\"lastUpdate\":\"<how it ended>\"}. Never a project decided as "
       + "completing this period, and never another government's project because a player wished it.",
+    "• A programme that exists only in material PLANTED on a service through its turned agent is no country's work, only what that service "
+      + "believes: open it, if at all, as a create with \"believedBy\":\"<that service's country>\" and the plan it is led to believe. "
+      + "Nothing runs it, and an entry the board marks as such is told as nothing happening. A doubted entry is the game's to settle.",
     PROJECT_EFFECTS_RULE,
     "A project whose owner is another country moves because its owner moves it. Tell it from outside, and of a covert one only what "
       + "the player's services could learn. Name each project exactly as the board names it: an op naming nothing on the board is dropped. "
@@ -83,17 +86,18 @@ export const buildJumpProjectsRules = ({ folded = false } = {}) => (folded
       + BOARD_ENTRY_NOT_STORYLINE,
   ].join("\n"));
 
-// The skip's live block: the board as it stands, what the engine decided for
-// the period (`forecast`, projectEngine.js describeOutcomes), and the doubted
-// entries a fresh agent can now settle (`doubted`). Shown on every folded skip,
-// an empty board included: that is where the countries nobody plays open their
-// first projects. `players`: the countries people play, never to be opened for.
-export const buildJumpProjectsDirective = (projectsSummary, { folded = false, doubted = "", rulesAbove = false, forecast = "", players = [] } = {}) => {
+// The skip's live block: the board as it stands, and what the engine decided for
+// the period (`forecast`, projectEngine.js describeOutcomes). Shown on every
+// folded skip, an empty board included: that is where the countries nobody
+// plays open their first projects. `players`: the countries people play, never
+// to be opened for. (The doubted entries a fresh agent could settle were listed
+// for the model to settle; the engine settles them now, for every service:
+// runtime/agentBoards.js.)
+export const buildJumpProjectsDirective = (projectsSummary, { folded = false, rulesAbove = false, forecast = "", players = [] } = {}) => {
   const board = String(projectsSummary ?? "").trim();
   const empty = !board || board.startsWith(EMPTY_BOARD_PREFIX);
   const decided = String(forecast ?? "").trim();
   if (empty && !folded && !decided) return "";
-  const settle = folded ? String(doubted ?? "").trim() : "";
   const played = (Array.isArray(players) ? players : []).map((name) => String(name ?? "").trim()).filter(Boolean);
   return [
     JUMP_PROJECTS_DIRECTIVE_HEADER,
@@ -103,6 +107,5 @@ export const buildJumpProjectsDirective = (projectsSummary, { folded = false, do
       : `The board (name · owner · progress · expected finish · cost a month · funding · status):\n${board}`,
     `Decided this period (the engine's; tell each on its date):\n${decided || "Nothing: no checkpoint, completion or stall falls in this period."}`,
     ...(folded && played.length ? [`Played by people, so never opened by you: ${played.join(", ")}.`] : []),
-    ...(settle ? [`These doubted entries can now be settled, because a fresh agent is in place:\n${settle}`] : []),
   ].join("\n");
 };

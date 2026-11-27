@@ -136,7 +136,7 @@ test("it is asked after a turn, when a scenario's fronts are built, and when a r
   assert.ok(turn.includes('const others = militaryTargets(world, { skip: names });\n  if (others.length > 0) void ensureMilitaryFigures(others, { reason: "at war" });'));
   assert.ok(turn.includes("  requestConflictSheets(nextWorld, nextGame);\n"), "after a turn");
   assert.ok(turn.includes("    if (written) requestConflictSheets({ ...world, battlefields: built.battlefields }, bundle.game);"), "when a scenario's fronts are built");
-  assert.ok(turn.includes("    if (attacked.length > 0) requestConflictSheets(world, game, attacked);"), "when a route is drawn into a country");
+  assert.ok(turn.includes("    if (ask && attacked.length > 0) requestConflictSheets(world, game, attacked);"), "when a route is drawn into a country");
   // A sheet wanted for the war is one with a backend: a scenario's own sheet written before it kept one is written again.
   assert.ok(turn.includes("if (complete && (!needBackend || hasStatsBackend(persisted))) return persisted;"));
   // (The player's own country, tracked from the first skip, was asked for the same, until tracking went, 2026-11-07.)

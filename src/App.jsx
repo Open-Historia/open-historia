@@ -1,6 +1,7 @@
 /*! Open Historia — portions (standalone map-editor mode) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { Component, lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import UI from "./Game/GameUI/main.jsx";
+import { enterActiveGameFromOutside } from "./Game/GameUI/libraryBar.jsx";
 
 // Lazy so OpenLayers is only fetched when the editor is actually opened.
 const MapEditor = lazy(() => import("./Editor/MapEditor.jsx"));
@@ -8,6 +9,25 @@ const MapEditor = lazy(() => import("./Editor/MapEditor.jsx"));
 // it survives the UI remounting when the page switches to the shared game.
 const SharedGameOverlay = lazy(() => import("./multiplayer/ui/SharedGameOverlay.jsx"));
 const DiscordInvites = lazy(() => import("./multiplayer/ui/DiscordInvites.jsx"));
+// A tab that hosted a shared game before it reloaded goes back to it as the
+// host's screen (multiplayer/client/sharedGame.js resumeHosting). Desktop only:
+// nowhere else hosts, and the module is fetched only where one was hosted.
+const resumeHostingIfAny = () => {
+  try {
+    if (!sessionStorage.getItem("oh:mp:hosting")) return;
+  } catch {
+    return;
+  }
+  // Back in the game too, as hosting from the Lobbies tab goes into it: the
+  // round bar is drawn over the game, not the menu.
+  void import("./multiplayer/client/sharedGame.js")
+    .then((shared) => shared.resumeHosting())
+    .then((back) => {
+      if (back) enterActiveGameFromOutside();
+    })
+    .catch(() => {});
+};
+resumeHostingIfAny();
 // Lazy too: the map and MapLibre with it (over 1 MB) are fetched and parsed
 // only when a game is opened (runtime/gameEntry.js), never for the main menu,
 // and the editor never loads them. Nothing outside Game/Map imports maplibre-gl.
@@ -25,6 +45,7 @@ import {
   runStartupPreload,
 } from "./runtime/preload.js";
 import { ensureLibraryCatalog, useLibraryState } from "./runtime/library.js";
+import { closeAbandonedStandIns } from "./runtime/standInGames.js";
 import { hasEnteredGame, useGameEntered } from "./runtime/gameEntry.js";
 import { VaultDoor } from "./Game/GameUI/VaultDoor.jsx";
 import { holdMusicBehindDoor } from "./runtime/ambientMusic.js";
@@ -203,6 +224,10 @@ function GameApp() {
     }, STARTUP_TIME_BUDGET_MS);
 
     ensureLibraryCatalog()
+      // A shared game's stand-in that a page left behind (a reload, a crash) is
+      // closed before the menu shows (runtime/standInGames.js): it would be the
+      // active game, and Continue would open it as one of the player's.
+      .then(() => closeAbandonedStandIns())
       .catch((error) => {
         console.warn("Failed to load library catalog at startup:", error);
       })

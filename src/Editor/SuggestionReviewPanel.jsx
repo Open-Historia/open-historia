@@ -26,6 +26,7 @@ import Fill from "ol/style/Fill";
 import Stroke from "ol/style/Stroke";
 import CircleStyle from "ol/style/Circle";
 import { fromLonLat } from "ol/proj";
+import { EDITOR_FOCUS_MAX_ZOOM } from "./editorZoomPrecision.js";
 import Panel from "./Panel.jsx";
 import { labelDim, pillButton } from "./editorStyles.js";
 import { PROJECTIONS, sameProjection } from "../../server/mapProjection.js";
@@ -542,7 +543,7 @@ const SuggestionReviewPanel = ({ review, doc, api, suggestion, onClose }) => {
       if (bbox && api?.map) {
         const [minX, minY] = fromLonLat([bbox[0], bbox[1]]);
         const [maxX, maxY] = fromLonLat([bbox[2], bbox[3]]);
-        api.map.getView().fit([minX, minY, maxX, maxY], { padding: [80, 80, 80, 80], duration: 350, maxZoom: 8 });
+        api.map.getView().fit([minX, minY, maxX, maxY], { padding: [80, 80, 80, 80], duration: 350, maxZoom: EDITOR_FOCUS_MAX_ZOOM });
       }
     } else if (targets.points.length) {
       api?.locateFeature?.(targets.points[0]);

@@ -131,10 +131,9 @@ test("the AI is told a type's movement and placement rules, naming its regions",
     { id: "r6", name: "Kent", typeId: "land" },
   ];
   assert.equal(regionTypeRules(types, regions), [
-    "- Sea (2 regions: North Sea, Irish Sea): water: fleets and aircraft only; no land unit enters these regions and nothing is built in them.",
+    "- Sea (2 regions: North Sea, Irish Sea): water: fleets and aircraft only; no land unit enters these regions; appropriate offshore structures such as oil platforms may be built here, not land-based structures.",
     "- Hills (1 region: Pennines): slow going: units cross these regions at 0.5 times their usual speed.",
     "- Roads (1 region: Via Appia): fast going: units cross these regions at 2 times their usual speed.",
-    "- The Void (1 region: r5): out of play: place no unit and build no structure in these regions.",
   ].join("\n"), "a type no region uses says nothing");
 
   const many = Array.from({ length: 15 }, (_, index) => ({ id: `s${index}`, name: `Sea ${index}`, typeId: "sea" }));
@@ -165,4 +164,20 @@ test("a type is water by the Workshop's switch alone, whatever its name and in w
   assert.deepEqual([...waterTypeIds(types)].sort(), ["mar", "sea"]);
   assert.deepEqual([...waterTypeIds(normalizeRegionTypes(types))].sort(), ["mar", "sea"]);
   assert.deepEqual([...waterTypeIds(null)], []);
+});
+
+// N033: selection accessibility must not reach the simulation's placement rules.
+test("non-interactable water has the same placement rules as selectable water", () => {
+  const regions = [{ id: "s1", name: "North Sea", typeId: "sea" }];
+  const selectable = regionTypeRules([sea], regions);
+  const disabled = regionTypeRules([{ ...sea, interactable: false }], regions);
+  assert.equal(disabled, selectable);
+  assert.match(disabled, /fleets and aircraft/);
+  assert.match(disabled, /no land unit enters/);
+  assert.match(disabled, /offshore structures/);
+  assert.doesNotMatch(disabled, /nothing is built|place no unit|out of play/);
+  assert.equal(regionTypesHaveRules([{ ...land, interactable: false }]), false);
+  assert.equal(regionTypeRules([{ ...land, interactable: false, passable: false }],
+    [{ id: "l1", typeId: land.id }]),
+    regionTypeRules([{ ...land, passable: false }], [{ id: "l1", typeId: land.id }]));
 });

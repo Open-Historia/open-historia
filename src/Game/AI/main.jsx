@@ -13,14 +13,16 @@ import {
     resolveTaskFallbackEntries,
     providerSupportsModelDiscovery,
     saveRecentModel,
+    sharedRoundAnswerer,
     updateEntry,
 } from "./providerConfig.js";
-import { formatResetTime, runWithFallback } from "./fallbackRunner.js";
-import { BACKGROUND_REQUEST, PLAYER_REQUEST, lookupRoundLimit, requestLedger, savingRequests, unlimitedRequests } from "./requestBudget.js";
+import { fallbackAvailability, formatResetTime, runWithFallback } from "./fallbackRunner.js";
+import { BACKGROUND_REQUEST, PLAYER_REQUEST, lookupRoundLimit, noRequestLimit, requestLedger, savingRequests, unlimitedRequests } from "./requestBudget.js";
 import { requestActivity } from "./requestActivity.js";
 import { agentClient } from "./agentConnection.js";
 import { onSimulationsIdle } from "./simulationStatus.js";
 import { hostingSharedGame } from "../../runtime/humanPolities.js";
+import { isSharedMultiplayerSession } from "../../multiplayer/client/sharedGameBridge.js";
 import {
     DEFAULT_ANSWER_RESERVE_TOKENS,
     LOCAL_OUTPUT_LIMIT_TOKENS,
@@ -40,6 +42,9 @@ import { RELAY_CUT_OFF_MESSAGE, isRelayRefusal, isRelayUnreachable, relayUnreach
 import { attachLookupRound, attachCallMetrics, attachRequestOutcome, attachAttemptOutcome, finishAiRecord, isTelemetryEnabled, startAiRecord } from "./telemetry.js";
 import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { describePlayerGroupForPrompt, normalizeGroups } from "../../runtime/groups.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
+import { describeGroupLeaderBrief } from "./groupDealTalk.js";
+import { describeTreatyTalk } from "./treatyTalk.js";
 import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describePuppetBriefing, describeRole, livePuppetsFor, puppetBriefingFor } from "../../runtime/puppets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
@@ -133,7 +138,7 @@ import {
 } from "./toolTurns.js";
 import { GROUP_LOOKUP_TOOLS, buildLookupContext, executeLookup } from "./lookupTools.js";
 import { audienceSeesReport, audienceStoleReport, viewerAudience } from "./audience.js";
-import { MAP_SETTING_KEYS, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import {
     buildPromptContext,
     formatDateReadable,
@@ -153,6 +158,8 @@ import { describeGoalForAdvisor, playerGoalOf } from "../../runtime/playerGoal.j
 import { describeReportsForPrompt, normalizeReports } from "../../runtime/reports.js";
 import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
+import { advisorRostraContext } from "../../runtime/advisorRostra.js";
+import { publicAudienceOptions, publicIssuerOptions, publicStatementContext, permitsPublicDraft } from "../../runtime/publicCommunications.js";
 import { withCatchUp } from "./conversationCatchUp.js";
 import { advisorMemoryDirectiveForMode, advisorMemoryContextEntry, latestAdvisorMemory, splitAdvisorMemory } from "./advisorMemory.js";
 import { pendingAdvisorActionDrafts, redactHistoricalAdvisorActionBlocks, renderHistoricalAdvisorReply, renderPendingAdvisorActionDrafts, sanitizeAdvisorModelHistory } from "./advisorActionHistory.js";
@@ -172,6 +179,7 @@ import { describeWarsForAdvisor } from "./advisorWars.js";
 import { describeLeaderStanding, describeOurFigures, describeTerritoryForConversation } from "./standingContext.js";
 import { OWN_WARS_HEADING, buildWarStatsBlock, describePeaceTalk } from "./warStatsPrompt.js";
 import { beginAiRequestScope } from "./aiRequestControl.js";
+import { answerOf, carriedCall, failureOf, payProfileOf, payerCallOf } from "./roundCarrier.js";
 
 // A time skip the player's Agent was answering is over once the game stops
 // simulating, so the Agent's `/skip` stops too (ADR 0008).
@@ -2971,6 +2979,18 @@ export async function callAI(systemPrompt, history, opts = {}) {
     if (directive) {
         systemPrompt = `${systemPrompt}\n\n${directive}`;
     }
+    // A shared round another player's device pays for (multiplayer/host/
+    // settings.js payment "cycle"): each request of the round's skip goes, as
+    // it was built here, to that device, which carries it to its own AI; its
+    // answer comes back in a provider's shape, with the rest of this call's
+    // contract (roundCarrier.js CALL_CONTRACT: lookup rounds counted and kept,
+    // the output limit, the failure's kind). No key leaves any device, and none
+    // of this one's providers is asked.
+    const carried = carriedCall({ systemPrompt, history, opts: providerOpts, lookups, spender, onRequest: observeRequest, debugSink });
+    if (carried) {
+        logDebugEvent("ai-call", `${logLabel || "AI call"}: carried to the device of the player who pays this round.`, { promptChars: systemPrompt.length }, { verbose: true });
+        return carried;
+    }
 
     const { entries, preferredEntryId } = resolveTaskFallbackEntries(providerOpts.taskKey);
     // Named for where the call STARTS; the answer names who actually answered.
@@ -3262,6 +3282,55 @@ export async function callAI(systemPrompt, history, opts = {}) {
     }
 }
 
+// A shared round's request the host sent this device to pay for, on its own AI
+// (multiplayer/host/roundPayers.js, the owner's decision 14): carried as the
+// host built it, and its answer handed back as it came (roundCarrier.js). A
+// lookup the model asks for is answered by the host (`execute`). Nothing of it
+// is written on this device; the host applies the answer.
+// `onRequest` hears the status of every provider response it causes, which the
+// host's skip reads as it reads its own (a contract the provider refused);
+// `onActivity` each piece of the answer and `onRound` each lookup round begun,
+// which the host's deadline and the round's budget count. This device's own
+// settings hold the request, whatever it was sent: no lookups where its own are
+// off, no more rounds than its own allow. A failure is thrown with its kind
+// (`payFailure`), which is all the host is told: the provider's words stay here.
+export async function carryRoundRequest(call, { execute = null, signal = null, onRequest = null, onActivity = null, onRound = null } = {}) {
+    const limits = {
+        lookups: !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
+        rounds: lookupRoundLimit({ unlimited: unlimitedRequests() }),
+    };
+    const { systemPrompt, history, opts, sink, carry } = payerCallOf(call, { execute, signal, onRequest, onActivity, onRound, limits });
+    try {
+        const result = await callAI(systemPrompt, history, opts);
+        // The answer is judged on the host: this device's record of the call is done.
+        attachAttemptOutcome(sink.record, { ok: true });
+        return answerOf(result, { sink, carry });
+    } catch (error) {
+        attachAttemptOutcome(sink.record, { ok: false });
+        const failed = error instanceof Error ? error : new Error(String(error));
+        failed.payFailure = failureOf(error);
+        throw failed;
+    }
+}
+
+// What this device states about paying for a shared round, with no key
+// (roundCarrier.js payProfileOf; the host passes over a device that cannot):
+// whether its list can answer a round now (an entry that serves one, set up and
+// not Spent, Unusable or busy: an Agent never answers a shared round), and its
+// own settings that decide what a round spends on its key.
+export function roundPayProfile() {
+    const list = getResolvedFallbackList();
+    const serving = list.filter((entry) => entryServesCall(entry, { spender: "jump", sharedGame: true }));
+    const ready = Boolean(sharedRoundAnswerer(list)) && fallbackAvailability({ entries: serving, store: fallbackStateStore }).canAnswer;
+    return payProfileOf({
+        ready,
+        noRequestLimit: noRequestLimit(),
+        lookups: getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
+        segmented: getMapSetting(MAP_SETTING_KEYS.chunkLongJumps),
+        declares: geminiDeclaresTaskFunction("jumpForward"),
+    });
+}
+
 let promptPack = normalizePromptPack({});
 let promptsReady = null;
 let promptsReadyKey = "";
@@ -3503,11 +3572,11 @@ You can change the board directly from this conversation, with no separate confi
 - Open a project for the player, once they have clearly decided to start it (an unambiguous commitment is enough; a question is not): {"op":"create","name":"<a name>","summary":"<what it is for>","kind":"project","tags":["naval"],"plan":{"durationDays":540,"monthlyCost":120000000,"milestones":[{"title":"Keel laid","atProgress":30}],"effects":[{"type":"stat","stat":"military.sea","change":4}]}}. kind is "operation" for a military, intelligence or covert undertaking; add "secrecy":"covert" for something deniable. Write the plan as [How a Plan Is Written] says. Without a plan it opens as planning, and the player plans it from the Projects tab.
 - Fund one of the player's projects when they ask: {"op":"update","name":"<its exact name>","funding":"none | low | normal | high"}.
 - Call off one of the player's projects when they ask: {"op":"cancel","name":"<its exact name>","note":"How it ended."}.
-- Say what has become of any entry: {"op":"update","name":"<its exact name>","lastUpdate":"One sentence."}; and settle a doubted foreign entry, once a fresh agent is in place, with "verification":"confirmed" or "refuted".
+- Say what has become of any entry: {"op":"update","name":"<its exact name>","lastUpdate":"One sentence."}. A doubted foreign entry is settled by itself once a fresh agent has reported: never give it a verdict.
 That is all you can do to the board. You never move a project's progress, complete it, or set it back: the engine runs it, and only the world's events set a project back. You never open another country's project: the world opens those, in its time skips. Proactively RECOMMEND projects in prose during strategy discussions; a recommendation is not a board change. Never reopen an abandoned effort unless the player explicitly asks.
 
 [How a Plan Is Written]
-durationDays: the days of work at normal funding (14 to 3650), as long as it would really take in this era and this country. monthlyCost: what it costs a month at normal funding, in the country's GDP currency; the country's project budget is about 2% of its GDP a year (more with a sound treasury, less under deficit and debt), and one project may cost at most half of it a month. milestones: two to five checkpoints, each at the share of the work when it is reached (atProgress, 1-99). effects: what it does to the world once, when done. ${PROJECT_EFFECTS_RULE}
+durationDays: the days of work at normal funding (14 to 3650), as long as it would really take in this era and this country. monthlyCost: for monetary Projects, what it costs a month at normal funding in constant 2026 USD accounting units, never domestic currency (e.g. lev) or the player's display currency; the country's Project allowance is about 2% of canonical GDP a year (adjusted for deficit and debt), and one Project may cost at most half of it per month at creation. In non-monetary scenarios set monthlyCost to 0; no cash is recorded. milestones: two to five checkpoints, each at the share of the work when it is reached (atProgress, 1-99). effects: what it does to the world once, when done. ${PROJECT_EFFECTS_RULE}
 
 [Whose project it is]
 A project the board marks with another country's name is THEIRS: the player only watches it. If they tell you to cancel, fund or otherwise steer another government's programme, REFUSE in one sentence — nobody here holds that lever — and send no op for it. Offer instead what they can do: their OWN effort against it (sabotage, a covert operation, diplomatic pressure, an embargo, outbuilding them), which is a project of theirs you may open once they settle on it. Their programme runs on until the world's events stop it.
@@ -3676,6 +3745,7 @@ async function buildAdvisorSystemPrompt({ recipient = null, discussionOnly = fal
                 recipient,
                 gameData: visible.game,
                 eventData: visible.events,
+                simulationRules: visible.world?.simulationRules,
             })}\n\n${chatLanguageDirective()}`,
             lookups: null,
         };
@@ -3785,6 +3855,14 @@ async function buildAdvisorSystemPrompt({ recipient = null, discussionOnly = fal
         discussionOnly || meetingMode ? "" : renderPendingAdvisorActionDrafts(
             pendingAdvisorActionDrafts(advisorData, actionData, recipient?.id || CHIEF_ADVISOR_THREAD)),
         discussionOnly ? "" : ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
+        advisorRostraContext({feed:worldData?.socialFeed,round:gameData?.round,query:currentQuestion,enabled:isActiveFeatureEnabled("socialMedia")}),
+        publicStatementContext(eventData,worldData,gameData),
+        permitsPublicDraft(recipient?.id || CHIEF_ADVISOR_THREAD, recipient, { discussionOnly, meetingMode, sharedGame: isSharedMultiplayerSession() }) ? [
+            "[Official public communications]",
+            "When asked to prepare a public speech, proclamation, press release or official public statement, write a brief introduction, then a fenced publicstatement JSON array of at most four objects. Use {title,body,issuerId,audience:{kind,target}}. issuerId may be omitted for the canonical default, or use an exact issuing-office id listed below. Body must be complete plain text, at most 4000 characters; title at most 180. Do not also repeat the body in a blockquote. Audience kind: domestic, worldwide, foreign-public, or institution. target is empty for domestic/worldwide, otherwise an exact canonical ID listed below. Public address to a foreign population or institution is distinct from private diplomacy. The issuing government is determined natively. This only prepares a draft; the human must review and publish it. Never claim publication, legal enactment or a Rostra post before a native receipt. Do not create Actions merely to publish an address.",
+            "Available issuing offices: "+JSON.stringify(publicIssuerOptions(worldData,gameData)),
+            "Available public audiences (IDs and labels): "+JSON.stringify(publicAudienceOptions(worldData)),
+        ].join("\n") : "",
         discussionOnly || meetingMode ? "" : ADVISOR_INSTITUTION_DRAFT_DIRECTIVE,
         discussionOnly || meetingMode ? "" : ADVISOR_DEPLOY_DIRECTIVE,
         discussionOnly ? "" : buildAdvisorProjectsDirective(variables.projectsSummary),
@@ -3832,7 +3910,7 @@ You are ${recipient.name}, known to the player as ${recipient.title}. You are sp
 ${officeContext}
 ${recipient.personality ? `Personality and operating principles: ${recipient.personality}\n` : ""}Maintain this identity across turns. Speak within your actual knowledge and office; do not invent appointments or authority. ${discussionOnly
   ? "This conversation is discussion-only. Propose plans in prose, but do not emit executable blocks or claim that you changed game state."
-  : "You may propose Actions for human review using fenced actions blocks, but they are NOT queued until the player explicitly selects Proceed; never claim to have executed one. You may also create or update Projects with fenced projects blocks once the player has clearly committed to the sustained effort, or when recording substantiated progress; those Project edits go directly to the existing board without an extra approval. Recommend potential Projects freely in prose, but do not open speculative ones or claim institutional powers merely from your typed title."} No other canonical government mutations are authorized by this conversation.`
+  : "You may propose Actions for human review using fenced actions blocks, but they are NOT queued until the player explicitly selects Proceed; never claim to have executed one. You may also create or update Projects with fenced projects blocks once the player has clearly committed to the sustained effort, or when recording substantiated progress; those Project edits go directly to the existing board without an extra approval. Recommend potential Projects freely in prose, but do not open speculative ones or claim institutional powers merely from your typed title."} ${permitsPublicDraft(recipient.id, recipient, { discussionOnly, meetingMode, sharedGame: isSharedMultiplayerSession() }) ? "You can also draft official public statements using the publicstatement contract above for explicit player review and publication; this is neither an Action nor a Rostra post." : ""} No other canonical government mutations are authorized by this conversation.`
         : "";
     const chiefIdentity = recipient || meetingMode === "batch" ? "" : describeChiefAdvisorOverride(chiefAdvisorProfile(advisorData));
     return { systemPrompt: `${rendered}\n\n${[...directives, identity, chiefIdentity].filter(Boolean).join("\n\n")}`, lookups };
@@ -4020,6 +4098,9 @@ Decide independently whether you need to speak as ${name}. Address a substantive
 // to appear there too, a second copy that changed with every message.
 export async function buildDiplomaticSystemPrompt(countries, playerCountry, speakingAs = "", {
     chatId = "",
+    // The player's line answered now is a treaty proposal (chat.jsx's Propose deal): the leader writes the
+    // treaty as the game models it on a hidden TREATY line (AI/treatyTalk.js).
+    proposal = false,
 } = {}) {
     await ensurePromptsLoaded();
     // The panel passes its country objects; `- ${country}` of one read
@@ -4129,13 +4210,31 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     // When the player leads a group rather than a country (runtime/groups.js), the
     // leader answering it knows what it is dealing with. Not while groups are
     // switched off for the game (server/gameFeatures.js), as for the time skip.
+    const canonicalPlayerName = toCountryName(playerCountry || gameData?.country || "");
+    const speakerEntry = Array.isArray(countries)
+        ? countries.find((entry) => entry && typeof entry === "object" && String(entry.name || "").trim().toLowerCase() === participantName(speaker).toLowerCase())
+        : null;
+    const speakerIsCountry = Boolean(speakerEntry && String(speakerEntry.code || "").trim());
+
     const playerGroupText = await (async () => {
-        const playerName = playerCountry || gameData?.country || "";
-        if (!worldData?.groups || !playerName || !isActiveFeatureEnabled("groups")) return "";
+        if (!worldData?.groups || !canonicalPlayerName || !isActiveFeatureEnabled("groups")) return "";
         const catalog = await loadRegionCatalog().catch(() => []);
         const names = new Map(catalog.map((region) => [region.id, region.name]));
-        return describePlayerGroupForPrompt(worldData, playerName, { regionName: (id) => names.get(id) || id });
+        return describePlayerGroupForPrompt(worldData, canonicalPlayerName, { regionName: (id) => names.get(id) || id });
     })();
+
+    // A group's leadership speaks as the group it is (Game/AI/groupDealTalk.js). Empty for a country.
+    const groupLeaderText = await (async () => {
+        if (!worldData?.groups || !speaker || speakerIsCountry || !isActiveFeatureEnabled("groups")) return "";
+        const catalog = await loadRegionCatalog().catch(() => []);
+        const names = new Map(catalog.map((region) => [region.id, region.name]));
+        return describeGroupLeaderBrief({ world: worldData, speaker: participantName(speaker), player: canonicalPlayerName, regionName: (id) => names.get(id) || "", isGroup: speakerIsCountry ? false : null });
+    })();
+    // Treaties with the player (AI/treatyTalk.js): those in force and how to break one, and, answering a
+    // proposal, how to write the treaty as the game models it, with its effects, from both sides' means.
+    const treatyText = speaker
+        ? describeTreatyTalk({ world: worldData, speaker: participantName(speaker), player: canonicalPlayerName, proposal, speakerIsGroup: speakerIsCountry ? false : null })
+        : "";
 
     // The Game Master's standing reminders bind a leader too: a leader told the
     // bridge is down does not offer to meet on it.
@@ -4183,7 +4282,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
 
     // How softly or firmly a leader bargains at the chosen difficulty is in its
     // template (${DIFFICULTY_DESCRIPTION_CHATS}, the diplomacy directive), once.
-    return `${rendered}${politicalSection}${espionage}${standing ? `\n\n${standing}` : ""}${territory ? `\n\n${territory}` : ""}${wars ? `\n\n${wars}` : ""}${peaceTalk ? `\n\n${peaceTalk}` : ""}${playerGroupText ? `\n\n${playerGroupText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}`;
+    return `${rendered}${politicalSection}${espionage}${standing ? `\n\n${standing}` : ""}${territory ? `\n\n${territory}` : ""}${wars ? `\n\n${wars}` : ""}${peaceTalk ? `\n\n${peaceTalk}` : ""}${playerGroupText ? `\n\n${playerGroupText}` : ""}${groupLeaderText ? `\n\n${groupLeaderText}` : ""}${treatyText ? `\n\n${treatyText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}`;
 }
 
 // Each recipient has an independent in-memory history, durable memory and
@@ -4289,9 +4388,9 @@ export async function sendMessage(userMessage, options) {
 // A second, bounded provider request verifies an omitted Action proposal
 // without sending the entire campaign prompt again. The UI owns the final
 // parser and native review state; this function creates NO canonical changes.
-export async function checkAdvisorActionCompleteness({ playerRequest, advisorReply } = {}) {
+export async function checkAdvisorActionCompleteness({ playerRequest, advisorReply, delivered } = {}) {
     const result = await callAI(ADVISOR_ACTION_COMPLETION_SYSTEM, [
-        { role: "user", parts: [{ text: buildAdvisorActionCompletionQuestion({ playerRequest, advisorReply }) }] },
+        { role: "user", parts: [{ text: buildAdvisorActionCompletionQuestion({ playerRequest, advisorReply, delivered }) }] },
     ], {
         maxTokens: ADVISOR_ACTION_COMPLETION_MAX_TOKENS,
         taskKey: "advisor", agentKind: "advisor",
@@ -4387,7 +4486,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     // `catchUp` is what the world did since this thread last spoke, written by
     // the panel and kept on the player's message (conversationCatchUp.js
     // buildThreadCatchUp); the leader reads it ahead of what the player typed.
-    const { chatId = "", catchUp = "", ...opts } = options || {};
+    const { chatId = "", catchUp = "", proposal = false, ...opts } = options || {};
     // The thread this reply is for, its history and the memory it was asked
     // with, taken before the first await: the player may open another thread
     // before the reply lands (liveConversation.js).
@@ -4395,7 +4494,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     const priorHistory = diplomaticHistory;
     const priorMemory = diplomaticMemorySummary;
     const priorMemoryTime = diplomaticMemoryThroughTime;
-    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs, { chatId });
+    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs, { chatId, proposal });
 
     const asked = { role: "user", parts: [{ text: withCatchUp(playerMessage, catchUp) }] };
     const history = compactConversationHistory([...priorHistory, asked]);
@@ -4422,7 +4521,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
 
     try {
         const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy → ${speakingAs}`, taskKey: "diplomacy", agentKind: "diplomacy" });
-        const { reply, reaction, memorySummary: generatedMemorySummary, peace } = parseDiplomaticEnvelope(raw);
+        const { reply, reaction, memorySummary: generatedMemorySummary, peace, treaty } = parseDiplomaticEnvelope(raw);
         // A reply that dropped the memory line keeps the last one; the
         // thread never forgets what it knew because one answer was terse.
         const memorySummary = generatedMemorySummary || priorMemory;
@@ -4441,11 +4540,13 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
             { verbose: true });
         // A reply that was only its PEACE line is remembered as that line, as the model wrote it, so the thread knows
         // what was decided.
-        const remembered = reply || String(raw ?? "").match(/^[ \t]*PEACE[ \t]*:.*$/im)?.[0]?.trim() || "";
+        const remembered = reply || (treaty ? `TREATY:${treaty}` : "") || String(raw ?? "").match(/^[ \t]*PEACE[ \t]*:.*$/im)?.[0]?.trim() || "";
         if (stillOpen) diplomaticHistory.push({ role: "model", parts: [{ text: `[${speakingAs}]: ${remembered}` }] });
         // `peace`: what the leader decided of peace with the player, its hidden
         // PEACE line, "" for nothing (the panel carries it out: gameplay.js answerPeaceInChat).
-        return { reply, reaction, memorySummary, peace };
+        // `treaty`: what the leader decided of a treaty and the treaty itself, its hidden TREATY line
+        // (gameplay.js answerTreatyInChat).
+        return { reply, reaction, memorySummary, peace, treaty };
     } catch (err) {
         if (diplomaticConversation.isCurrent(conversation)) removeEntry(diplomaticHistory, asked);
         logDebugEvent("diplomacy", `${speakingAs} failed to reply after ${elapsedSeconds(startedAt)} — the message was rolled back off the history.`, err);

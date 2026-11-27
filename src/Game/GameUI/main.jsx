@@ -6,9 +6,10 @@ import { Presence } from "./presence.jsx";
 import { LibraryTopBar, TOP_BAR_OFFSET, openLibraryTab, useMainMenuOpen } from "./libraryBar";
 import { ApiSetupPrompt } from "./apiSetupPrompt.jsx";
 import { GameLoadingScreen, LOADING_CEILING_MS, useGameLoading } from "./gameLoadingScreen.jsx";
-import { setOpenGameCountry, useLibraryState } from "../../runtime/library.js";
+import { hasNoGameToRun, setOpenGameCountry, useLibraryState } from "../../runtime/library.js";
 import { playerAtWar } from "../../runtime/playerAtWar.js";
 import { enterGame, useGameEntered } from "../../runtime/gameEntry.js";
+import { holdSeatsLeftBehind } from "../../runtime/seatsLeftBehind.js";
 import { useActiveFeatures, activeWars } from "../../runtime/gameFeatures.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { brushedMetalUrl } from "./brushedMetal.js";
@@ -39,6 +40,8 @@ import { OPEN_COUNTRY_STATS_EVENT, openCountryPanel } from "../Selection/Country
 import { logDebugEvent, logSettingChange } from "../../runtime/debugLog.js";
 import {
   describeProviderSetupNeed,
+  fallbackListAnswersGameCalls,
+  fallbackListHasAgent,
   getProviderMeta,
   getResolvedFallbackList,
   isFallbackListConfigured,
@@ -50,14 +53,20 @@ import { BordersFallbackNotice } from "./bordersFallbackNotice.jsx";
 import { PromptLimitNotice } from "./promptLimitNotice.jsx";
 import { PLAYER_ACTIVITY_EVENTS, createPlayerActivity } from "../../runtime/playerActivity.js";
 import { MAP_SETTING_KEYS, useMapSettingDefaultOn } from "../../runtime/mapSettings.js";
-import { inSharedGame, sharedGameRole, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame, sharedGameRole, sharedGameSeats, sharedGameSettings, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
+import GameMenuDropdown from "./GameMenuDropdown.jsx";
+import { gameMenuItems } from "./gameMenuItems.js";
+import { OWN_AGENT_LINE, ownAiUsesOf } from "../../multiplayer/costRules.js";
 
 // Whether anything in the Fallback list has what its provider needs, and the
 // top entry's provider for the start-of-game prompt's wording. Re-read whenever
 // the list or a Connection changes (providerConfig.js announces it).
+// `gameCalls`: whether something in it answers what no Agent does (the calls a
+// shared game's guest is asked its own AI for, beyond what it starts and
+// answers with /answer); `agent`: whether the player's own Agent is in it.
 const readAiSetup = () => {
   const [top] = getResolvedFallbackList();
-  return { ready: isFallbackListConfigured(), provider: top?.provider ?? "gemini" };
+  return { ready: isFallbackListConfigured(), gameCalls: fallbackListAnswersGameCalls(), agent: fallbackListHasAgent(), provider: top?.provider ?? "gemini" };
 };
 
 // The advisor drawer is user-resizable — drag its left edge (see advisor.jsx).
@@ -134,6 +143,8 @@ const LazyDebugConsole = lazy(() =>
 const LazyInteractivePanel = lazy(() =>
   import("./interactive.jsx").then((module) => ({ default: module.InteractivePanel })),
 );
+
+const LazyCampaignLorePanel = lazy(() => import("./campaignLore.jsx"));
 
 const checkWebGL = () => {
   try {
@@ -322,6 +333,10 @@ const HUD_OUT_OF_SIGHT = Object.freeze({ display: "none" });
 
 // The country a game's own record names, or null while there is no record yet.
 const selectPlayedCountry = (game) => (game ? String(game.country ?? "").trim() : null);
+// Each time skip publishes game.json to the runtime store. Library entries
+// are not refreshed for every turn, so Rich Presence follows this date.
+const selectPlayedDate = (game) => (game ? String(game.gameDate || game.startDate || "") : null);
+const selectPlayedStartDate = (game) => String(game?.startDate || "");
 
 const Main = ({
   mapRef,
@@ -341,6 +356,7 @@ const Main = ({
   const [isDebugConsoleOpen, setIsDebugConsoleOpen] = useState(false);
   const [shouldLoadDebugConsole, setShouldLoadDebugConsole] = useState(false);
   const [isInteractiveOpen, setIsInteractiveOpen] = useState(false);
+  const [loreCampaignId, setLoreCampaignId] = useState("");
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
   const [isCountryOpen, setIsCountryOpen] = useState(false);
   const [isWarRoomOpen, setIsWarRoomOpen] = useState(false);
@@ -383,15 +399,25 @@ const Main = ({
   // names the country the game is really played as. Null until the record is
   // read; a game with no country says so with an empty name.
   const playedCountry = useRuntimeState("game", selectPlayedCountry);
+  const liveGameDate = useRuntimeState("game", selectPlayedDate);
+  const liveGameStartDate = useRuntimeState("game", selectPlayedStartDate);
   useEffect(() => {
     if (gameEntered && activeGame?.id && playedCountry !== null) setOpenGameCountry(activeGame.id, playedCountry);
   }, [gameEntered, activeGame?.id, playedCountry]);
+  // A game left while it was shared, opened alone: what is its other players'
+  // waits for the session to be taken up again (runtime/seatsLeftBehind.js).
+  useEffect(() => {
+    if (!gameEntered || !activeGame?.id || inSharedGame()) return;
+    holdSeatsLeftBehind().catch((error) => console.warn("[shared game] what the other players left could not be held:", error?.message || error));
+  }, [gameEntered, activeGame?.id]);
   // The game menu names the campaign the way the library does. (Not before a
   // game is opened: looking the name up reads the game's world and the country
   // tiles.)
   const activeCountryName = useCountryDisplayName(activeGame?.country || "", { wait: !gameEntered });
-  // No games -> nothing to simulate (the main menu covers the empty world).
-  const hasNoGames = loaded && (games?.length ?? 0) === 0;
+  // No games -> nothing to simulate (the main menu covers the empty world). A
+  // shared game's stand-in is no game of the list's, but is the one being run
+  // (runtime/library.js hasNoGameToRun).
+  const hasNoGames = hasNoGameToRun({ loaded, games, activeGame });
 
   // Starting a game with nothing to call the AI with: a prompt, once per game
   // per session, offering the AI settings. It goes away the moment a key is
@@ -420,9 +446,9 @@ const Main = ({
     activeGame,
     playerName: activeCountryName || activeGame?.country || "",
     scenarioName: runtimeScenario?.name || "",
+    gameDate: liveGameDate,
     inMenu: mainMenuOpen || hasNoGames || !gameEntered,
   }));
-  const providerReady = aiSetup.ready;
   const [apiPromptAnsweredFor, setApiPromptAnsweredFor] = useState(() => {
     try { return sessionStorage.getItem("oh:api-setup-answered") || ""; } catch { return ""; }
   });
@@ -431,15 +457,35 @@ const Main = ({
     setApiPromptAnsweredFor(id);
     try { sessionStorage.setItem("oh:api-setup-answered", id); } catch { /* the prompt just shows again next time */ }
   };
-  // A guest in a shared game plays on the host's key: nothing to set up.
+  // A guest in a shared game is asked too, in the words of that game's rules
+  // (multiplayer/costRules.js ownAiUsesOf): its advisor, suggestions, generals
+  // and Search are always its own AI's, and the host's settings may leave it
+  // its letters, sheets and its turn to pay for a round. It used to be told it
+  // played on the host's key, with nothing to set up.
   const sharedRole = useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole);
+  const sharedRules = useSyncExternalStore(subscribeSharedGameRole, sharedGameSettings, sharedGameSettings);
+  // Who plays what, for the corner button's Players (GameMenuDropdown.jsx);
+  // empty in single player, where the button opens the game menu at once.
+  const sharedSeats = useSyncExternalStore(subscribeSharedGameRole, sharedGameSeats, sharedGameSeats);
+  const [isGameMenuDropOpen, setIsGameMenuDropOpen] = useState(false);
+  const closeGameMenuDrop = useCallback(() => setIsGameMenuDropOpen(false), []);
+  // What counts as set up is what this game asks of this device's AI. A guest's
+  // is asked for what no Agent answers (its suggestions, Plan it, the generals,
+  // Search, the sheets it opens, its turn to pay): a list of Agents alone was
+  // counted ready, and the guest was never asked. Single player and the host
+  // are as they were: the host cannot host on Agents alone (engineMain.js).
+  const providerReady = sharedRole === "guest" ? aiSetup.gameCalls : aiSetup.ready;
   const showApiPrompt = loaded && Boolean(activeGame?.id) && !mainMenuOpen && !providerReady
     && apiPromptAnsweredFor !== String(activeGame?.id) && !isSettingsOpen && !showGameLoading
-    && sharedRole !== "guest";
+    && (sharedRole !== "guest" || Boolean(sharedRules));
   // The game master's tools are not offered in a shared game (see onOpenCheats
-  // below): a panel already open when one begins closes.
+  // below): a panel already open when one begins closes, and so does its Force
+  // Manager (the Forces panel, which only the Cheats panel opens: it edits and
+  // places any unit by hand).
   useEffect(() => {
-    if (sharedRole) setIsCheatsOpen(false);
+    if (!sharedRole) return;
+    setIsCheatsOpen(false);
+    setIsForcesOpen(false);
   }, [sharedRole]);
 
   // Asked again while the warning is up. WebGL is refused for a moment while
@@ -761,6 +807,7 @@ const Main = ({
   useBackToClose(isCheatsOpen, () => setIsCheatsOpen(false));
   useBackToClose(isDebugConsoleOpen, () => setIsDebugConsoleOpen(false));
   useBackToClose(isInteractiveOpen, () => setIsInteractiveOpen(false));
+  useBackToClose(Boolean(loreCampaignId), () => setLoreCampaignId(""));
   useBackToClose(isSettingsOpen, () => {
     setSettingsInitialSection(null);
     setIsSettingsOpen(false);
@@ -940,6 +987,9 @@ const Main = ({
           />
         </Presence>
       </Suspense>
+      <Suspense fallback={null}>
+        {loreCampaignId && loreCampaignId === activeGame?.id && !sharedRole && gameEntered && !mainMenuOpen && <LazyCampaignLorePanel key={loreCampaignId} campaignId={loreCampaignId} gameName={activeGame?.name || ""} scenarioName={runtimeScenario?.name || ""} countryName={activeCountryName || activeGame?.country || ""} currentDate={liveGameDate || activeGame?.currentDate || ""} startDate={liveGameStartDate} onClose={() => setLoreCampaignId("")} />}
+      </Suspense>
       <GenerationRatingToast />
       <Presence open={showGameLoading} leaveMs={450}>
         <GameLoadingScreen
@@ -955,6 +1005,8 @@ const Main = ({
         <ApiSetupPrompt
           providerLabel={getProviderMeta(aiSetup.provider)?.label || "the selected provider"}
           missing={describeProviderSetupNeed(aiSetup.provider)}
+          lead={sharedRole === "guest" && sharedRules ? ownAiUsesOf(sharedRules) : ""}
+          note={sharedRole === "guest" && sharedRules && aiSetup.agent ? OWN_AGENT_LINE : ""}
           onDismiss={answerApiPrompt}
           onConfigure={() => {
             answerApiPrompt();
@@ -967,10 +1019,27 @@ const Main = ({
       <SettingsButton
         topOffset={TOP_BAR_OFFSET}
         hidden={isSettingsOpen || warRoomShown}
+        expanded={gameMenuItems({ seats: sharedSeats }).length ? isGameMenuDropOpen : undefined}
         onToggle={() => {
+          // A shared game: the drop-down, with the game menu as its first item.
+          if (gameMenuItems({ seats: sharedSeats }).length) {
+            setIsGameMenuDropOpen((open) => !open);
+            return;
+          }
           setSettingsScope("game");
           setSettingsInitialSection(null);
           setIsSettingsOpen(!isSettingsOpen);
+        }}
+      />
+      <GameMenuDropdown
+        open={isGameMenuDropOpen && !isSettingsOpen && !warRoomShown}
+        seats={sharedSeats}
+        top={`calc(${TOP_BAR_OFFSET} + ${isMobile ? "3.2rem" : "2.85rem"} + 0.35rem)`}
+        onClose={closeGameMenuDrop}
+        onOpenGameMenu={() => {
+          setSettingsScope("game");
+          setSettingsInitialSection(null);
+          setIsSettingsOpen(true);
         }}
       />
       <Presence open={isSettingsOpen} leaveMs={260}>
@@ -992,6 +1061,7 @@ const Main = ({
             setIsSettingsOpen(false);
           }}
           onOpenGameManagement={() => openLibraryTab("games")}
+          onOpenCampaignLore={!sharedRole && gameEntered && !mainMenuOpen && activeGame?.id ? () => setLoreCampaignId(activeGame.id) : undefined}
           onOpenEvents={() => setActiveBottomPanel("history")}
           // The game master's tools write the game itself, which in a shared
           // game is the host's engine's alone: they are not offered there.

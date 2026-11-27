@@ -6,17 +6,26 @@ import { parseAdvisorReply } from "./advisorReply.js";
 const ACTIONS_ONLY = /^```actions[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/;
 const UNRESOLVED = "The advisor's Action paperwork could not be completed for review. No Action was queued; ask for the missing proposal.";
 
-export const completeAdvisorActionReply = async ({ reply, canPropose, check }) => {
+export const completeAdvisorActionReply = async ({ reply, canPropose, check, allowedUnitTypes = null }) => {
   const source = String(reply ?? "");
-  const current = parseAdvisorReply(source);
+  const current = parseAdvisorReply(source, { allowedUnitTypes });
   // Existing malformed blocks already have native errors; never replace them
   // or ask another model to reinterpret the original operation.
   if (!canPropose || current.actionsProposal !== null || current.actionBlockProblems.length > 0) {
     return { reply: source, status: "skipped", problem: "" };
   }
+  // Receipts are derived from accepted native parsing, not the advisor's claims.
+  // They inform the bounded semantic check without granting any Action authority.
+  const delivered = {
+    deployments: current.deployments?.length ?? 0,
+    projects: current.projectsProposal?.length ?? 0,
+    diplomaticDrafts: current.messageDrafts?.length ?? 0,
+    institutionDrafts: current.institutionDrafts?.length ?? 0,
+    publicStatements: current.publicDrafts?.filter(Boolean).length ?? 0,
+  };
   let response;
   try {
-    response = String(await check()).trim();
+    response = String(await check({ delivered })).trim();
   } catch {
     return {
       reply: source, status: "unavailable",
@@ -38,7 +47,7 @@ export const completeAdvisorActionReply = async ({ reply, canPropose, check }) =
   if (!Array.isArray(proposed.actionsProposal) || proposed.actionsProposal.length === 0
       || proposed.actionBlockProblems.length || proposed.text
       || proposed.projectsProposal || proposed.deployments?.length || proposed.institutionDrafts?.length
-      || proposed.messageDrafts?.length || proposed.chartConfig
+      || proposed.messageDrafts?.length || proposed.publicDrafts?.length || proposed.chartConfig
       // There is no canonical planned-order reference in the bounded check.
       // It may only recover a CREATE draft, never guess an edit/remove target.
       || proposed.actionsProposal.some((op) => !op || typeof op !== "object" || Array.isArray(op)

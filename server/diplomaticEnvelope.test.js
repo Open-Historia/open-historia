@@ -22,7 +22,7 @@ test("the envelope splits the reply, the hidden memory line and the reaction", (
 });
 
 test("a reply without the envelope parts is returned whole, and a multi-line memory is folded", () => {
-  assert.deepEqual(parseDiplomaticEnvelope("  Plain words.  "), { reply: "Plain words.", reaction: null, memorySummary: "", peace: "" });
+  assert.deepEqual(parseDiplomaticEnvelope("  Plain words.  "), { reply: "Plain words.", reaction: null, memorySummary: "", peace: "", treaty: "" });
   const folded = parseDiplomaticEnvelope("Reply.\nDIPLOMATIC_MEMORY: first line\n   second line\nthird");
   assert.equal(folded.reply, "Reply.");
   assert.equal(folded.memorySummary, "first line second line third");
@@ -77,4 +77,17 @@ test("the turn instruction names the voice, carries the prior memory and keeps t
   assert.match(instruction, /Prior durable memory:\nRuritania demanded the fort\./);
   assert.match(instruction, /REACTION:<emoji>/);
   assert.match(buildDiplomaticTurnInstruction({ speakingAs: "X" }), /No durable memory has been established yet/);
+});
+
+test("TREATY handles multiline or fenced JSON and ignores prose lines starting with Treaty:", () => {
+  const prose = "We cannot accept those terms.\nTreaty: the 1920 border convention still binds us.\nDIPLOMATIC_MEMORY: Refused.";
+  const parsedProse = parseDiplomaticEnvelope(prose);
+  assert.equal(parsedProse.treaty, "");
+  assert.match(parsedProse.reply, /Treaty: the 1920 border convention/);
+
+  const fenced = "Agreed.\nTREATY:\n```json\n{\n  \"answer\": \"accept\",\n  \"type\": \"truce\",\n  \"parties\": [\"Mexico\", \"Cartel del Golfo\"],\n  \"title\": \"Gulf truce\"\n}\n```\nREACTION:🤝";
+  const parsedFenced = parseDiplomaticEnvelope(fenced);
+  assert.equal(parsedFenced.reply, "Agreed.");
+  assert.equal(parsedFenced.reaction, "🤝");
+  assert.equal(JSON.parse(parsedFenced.treaty).title, "Gulf truce");
 });

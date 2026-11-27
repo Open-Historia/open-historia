@@ -296,6 +296,29 @@ export const resolvePolityIdentity = (
     }
 
     if (choice.ambiguous) {
+      // A legacy save may have multiple stable polity keys differing only in
+      // punctuation. The normal name fold deliberately treats them as equal,
+      // but the precise registry key is still authoritative when explicitly
+      // named: prefer one byte-exact key, then one case-insensitive key. Do
+      // NOT infer identity from map ownership; landless governments are valid
+      // polities too. Ambiguous aliases, former names and non-exact spellings
+      // must continue to fail closed rather than silently merging identities.
+      if (field === "ownKeys") {
+        const raw = normalizeString(token);
+        const literal = exact.filter((candidate) => candidate.canonical === raw);
+        const spelling = literal.length ? literal : exact.filter(
+          (candidate) => candidate.canonical.toLowerCase() === raw.toLowerCase(),
+        );
+        if (spelling.length === 1) {
+          return {
+            input: raw,
+            normalizedInput,
+            resolved: spelling[0].canonical,
+            status: "explicit-declared-key",
+            candidates: exact.map((candidate) => candidate.canonical),
+          };
+        }
+      }
       return {
         input: normalizeString(token),
         normalizedInput,

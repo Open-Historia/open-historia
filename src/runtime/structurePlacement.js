@@ -14,6 +14,7 @@
 import { livePuppetsFor } from "./puppets.js";
 import { mutateWorldState } from "./gameState.js";
 import { inSharedGame, requestFromHost } from "../multiplayer/client/sharedGameBridge.js";
+import { wrapLng } from "./unitMotion.js";
 
 const text = (value) => String(value ?? "").trim();
 const same = (a, b) => text(a).toLowerCase() === text(b).toLowerCase() && text(a) !== "";
@@ -49,6 +50,31 @@ const settle = (markers, id, change) => {
 
 export const acceptStructure = (markers, id) => settle(markers, id, {});
 
+// How far out to sea a structure may be moved off its country's own land: an
+// island base, a platform off its coast.
+export const STRUCTURE_SEA_KM = 300;
+const MOVE_REFUSED = Object.freeze({
+  chart: "The map could not be read to see whose ground that is: try again.",
+  ground: "A structure is moved onto its own country's land, or to the sea off it.",
+});
+
+// Where Move may put a structure in a shared game, held to the host's own map
+// (runtime/warRoomChart.js chartOf): onto land its country holds (its
+// ownerCode: a puppet's structure onto the puppet's), or out to sea within
+// STRUCTURE_SEA_KM of that land. "" when it may, else why not, in words. Any
+// point on Earth was taken, another player's capital included (the gap audit
+// of 2026-11-18). Single player puts it where the player clicks, as it always has.
+export const structureMoveRefusal = (marker, { lng, lat } = {}, { chart = null } = {}) => {
+  if (!chart || typeof chart.holds !== "function") return MOVE_REFUSED.chart;
+  const owner = text(marker?.ownerCode);
+  const held = chart.holds(owner, Number(lng), Number(lat));
+  if (held === true) return "";
+  if (held === false) return MOVE_REFUSED.ground;
+  const offShore = typeof chart.sea === "function" && chart.sea(Number(lng), Number(lat))
+    && typeof chart.landNear === "function" && chart.landNear(owner, Number(lng), Number(lat), STRUCTURE_SEA_KM);
+  return offShore ? "" : MOVE_REFUSED.ground;
+};
+
 // A point off the earth, or no point at all, changes nothing.
 export const moveStructure = (markers, id, { lng, lat } = {}) => {
     const x = Number(lng); const y = Number(lat);
@@ -63,8 +89,18 @@ export const moveStructure = (markers, id, { lng, lat } = {}) => {
 //
 // In a shared game the world is the host's: the page asks (request "settle"),
 // the host checks the structure is the player's to settle and writes it, and
-// the next view shows it. A refusal is thrown with the host's reason.
-export const saveSettledStructure = async (id, point = null) => {
+// the next view shows it. A refusal is thrown with the host's reason, and a
+// write that failed with SETTLE_NOT_SAVED, for the card or the map's banner to
+// show where the player pressed (Selection/Features.jsx, Map/Nations.jsx).
+export const SETTLE_NOT_SAVED = "The structure's place could not be saved. Try again.";
+//
+// `point` is where the map was clicked, as the map reports it: on a world copy
+// either side of the date line its longitude runs past 180, and is taken back
+// into range here, for both doors alike. The shared game's request refused it in
+// its schema's words, and single player's moveStructure did nothing at all (the
+// review of 2026-11-18, door 5).
+export const saveSettledStructure = async (id, clickedAt = null) => {
+    const point = clickedAt ? { lng: wrapLng(Number(clickedAt.lng)), lat: Number(clickedAt.lat) } : null;
     if (inSharedGame()) {
         const answer = await requestFromHost("settle", {
             marker: String(id ?? ""),
@@ -72,11 +108,15 @@ export const saveSettledStructure = async (id, point = null) => {
             lng: Number(point?.lng) || 0,
             lat: Number(point?.lat) || 0,
         });
-        if (!answer.ok) throw new Error(answer.error || "The host did not settle the structure.");
+        if (!answer.ok) throw new Error(answer.error || SETTLE_NOT_SAVED);
         return;
     }
-    await mutateWorldState((world) => {
-        const markers = point ? moveStructure(world.markers, id, point) : acceptStructure(world.markers, id);
-        return { ...world, markers };
-    });
+    try {
+        await mutateWorldState((world) => {
+            const markers = point ? moveStructure(world.markers, id, point) : acceptStructure(world.markers, id);
+            return { ...world, markers };
+        });
+    } catch (error) {
+        throw new Error(SETTLE_NOT_SAVED, { cause: error });
+    }
 };

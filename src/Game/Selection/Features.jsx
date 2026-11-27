@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { getWorldStateSnapshot, useWorldState } from "../Map/useWorldState.js";
 import { getPlayerCode, setInteractionMode } from "../Map/unitsController.js";
-import { approximateMark, canSettleStructure, saveSettledStructure } from "../../runtime/structurePlacement.js";
+import { SETTLE_NOT_SAVED, approximateMark, canSettleStructure, saveSettledStructure } from "../../runtime/structurePlacement.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -158,12 +158,16 @@ const FeaturePopup = () => {
   const [selection, setSelection] = useState(null);
   const [animKey, setAnimKey] = useState(0);
   const [dismissing, setDismissing] = useState(false);
+  // Why the host did not settle the structure (a shared game), said in the card
+  // where the player pressed Accept.
+  const [settleError, setSettleError] = useState("");
   const { current: map } = useMap();
   const { markers } = useWorldState();
 
   _setSelection = (value) => {
     _currentSelection = value;
     setDismissing(false);
+    setSettleError("");
     setSelection(value);
     if (value !== null) setAnimKey((key) => key + 1);
   };
@@ -408,9 +412,13 @@ const FeaturePopup = () => {
               <button
                 className="oh-tap"
                 onClick={() => {
-                  // In a shared game the host may refuse (the round is being resolved).
+                  // In a shared game the host may refuse, and the card says why.
+                  setSettleError("");
                   void saveSettledStructure(feature.id)
-                    .catch((error) => logDebugEvent("warn", "[map] Accepting the structure's place failed.", error));
+                    .catch((error) => {
+                      logDebugEvent("warn", "[map] Accepting the structure's place failed.", error);
+                      setSettleError(String(error?.message || "") || SETTLE_NOT_SAVED);
+                    });
                 }}
                 style={settleButton}
               >
@@ -426,6 +434,11 @@ const FeaturePopup = () => {
               >
                 Move
               </button>
+            </div>
+          ) : null}
+          {!isCity && settleable && settleError ? (
+            <div role="alert" style={{ marginTop: "6px", fontSize: "11px", lineHeight: 1.45, color: "#fca5a5" }}>
+              {settleError}
             </div>
           ) : null}
         </div>

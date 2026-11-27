@@ -458,6 +458,16 @@ select optgroup {
 select option:disabled {
   color: #8b8b93 !important;
 }
+/* Keep the default accessibility fix, but do not override an active palette
+   with a second, fixed charcoal menu. */
+:root[data-oh-ui-theme]:not([data-oh-ui-theme="default"]) select option,
+:root[data-oh-ui-theme]:not([data-oh-ui-theme="default"]) select optgroup {
+  background-color: var(--oh-grey-surface) !important;
+  color: var(--oh-grey-text) !important;
+}
+:root[data-oh-ui-theme]:not([data-oh-ui-theme="default"]) select option:disabled {
+  color: var(--oh-grey-muted) !important;
+}
 
 /* While a list scrolls under a still cursor, what passes under it takes no
    hover (runtime/scrollHoverFreeze.js): each row and button lit up and eased
@@ -708,3 +718,148 @@ button:active:not(:disabled) {
   background: rgba(255, 255, 255, 0.22) !important;
 }
 
+
+/* Purpose-built editor zoom unit. Other OpenLayers pickers stay untouched. */
+.ol-zoom.oh-editor-zoom-control {
+  width: 60px !important;
+  padding: 4px !important;
+  gap: 0 !important;
+  align-items: stretch !important;
+  border-radius: 11px !important;
+  border: 1px solid var(--oh-ui-line, rgba(255, 255, 255, 0.15)) !important;
+  background: var(--oh-ui-panel, rgba(16, 23, 34, 0.96)) !important;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(10px);
+}
+.ol-zoom.oh-editor-zoom-control button {
+  width: 50px !important;
+  height: 34px !important;
+  background: transparent !important;
+  border-radius: 7px !important;
+  color: var(--oh-ui-text, #f5f6f8) !important;
+  font-size: 19px !important;
+  font-weight: 500 !important;
+  transition: background 120ms ease, color 120ms ease !important;
+}
+.ol-zoom.oh-editor-zoom-control button:hover:not(:disabled) {
+  background: var(--oh-ui-tint, rgba(255, 255, 255, 0.12)) !important;
+}
+.ol-zoom.oh-editor-zoom-control button:focus-visible {
+  outline: 2px solid var(--oh-ui-focus, #a7c4ff) !important;
+  outline-offset: -2px !important;
+}
+.ol-zoom.oh-editor-zoom-control button:disabled {
+  opacity: 0.35;
+  cursor: default !important;
+}
+.ol-zoom.oh-editor-zoom-control .oh-editor-zoom-readout {
+  display: flex;
+  width: 50px;
+  min-height: 40px;
+  padding: 5px 1px 4px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 2px;
+  border-top: 1px solid var(--oh-ui-line, rgba(255, 255, 255, 0.1));
+  border-bottom: 1px solid var(--oh-ui-line, rgba(255, 255, 255, 0.1));
+  color: var(--oh-ui-text, #f5f6f8);
+  text-align: center;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.oh-editor-zoom-value {
+  font: 700 13.5px/1.15 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.oh-editor-zoom-caption {
+  color: var(--oh-ui-muted, rgba(240, 240, 240, 0.6));
+  font: 650 9px/1.15 system-ui, sans-serif;
+  letter-spacing: 0.15px;
+}
+
+
+/* P22: give narrow editor maps back their space. The full zoom readout stays
+   visible on desktop; only this editor control (not OL picker zooms) compacts. */
+@media (max-width: 600px) {
+  .ol-zoom.oh-editor-zoom-control {
+    width: 42px !important;
+    top: 0.5rem !important;
+    left: 0.5rem !important;
+    padding: 2px !important;
+    border-radius: 9px !important;
+  }
+  .ol-zoom.oh-editor-zoom-control button {
+    width: 36px !important;
+    height: 32px !important;
+    font-size: 18px !important;
+  }
+  .ol-zoom.oh-editor-zoom-control .oh-editor-zoom-readout {
+    width: 36px;
+    min-height: 18px;
+    padding: 1px 0;
+    gap: 0;
+  }
+  .ol-zoom.oh-editor-zoom-control .oh-editor-zoom-value {
+    font-size: 11px;
+    letter-spacing: -0.25px;
+  }
+  .ol-zoom.oh-editor-zoom-control .oh-editor-zoom-caption {
+    display: none;
+  }
+}
+
+/* Scenario authoring: native dialog matches the existing full-size managers. */
+.oh-scenario-authoring-dialog::backdrop {
+  background: rgba(6,6,7,0.8);
+  backdrop-filter: blur(14px);
+}
+.oh-scenario-relation-layout {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  grid-template-columns: minmax(19rem, 1fr) minmax(0, 1.55fr);
+}
+.oh-scenario-relation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-height: 0;
+  min-width: 0;
+  padding: 0.72rem;
+  border-right: 1px solid var(--oh-grey-border);
+}
+.oh-scenario-relation-rows {
+  display: grid;
+  align-content: start;
+  gap: 0.45rem;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+.oh-scenario-relation-detail {
+  display: grid;
+  align-content: start;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  gap: 0.85rem;
+  padding: 1rem;
+}
+.oh-scenario-authoring-dialog button:focus-visible,
+.oh-scenario-authoring-dialog input:focus-visible,
+.oh-scenario-authoring-dialog select:focus-visible,
+.oh-scenario-authoring-dialog textarea:focus-visible {
+  outline: 2px solid var(--oh-ui-focus, var(--oh-grey-border-strong));
+  outline-offset: 2px;
+}
+.oh-scenario-authoring-dialog button:disabled { opacity: 0.5; cursor: not-allowed; }
+@media (max-width: 760px) {
+  .oh-scenario-relation-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(10rem, 0.9fr) minmax(0, 1.1fr);
+  }
+  .oh-scenario-relation-list { border-right: 0; border-bottom: 1px solid var(--oh-grey-border); }
+  .oh-scenario-relation-detail { padding: 0.72rem; }
+}

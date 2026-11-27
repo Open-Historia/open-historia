@@ -11,6 +11,8 @@ export const TASK_TEMPERATURES = Object.freeze({
 
   // Reconciliation and summary, all told that changing nothing is a correct answer.
   eventConsolidator: 0.2,
+  campaignChronicle: 0.2,
+  projectFinanceReview: 0.2,
   gameMaster: 0.2,
   projects: 0.2,
   structureDirector: 0.2,

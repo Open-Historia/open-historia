@@ -18,10 +18,10 @@ test("scenario institution authoring uses a dedicated OH-style manager", () => {
   assert.match(source, /Visual identity/);
 });
 
-test("institution manager preserves canonical save and explicit dark select option styling", () => {
+test("institution manager preserves canonical save and theme-aware select option styling", () => {
   assert.match(source, /worldPatch:\s*\{\s*institutions:/);
   assert.match(source, /upsertScenarioInstitution/);
-  assert.match(source, /colorScheme:\s*"dark"/);
+  assert.doesNotMatch(source, /colorScheme:\s*"dark"/);
   assert.match(source, /const optionStyle/);
   assert.match(source, /<option key=\{kind\} style=\{optionStyle\}/);
   assert.match(source, /BUILTIN_INSTITUTION_LOGOS/);

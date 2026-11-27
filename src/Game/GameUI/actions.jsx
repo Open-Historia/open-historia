@@ -12,8 +12,8 @@ import { revertUnitOrder } from "../Map/unitsController.js";
 import {
     buildActionDisplayText,
     normalizeActionEntry,
+    mutateActionsState,
     readWorldState,
-    writeActionsState,
     writeWorldState,
 } from "../../runtime/gameState.js";
 import { PLAYER_GOAL_MAX_CHARS, playerGoalEntryOf, playerGoalOf, withPlayerGoal } from "../../runtime/playerGoal.js";
@@ -21,11 +21,16 @@ import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
 import { useTurnRunning } from "./useTurnRunning.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
-import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame, requestFromHost, sharedRoundPhase, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
+import { orderRequestFor, rewordRequestFor } from "../../multiplayer/client/sharedOrders.js";
+import { ORDER_MAX_CHARS, ORDER_TITLE_MAX } from "../../multiplayer/game/messages.js";
+import { ORDER_GONE_NOTE, hasOwnTitle, orderEditBlock, queueOrderIn, removeOrderFrom, rewordOrderIn } from "../../runtime/actionEdit.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { uiString } from "../../runtime/translator.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
-import { queuedActionIds, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
+import { queuedActionIds, seatAdviceKey, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
+import { refusedOrdersKey } from "./overdueOrders.js";
+import { filedFateLabel } from "../../runtime/filedEvents.js";
 import { ProjectsBoard, ProjectsTabIcon } from "./projects.jsx";
 import { isKnownToPlayer, isProjectOpen } from "../../runtime/projects.js";
 import {
@@ -116,7 +121,18 @@ const SpinnerRing = ({ size = 14, tone = "rgba(255,255,255,0.88)" }) => {
     );
 };
 
-const saveActions = async (actions) => writeActionsState(actions);
+// A change to the queue on this device, decided on the list as it is stored
+// when it is written, in the game's one write order (runtime/actionEdit.js:
+// never a whole list saved from what the panel last drew). `change(stored)`
+// returns { next, outcome, ... }; resolves to that once written.
+const commitActions = async (change) => {
+    let result = { next: null, outcome: "" };
+    await mutateActionsState((stored) => {
+        result = change(Array.isArray(stored) ? stored : []);
+        return result.next;
+    });
+    return result;
+};
 
 // Saves the diagnostics log with an AI failure attached at the top, or copies
 // the failure alone while logging is off (runtime/saveDebugLog.js), as the
@@ -160,6 +176,8 @@ const aiFailureIncident = (kind, title, { reason = "", rawResponse = "" } = {}) 
 // What the panel says when the queue could not be written.
 const ORDER_NOT_SAVED = "Your order could not be saved, so the next time skip would not see it. Try again.";
 const ORDER_NOT_REMOVED = "The order could not be removed, so the next time skip would still carry it out. Try again.";
+const ORDER_NOT_CHANGED = "The order could not be changed, so the next time skip would carry out its old words. Try again.";
+const ORDER_GONE = ORDER_GONE_NOTE;
 
 const createManualAction = (input) =>
 normalizeActionEntry({
@@ -181,24 +199,219 @@ normalizeActionEntry({
 // A queued troop order whose deletion undoes what it did to the map (#368).
 const movesUnit = (action) => Boolean(action?.unitRevert) && (action.status ?? "planned") === "planned";
 
+const PencilIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+);
+
+// The order's fields as the editor shows them: its words always, a title of
+// its own (an AI suggestion's, the advisor's) when it has one, and the opening
+// line of a conversation it opens. A typed order's title is only its words cut
+// short, and follows them (runtime/actionEdit.js).
+const editDraftOf = (action) => ({
+    title: hasOwnTitle(action) ? action.title : "",
+    text: action.text || "",
+    chatStarter: action.kind === "chat" ? action.chatStarter || "" : "",
+});
+
+const EDIT_FIELD_STYLE = {
+    background: "var(--oh-ui-overlay-strong, rgba(0,0,0,0.2))",
+    border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.15))",
+    borderRadius: "8px",
+    boxSizing: "border-box",
+    color: "white",
+    fontFamily: "sans-serif",
+    fontSize: "0.82rem",
+    lineHeight: "1.45",
+    outline: "none",
+    padding: "0.5rem 0.65rem",
+    width: "100%",
+};
+
+const EDIT_LABEL_STYLE = { color: "rgba(255,255,255,0.5)", fontSize: "0.66rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" };
+
+const focusField = (event) => {
+    event.target.style.borderColor = "var(--oh-ui-focus, rgba(255,255,255,0.25))";
+};
+const blurField = (event) => {
+    event.target.style.borderColor = "var(--oh-ui-line, rgba(255,255,255,0.15))";
+};
+
+// The order, opened in place to be given other words: Save (or Enter, as in
+// the composer) keeps them in the same order, Cancel (or Esc) leaves it as it
+// was. `onSave(fields)` answers "" when it was kept, or why not.
+const ActionEditor = ({ action, blocked, sharedGame, onSave, onCancel }) => {
+    const [draft, setDraft] = React.useState(() => editDraftOf(action));
+    const [saving, setSaving] = React.useState(false);
+    const [error, setError] = React.useState("");
+    const textRef = React.useRef(null);
+    const isTouch = useTouchPrimary();
+    const original = React.useMemo(() => editDraftOf(action), [action]);
+    const hasTitle = Boolean(original.title);
+    const hasOpening = Boolean(original.chatStarter);
+
+    React.useEffect(() => {
+        const field = textRef.current;
+        if (!field) return;
+        field.focus();
+        const end = field.value.length;
+        field.setSelectionRange?.(end, end);
+    }, []);
+
+    const filled = draft.text.trim() && (!hasTitle || draft.title.trim()) && (!hasOpening || draft.chatStarter.trim());
+    const changed = ["title", "text", "chatStarter"].some((key) => draft[key].trim() !== original[key].trim());
+    const canSave = Boolean(filled) && !saving && !blocked;
+
+    const save = async () => {
+        if (!canSave) return;
+        if (!changed) {
+            onCancel();
+            return;
+        }
+        setSaving(true);
+        setError("");
+        let refusal = "";
+        try {
+            refusal = await onSave({
+                text: draft.text.trim(),
+                ...(hasTitle ? { title: draft.title.trim() } : {}),
+                ...(hasOpening ? { chatStarter: draft.chatStarter.trim() } : {}),
+            });
+        } catch (saveError) {
+            console.error("Failed to edit the order:", saveError);
+            refusal = ORDER_NOT_CHANGED;
+        } finally {
+            setSaving(false);
+        }
+        if (refusal) setError(refusal);
+        else onCancel();
+    };
+
+    const cancel = () => {
+        setError("");
+        onCancel();
+    };
+
+    // Enter saves as it sends in the composer (Shift+Enter, or any Enter on a
+    // touch screen, is a new line); a one-line field has no new line to make.
+    const handleKeyDown = (event, { multiline = true } = {}) => {
+        if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            cancel();
+            return;
+        }
+        if (isComposerSendKey(event, { touch: multiline && isTouch })) {
+            event.preventDefault();
+            void save();
+        }
+    };
+
+    const field = (key, label, { multiline = true, rows = 3, maxLength, ref } = {}) => {
+        const Tag = multiline ? "textarea" : "input";
+        return (
+            <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            {(hasTitle || hasOpening) && <span style={EDIT_LABEL_STYLE}>{label}</span>}
+            <Tag
+            ref={ref}
+            className={multiline ? "actions-composer" : undefined}
+            aria-label={label}
+            {...(multiline ? { rows, enterKeyHint: "enter" } : { type: "text", enterKeyHint: "done" })}
+            maxLength={maxLength}
+            value={draft[key]}
+            disabled={saving}
+            onChange={(event) => setDraft((current) => ({ ...current, [key]: event.target.value }))}
+            onKeyDown={(event) => handleKeyDown(event, { multiline })}
+            onFocus={focusField}
+            onBlur={blurField}
+            style={{ ...EDIT_FIELD_STYLE, ...(multiline ? { minHeight: "3rem", resize: "vertical" } : {}) }}
+            />
+            </label>
+        );
+    };
+
+    const note = error || blocked;
+    return (
+        <div
+        data-action-editing="true"
+        style={{
+            background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.08))",
+            border: "1px solid var(--oh-ui-accent, rgba(255,255,255,0.18))",
+            borderRadius: "10px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.45rem",
+            padding: "0.6rem 0.75rem",
+        }}
+        >
+        {hasTitle && field("title", "Title", { multiline: false, maxLength: sharedGame ? ORDER_TITLE_MAX : undefined })}
+        {field("text", "Order", { ref: textRef, maxLength: sharedGame ? ORDER_MAX_CHARS : undefined })}
+        {hasOpening && field("chatStarter", "Opening line", { rows: 2, maxLength: sharedGame ? ORDER_MAX_CHARS : undefined })}
+        <div style={{ alignItems: "center", display: "flex", gap: "0.4rem", justifyContent: "flex-end" }}>
+        <button type="button" className="oh-tap-row" onClick={cancel} style={goalButtonStyle(true)}>
+        Cancel
+        </button>
+        <button type="button" className="oh-tap-row" disabled={!canSave} onClick={() => void save()} style={goalButtonStyle(canSave, "primary")}>
+        {saving ? "Saving…" : "Save"}
+        </button>
+        </div>
+        {note && (
+            <span role="status" style={{ color: "rgba(253,186,116,0.9)", fontSize: "0.72rem", lineHeight: "1.45" }}>{note}</span>
+        )}
+        </div>
+    );
+};
+
 // locked: an order that moved a unit on the map (unitRevert) cannot be deleted
 // while a turn runs, because deleting it moves the unit back, and the turn's
 // world write would put the unit where it was. Other orders can: the turn reads
 // the queue again before it writes it.
-const ActionItem = ({ action, onDelete, locked = false }) => {
+// `editBlock`: why the order cannot be edited now (runtime/actionEdit.js
+// orderEditBlock), or "". Editing it changes the same order, by its id, in its
+// place (`onEdit(fields)`, which answers "" or why it was not kept).
+// `refusal`: { fate, note } when the last time skip wrote an event for this
+// order and the engine kept it off the timeline (overdueOrders.js).
+const ActionItem = ({ action, onDelete, onEdit, editBlock = "", sharedGame = false, locked = false, refusal = null }) => {
     const [hovered, setHovered] = React.useState(false);
-    // The ✕ appears with the pointer over the row. Nothing hovers on a touch
-    // screen, so there it is always shown, or an order could never be deleted.
+    const [editing, setEditing] = React.useState(false);
+    // The ✎ and ✕ appear with the pointer over the row. Nothing hovers on a
+    // touch screen, so there they are always shown, or an order could never
+    // be edited or deleted.
     const canHover = useCanHover();
-    const showDelete = hovered || !canHover;
+    const showControls = hovered || !canHover;
     const normalized = normalizeActionEntry(action);
 
     if (!normalized) {
         return null;
     }
 
+    if (editing) {
+        return (
+            <ActionEditor
+            action={normalized}
+            blocked={editBlock}
+            sharedGame={sharedGame}
+            onSave={onEdit}
+            onCancel={() => setEditing(false)}
+            />
+        );
+    }
+
     const label = buildActionDisplayText(normalized);
     const showTitle = normalized.title && normalized.title !== label;
+    const controlStyle = {
+        alignItems: "center",
+        border: "none",
+        borderRadius: "6px",
+        display: "flex",
+        flexShrink: 0,
+        lineHeight: 1,
+        opacity: showControls ? 1 : 0,
+        pointerEvents: showControls ? "auto" : "none",
+        transition: "opacity 0.15s, color 0.15s, background 0.15s",
+    };
 
     return (
         <div
@@ -239,7 +452,36 @@ const ActionItem = ({ action, onDelete, locked = false }) => {
         >
         {normalized.kind} • {normalized.status}
         </div>
+        {/* Carried over unanswered (AI/playerFocus.js settleOrders): said, with
+            why its event was refused when it was, and the ✕ withdraws it. */}
+        {normalized.overdue && (
+            <div style={{ color: "rgba(253,186,116,0.9)", fontSize: "0.7rem", lineHeight: "1.45", marginTop: "0.25rem" }}>
+            <div>Overdue: the last time skip gave this order no outcome. The next one answers it first.</div>
+            {refusal?.note && <div>{`${filedFateLabel(refusal.fate)}: ${refusal.note}`}</div>}
+            </div>
+        )}
         </div>
+        <div style={{ alignItems: "center", display: "flex", flexShrink: 0, gap: "0.15rem" }}>
+        <button
+        type="button"
+        className="oh-tap"
+        data-action-edit="true"
+        onClick={() => {
+            if (!editBlock) setEditing(true);
+        }}
+        disabled={Boolean(editBlock)}
+        title={editBlock || "Edit action"}
+        aria-label="Edit action"
+        style={{
+            ...controlStyle,
+            background: hovered && !editBlock ? "var(--oh-ui-hover, rgba(255,255,255,0.08))" : "none",
+            color: editBlock ? "rgba(255,255,255,0.18)" : hovered ? "var(--oh-ui-accent, #2bc1f3)" : "rgba(255,255,255,0.6)",
+            cursor: editBlock ? "not-allowed" : "pointer",
+            padding: "0.22rem 0.3rem",
+        }}
+        >
+        <PencilIcon />
+        </button>
         <button
         type="button"
         className="oh-tap"
@@ -248,24 +490,17 @@ const ActionItem = ({ action, onDelete, locked = false }) => {
         title={locked ? TURN_RUNNING_NOTE : "Delete action"}
         aria-label="Delete action"
         style={{
-            alignItems: "center",
+            ...controlStyle,
             background: hovered && !locked ? "rgba(239,68,68,0.1)" : "none",
-            border: "none",
-            borderRadius: "6px",
             color: locked ? "rgba(255,255,255,0.18)" : hovered ? "rgba(239,68,68,0.95)" : "rgba(239,68,68,0.8)",
             cursor: locked ? "not-allowed" : "pointer",
-            display: "flex",
-            flexShrink: 0,
             fontSize: "1rem",
-            lineHeight: 1,
-            opacity: showDelete ? 1 : 0,
             padding: "0.18rem 0.3rem",
-            pointerEvents: showDelete ? "auto" : "none",
-            transition: "opacity 0.15s, color 0.15s, background 0.15s",
         }}
         >
-        {"\u2715"}
+        {"✕"}
         </button>
+        </div>
         </div>
     );
 };
@@ -325,6 +560,9 @@ const SuggestionCard = ({ topic, onQueue, queuedIds }) => (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
     {topic.actions.map((action) => {
         const isQueued = queuedIds?.has(action.id);
+        // An order that is one sentence (an advisor's, actionSuggestions.js
+        // seatAdviceTopic) is its own title: said once.
+        const title = action.title && action.title !== action.text ? action.title : "";
         return (
             <button
             key={action.id}
@@ -343,9 +581,11 @@ const SuggestionCard = ({ topic, onQueue, queuedIds }) => (
                 textAlign: "left",
             }}
             >
-            <div style={{ fontSize: "0.76rem", fontWeight: 700 }}>
-            {isQueued ? `✓ Queued — ${action.title}` : action.title}
-            </div>
+            {(title || isQueued) && (
+                <div style={{ fontSize: "0.76rem", fontWeight: 700 }}>
+                {isQueued ? (title ? `✓ Queued — ${title}` : "✓ Queued") : title}
+                </div>
+            )}
             <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.74rem", lineHeight: "1.45", marginTop: "0.18rem" }}>
             {action.text}
             </div>
@@ -502,9 +742,14 @@ const StandingGoal = ({ country, round, gameDate, isOpen, open = true, onToggle 
         setError("");
         try {
             // In a shared game the host keeps the goal: it is asked to.
+            // Its refusal is said here in the host's words: it was replaced by
+            // "could not be saved. Try again." whatever the host said.
             if (inSharedGame()) {
                 const answer = await requestFromHost("goal", { text: String(text || "").trim() });
-                if (!answer.ok) throw new Error(answer.error);
+                if (!answer.ok) {
+                    setError(answer.error || "The goal could not be saved. Try again.");
+                    return;
+                }
                 setEditing(false);
                 return;
             }
@@ -829,6 +1074,17 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     // The suggestions the game saved on the world (a time skip clears them), so
     // reopening the panel shows them again without spending a request.
     const suggestions = useRuntimeState("world", selectSavedSuggestions);
+    // And in a shared game, the orders the round's own time skip brought from
+    // this player's advisor, which cost nothing (actionSuggestions.js
+    // seatAdviceTopic): first, as one more card.
+    const sharedGame = inSharedGame();
+    const adviceKey = useRuntimeState(
+        "world",
+        (world) => (sharedGame ? seatAdviceKey(world, game.country, game.round) : "null"),
+        `${sharedGame}|${game.country}|${game.round}`,
+    );
+    const advice = React.useMemo(() => JSON.parse(adviceKey || "null"), [adviceKey]);
+    const shownSuggestions = React.useMemo(() => (advice ? [advice, ...suggestions] : suggestions), [advice, suggestions]);
     const [hasRequestedSuggestions, setHasRequestedSuggestions] = React.useState(false);
     // Why the last press of the suggestions button got no list at all, and, when
     // it got the canned one instead, what the AI did (for the report button).
@@ -838,6 +1094,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     const [improveFailure, setImproveFailure] = React.useState(null);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
     const turnRunning = useTurnRunning(isOpen);
+    // The host's round's phase in a shared game, which says whether an order
+    // can be edited now (runtime/actionEdit.js orderEditBlock).
+    const roundPhase = React.useSyncExternalStore(subscribeSharedGameRole, sharedRoundPhase, sharedRoundPhase);
     // Why the last change to the queue was not saved, until one is.
     const [saveError, setSaveError] = React.useState("");
     const [isImproving, setIsImproving] = React.useState(false);
@@ -852,7 +1111,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     React.useEffect(() => {
         writeGoalOpen(browserStorage(), layout.goalOpen);
     }, [layout.goalOpen]);
-    const showSuggested = hasRequestedSuggestions || isSuggesting || suggestions.length > 0;
+    const showSuggested = hasRequestedSuggestions || isSuggesting || shownSuggestions.length > 0;
     // The height the player dragged the panel to (null: the default), kept too.
     const panelRef = React.useRef(null);
     const [panelHeight, setPanelHeight] = React.useState(() => readPanelHeight(browserStorage()));
@@ -884,7 +1143,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         // its own drawer) used to be invisible here until the panel was closed and
         // reopened. The store publishes those writes. Signature-gated so a
         // republish with no real change doesn't reset hover state on every row.
-        const actionsSignature = (list) => list.map((a) => `${a.id}:${a.title}:${a.text}:${a.status}`).join("|");
+        // (Overdue too: a skip that answers an order leaves the rest as they
+        // were in every other way, and the mark is what changed.)
+        // (And an opening line, which an edit may change alone.)
+        const actionsSignature = (list) => list.map((a) => `${a.id}:${a.title}:${a.text}:${a.chatStarter || ""}:${a.status}:${a.overdue === true ? "overdue" : ""}`).join("|");
         const unsubscribe = subscribeRuntime("actions", (saved) => {
             if (cancelled || !Array.isArray(saved)) return;
             setActions((prev) => (actionsSignature(saved) === actionsSignature(prev) ? prev : saved));
@@ -908,27 +1170,36 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         lastRoundRef.current = game.round;
     }, [isOpen, game.round]);
 
-    // Saves the list and says whether it was saved. The panel shows the new list
-    // only once it is: the time skip reads actions.json, not this panel, so an
-    // order shown as queued but never written would be dropped without a word.
-    // On a failure nothing is put back from this closure, because nothing was
-    // changed: the list on screen is still what the store holds, including
-    // anything the advisor or a unit move wrote meanwhile.
-    const persistActions = async (nextActions, failureNote = ORDER_NOT_SAVED) => {
+    // Makes one change to the stored queue (commitActions) and answers what it
+    // did, or null when it was not made (and why is said). The panel shows the
+    // new list only once it is written: the time skip reads actions.json, not
+    // this panel, so an order shown as queued but never written would be
+    // dropped without a word. Nothing is put back from this closure on a
+    // failure: the change was decided on what is stored, and the panel's list
+    // follows the store.
+    const persistChange = async (change, failureNote = ORDER_NOT_SAVED) => {
+        let result;
         try {
-            await saveActions(nextActions);
+            result = await commitActions(change);
         } catch (error) {
             console.error("Failed to save actions:", error);
             setSaveError(failureNote);
-            return false;
+            return null;
         }
-        setActions(nextActions);
+        if (result.outcome) {
+            setSaveError(result.outcome);
+            return null;
+        }
+        if (result.next) setActions(result.next);
         setSaveError("");
-        return true;
+        return result;
     };
 
     // A card's order already in the queue shows as queued, restored cards too.
     const queuedSuggestionIds = React.useMemo(() => queuedActionIds(actions), [actions]);
+    // Why the last skip's event for an overdue order was refused, by its id.
+    const refusedKey = useRuntimeState("world", refusedOrdersKey);
+    const refusedOrders = React.useMemo(() => JSON.parse(refusedKey || "{}"), [refusedKey]);
 
     const submittedActions = React.useMemo(
         () =>
@@ -958,17 +1229,19 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
             // In a shared game an order is the host's to queue; its answer comes
             // back in the next view.
             if (inSharedGame()) {
-                const answer = await requestFromHost("order", { text: nextAction.text || trimmed });
+                const answer = await requestFromHost("order", orderRequestFor(nextAction, trimmed));
+                // Refused: the order stays in the box, and the host's reason is said.
                 if (!answer.ok) {
-                    console.warn("[actions] the host refused the order:", answer.error);
+                    setSaveError(answer.error || ORDER_NOT_SAVED);
                     return;
                 }
+                setSaveError("");
                 logDebugEvent("action", `Order sent to the host: ${nextAction.title || nextAction.text || "(untitled)"}`);
                 setInputValue("");
                 return;
             }
             // Not saved: the order stays in the box to try again.
-            if (!(await persistActions([...actions, nextAction]))) return;
+            if (!(await persistChange((stored) => queueOrderIn(stored, nextAction)))) return;
             // What the player told their country to do is half of "the series of
             // events they did" — a turn that goes wrong usually goes wrong
             // BECAUSE of an order, and the diagnostics log is unreadable without
@@ -1023,16 +1296,25 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     };
 
     const handleDelete = async (index) => {
-        const removed = actions[index];
+        let removed = actions[index];
         if (inSharedGame()) {
-            await requestFromHost("unorder", { order: String(removed?.id || "") });
+            const answer = await requestFromHost("unorder", { order: String(removed?.id || "") });
+            setSaveError(answer.ok ? "" : answer.error || ORDER_NOT_REMOVED);
             return;
         }
         if (movesUnit(removed) && isSimulationBusy()) return;
         // Removed from the queue first: undoing the unit's move while the order
         // stays in actions.json would leave the skip acting on a move the map no
-        // longer shows.
-        if (!(await persistActions(actions.filter((_, actionIndex) => actionIndex !== index), ORDER_NOT_REMOVED))) return;
+        // longer shows. By its id, and decided on the order as stored: whether
+        // its move is undone follows what it is now (a skip may have carried it
+        // out since the panel drew it).
+        const done = await persistChange((stored) => {
+            const taken = removeOrderFrom(stored, removed?.id);
+            if (taken.removed && movesUnit(taken.removed) && isSimulationBusy()) return { next: null, outcome: TURN_RUNNING_NOTE };
+            return taken;
+        }, ORDER_NOT_REMOVED);
+        if (!done) return;
+        removed = done.removed;
         // Deleting a queued troop order also undoes what it did to the map —
         // otherwise a manual move/deploy stays in place while the AI is never
         // told about it (#368). Only planned orders carry a revert; anything
@@ -1049,6 +1331,43 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         });
     };
 
+    // An order given other words, in its place and by its id: never deleted and
+    // queued again, so it keeps its id, its place in the queue and whatever it
+    // carries (a troop order's way back on the map, whom a conversation it opens
+    // invites). In a shared game the host changes it, through the same door an
+    // order is queued by ("reword", as the advisor's approved edits go), and
+    // only while the round takes changes. Answers "" when kept, or why not.
+    const handleEdit = async (id, fields) => {
+        const current = actions.find((action) => String(action?.id || "") === String(id || ""));
+        if (!current) return ORDER_GONE;
+        const shared = inSharedGame();
+        const block = orderEditBlock(current, { turnRunning: isSimulationBusy(), sharedGame: shared, roundPhase: sharedRoundPhase() });
+        if (block) return block;
+        if (shared) {
+            const request = rewordRequestFor(current, fields);
+            if (!request) return ORDER_GONE;
+            const answer = await requestFromHost("reword", request);
+            if (!answer.ok) return answer.error || ORDER_NOT_CHANGED;
+            logDebugEvent("action", `Order edit sent to the host: ${fields?.title || fields?.text || "(untitled)"}`);
+            return "";
+        }
+        // By its id, on the order as stored when it is written, and only if it
+        // may still be changed then (a skip may have begun, or carried it out).
+        let result;
+        try {
+            result = await commitActions((stored) => rewordOrderIn(stored, id, fields, { turnRunning: isSimulationBusy() }));
+        } catch (error) {
+            console.error("Failed to save the edited order:", error);
+            return ORDER_NOT_CHANGED;
+        }
+        if (result.outcome) return result.outcome;
+        if (!result.next) return "";
+        setActions(result.next);
+        setSaveError("");
+        logDebugEvent("action", `Order edited: ${result.edited?.title || result.edited?.text || "(untitled)"}`);
+        return "";
+    };
+
     const handleQueueSuggestion = async (action) => {
         const queuedAction = normalizeSuggestionAction(action);
         if (!queuedAction) {
@@ -1058,9 +1377,12 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         }
 
         if (inSharedGame()) {
-            const answer = await requestFromHost("order", { text: queuedAction.text || queuedAction.title });
+            // By the card's own id, so the card says it is queued and a second
+            // press queues nothing more.
+            const answer = await requestFromHost("order", orderRequestFor(queuedAction));
+            setSaveError(answer.ok ? "" : answer.error || ORDER_NOT_SAVED);
             if (!answer.ok) return;
-        } else if (!(await persistActions([...actions, queuedAction]))) {
+        } else if (!(await persistChange((stored) => queueOrderIn(stored, queuedAction)))) {
             // Not saved: the card stays unqueued, so it can be tried again.
             return;
         }
@@ -1302,7 +1624,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
                 <>
                 {showSuggested && (
                     <div style={sectionStyle(suggestedOpen)}>
-                    <SectionHeader title="Suggested Actions" count={suggestions.length} open={suggestedOpen} onToggle={() => dispatchLayout({ type: "toggle", showSuggested })} />
+                    <SectionHeader title="Suggested Actions" count={shownSuggestions.length} open={suggestedOpen} onToggle={() => dispatchLayout({ type: "toggle", showSuggested })} />
                     {suggestedOpen && (
                         <div style={{ ...listStyle, gap: "0.5rem" }}>
                         {suggestionError && !isSuggesting && (
@@ -1320,7 +1642,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
                             The AI gave no usable suggestions, so these are generic ones.
                             </AiFailureNote>
                         )}
-                        {suggestions.map((topic) => (
+                        {shownSuggestions.map((topic) => (
                             <SuggestionCard key={topic.id} topic={topic} onQueue={handleQueueSuggestion} queuedIds={queuedSuggestionIds} />
                         ))}
                         </div>
@@ -1353,7 +1675,16 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
                         </p>
                     )}
                     {submittedActions.map(({ normalized, originalIndex }) => (
-                        <ActionItem key={normalized.id || originalIndex} action={normalized} locked={turnRunning && movesUnit(normalized)} onDelete={() => handleDelete(originalIndex)} />
+                        <ActionItem
+                        key={normalized.id || originalIndex}
+                        action={normalized}
+                        refusal={refusedOrders[normalized.id] ?? null}
+                        locked={turnRunning && movesUnit(normalized)}
+                        editBlock={orderEditBlock(normalized, { turnRunning, sharedGame, roundPhase })}
+                        sharedGame={sharedGame}
+                        onEdit={(fields) => handleEdit(normalized.id, fields)}
+                        onDelete={() => handleDelete(originalIndex)}
+                        />
                     ))}
                     </div>
                 )}
@@ -1395,6 +1726,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         className="actions-composer"
         // A phone's keyboard has no Shift+Enter to speak of.
         placeholder={isTouch ? "Enter your action…" : "Enter your action…  (Shift+Enter for a new line)"}
+        // In a shared game an order is held to what the host's request takes
+        // (game/messages.js), the box and the request alike; single player's
+        // are free text.
+        maxLength={sharedGame ? ORDER_MAX_CHARS : undefined}
         value={inputValue}
         enterKeyHint="enter"
         onChange={(event) => setInputValue(event.target.value)}
@@ -1451,6 +1786,11 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         >
         {isImproving ? <StopIcon /> : <SparkleIcon />}
         </button>
+        {sharedGame && inputValue.length > ORDER_MAX_CHARS * 0.8 ? (
+            <span aria-live="polite" style={{ bottom: "0.2rem", color: inputValue.length > ORDER_MAX_CHARS ? "#fca5a5" : "rgba(255,255,255,0.45)", fontSize: "0.55rem", pointerEvents: "none", position: "absolute", right: "0.4rem" }}>
+            {`${inputValue.length}/${ORDER_MAX_CHARS}`}
+            </span>
+        ) : null}
         </div>
 
         <button

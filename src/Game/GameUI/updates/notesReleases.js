@@ -35,6 +35,10 @@ export const RELEASES = [
       // Already on the stable channel before 2.5.
       "2026-11-updates-not-imports": "already released",
       "2026-11-install-count": "already released",
+      "2026-11-native-fits-the-window": "native app only",
+      "2026-11-native-sharp-at-any-size": "native app only",
+      "2026-11-native-advisor-contacts": "native app only",
+      "2026-11-native-editor-map": "native app only",
     },
     omit: [
       "Listening in on a region now opens on its country's feed first.",

@@ -13,6 +13,7 @@
 // every branch.
 
 import { nameId } from "../../server/nameId.js";
+import { humanCountriesOf, orderOwner } from "./humanPolities.js";
 
 export const DEFAULT_INTELLIGENCE = 40;
 export const MAX_ACTIVE_SPIES = 3;   // per owner
@@ -248,6 +249,51 @@ export const cancelOperation = (world, id) => {
 // the whole turn. Returns the next spies list plus what was applied and what
 // was skipped, with the reason in the words the UI would have shown.
 export const SPY_OP_KINDS = ["deploy", "recall"];
+
+// Whose intelligence service runs each of a turn's spy orders (its events'
+// impacts.spyOps): the player whose order the event carried out (its
+// impacts.actionIds; whose an order is, orderOwner), or whom its agency names as
+// acting on a player's order (authority "player-order" or "player-commitment");
+// with one player in the game, theirs, as it always was. An event that carries
+// orders of several players, or of none it names, says nobody's service: its
+// spy orders are nobody's to run. In a shared game every one was run for the
+// host's service, so a guest's order to plant an agent placed the host's.
+//   events    the turn's events
+//   game      the game: whose an order naming no owner is, and who plays
+//   actions   the orders the turn carried out
+//   players   the countries people play (humanCountriesOf the game, by default)
+// Returns { byService: Map(player -> ops, in order), unowned: how many ops were nobody's }.
+const ACTING_ON_ORDERS = new Set(["player-order", "player-commitment"]);
+export const spyServicesOf = (events, { game = null, actions = [], players = null } = {}) => {
+  const fold = (value) => String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  const people = (Array.isArray(players) ? players : humanCountriesOf(game)).map((name) => String(name ?? "").trim()).filter(Boolean);
+  const personNamed = (name) => people.find((person) => fold(person) === fold(name)) ?? "";
+  const ordersById = new Map((Array.isArray(actions) ? actions : []).map((order) => [String(order?.id ?? "").trim(), order]));
+  const byService = new Map();
+  let unowned = 0;
+  for (const event of Array.isArray(events) ? events : []) {
+    const ops = (Array.isArray(event?.impacts?.spyOps) ? event.impacts.spyOps : []).filter(Boolean);
+    if (!ops.length) continue;
+    const named = new Set();
+    for (const id of Array.isArray(event?.impacts?.actionIds) ? event.impacts.actionIds : []) {
+      const order = ordersById.get(String(id ?? "").trim());
+      const person = order ? personNamed(orderOwner(order, game)) : "";
+      if (person) named.add(person);
+    }
+    const agency = event?.agency;
+    if (agency && ACTING_ON_ORDERS.has(fold(agency.authority))) {
+      const person = personNamed(agency.principal);
+      if (person) named.add(person);
+    }
+    const service = named.size === 1 ? [...named][0] : named.size === 0 && people.length === 1 ? people[0] : "";
+    if (!service) {
+      unowned += ops.length;
+      continue;
+    }
+    byService.set(service, [...(byService.get(service) ?? []), ...ops]);
+  }
+  return { byService, unowned };
+};
 
 // One order as it is STORED on an event. It used to be read straight off the raw
 // event and never normalized, so it did not survive a save: the order applied
@@ -688,6 +734,68 @@ export const normalizeIntercepts = (raw) => {
   return out;
 };
 
+// ONE TABLE PER SPYMASTER. Single player has one spymaster, the game's own
+// country, and its table (above) is the file itself. In a shared game every
+// player's agents report, and what an agent brings back is its owner's alone:
+// each other player's table is kept beside the game country's, under
+// SEAT_INTERCEPTS by country, as world.seatBoards keeps their Projects boards
+// beside world.projects. A reserved member, never a target: it holds no
+// traffic, so normalizeIntercepts leaves it out of a table, and single player's
+// file never has one. The host's projection gives each player its own table as
+// its whole file (multiplayer/host/projection.js): the secret is kept by who
+// is sent what. `gameCountry`: the game's own country, whose table is the top.
+export const SEAT_INTERCEPTS = "@seats";
+const sameSpymaster = (left, right) => String(left ?? "").trim().toLowerCase() === String(right ?? "").trim().toLowerCase();
+const isTable = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const ownTable = (file) => {
+  const { [SEAT_INTERCEPTS]: _seats, ...table } = isTable(file) ? file : {};
+  return table;
+};
+const seatTables = (file) => (isTable(file?.[SEAT_INTERCEPTS]) ? file[SEAT_INTERCEPTS] : {});
+
+// `owner`'s table as the file holds it (normalizeIntercepts reads it, as it
+// read the whole file).
+export const interceptTableOf = (file, owner, { gameCountry = "" } = {}) => {
+  if (!String(owner ?? "").trim() || sameSpymaster(owner, gameCountry)) return ownTable(file);
+  const seats = seatTables(file);
+  const key = Object.keys(seats).find((name) => sameSpymaster(name, owner));
+  return key && isTable(seats[key]) ? seats[key] : {};
+};
+
+// The file with `owner`'s table replaced; every other table as it was.
+export const withInterceptTable = (file, owner, table, { gameCountry = "" } = {}) => {
+  const seats = seatTables(file);
+  const next = ownTable(table);
+  if (!String(owner ?? "").trim() || sameSpymaster(owner, gameCountry)) {
+    return Object.keys(seats).length ? { ...next, [SEAT_INTERCEPTS]: seats } : next;
+  }
+  const others = Object.fromEntries(Object.entries(seats).filter(([name]) => !sameSpymaster(name, owner)));
+  const kept = Object.keys(next).length ? { ...others, [String(owner).trim()]: next } : others;
+  const own = ownTable(file);
+  return Object.keys(kept).length ? { ...own, [SEAT_INTERCEPTS]: kept } : own;
+};
+
+// Every table of the file put through `change` (a table in, a table out; the
+// same table back when nothing changed). The file itself back when none did.
+export const mapInterceptTables = (file, change) => {
+  const own = ownTable(file);
+  const nextOwn = change(own);
+  let changed = nextOwn !== own;
+  const seats = {};
+  for (const [owner, table] of Object.entries(seatTables(file))) {
+    const next = change(isTable(table) ? table : {});
+    if (next !== table) changed = true;
+    if (isTable(next) && Object.keys(next).length) seats[owner] = next;
+  }
+  if (!changed) return file;
+  const base = isTable(nextOwn) ? nextOwn : {};
+  return Object.keys(seats).length ? { ...base, [SEAT_INTERCEPTS]: seats } : base;
+};
+
+// The spymasters of a game: its own country, and in a shared game's engine
+// every other country a person plays (runtime/humanPolities.js).
+export const spymastersOf = (game) => humanCountriesOf(game);
+
 // ---- what the AI is told ------------------------------------------------------------
 
 // The simulator's view: everything, uncensored, both directions. Handed to the
@@ -695,29 +803,51 @@ export const normalizeIntercepts = (raw) => {
 // rival with a live agent acts on what it stole, a planted story is believed.
 // `intercepts` here are already DECRYPTED by the caller (the simulator knows
 // the truth; only the player is kept in the dark).
+// The world's last public expulsions, one line each: a fact every service
+// shares, told once however many services a brief is written for.
 // i18n-ignore: the model's briefing, never shown.
-export const espionageBrief = (world, intercepts, { playerPolity = "", hiddenTargets = [] } = {}) => {
+export const publicExpulsionLines = (world) => normalizeSpies(world?.spies)
+  .filter((spy) => spy.status === "exposed")
+  .slice(-4)
+  .map((spy) => `${spy.target} publicly expelled a ${spy.owner} agent on ${spy.exposedAt || "an earlier date"}.`);
+
+// What the brief says an agent's owner does with what it knows. An owner the AI
+// plays acts on it, which is what the brief is for. An owner a person plays
+// (`people`, a shared game's: every player's service is briefed, so one
+// player's agent sits inside another's country) is the person's to move: the
+// brief once told the model that a player's government "may act on what it
+// knows", and the skip wrote it confronting another with stolen plans its
+// player never ordered. Its knowledge is told, and whose choice it is.
+// i18n-ignore: the model's briefing, never shown.
+const playersChoice = (owner, what) => `${owner} is played by a person: only its player's own orders decide what it does with ${what}.`;
+
+// `people`: the polities people play. `expulsions: false` leaves out the
+// world's public expulsions (publicExpulsionLines), for a caller that tells
+// them once for several services.
+// i18n-ignore: the model's briefing, never shown.
+export const espionageBrief = (world, intercepts, { playerPolity = "", hiddenTargets = [], people = [], expulsions = true } = {}) => {
   const player = String(playerPolity ?? "").trim();
   const spies = normalizeSpies(world?.spies);
   const lines = [];
   const hidden = new Set((Array.isArray(hiddenTargets) ? hiddenTargets : []).map((name) => String(name ?? "").trim().toLowerCase()).filter(Boolean));
+  const persons = new Set((Array.isArray(people) ? people : []).map((name) => String(name ?? "").trim().toLowerCase()).filter(Boolean));
+  const isPerson = (name) => persons.has(String(name ?? "").trim().toLowerCase());
   const mine = spies.filter((spy) => spy.owner === player && isLive(spy) && !hidden.has(spy.target.toLowerCase()));
   const theirs = spies.filter((spy) => spy.target === player && (isLive(spy) || spy.status === "discovered"));
-  const finished = spies.filter((spy) => spy.status === "exposed").slice(-4);
 
   if (mine.length) {
     lines.push(`${player} has agents in: ${mine.map((s) => `${s.target}${s.status === "turned" ? " (TURNED by them — feeding false reports; the player does not know)" : ""}`).join("; ")}.`);
   }
   for (const spy of theirs) {
     if (spy.status === "turned") {
-      lines.push(`${spy.owner}'s agent in ${player} has been turned by ${player}. ${spy.owner} believes the agent is loyal${spy.coverStory ? ` and has been told: "${spy.coverStory}"` : ""}. ${spy.owner} should act on that belief.`);
+      lines.push(`${spy.owner}'s agent in ${player} has been turned by ${player}. ${spy.owner} believes the agent is loyal${spy.coverStory ? ` and has been told: "${spy.coverStory}"` : ""}. ${isPerson(spy.owner) ? playersChoice(spy.owner, "that belief") : `${spy.owner} should act on that belief.`}`);
     } else if (spy.status === "discovered") {
       lines.push(`${player} has caught an agent of ${spy.owner} and has not yet decided what to do with them.`);
     } else {
-      lines.push(`${spy.owner} has a live agent in ${player} and knows ${player}'s private diplomacy and plans. ${spy.owner} may act on what it knows.`);
+      lines.push(`${spy.owner} has a live agent in ${player} and knows ${player}'s private diplomacy and plans. ${isPerson(spy.owner) ? playersChoice(spy.owner, "what it knows") : `${spy.owner} may act on what it knows.`}`);
     }
   }
-  for (const spy of finished) lines.push(`${spy.target} publicly expelled a ${spy.owner} agent on ${spy.exposedAt || "an earlier date"}.`);
+  if (expulsions) lines.push(...publicExpulsionLines(world));
 
   // Targets we HAVE read and can no longer read. Without this the brief simply
   // goes quiet about them, and silence is indistinguishable from "nothing
@@ -737,7 +867,7 @@ export const espionageBrief = (world, intercepts, { playerPolity = "", hiddenTar
     if (!mine.some((s) => s.target === target)) continue;
     for (const exchange of entry.exchanges.slice(0, 3)) {
       const gist = exchange.messages.map((m) => `${m.speaker}: ${m.text}`).join(" / ");
-      lines.push(`${entry.planted ? "PLANTED (false, fed to the player's turned agent)" : "Intercepted"} ${target}↔${exchange.counterpart} on ${exchange.subject}: ${gist.slice(0, 400)}`);
+      lines.push(`${entry.planted ? `PLANTED (false, fed to ${player || "the player"}'s turned agent)` : "Intercepted"} ${target}↔${exchange.counterpart} on ${exchange.subject}: ${gist.slice(0, 400)}`);
     }
   }
   return lines.join("\n");

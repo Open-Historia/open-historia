@@ -10,6 +10,8 @@ import { mergeStockAndDeclaredPolities } from "./countryList.js";
 import { WholeFileSource } from "./wholeFileSource.js";
 import { isNativeBuild } from "./native/bridge.js";
 import { MAP_POLITIES_READY_EVENT, mapIsOpening } from "./mapReadiness.js";
+// What the game reads of a region: one reader with the map's checksum, which a shared game's guests are checked by.
+import { regionFactsOf } from "../../server/regionFacts.js";
 
 // v2: v1 could serve a stale archive forever (no freshness check), which
 // left months-old map data — countries missing their names — in every
@@ -110,6 +112,8 @@ export const JSON_URLS = {
   ownBasemapsData: "",
   world: "",
   intercepts: "",
+  // A shared game's session, the host's engine window's (multiplayer/host/sessionRecord.js).
+  shared: "",
 };
 
 // ESRI / ArcGIS Online basemaps — all public and token-free. `service` is the
@@ -344,6 +348,7 @@ const isMutableRuntimeJsonUrl = (url) =>
   url === JSON_URLS.events ||
   url === JSON_URLS.game ||
   url === JSON_URLS.intercepts ||
+  url === JSON_URLS.shared ||
   url === JSON_URLS.prompts ||
   url === JSON_URLS.snapshots ||
   url === JSON_URLS.snapshotsIndex ||
@@ -666,6 +671,7 @@ export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
   JSON_URLS.ownBasemapsData = withRuntimeToken("/api/runtime/json/ownBasemapsData");
   JSON_URLS.world = withRuntimeToken("/api/runtime/json/world");
   JSON_URLS.intercepts = withRuntimeToken("/api/runtime/json/intercepts");
+  JSON_URLS.shared = withRuntimeToken("/api/runtime/json/shared");
 
   PMTILES_ARCHIVES.cities = buildAbsoluteUrl("/api/runtime/pmtiles/cities");
   PMTILES_ARCHIVES.countries = buildAbsoluteUrl("/api/runtime/pmtiles/countries");
@@ -1697,36 +1703,15 @@ export const loadCountryNames = async ({ force = false } = {}) => {
 // Project a tiny metadata-only catalog while that geometry is in memory so
 // country panels/AI/cheats never reparse it just to learn province names.
 // A regions file's features as the catalog's raw rows (the primers below).
+// Its properties are read as the map's checksum reads them (server/regionFacts.js regionFactsOf), so a guest whose
+// copy the checksum passed reads the same owners, seas and borders as its host.
 const customRegionRawEntries = (geojson) => {
   const rawEntries = [];
   for (const feature of geojson?.features ?? []) {
-    const props = feature?.properties ?? {};
-    // The same id vocabulary the AI's Preview resolver reads from these features
-    // (resolveRegionTransfers in gameplay.js), so an id Preview accepted is never
-    // "missing" from the compact catalog when Apply revalidates it.
-    const rawId = props.id ?? props.GID_1 ?? props.gid_1 ?? props.HASC_1 ?? feature?.id;
-    const id = rawId != null ? String(rawId) : "";
-    if (!id) continue;
-    const centroid = props?.centroid?.coordinates;
-    rawEntries.push({
-      // A drawn region's baked owner is its `owner` property; carrying it as the
-      // catalog's base country lets the prompt tell a real change from the seed.
-      country: props.country ? String(props.country) : props.owner ? String(props.owner) : "",
-      // Political seed owner is distinct from geographic country on historical
-      // maps. Keep the field's presence (including an explicitly unowned "").
-      ...(Object.hasOwn(props, "owner") ? { owner: String(props.owner ?? "") } : {}),
-      countryCode: props.gid0 ? String(props.gid0) : props.GID_0 ? String(props.GID_0) : "",
-      id,
-      name: props.name ?? props.NAME_1 ?? props.name_1 ?? id,
-      lng: Array.isArray(centroid) ? centroid[0] : props?.lng ?? props?.longitude,
-      lat: Array.isArray(centroid) ? centroid[1] : props?.lat ?? props?.latitude,
-      tags: Array.isArray(props?.tags) ? props.tags : [],
-      type: props?.type ?? "",
-      typeId: props?.typeId ?? "",
-      adjacencies: Array.isArray(props?.adjacencies) ? props.adjacencies : [],
-      bounds: geometryBounds(feature?.geometry),
-      claimants: Array.isArray(props?.claimants) ? props.claimants : [],
-    });
+    const facts = regionFactsOf(feature);
+    if (!facts) continue;
+    const { claimants, ...rest } = facts;
+    rawEntries.push({ ...rest, bounds: geometryBounds(feature?.geometry), claimants });
   }
   return rawEntries;
 };

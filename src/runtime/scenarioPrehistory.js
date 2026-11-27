@@ -52,6 +52,9 @@ export const PREHISTORY_IMPORTANCE = Object.freeze(["minor", "major"]);
 // the world's, before the player has done anything.
 export const PREHISTORY_KINDS = Object.freeze(["world", "diplomacy", "military", "economic", "domestic"]);
 export const MAX_PREHISTORY_EVENTS = 60;
+// Shared aggregate bound for semantic scenario authoring, transport and native compilation.
+// Legacy lifecycle families retain their existing separate bound.
+export const MAX_SEMANTIC_DAY_ONE_FACTS = 256;
 const MAX_UPDATES_PER_FAMILY = 64;
 const LIMITS = { id: 80, date: 24, title: 200, description: 4000, kind: 40, prompt: 2000, summary: 2000, quote: 600, speaker: 120 };
 
@@ -118,7 +121,11 @@ export const normalizeScenarioPrehistory = (value, { draft = false } = {}) => {
   }
   const updates = {};
   for (const family of PREHISTORY_UPDATE_FAMILIES) {
-    updates[family] = array(value.updates?.[family]).filter(isRecord).slice(0, MAX_UPDATES_PER_FAMILY).map(clone);
+    const rows = array(value.updates?.[family]).filter(isRecord);
+    // Keep over-limit semantic drafts visible so validation can refuse the save
+    // rather than hiding excess facts. Saved records retain the bounded format.
+    const limit = family === "canonicalUpdates" ? MAX_SEMANTIC_DAY_ONE_FACTS : MAX_UPDATES_PER_FAMILY;
+    updates[family] = (draft && family === "canonicalUpdates" ? rows : rows.slice(0, limit)).map(clone);
   }
   const generatedAt = clean(value.generatedAt, 40);
   return {

@@ -20,6 +20,19 @@ test("the supplemental Action check is bounded and uses only the player's latest
   assert.equal(ADVISOR_ACTION_COMPLETION_MAX_TOKENS, 1800);
 });
 
+test("native delivery receipts are passed as trusted bounded context to the missing-Action auditor", () => {
+  const question = buildAdvisorActionCompletionQuestion({
+    playerRequest: "Create the French Northern Squadron, and separately draft a naval mobilization Action.",
+    advisorReply: "The squadron is ready for placement.",
+    delivered: { deployments: 1, projects: 0, diplomaticDrafts: 0, institutionDrafts: 0 },
+  });
+  assert.match(question, /NATIVE STRUCTURED DELIVERIES/);
+  assert.match(question, /1 deployment/);
+  assert.match(question, /separately draft a naval mobilization Action/);
+  assert.match(ADVISOR_ACTION_COMPLETION_SYSTEM, /NO_MISSING_ACTION/);
+  assert.match(ADVISOR_ACTION_COMPLETION_SYSTEM, /duplicate/i);
+});
+
 test("the semantic check preserves native review boundaries and a language-neutral verdict", () => {
   assert.match(ADVISOR_ACTION_COMPLETION_SYSTEM, /NO_MISSING_ACTION/);
   assert.match(ADVISOR_ACTION_COMPLETION_SYSTEM, /UNRESOLVED_ACTION/);
@@ -41,4 +54,11 @@ test("the second AI call has no lookups, cannot access campaign-wide prompt cont
   assert.match(body, /languageMode: "none"/);
   assert.match(body, /agentKind: "advisor"/);
   assert.doesNotMatch(body, /buildAdvisorSystemPrompt|mutateActionsState|applyAdvisorAction|lookups:/);
+});
+
+test("public statement receipt reaches the bounded checker without conflating publication and policy execution",()=>{
+  const question=buildAdvisorActionCompletionQuestion({playerRequest:"Prepare a public statement",advisorReply:"Below is my draft for review.",delivered:{publicStatements:1}});
+  assert.match(question,/1 public statement draft/);
+  assert.match(ADVISOR_ACTION_COMPLETION_SYSTEM,/publication button is not an Action Proceed button/);
+  assert.match(ADVISOR_ACTION_COMPLETION_SYSTEM,/Only recover a separately requested formal Action/);
 });

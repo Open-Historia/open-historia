@@ -31,6 +31,11 @@ test("the turn has the country that was attacked ask, in its own voice and the g
   // From the defender, to the ally, folded into a thread already open with it, and the message's id kept on the call.
   assert.match(block, /countries: \[call\.defender\],\n\s+to: call\.ally,\n\s+speaker: call\.defender,/);
   assert.match(block, /openingMessageId: messageId,/);
+  // A defender a person plays speaks for itself: the call is a line between the two that nobody speaks
+  // (sharedLetters.js sharedNoteOf), with the same message id, under which the ally answers.
+  assert.match(block, /const defenderPlayed = people\.length > 1 && people\.some\(\(person\) => regionKey\(person\) === regionKey\(call\.defender\)\);/);
+  assert.match(block, /\? await filed\(sharedNoteOf\(\{\n\s+from: call\.defender,\n\s+to: call\.ally,/);
+  assert.match(block, /message: \{ id: messageId, text: callToArmsBetweenPeople\(/);
   assert.match(block, /entry\?\.id === call\.id \? \{ \.\.\.entry, messageId, askedRound: Number\(nextGame\.round\) \|\| 0 \}/);
   // The words are the packs' (uiString), and they ask: nothing of reputation, war or what an answer does.
   const asks = [...block.matchAll(/uiString\("([^"]+)"/g)].map((match) => match[1]);
@@ -39,6 +44,7 @@ test("the turn has the country that was attacked ask, in its own voice and the g
     "We have been attacked by {{enemy}}. As our ally, we call on you to come to our defence.",
     "We have been attacked. Under {{treaty}}, we call on you to come to our defence.",
     "We have been attacked. As our ally, we call on you to come to our defence.",
+    "A call for help",
     "A call for help",
   ]);
   for (const text of asks) assert.doesNotMatch(text, /reputation|war|break|unanswered/i);

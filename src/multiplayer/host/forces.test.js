@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { MAX_UNITS_PER_PLAYER, deployFor, disbandFor, revertOrderFor } from "./forces.js";
+import { MAX_UNITS_PER_PLAYER, deployFor, deployPlaceRefusal, disbandFor, revertOrderFor } from "./forces.js";
 
 const FRANCE = "France";
 const GERMANY = "Germany";
@@ -15,7 +15,14 @@ const state = () => ({
   actions: [{ id: "a-de", status: "planned", text: "Hold the Rhine", ownerCode: GERMANY }],
 });
 const ask = { type: "armor", strength: 80, name: "2e Division Blindée", composition: "Leclerc tanks", lng: 4.83, lat: 45.76 };
-const ids = (n) => ({ orderId: `order-${n}`, unitId: `unit-${n}`, at: AT, maxOrders: 12 });
+// The host's map, as runtime/warRoomChart.js reads it: France's land east of 0°, the sea west of it, and
+// France's coast within the first 3° of sea.
+const CHART = {
+  holds: (country, lng) => (lng < 0 ? null : country === FRANCE ? lng < 8 : lng >= 8),
+  sea: (lng) => lng < 0,
+  landNear: (country, lng) => country === FRANCE && lng > -3,
+};
+const ids = (n) => ({ orderId: `order-${n}`, unitId: `unit-${n}`, at: AT, maxOrders: 12, chart: CHART });
 
 test("raising a formation puts it on the map as pending, with the request that asks the skip to confirm it", () => {
   const result = deployFor(state(), FRANCE, ask, ids(1));
@@ -38,16 +45,48 @@ test("the rules a deployment is held to: the scenario's types, a place on the ma
   assert.match(deployFor(state(), FRANCE, { ...ask, lat: "north" }, ids(1)).error, /not a place on the map/);
 
   const full = state();
-  full.world.units = Array.from({ length: MAX_UNITS_PER_PLAYER }, (_, n) => unit(`fr-${n}`, FRANCE));
-  assert.match(deployFor(full, FRANCE, ask, ids(1)).error, /at most 15 formations/);
+  full.world.units = Array.from({ length: MAX_UNITS_PER_PLAYER }, (_, n) => unit(`fr-${n}`, FRANCE, { source: "player" }));
+  assert.match(deployFor(full, FRANCE, ask, ids(1)).error, /raises at most 15 formations of their own/);
   // The beaten are not counted, and nor is anyone else's army.
   full.world.units[0].status = "defeated";
-  full.world.units.push(...Array.from({ length: 20 }, (_, n) => unit(`de-${n}`, GERMANY)));
+  full.world.units.push(...Array.from({ length: 20 }, (_, n) => unit(`de-${n}`, GERMANY, { source: "player" })));
   assert.equal(deployFor(full, FRANCE, ask, ids(1)).error, undefined);
+
+  // Only what the player raised counts: a country the scenario gave a large army, and the formations the story
+  // raised for it, could never raise one (the gap audit of 2026-11-18).
+  const armed = state();
+  armed.world.units = [
+    ...Array.from({ length: 30 }, (_, n) => unit(`fr-scenario-${n}`, FRANCE, { source: "scenario" })),
+    ...Array.from({ length: 5 }, (_, n) => unit(`fr-story-${n}`, FRANCE, { source: "ai" })),
+  ];
+  assert.equal(deployFor(armed, FRANCE, ask, ids(1)).error, undefined);
+  armed.world.units.push(...Array.from({ length: MAX_UNITS_PER_PLAYER }, (_, n) => unit(`fr-raised-${n}`, FRANCE, { source: "player", status: n ? "idle" : "pending" })));
+  assert.match(deployFor(armed, FRANCE, ask, ids(1)).error, /raises at most 15/, "those it raised, pending or confirmed, do");
 
   const busy = state();
   busy.actions = Array.from({ length: 12 }, (_, n) => ({ id: `a-${n}`, status: "planned", text: "x", ownerCode: FRANCE }));
   assert.match(deployFor(busy, FRANCE, ask, ids(1)).error, /At most 12 orders a round/);
+  // Orders the last skip left unanswered (overdue) are not this round's (host/orderCap.js).
+  for (const action of busy.actions.slice(0, 3)) action.overdue = true;
+  assert.equal(deployFor(busy, FRANCE, ask, ids(1)).error, undefined);
+  assert.equal(disbandFor(busy, FRANCE, "fr-1", ids(2)).error, undefined);
+  // But they wait in the round's one request: the whole queue is held to twice a round's (the review of
+  // 2026-11-18, wars 3).
+  const carried = state();
+  carried.actions = Array.from({ length: 24 }, (_, n) => ({ id: `a-${n}`, status: "planned", text: "x", ownerCode: FRANCE, overdue: n < 20 }));
+  assert.match(deployFor(carried, FRANCE, ask, ids(1)).error, /At most 24 of your orders wait at once/);
+  assert.match(disbandFor(carried, FRANCE, "fr-1", ids(2)).error, /At most 24 of your orders wait at once/);
+});
+
+// A deployment anywhere on Earth stood wherever it was put once the skip had not turned it down, another player's
+// capital included (the review of 2026-11-18, wars 11): it is held to the host's map, as a structure moved is.
+test("a formation is raised on land its country holds, or at sea off it, by the host's own map", () => {
+  assert.equal(deployFor(state(), FRANCE, { ...ask, lng: 4.8 }, ids(1)).error, undefined, "its own land");
+  assert.match(deployFor(state(), FRANCE, { ...ask, lng: 13.4, lat: 52.5 }, ids(1)).error, /on land your country holds, or at sea off it/, "another's");
+  assert.equal(deployFor(state(), FRANCE, { ...ask, type: "naval", lng: -2, lat: 47 }, ids(1)).error, undefined, "the sea off its coast");
+  assert.match(deployFor(state(), FRANCE, { ...ask, type: "naval", lng: -30, lat: 40 }, ids(1)).error, /at sea off it/, "the open ocean");
+  assert.match(deployFor(state(), FRANCE, ask, { ...ids(1), chart: null }).error, /could not be read/, "no map, no place");
+  assert.equal(deployPlaceRefusal(GERMANY, 13.4, 52.5, CHART), "");
 });
 
 test("standing down a formation that was only pending withdraws its request too, and asks nothing of the skip", () => {

@@ -17,8 +17,15 @@ test("a player places an agent of its own, which stands on its own board", () =>
   const result = order({ spies: [] }, [], RUSSIA, { op: "deploy", target: ESTONIA });
   assert.equal(result.error, undefined);
   assert.deepEqual(result.world.spies.map((entry) => [entry.owner, entry.target, entry.status, entry.deployedAt]), [[RUSSIA, ESTONIA, "active", "2014-04-01"]]);
-  assert.match(result.world.spySeal, /^[0-9a-f]{64}$/);
+  // Its traffic will be sealed with a seal of its own, never the host's (runtime/spySeal.js sealOf).
+  assert.match(result.world.seatSeals[RUSSIA], /^[0-9a-f]{64}$/);
+  assert.equal(result.world.spySeal, undefined, "the host's seal is not made for another's agent");
   assert.deepEqual(result.board.map((project) => [project.name, project.kind, project.secrecy, project.ownerCode]), [[`Agent in ${ESTONIA}`, "operation", "covert", ""]]);
+  const hosts = order({ spies: [] }, [], LATVIA, { op: "deploy", target: ESTONIA });
+  assert.match(hosts.world.spySeal, /^[0-9a-f]{64}$/, "the host's own agent, the game's own seal");
+  assert.equal(hosts.world.seatSeals, undefined);
+  // A seal once made is kept.
+  assert.equal(order(result.world, result.board, RUSSIA, { op: "deploy", target: LATVIA }).world.seatSeals[RUSSIA], result.world.seatSeals[RUSSIA]);
 });
 
 test("the game's own rules refuse in the game's own words", () => {
@@ -74,4 +81,12 @@ test("a player tasks its own agent: what it collects on, and an operation for th
   assert.deepEqual(ordered.world.spies[0].mission, { kind: "recruit", instructions: "a port engineer", orderedAt: "2014-04-01" });
   const cancelled = order(ordered.world, ordered.board, RUSSIA, { op: "mission", spy: "s-ru", target: "" });
   assert.equal(cancelled.world.spies[0].mission ?? null, null);
+});
+
+test("an agent from before owners were kept never stands on a guest's board", () => {
+  // It is the host seat's: a guest's order put it on the guest's board as the
+  // guest's own operation, and so told the guest of the host's agent.
+  const world = { spies: [spy("spy-old", "", RUSSIA)] };
+  const result = order(world, [], RUSSIA, { op: "deploy", target: ESTONIA });
+  assert.deepEqual(result.board.map((project) => project.name), [`Agent in ${ESTONIA}`]);
 });

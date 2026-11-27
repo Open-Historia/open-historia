@@ -7,7 +7,9 @@
 //   world.puppets     who answers to whom, as the PLAYER may see it (a covert
 //                     arrangement the player has not learned of is not drawn,
 //                     runtime/puppets.js livePuppetsFor)
-//   world.agreements  all eleven types, in force
+//   world.agreements  every type, in force, a group's deals among them
+//                     (runtime/groupParties.js): a group is a party like a
+//                     country, and its area is drawn by its standing too
 //   institutions      a shared security alliance or defence pact, a political
 //                     or economic union (full members only)
 //   world.relations   the bilateral climate, banded by its score exactly as
@@ -30,6 +32,7 @@ export const RELATION_PRECEDENCE = Object.freeze([
   "overlord",
   "puppet",
   "war",
+  "crackdown",
   "ceasefire",
   "alliance",
   "guarantee",
@@ -52,7 +55,7 @@ export const RELATION_PRECEDENCE = Object.freeze([
 // The climate's bands, best first: below every treaty whatever the band.
 export const CLIMATE_BANDS = Object.freeze(["friendly", "cordial", "neutral", "cautious", "strained", "hostile", "rival"]);
 
-// Which category each of the eleven agreement types draws as.
+// Which category each agreement type draws as, a group's deals among them.
 export const AGREEMENT_CATEGORY = Object.freeze({
   alliance: "alliance",
   mutual_defense: "alliance",
@@ -65,6 +68,15 @@ export const AGREEMENT_CATEGORY = Object.freeze({
   friendship_consultation: "friendly",
   trade_economic: "trade",
   other: "agreement",
+  truce: "nonAggression",
+  protection: "agreement",
+  sponsorship: "friendly",
+  safe_passage: "access",
+  smuggling: "trade",
+  amnesty: "peace",
+  hostage_exchange: "agreement",
+  recognition: "friendly",
+  crackdown: "crackdown",
 });
 
 // Which institutions bind their members as a treaty would.

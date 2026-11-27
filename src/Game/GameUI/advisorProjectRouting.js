@@ -4,6 +4,8 @@ import {
   CHIEF_ADVISOR_THREAD,
   advisorRecipientType,
 } from "../../runtime/advisorThreads.js";
+import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { PROJECT_OPS_MAX } from "../../multiplayer/game/messages.js";
 
 // A typed minister contact may author Project operations during a conversation.
 // This is deliberately NOT proof of a political appointment or broader
@@ -23,6 +25,27 @@ export const canAdvisorApplyProjectOps = (threadId, recipient) => (
 // on any entry; the engine runs them (runtime/projectEngine.js), so nothing the
 // advisor writes completes one or moves its progress.
 const CLOSED = new Set(["complete", "failed", "cancelled"]);
+
+// In a shared game the board is the host's to change: what the advisor proposes
+// is worked out on the player's view (for its report) and asked of the host, by
+// the same operations (multiplayer/game/messages.js "projectOps"), never
+// written here. At most PROJECT_OPS_MAX in one request.
+//
+// A refusal is the host's, and is thrown in its words, marked `refusedByHost`:
+// the advisor's screen says it as that (advisor.jsx), not as a reply whose
+// entries "referred to a project that is not on the board", and a group keeps
+// its replies (the review of 2026-11-18, door 6). Resolves how many operations
+// the host took before it refused, when `settle` is asked for.
+export const hostRefusal = (reason) => Object.assign(new Error(reason || "The host did not take that."), { refusedByHost: true });
+const askHostForOps = async (ops, { settle = false } = {}) => {
+  for (let start = 0; start < ops.length; start += PROJECT_OPS_MAX) {
+    const answer = await requestFromHost("projectOps", { ops: ops.slice(start, start + PROJECT_OPS_MAX), by: "advisor" });
+    if (answer?.ok) continue;
+    if (settle) return { taken: start, refusal: answer?.error || "The host did not take that." };
+    throw hostRefusal(answer?.error);
+  }
+  return { taken: ops.length, refusal: "" };
+};
 const projectOutcome = ({ world, proposal, gameDate, round, applyProjectOpsToWorld }) => {
   const before = Array.isArray(world.projects) ? world.projects : [];
   const previousById = new Map(before.map((project) => [project.id, project]));
@@ -51,11 +74,13 @@ export const applyAdvisorProjectProposal = async ({
 } = {}) => {
   if (!Array.isArray(proposal) || proposal.length === 0) return null;
   let items = [];
+  const shared = inSharedGame();
   await mutateWorldState((world) => {
     const result = projectOutcome({ world, proposal, gameDate, round, applyProjectOpsToWorld });
     items = result.changes;
-    return result.changed ? result.nextWorld : null;
+    return result.changed && !shared ? result.nextWorld : null;
   });
+  if (shared && items.length) await askHostForOps(proposal);
   return items.length ? items : null;
 };
 
@@ -63,13 +88,21 @@ export const applyAdvisorProjectProposal = async ({
 // If any native Project operation throws, the single world mutation aborts;
 // no preceding speaker's Projects are committed. Action proposals are NEVER
 // enqueued here and still require each member's player-reviewed Proceed.
+//
+// In a shared game a refusal from the host is no failure of the batch: every
+// minister's reply was paid for on the player's own key, and a throw here lost
+// them all. Each speaker whose changes the host did not take is told to
+// `onRefused(speakerId, reason)`, with nothing of theirs reported as applied,
+// and the replies are kept.
 export const applyAdvisorGroupProjectBatch = async ({
-  entries, gameDate, round, mutateWorldState, applyProjectOpsToWorld,
+  entries, gameDate, round, mutateWorldState, applyProjectOpsToWorld, onRefused = () => {},
 } = {}) => {
   const pending = (Array.isArray(entries) ? entries : []).filter((entry) =>
     Array.isArray(entry.proposal) && entry.proposal.length > 0);
   if (!pending.length) return new Map();
   const changesBySpeaker = new Map();
+  const shared = inSharedGame();
+  let anyChange = false;
   await mutateWorldState((world) => {
     let staged = world;
     let changed = false;
@@ -80,7 +113,26 @@ export const applyAdvisorGroupProjectBatch = async ({
       changesBySpeaker.set(entry.speakerId, result.changes);
       if (result.changed) { staged = result.nextWorld; changed = true; }
     }
-    return changed ? staged : null;
+    anyChange = changed;
+    return changed && !shared ? staged : null;
   });
+  // One request for the whole batch, in the speakers' order, as the one world
+  // mutation above is in single player. What the host refused (and what was to
+  // follow it) is no speaker's change.
+  if (shared && anyChange) {
+    const ops = pending.flatMap((entry) => entry.proposal);
+    const { taken, refusal } = await askHostForOps(ops, { settle: true });
+    if (refusal) {
+      let at = 0;
+      for (const entry of pending) {
+        const end = at + entry.proposal.length;
+        if (end > taken) {
+          changesBySpeaker.set(entry.speakerId, []);
+          onRefused(entry.speakerId, refusal);
+        }
+        at = end;
+      }
+    }
+  }
   return changesBySpeaker;
 };

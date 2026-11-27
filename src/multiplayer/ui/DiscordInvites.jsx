@@ -17,6 +17,7 @@ import React, { useEffect, useState } from "react";
 import { presenceAllowed, presenceAvailable, setDiscordParty } from "../../runtime/discordPresence.js";
 import { enterActiveGameFromOutside } from "../../Game/GameUI/libraryBar.jsx";
 import { joinSharedGame, sharedGameActive, useSharedGame } from "../client/sharedGame.js";
+import { PLAYER_NAME_MAX, cleanPlayerName, rememberPlayerName, rememberedPlayerName } from "../client/playerName.js";
 
 // How often the inbox is read.
 export const INBOX_POLL_MS = 3000;
@@ -31,15 +32,6 @@ export const discordPartyOf = (shared) => {
   return { token: shared.token, players: Math.max(1, players), seats: Math.max(1, total) };
 };
 
-// The name a player joins under: the one last used in the Lobbies tab.
-const NAME_KEY = "oh:mp:name";
-const rememberedName = () => {
-  try {
-    return localStorage.getItem(NAME_KEY) || "Player";
-  } catch {
-    return "Player";
-  }
-};
 
 const glass = {
   background: "var(--oh-ui-overlay-strong, rgba(20,20,23,0.94))",
@@ -74,6 +66,9 @@ export default function DiscordInvites() {
   const [requests, setRequests] = useState([]);
   const [error, setError] = useState("");
   const [joining, setJoining] = useState(false);
+  // The name this player is shown as, asked here too (client/playerName.js):
+  // an invitation joined as the last name used, or "Player", unasked.
+  const [name, setName] = useState(() => rememberedPlayerName());
   const available = presenceAvailable();
   const party = discordPartyOf(shared);
 
@@ -93,6 +88,7 @@ export default function DiscordInvites() {
       if (stopped || !inbox) return;
       if (inbox.join?.token) {
         setError("");
+        setName(rememberedPlayerName());
         setInvite({ token: String(inbox.join.token) });
       }
       setRequests(Array.isArray(inbox.requests) ? inbox.requests : []);
@@ -106,11 +102,12 @@ export default function DiscordInvites() {
   }, [available]);
 
   const join = async () => {
-    if (!invite || joining) return;
+    if (!invite || joining || !cleanPlayerName(name)) return;
     setJoining(true);
     setError("");
     try {
-      await joinSharedGame({ token: invite.token, name: rememberedName() });
+      rememberPlayerName(name);
+      await joinSharedGame({ token: invite.token, name: cleanPlayerName(name) });
       setInvite(null);
       enterActiveGameFromOutside();
     } catch (failure) {
@@ -139,10 +136,24 @@ export default function DiscordInvites() {
         <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.82rem", lineHeight: 1.45, marginBottom: "0.8rem" }}>
           {busy ? <>Leave the shared game you are in first, then join this one.</> : <>You were invited on Discord. You will need the lobby&apos;s scenario in your library.</>}
         </div>
+        {busy ? null : (
+          <label style={{ display: "block", marginBottom: "0.8rem" }}>
+            <span style={{ color: "rgba(255,255,255,0.72)", display: "block", fontSize: "0.72rem", fontWeight: 600, letterSpacing: "0.04em", marginBottom: "0.35rem", textTransform: "uppercase" }}>Your name in the game</span>
+            <input
+              data-no-translate
+              value={name}
+              maxLength={PLAYER_NAME_MAX}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="Pick a name"
+              autoComplete="nickname"
+              style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "9px", boxSizing: "border-box", color: "#f8fafc", fontSize: "0.9rem", outline: "none", padding: "0.6rem 0.75rem", width: "100%" }}
+            />
+          </label>
+        )}
         {error ? <div style={{ color: "#fca5a5", fontSize: "0.8rem", marginBottom: "0.7rem" }}>{error}</div> : null}
         <div style={{ display: "flex", gap: "0.6rem", justifyContent: "flex-end" }}>
           <button type="button" style={button} onClick={() => setInvite(null)}>Not now</button>
-          <button type="button" style={primary} disabled={busy || joining} onClick={join}>{joining ? <>Joining…</> : <>Join</>}</button>
+          <button type="button" style={primary} disabled={busy || joining || !cleanPlayerName(name)} onClick={join}>{joining ? <>Joining…</> : <>Join</>}</button>
         </div>
       </Card>
     );

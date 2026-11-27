@@ -5,6 +5,7 @@
 // model's own. Regions are stored by their map id, which the resolver takes as
 // it is. The model is told what each event carries so its story agrees.
 
+import { describeNativeScriptedOutcomes } from "./scriptedNativeOutcomes.js";
 import { normalizeScriptedImpacts } from "../../../server/scriptedImpacts.js";
 import { SCRIPTED_EVENT, beatIsWritten, ensureScriptedEvents } from "./worldDirection.js";
 
@@ -167,7 +168,7 @@ export const describeScriptedImpacts = (impactsInput) => {
 // written only by the event that names its id (worldDirection.js
 // beatIsWritten), so the model is told that is what was missing.
 export const scriptedBeatWrittenNote = (beat, { fallback = false } = {}) => {
-  const carries = describeScriptedImpacts(scriptedImpactsOf(beat));
+  const carries = [describeScriptedImpacts(scriptedImpactsOf(beat)), describeNativeScriptedOutcomes(beat)].filter(Boolean).join("; ");
   return `The scripted event of ${beat?.date} — "${beat?.title}" — was not in ${fallback ? "the fallback answer" : "your answer (no event named it in scriptedBeat)"}, so the engine wrote it in the author's words, `
     + (carries ? `with the impacts its author attached: ${carries}.` : "with no impacts.");
 };
@@ -219,7 +220,7 @@ export const resolveFallbackScriptedImpacts = async (payload, world, {
 // What the period is told: beside the scripted events, which beats carry what.
 export const buildScriptedImpactsInstruction = (beatsInput) => {
   const rows = array(beatsInput)
-    .map((beat) => ({ beat, line: describeScriptedImpacts(scriptedImpactsOf(beat)) }))
+    .map((beat) => ({ beat, line: [describeScriptedImpacts(scriptedImpactsOf(beat)), describeNativeScriptedOutcomes(beat)].filter(Boolean).join("; ") }))
     .filter((entry) => entry.line)
     .map(({ beat, line }) => `- ${beat.date} — ${text(beat.title) || text(beat.text).slice(0, 80)}: this event carries: ${line}.`);
   if (!rows.length) return "";

@@ -259,6 +259,9 @@ test("what the simulator is told, and what a foreign leader is told", () => {
   assert.match(brief, /Italy has a live agent in France/);
   assert.match(brief, /Poland publicly expelled a France agent on 1938-02-01/);
   assert.match(brief, /PLANTED \(false.*Germany↔Italy on Austria: Germany: Nothing planned\./);
+  // Whose service it was planted on, by name: a programme opened from it is that
+  // service's belief (believedBy), never Germany's real work.
+  assert.match(brief, /PLANTED \(false, fed to France's turned agent\)/);
 
   // Italy, live agent: gets the material, redacted by its clarity against France.
   const italy = foreignAgentBrief(world, "Italy", { playerPolity: P, material: "France plans to garrison the Rhine in May." });

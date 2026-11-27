@@ -116,7 +116,8 @@ test("Cancel cannot remove an already resolved, edited, missing, unit-backed or 
 test("Cancelled creates are not a loophole for forged proposals, shared-game writes or privileged contacts", async () => {
   const ctx = setup();
   await approveAdvisorAction(ctx.api);
-  await assert.rejects(cancelApprovedAdvisorAction({ ...ctx.api, sharedGame: true }), /shared games/i);
+  // In a shared game the queue is the host's alone: with no way to ask it, nothing is written here.
+  await assert.rejects(cancelApprovedAdvisorAction({ ...ctx.api, sharedGame: true }), /shared game's queue could not be reached/i);
   await assert.rejects(cancelApprovedAdvisorAction({ ...ctx.api, proposalId: "proposal-3" }), /missing/i);
   const wrongThread = { ...ctx.api, threadId: "advisor-unavailable" };
   await assert.rejects(cancelApprovedAdvisorAction(wrongThread), /active domestic/i);

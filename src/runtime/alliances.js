@@ -29,11 +29,14 @@
 //                          on a person's behalf. A call left unanswered for
 //                          CALL_STANDS_ROUNDS turns is a treaty broken.
 //
-// A TREATY BROKEN costs the breaker TREATY_BROKEN_REPUTATION of its standing
-// in the world (world.internationalReputation), and the bond is gone: it
-// leaves the agreement (which ends when fewer than two are left in it). A
-// member of an institution that will not fight keeps its seat and pays the
-// same.
+// A TREATY BROKEN: the bond is gone, the breaker leaves the agreement (which
+// ends when fewer than two are left in it), and what the agreement says a
+// breach costs, as the request that made it wrote it, is carried out
+// (Game/AI/warAndPeace.js withTreatyBroken, its onBreak effects); one with
+// none written costs nothing more. A member of an institution that will not
+// fight keeps its seat and loses TREATY_BROKEN_REPUTATION of its standing
+// (world.internationalReputation): an institution's charter has no effects
+// of its own written.
 //
 // Pure, and loads in plain Node.
 

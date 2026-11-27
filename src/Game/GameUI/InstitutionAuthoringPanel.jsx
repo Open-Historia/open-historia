@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { authoringCardStyle, authoringCardRow, authoringCardCopy, authoringTitleStyle, authoringDescriptionStyle, authoringMetaStyle, authoringButtonStyle, authoringInputStyle, authoringOptionStyle, authoringLabelStyle, authoringSectionStyle, authoringShellStyle, authoringHeaderStyle, authoringCloseStyle, authoringEyebrowStyle, authoringHeadingStyle, authoringSubheadingStyle } from "./scenarioAuthoringStyles.js";
 
 import {
   downloadScenarioJsonAsset,
@@ -24,57 +25,15 @@ import {
 import { collectScenarioPoliticalPolities } from "../../runtime/scenarioPolities.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 
-const actionButtonStyle = {
-  alignItems: "center",
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.12)",
-  borderRadius: "9px",
-  color: "rgba(246,246,248,0.94)",
-  cursor: "pointer",
-  display: "inline-flex",
-  fontSize: "0.76rem",
-  fontWeight: 750,
-  gap: "0.35rem",
-  justifyContent: "center",
-  minHeight: "2rem",
-  padding: "0 0.75rem",
-};
+const actionButtonStyle = authoringButtonStyle;
 
-const inputStyle = {
-  background: "rgba(255,255,255,0.045)",
-  border: "1px solid rgba(255,255,255,0.1)",
-  borderRadius: "10px",
-  boxSizing: "border-box",
-  color: "#f8fafc",
-  colorScheme: "dark",
-  fontSize: "0.76rem",
-  minWidth: 0,
-  outline: "none",
-  padding: "0.58rem 0.64rem",
-  width: "100%",
-};
+const inputStyle = { ...authoringInputStyle };
 
-const optionStyle = {
-  backgroundColor: "#1a1b1f",
-  color: "#f8fafc",
-};
+const optionStyle = authoringOptionStyle;
 
-const labelStyle = {
-  color: "rgba(255,255,255,0.58)",
-  display: "block",
-  fontSize: "0.62rem",
-  fontWeight: 800,
-  letterSpacing: "0.055em",
-  marginBottom: "0.3rem",
-  textTransform: "uppercase",
-};
+const labelStyle = authoringLabelStyle;
 
-const sectionStyle = {
-  background: "rgba(255,255,255,0.025)",
-  border: "1px solid rgba(255,255,255,0.075)",
-  borderRadius: "13px",
-  padding: "0.72rem",
-};
+const sectionStyle = authoringSectionStyle;
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
@@ -112,10 +71,10 @@ const InstitutionLogoPreview = ({ draft, previewUrl = "", size = "4.2rem" }) => 
     .slice(0, 4) || "ORG";
 
   return (
-    <div style={{ alignItems: "center", background: "rgba(7,10,18,0.72)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "14px", display: "flex", flex: "0 0 auto", height: size, justifyContent: "center", overflow: "hidden", width: size }}>
+    <div style={{ alignItems: "center", background: "var(--oh-grey-raised)", border: "1px solid var(--oh-grey-border)", borderRadius: "14px", display: "flex", flex: "0 0 auto", height: size, justifyContent: "center", overflow: "hidden", width: size }}>
       {resolved && !failed
         ? <img alt="" aria-hidden="true" onError={() => setFailed(true)} src={resolved} style={{ maxHeight: `calc(${size} - 0.7rem)`, maxWidth: `calc(${size} - 0.7rem)`, objectFit: "contain" }} />
-        : <span style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.78rem", fontWeight: 900, letterSpacing: "0.05em" }}>{initials}</span>}
+        : <span style={{ color: "var(--oh-grey-text)", fontSize: "0.78rem", fontWeight: 900, letterSpacing: "0.05em" }}>{initials}</span>}
     </div>
   );
 };
@@ -369,28 +328,28 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
       }}
       style={{ alignItems: "center", background: "rgba(6,6,7,0.8)", backdropFilter: "blur(14px)", display: "flex", inset: 0, justifyContent: "center", padding: "clamp(0.5rem, 1.8vw, 1.2rem)", position: "fixed", zIndex: 2147483200 }}
     >
-      <div data-institution-authoring-manager="true" style={{ background: "rgba(24,24,27,0.985)", border: "1px solid rgba(255,255,255,0.11)", borderRadius: "20px", boxShadow: "0 24px 70px rgba(0,0,0,0.52)", color: "#fff", display: "flex", flexDirection: "column", maxHeight: "calc(100vh - 1.2rem)", minHeight: "min(44rem, calc(100vh - 1.2rem))", overflow: "hidden", width: "min(82rem, calc(100vw - 1rem))" }}>
-        <header style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.8rem", justifyContent: "space-between", padding: "0.85rem 1rem" }}>
+      <div data-institution-authoring-manager="true" style={{ ...authoringShellStyle }}>
+        <header style={authoringHeaderStyle}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ color: "rgba(255,255,255,0.46)", fontSize: "0.63rem", fontWeight: 850, letterSpacing: "0.08em", textTransform: "uppercase" }}>Scenario authoring</div>
-            <div style={{ fontSize: "1.15rem", fontWeight: 850, letterSpacing: "-0.025em", marginTop: "0.12rem" }}>Institutions</div>
-            <div style={{ color: "rgba(255,255,255,0.46)", fontSize: "0.69rem", marginTop: "0.16rem" }}>{rows.length} institution{rows.length === 1 ? "" : "s"} · {totalMembers} starting membership record{totalMembers === 1 ? "" : "s"}</div>
+            <div style={authoringEyebrowStyle}>Scenario authoring</div>
+            <div style={authoringHeadingStyle}>Institutions</div>
+            <div style={authoringSubheadingStyle}>{rows.length} institution{rows.length === 1 ? "" : "s"} · {totalMembers} starting membership record{totalMembers === 1 ? "" : "s"}</div>
           </div>
-          <button aria-label="Close Institutions manager" className="oh-tap" onClick={closeManager} style={{ ...actionButtonStyle, background: "rgba(255,255,255,0.04)", fontSize: "1rem", minWidth: "2.35rem", padding: 0 }} type="button">×</button>
+          <button aria-label="Close Institutions manager" className="oh-tap" onClick={closeManager} style={authoringCloseStyle} type="button">×</button>
         </header>
 
         <div style={{ display: "grid", flex: 1, gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "minmax(16rem, 0.78fr) minmax(0, 2.22fr)", gridTemplateRows: isMobile ? "minmax(11rem, 16rem) minmax(0, 1fr)" : undefined, minHeight: 0 }}>
-          <aside style={{ borderBottom: isMobile ? "1px solid rgba(255,255,255,0.08)" : undefined, borderRight: isMobile ? undefined : "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", minHeight: 0 }}>
-            <div style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", display: "grid", gap: "0.45rem", padding: "0.72rem" }}>
+          <aside style={{ borderBottom: isMobile ? "1px solid var(--oh-grey-border)" : undefined, borderRight: isMobile ? undefined : "1px solid var(--oh-grey-border)", display: "flex", flexDirection: "column", minHeight: 0 }}>
+            <div style={{ borderBottom: "1px solid var(--oh-grey-border)", display: "grid", gap: "0.45rem", padding: "0.72rem" }}>
               <input aria-label="Search institutions" onChange={(event) => setQuery(event.target.value)} placeholder="Search institutions..." style={inputStyle} value={query} />
               <button onClick={createNew} style={{ ...actionButtonStyle, background: "var(--oh-grey-raised)", borderColor: "var(--oh-grey-border-strong)", width: "100%" }} type="button">+ Create institution</button>
             </div>
             <div style={{ flex: 1, overflowY: "auto", padding: "0.45rem" }}>
               {selectedIsNew && (
-                <button className="oh-tap-row" style={{ alignItems: "center", background: "var(--oh-grey-selected)", border: "1px solid var(--oh-grey-border-strong)", borderRadius: "10px", color: "#fff", cursor: "pointer", display: "flex", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.3rem", padding: "0.55rem 0.6rem", textAlign: "left", width: "100%" }} type="button">
+                <button className="oh-tap-row" style={{ alignItems: "center", background: "var(--oh-grey-selected)", border: "1px solid var(--oh-grey-border-strong)", borderRadius: "10px", color: "var(--oh-grey-text)", cursor: "pointer", display: "flex", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.3rem", padding: "0.55rem 0.6rem", textAlign: "left", width: "100%" }} type="button">
                   <span style={{ minWidth: 0 }}>
                     <span style={{ display: "block", fontSize: "0.76rem", fontWeight: 800 }}>New institution</span>
-                    <span style={{ color: "rgba(255,255,255,0.4)", display: "block", fontSize: "0.59rem", marginTop: "0.12rem" }}>Unsaved draft</span>
+                    <span style={{ color: "var(--oh-grey-muted)", display: "block", fontSize: "0.59rem", marginTop: "0.12rem" }}>Unsaved draft</span>
                   </span>
                   <span style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.24)", borderRadius: 999, color: "#fbbf24", flex: "0 0 auto", fontSize: "0.55rem", fontWeight: 900, padding: "0.1rem 0.35rem" }}>NEW</span>
                 </button>
@@ -403,22 +362,22 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
                     className="oh-tap-row"
                     key={institution.id}
                     onClick={() => chooseInstitution(institution)}
-                    style={{ alignItems: "center", background: selected ? "var(--oh-grey-selected)" : "transparent", border: `1px solid ${selected ? "var(--oh-grey-border-strong)" : "transparent"}`, borderRadius: "10px", color: "#fff", cursor: "pointer", display: "flex", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.22rem", padding: "0.55rem 0.6rem", textAlign: "left", width: "100%" }}
+                    style={{ alignItems: "center", background: selected ? "var(--oh-ui-active, var(--oh-grey-selected))" : "transparent", border: `1px solid ${selected ? "var(--oh-ui-accent, var(--oh-grey-border-strong))" : "transparent"}`, borderRadius: "10px", color: "var(--oh-grey-text)", cursor: "pointer", display: "flex", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.22rem", padding: "0.55rem 0.6rem", textAlign: "left", width: "100%" }}
                     type="button"
                   >
                     <span style={{ minWidth: 0 }}>
                       <span style={{ display: "block", fontSize: "0.76rem", fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{institution.shortName || institution.name}</span>
-                      <span style={{ color: "rgba(255,255,255,0.38)", display: "block", fontSize: "0.59rem", marginTop: "0.12rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{institution.name}</span>
+                      <span style={{ color: "var(--oh-grey-muted)", display: "block", fontSize: "0.59rem", marginTop: "0.12rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{institution.name}</span>
                     </span>
-                    <span style={{ color: "rgba(255,255,255,0.38)", flex: "0 0 auto", fontSize: "0.56rem", fontWeight: 800 }}>{memberCount}</span>
+                    <span style={{ color: "var(--oh-grey-muted)", flex: "0 0 auto", fontSize: "0.56rem", fontWeight: 800 }}>{memberCount}</span>
                   </button>
                 );
-              }) : <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.72rem", padding: "1rem 0.5rem", textAlign: "center" }}>{rows.length ? "No institutions match this search." : "No authored institutions yet."}</div>}
+              }) : <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.72rem", padding: "1rem 0.5rem", textAlign: "center" }}>{rows.length ? "No institutions match this search." : "No authored institutions yet."}</div>}
             </div>
           </aside>
 
           <main style={{ minHeight: 0, overflowY: "auto", padding: "0.85rem 1rem 1rem" }}>
-            <div style={{ alignItems: "flex-start", background: "rgba(24,24,27,0.96)", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", flexWrap: "wrap", gap: "0.75rem", justifyContent: "space-between", margin: "-0.85rem -1rem 0.75rem", padding: "0.85rem 1rem 0.72rem", position: "sticky", top: "-0.85rem", zIndex: 3 }}>
+            <div style={{ alignItems: "flex-start", background: "var(--oh-grey-bg)", borderBottom: "1px solid var(--oh-grey-border)", display: "flex", flexWrap: "wrap", gap: "0.75rem", justifyContent: "space-between", margin: "-0.85rem -1rem 0.75rem", padding: "0.85rem 1rem 0.72rem", position: "sticky", top: "-0.85rem", zIndex: 3 }}>
               <div style={{ alignItems: "center", display: "flex", gap: "0.7rem", minWidth: 0 }}>
                 <InstitutionLogoPreview draft={draft} previewUrl={previewUrl} size="3.4rem" />
                 <div style={{ minWidth: 0 }}>
@@ -426,8 +385,8 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
                     <div style={{ fontSize: "1.05rem", fontWeight: 850, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayName}</div>
                     <span style={{ background: selectedIsNew ? "rgba(245,158,11,0.12)" : "rgba(34,197,94,0.12)", border: `1px solid ${selectedIsNew ? "rgba(245,158,11,0.24)" : "rgba(34,197,94,0.24)"}`, borderRadius: 999, color: selectedIsNew ? "#fbbf24" : "#86efac", fontSize: "0.55rem", fontWeight: 900, padding: "0.11rem 0.36rem", textTransform: "uppercase" }}>{selectedIsNew ? "New draft" : "Scenario canon"}</span>
                   </div>
-                  <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.63rem", marginTop: "0.16rem" }}>{displaySubtitle}{draft.id ? ` · ${draft.id}` : ""}</div>
-                  <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.66rem", lineHeight: 1.4, marginTop: "0.3rem", maxWidth: "48rem" }}>Create institutions that already exist when the scenario begins. Political World may enrich them later while preserving the authored canonical identity, membership and visual assets.</div>
+                  <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.63rem", marginTop: "0.16rem" }}>{displaySubtitle}{draft.id ? ` · ${draft.id}` : ""}</div>
+                  <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.66rem", lineHeight: 1.4, marginTop: "0.3rem", maxWidth: "48rem" }}>Create institutions that already exist when the scenario begins. Political World may enrich them later while preserving the authored canonical identity, membership and visual assets.</div>
                 </div>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
@@ -478,7 +437,7 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
 
               <details open style={sectionStyle}>
                 <summary style={{ cursor: "pointer", fontSize: "0.78rem", fontWeight: 850 }}>Starting membership ({memberNames.length})</summary>
-                <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>Add the polities that belong to this institution when the scenario begins. Existing member roles and statuses are preserved for members that remain in the list.</div>
+                <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>Add the polities that belong to this institution when the scenario begins. Existing member roles and statuses are preserved for members that remain in the list.</div>
                 <div style={{ marginTop: "0.6rem" }}>
                   <PolityMultiPicker allowUnlisted label="Type a polity name" multiple={false} onChange={addMember} polities={pickable} value="" />
                 </div>
@@ -494,16 +453,16 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
                         <span key={name.toLocaleLowerCase()} title={flagged ? "Not a polity in this scenario" : option?.polityKey || name} style={{ alignItems: "center", background: flagged ? "rgba(245,158,11,0.1)" : "rgba(255,255,255,0.05)", border: `1px solid ${flagged ? "rgba(245,158,11,0.38)" : "var(--oh-grey-border)"}`, borderRadius: "999px", color: flagged ? "#fde68a" : undefined, display: "inline-flex", fontSize: "0.66rem", gap: "0.35rem", padding: "0.3rem 0.35rem 0.3rem 0.55rem" }}>
                           {flagged && <span aria-hidden="true">⚠</span>}
                           {label}
-                          <button aria-label={`Remove ${label}`} onClick={() => removeMember(name)} style={{ background: "transparent", border: 0, color: "rgba(255,255,255,0.55)", cursor: "pointer", fontSize: "0.8rem", lineHeight: 1, padding: "0 0.15rem" }} type="button">×</button>
+                          <button aria-label={`Remove ${label}`} onClick={() => removeMember(name)} style={{ background: "transparent", border: 0, color: "var(--oh-grey-muted)", cursor: "pointer", fontSize: "0.8rem", lineHeight: 1, padding: "0 0.15rem" }} type="button">×</button>
                         </span>
                       );
                     })}
                   </div>
                 ) : (
-                  <div style={{ background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(255,255,255,0.08)", borderRadius: "10px", color: "rgba(255,255,255,0.36)", fontSize: "0.66rem", marginTop: "0.6rem", padding: "0.75rem", textAlign: "center" }}>No starting members added.</div>
+                  <div style={{ background: "var(--oh-grey-surface)", border: "1px dashed var(--oh-grey-border)", borderRadius: "10px", color: "var(--oh-grey-muted)", fontSize: "0.66rem", marginTop: "0.6rem", padding: "0.75rem", textAlign: "center" }}>No starting members added.</div>
                 )}
                 <details style={{ marginTop: "0.65rem" }}>
-                  <summary style={{ color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: "0.65rem", fontWeight: 750 }}>Advanced bulk edit member list</summary>
+                  <summary style={{ color: "var(--oh-grey-muted)", cursor: "pointer", fontSize: "0.65rem", fontWeight: 750 }}>Advanced bulk edit member list</summary>
                   <textarea onChange={(event) => edit("membersText", event.target.value)} placeholder="One polity name per line" style={{ ...inputStyle, minHeight: "6rem", marginTop: "0.45rem", resize: "vertical" }} value={draft.membersText} />
                 </details>
                 {unmatched.size > 0 && (
@@ -545,7 +504,7 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
                       <button onClick={() => { setPendingLogoDataUrl(""); setDirty(true); setDraft((current) => ({ ...current, badgeKey: "", logoUrl: "", logoAsset: false })); }} style={actionButtonStyle} type="button">Clear logo</button>
                       <input accept=".gif,.jpeg,.jpg,.png,.webp" onChange={uploadLogo} ref={fileRef} style={{ display: "none" }} type="file" />
                     </div>
-                    <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", lineHeight: 1.45 }}>PNG, JPEG, WebP and GIF uploads up to 256 KB can travel with the scenario. Use an asset path or URL for SVG or larger artwork.</div>
+                    <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.61rem", lineHeight: 1.45 }}>PNG, JPEG, WebP and GIF uploads up to 256 KB can travel with the scenario. Use an asset path or URL for SVG or larger artwork.</div>
                   </div>
                 </div>
               </details>
@@ -561,7 +520,7 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
                     <label style={labelStyle}>Author note</label>
                     <textarea onChange={(event) => edit("note", event.target.value)} placeholder="Optional note for scenario authors" style={{ ...inputStyle, minHeight: "5rem", resize: "vertical" }} value={draft.note} />
                   </div>
-                  {draft.id && <div style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.61rem" }}>Canonical id: <code>{draft.id}</code></div>}
+                  {draft.id && <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.61rem" }}>Canonical id: <code>{draft.id}</code></div>}
                 </div>
               </details>
             </div>
@@ -573,17 +532,17 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
   ) : null;
 
   return (
-    <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.9rem", padding: "0.9rem" }}>
-      <div style={{ alignItems: "flex-start", display: "flex", flexWrap: "wrap", gap: "0.7rem", justifyContent: "space-between" }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.95rem", fontWeight: 800 }}>Institutions</div>
-          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.2rem" }}>Create institutions that already exist when the scenario begins. Political World generation may enrich membership and governance later, but it will preserve the identity and artwork you author here.</div>
-          <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.64rem", marginTop: "0.35rem" }}>{rows.length} institution{rows.length === 1 ? "" : "s"} configured · {totalMembers} starting member{totalMembers === 1 ? "" : "s"}.</div>
+    <div style={authoringCardStyle}>
+      <div style={authoringCardRow}>
+        <div style={authoringCardCopy}>
+          <div style={authoringTitleStyle}>Institutions</div>
+          <div style={authoringDescriptionStyle}>Create institutions that already exist when the scenario begins. Political World generation may enrich membership and governance later, but it will preserve the identity and artwork you author here.</div>
+          <div style={authoringMetaStyle}>{rows.length} institution{rows.length === 1 ? "" : "s"} configured · {totalMembers} starting member{totalMembers === 1 ? "" : "s"}.</div>
         </div>
         <button onClick={() => setManagerOpen(true)} style={{ ...actionButtonStyle, background: "var(--oh-grey-raised)", borderColor: "var(--oh-grey-border-strong)", flex: "0 0 auto" }} type="button">Manage institutions</button>
       </div>
       {!rows.length && (
-        <div style={{ background: "rgba(255,255,255,0.035)", border: "1px solid var(--oh-grey-border)", borderRadius: 12, color: "var(--oh-grey-muted)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.75rem", padding: "0.65rem 0.7rem" }}><strong>No institutions created yet.</strong> Open the manager to author one manually, or leave this empty and let Political World generation establish relevant institutions later.</div>
+        <div style={{ background: "var(--oh-grey-surface)", border: "1px solid var(--oh-grey-border)", borderRadius: 12, color: "var(--oh-grey-muted)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.75rem", padding: "0.65rem 0.7rem" }}><strong>No institutions created yet.</strong> Open the manager to author one manually, or leave this empty and let Political World generation establish relevant institutions later.</div>
       )}
       {manager}
     </div>

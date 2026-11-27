@@ -7,6 +7,8 @@ import assert from "node:assert/strict";
 
 import {
   PROJECT_SORTS,
+  agentKnowledgeChanges,
+  knowledgeOf,
   boardEntriesConcernedByEvent,
   boardPassCarriers,
   materiallyChangedEntryIds,
@@ -21,11 +23,13 @@ import {
   isPlayerProject,
   nextMilestoneOf,
   sortProjects,
-  describeDoubtedForPrompt,
   doubtedAwaitingFreshSource,
+  isBelief,
+  plantedOn,
   spyIntelDoubtOps,
   spyOperationOps,
   spyProvenanceOps,
+  spyVerdictOps,
 } from "./projects.js";
 
 const project = (overrides = {}) => ({
@@ -360,14 +364,12 @@ test("provenance is not restamped, and not applied where there is no agent", () 
   assert.deepEqual(spyProvenanceOps([spy({ status: "exposed" })], [foreignEntry()], { playerPolity: "France" }), []);
 });
 
-test("a suspected agent casts doubt on what it sourced, without saying why", () => {
+test("a suspected agent casts doubt on what it sourced, without saying why, and the programme runs on", () => {
   const linkedForeign = foreignEntry({ linkedSpyIds: ["spy-france-prussia-1"] });
   const [op] = spyIntelDoubtOps([spy({ suspected: true })], [linkedForeign], { playerPolity: "France", date: "1741-06-01" });
-  assert.equal(op.verification, "doubted");
-  assert.equal(op.status, "stalled");
-  assert.match(op.lastUpdate, /no longer trust how we came by this/);
-  // The player is never told the agent was turned; neither is the board.
-  assert.ok(!/turned|double agent|planted/i.test(op.lastUpdate));
+  // The doubt is the player's service's (the panel's Doubtful badge), and all
+  // that is written: Prussia's own programme is Prussia's, which the engine runs.
+  assert.deepEqual(op, { op: "update", id: "f1", name: "Prussian Rocket Programme", verification: "doubted" });
 });
 
 test("doubt is cast once, so the model's verdict is never overwritten", () => {
@@ -418,7 +420,7 @@ test("a doubted entry waits for a FRESH agent, not the one that caused the doubt
   );
   assert.equal(pending.length, 1);
   assert.equal(pending[0].spy.id, "spy-france-prussia-2");
-  assert.match(describeDoubtedForPrompt(pending), /Prussian Rocket Programme.*fresh agent inside Prussia/);
+  assert.equal(pending[0].verdict, "confirmed", "another country's work on the game's board is real");
 });
 
 test("a replacement who has not reported yet cannot settle anything", () => {
@@ -471,7 +473,6 @@ test("a replacement agent who is themselves suspected cannot settle anything", (
 test("an entry nobody doubts is never offered for settling", () => {
   const pending = doubtedAwaitingFreshSource([spy()], [foreignEntry()], { playerPolity: "France", intercepts: filed(false) });
   assert.deepEqual(pending, []);
-  assert.equal(describeDoubtedForPrompt(pending), "");
 });
 
 test("the operation the agent IS is never doubted, only what it reported", () => {
@@ -698,14 +699,104 @@ test("a covert operation an agent IS opens with a plan of its own: set up in a m
   assert.deepEqual(create.plan, { durationDays: 30, monthlyCost: 0, ongoing: true, milestones: [], effects: [], yields: [] });
 });
 
-test("doubt stalls what a compromised agent sourced, as blocked, so the engine stops working it", () => {
+test("doubt never stops another country's work: the doubt is the knower's, the programme its owner's", () => {
+  // Since the engine, another country's entry is that country's own work. A
+  // doubt that stalled it as "blocked" stopped Germany's programme for good
+  // because France's agent fell under suspicion (the review of 2026-11-18).
   const ops = spyIntelDoubtOps(
     [{ id: "spy-1", owner: "France", target: "Germany", status: "active", suspected: true }],
     [project({ id: "g", ownerCode: "Germany", linkedSpyIds: ["spy-1"] })],
     { playerPolity: "France", date: "1938-02-01" },
   );
   assert.equal(ops.length, 1);
-  assert.equal(ops[0].status, "stalled");
-  assert.equal(ops[0].stallReason, "blocked");
   assert.equal(ops[0].verification, "doubted");
+  for (const field of ["status", "stallReason", "lastUpdate"]) assert.equal(field in ops[0], false, `${field} is the owner's`);
+});
+
+test("an entry lent to the board for a skip is its lender's own work, never a file of the board's government", () => {
+  // In a shared game each guest's open work is lent to the game's board for the
+  // skip (seatBoards.js): it is France's own, whatever agents Germany has there.
+  const lent = project({ id: "fr-1", name: "Maginot Extension", ownerCode: "France", lentFrom: "France", secrecy: "covert" });
+  const germans = [{ id: "spy-germany-france-1", owner: "Germany", target: "France", status: "active", suspected: true }];
+  assert.deepEqual(spyProvenanceOps(germans, [lent], { playerPolity: "Germany" }), []);
+  assert.deepEqual(spyIntelDoubtOps(germans, [{ ...lent, linkedSpyIds: ["spy-germany-france-1"] }], { playerPolity: "Germany" }), []);
+});
+
+test("what another government's agents tell it is kept as its own knowledge of the work, never on the work", () => {
+  const work = [
+    { project: project({ id: "fr-1", name: "Maginot Extension", ownerCode: "", secrecy: "covert" }), owner: "France" },
+    { project: project({ id: "it-1", name: "Alpine Wall", ownerCode: "Italy" }), owner: "Italy" },
+    { project: project({ id: "de-1", name: "Autobahn", ownerCode: "" }), owner: "Germany" },
+  ];
+  const live = [{ id: "spy-de-fr", owner: "Germany", target: "France", status: "active" }];
+  const [stamped] = agentKnowledgeChanges(live, work, { knower: "Germany" });
+  assert.equal(stamped.index, 0);
+  assert.equal(stamped.doubted, false);
+  assert.deepEqual(stamped.project.knownBy, { Germany: { spyIds: ["spy-de-fr"] } });
+  assert.deepEqual(knowledgeOf(stamped.project, "germany"), { spyIds: ["spy-de-fr"], verification: "" });
+  for (const field of ["status", "stallReason", "linkedSpyIds", "verification", "lastUpdate", "updatedAt"]) {
+    assert.deepEqual(stamped.project[field], work[0].project[field], `the work's own ${field} is untouched`);
+  }
+  // Its own country's work, a country it has no agent in, nothing.
+  assert.equal(agentKnowledgeChanges(live, work, { knower: "Germany" }).length, 1);
+  // Suspected, in the same pass: doubted, and only for Germany.
+  const [doubted] = agentKnowledgeChanges([{ ...live[0], suspected: true }], work, { knower: "Germany" });
+  assert.equal(doubted.doubted, true);
+  assert.deepEqual(doubted.project.knownBy, { Germany: { spyIds: ["spy-de-fr"], verification: "doubted" } });
+  assert.equal(doubted.project.status, "active");
+  assert.equal(knowledgeOf(doubted.project, "Italy"), null);
+  // Once only: a verdict is never overwritten, and another knower's is its own.
+  const settled = { project: { ...doubted.project, knownBy: { ...doubted.project.knownBy, Germany: { spyIds: ["spy-de-fr"], verification: "confirmed" }, Italy: { spyIds: ["spy-it-fr"] } } }, owner: "France" };
+  assert.deepEqual(agentKnowledgeChanges([{ ...live[0], suspected: true }], [settled], { knower: "Germany" }), []);
+  // Another government's agents are never this one's.
+  assert.deepEqual(agentKnowledgeChanges(live, work, { knower: "Italy" }), []);
+});
+
+// ---- the verdict on a doubt, the engine's ----------------------------------------
+// The model gave it, told to refute an entry "and fail it": since the engine runs
+// every country's work, its "refuted" ended an AI's real programme, and it was asked
+// only of the host's service, so a guest's doubts never got one (the follow-ups of
+// 2026-11-18). A planted programme is a belief now (isBelief), so whether a doubted
+// entry was real is the world's to know.
+
+test("a clean source settles a doubt: real work is confirmed, a belief refuted and closed", () => {
+  const spies = [spy({ status: "recalled", suspected: true }), spy({ id: "spy-france-prussia-2" })];
+  const real = foreignEntry({ linkedSpyIds: ["spy-france-prussia-1"], verification: "doubted" });
+  const phantom = foreignEntry({ id: "f2", name: "Prussian Phantom Fleet", belief: true, linkedSpyIds: ["spy-france-prussia-1"], verification: "doubted" });
+  assert.deepEqual(spyVerdictOps(spies, [real, phantom], { playerPolity: "France", intercepts: filed(false) }), [
+    { op: "update", id: "f1", name: "Prussian Rocket Programme", verification: "confirmed" },
+    { op: "update", id: "f2", name: "Prussian Phantom Fleet", verification: "refuted" },
+    { op: "fail", id: "f2", name: "Prussian Phantom Fleet" },
+  ]);
+  // Nothing settles it until the fresh agent has filed untainted material.
+  assert.deepEqual(spyVerdictOps(spies, [real, phantom], { playerPolity: "France", intercepts: filed(true) }), []);
+  // A file whose work cannot be found is left as it is; another player's lent work is never this board's.
+  assert.deepEqual(spyVerdictOps(spies, [real], { playerPolity: "France", intercepts: filed(false), isWork: () => false }), []);
+  assert.deepEqual(spyVerdictOps(spies, [{ ...real, lentFrom: "Prussia" }], { playerPolity: "France", intercepts: filed(false) }), []);
+  // Another service's agents settle nothing of this one's.
+  assert.deepEqual(spyVerdictOps(spies, [real], { playerPolity: "Austria", intercepts: filed(false) }), []);
+});
+
+test("another government's doubt of a country's work is settled in its own knowledge, confirmed", () => {
+  const work = [{ project: project({ id: "fr-1", name: "Maginot Extension", ownerCode: "", secrecy: "covert", knownBy: { Germany: { spyIds: ["spy-de-fr-1"], verification: "doubted" } } }), owner: "France" }];
+  const spies = [{ id: "spy-de-fr-1", owner: "Germany", target: "France", status: "exposed", turnedAt: "1939-01-01" }, { id: "spy-de-fr-2", owner: "Germany", target: "France", status: "active" }];
+  const table = { France: { gatheredAt: "1939-06-01", round: 4, planted: false, exchanges: [] } };
+  const [settled] = agentKnowledgeChanges(spies, work, { knower: "Germany", intercepts: table });
+  assert.deepEqual(settled.project.knownBy, { Germany: { spyIds: ["spy-de-fr-1"], verification: "confirmed" } });
+  assert.equal(settled.project.status, "active");
+  assert.deepEqual(agentKnowledgeChanges(spies, work, { knower: "Germany", intercepts: { France: { ...table.France, planted: true } } }), []);
+});
+
+test("a belief is one service's, believed through its own turned agent in that country", () => {
+  const turned = spy({ status: "turned", turnedAt: "1741-02-01" });
+  const entry = { name: "Prussian Phantom Fleet", ownerCode: "Prussia", believedBy: "france" };
+  assert.deepEqual(plantedOn(entry, { spies: [turned], players: ["France"] }), { believer: "France", agent: turned });
+  assert.equal(isBelief(entry), true);
+  assert.equal(isBelief({ belief: true }), true);
+  assert.equal(isBelief(foreignEntry()), false);
+  assert.equal(plantedOn(entry, { spies: [spy()], players: ["France"] }), null, "a loyal agent carried nothing planted");
+  assert.notEqual(plantedOn(entry, { spies: [spy({ status: "exposed", turnedAt: "1741-02-01" })], players: ["France"] }), null, "turned, then caught");
+  assert.equal(plantedOn(entry, { spies: [turned], players: ["Austria"] }), null, "an AI country's service keeps no board");
+  assert.equal(plantedOn({ ...entry, ownerCode: "Saxony" }, { spies: [turned], players: ["France"] }), null, "its agent is in Prussia");
+  assert.equal(plantedOn({ ...entry, ownerCode: "France" }, { spies: [turned], players: ["France"] }), null, "never of its own country");
 });

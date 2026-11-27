@@ -142,3 +142,15 @@ export const groupEraseSteps = (setGroups, name, record = null) => ({
   }),
   undo: () => setGroups((registry) => (record && !registry?.[name] ? { ...(registry || {}), [name]: record } : registry)),
 });
+
+
+// Replace an authored canonical row list with a starter preset as ONE native
+// Undo command. The caller supplies a fresh (not shared) preset value.
+// Like addRowStep/removeRowStep, this applies now and returns reversible steps.
+export const replaceRowsStep = (list, setList, replacement) => {
+  if (typeof setList !== "function" || !Array.isArray(replacement)) return null;
+  const previous = Array.isArray(list) ? list : [];
+  const apply = (rows) => () => setList(rows);
+  apply(replacement)();
+  return { undo: apply(previous), redo: apply(replacement) };
+};

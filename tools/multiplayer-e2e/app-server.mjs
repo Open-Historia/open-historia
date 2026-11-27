@@ -6,7 +6,8 @@
 // both servers, read only), and the server leaves the player's Discord alone.
 // "host" stands in for the desktop app's engine-window handle
 // (electron/main.cjs): open() only says yes, and the run opens engine.html in
-// a browser tab itself.
+// a browser tab itself, with the engine's credential the run gives this server
+// (OH_E2E_ENGINE_CREDENTIAL) in its address, as the app gives its window one.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -24,6 +25,7 @@ if (role === "host") {
   let open = false;
   globalThis.__ohSharedGameEngine = {
     status: () => ({ open }),
+    credential: () => (open ? String(process.env.OH_E2E_ENGINE_CREDENTIAL || "") : ""),
     open: async () => {
       open = true;
       console.log("[e2e] engine window requested");

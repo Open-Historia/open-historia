@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { POLITY_TEXT_RENDERER_LAYER_ID } from "./polityTextCustomLayer.js";
 import { createPolityTextRuntime } from "./polityTextSync.js";
+import { polityLabelVisibilityFor } from "../../../runtime/polityLabelVisibility.js";
 
 const fakeMap = () => {
   const layers = new Map();
@@ -217,4 +218,43 @@ test("a removed polity leaves the layer without preparing anything", async () =>
   assert.deepEqual(shown(), { china: "CHINA" });
   assert.deepEqual(preparer.calls.slice(callsBefore).flatMap((call) => call.ids), []);
   runtime.dispose();
+});
+
+test("N029: presentation policy is read lazily by the mounted layer, including changes during placement", async () => {
+  const map = fakeMap();
+  const prep = fakePreparer();
+  const records = [record("bulgaria")];
+  let visibility = polityLabelVisibilityFor(6.2);
+  const created = [];
+  const runtime = createPolityTextRuntime({
+    mapInstance: map,
+    getRecords: () => records,
+    getVisibility: () => visibility,
+    prepareRecords: prep.prepareRecords,
+    createLayer: (args) => {
+      const layer = { ...fakeLayer(args), getVisibility: args.getVisibility };
+      created.push(layer);
+      return layer;
+    },
+    waitForFonts: async () => {},
+    enforceLayerOrder: () => {},
+  });
+  try {
+    runtime.syncRecords();
+    await settle();
+    assert.equal(prep.solves.length, 1);
+    visibility = polityLabelVisibilityFor(9);
+    prep.solves[0].finish();
+    await settle();
+    assert.equal(created.length, 1);
+    assert.deepEqual(created[0].getVisibility(), visibility);
+    visibility = polityLabelVisibilityFor(5);
+    await runtime.syncRecords({ invalidateInFlight: false });
+    assert.equal(prep.calls.length, 1, "presentation setting never re-prepares records");
+    assert.equal(created.length, 1);
+    assert.equal(created[0].replacements, 0);
+    assert.deepEqual(created[0].getVisibility(), visibility);
+  } finally {
+    runtime.dispose();
+  }
 });

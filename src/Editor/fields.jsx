@@ -62,7 +62,7 @@ export const ColorField = ({ value, onChange }) => (
       width: 40,
       height: 26,
       padding: 0,
-      border: "1px solid rgba(255,255,255,0.2)",
+      border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.2))",
       borderRadius: 6,
       background: "transparent",
       cursor: "pointer",

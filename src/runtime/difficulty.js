@@ -368,6 +368,8 @@ export const TASKS_WITHOUT_DIFFICULTY = Object.freeze(new Set([
   "politicalWorldGeneration",
   "politicalWorldVerification",
   "scenarioTranslation",
+  "campaignChronicle",
+  "projectFinanceReview",
 ]));
 
 // A call that does not say which task it is (a connection test) gets nothing.

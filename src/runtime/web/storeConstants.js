@@ -32,7 +32,7 @@ export const STORAGE_JSON_ASSET_KEYS = ["actions", "advisor", "chat", "events"];
 export const CORE_JSON_ASSET_KEYS = ["game", "prompts", "world"];
 export const JSON_ASSET_KEYS = [...STORAGE_JSON_ASSET_KEYS, ...CORE_JSON_ASSET_KEYS];
 export const OPTIONAL_JSON_ASSET_KEYS = ["colors", "flags", "tags", "stats", "institutionLogos"];
-export const RUNTIME_ONLY_JSON_ASSET_KEYS = ["snapshots", "intercepts"];
+export const RUNTIME_ONLY_JSON_ASSET_KEYS = ["snapshots", "intercepts", "shared"];
 export const PMTILES_ASSET_KEYS = ["cities", "countries", "regions"];
 export const SCENARIO_GEOJSON_ASSET_KEYS = ["regionsGeojson", "citiesGeojson", "backgroundData", "ownBasemapsData"];
 // Order matters for assetStatus (Object.keys(UPLOADABLE_SCENARIO_ASSET_FILES)).
@@ -46,7 +46,7 @@ export const UPLOADABLE_GAME_ASSET_KEYS = [COVER_IMAGE_ASSET_KEY];
 
 export const JSON_ASSET_DEFAULTS = {
   actions: [], advisor: [], chat: [], colors: {}, events: [],
-  game: {}, prompts: {}, stats: {}, institutionLogos: {}, world: {}, snapshots: [], intercepts: {},
+  game: {}, prompts: {}, stats: {}, institutionLogos: {}, world: {}, snapshots: [], intercepts: {}, shared: {},
 };
 
 // This project's name, deliberately. The scenario schema below is a frozen wire

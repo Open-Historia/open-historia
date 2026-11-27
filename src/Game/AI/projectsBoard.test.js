@@ -95,7 +95,7 @@ test("the board names the newest fifteen closed entries and counts the rest", as
   const newest = [...closed].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, CLOSED_PROJECTS_LISTED);
   assert.deepEqual(new Set(listed), new Set(newest), "the newest are the ones named");
   assert.match(text, /; and 25 more\./);
-  assert.match(text, /never open these again/);
+  assert.match(text, /Finished or abandoned\. Do not open these again unless the player asks for it or the story calls for it: /);
 });
 
 test("an entry is its name as it is, whatever language the name is in, and a quoted copy of it still finds it", async () => {
@@ -112,4 +112,15 @@ test("a skip's standing rules carry the board's rules, always, folded where its 
   const fs = await import("node:fs");
   const source = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
   assert.ok(source.includes("`${JUMP_PROJECTS_RULES_HEADING}\\n${buildJumpProjectsRules({ folded: Boolean(variables?.foldedSkip) && variables?.foldedBoard !== false })}`,"));
+});
+
+// A belief (runtime/projectEngine.js isBelief) is no country's work, only what the
+// board's service was made to believe by material planted on its turned agent. The
+// world is told so, so that it never tells it as happening; the player's own tasks
+// (the advisor, the planner) see it as their service does.
+test("the world's tasks are told which entries are beliefs; the player's own tasks never", () => {
+  const board = { projects: [project("Dragon eggs", { ownerCode: "House Targaryen", secrecy: "covert", belief: true, linkedSpyIds: ["spy-1"] })] };
+  assert.match(buildProjectsSummaryText(board, GAME, { compact: true, beliefsTold: true }), /"Dragon eggs" · House Targaryen · .* \[covert; NOT REAL: planted on House Stark's service, which believes it\]/);
+  assert.doesNotMatch(buildProjectsSummaryText(board, GAME, { compact: true }), /NOT REAL|planted/);
+  assert.doesNotMatch(buildProjectsSummaryText(board, GAME), /NOT REAL|planted/);
 });

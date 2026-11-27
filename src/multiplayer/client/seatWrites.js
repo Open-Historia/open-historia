@@ -6,15 +6,17 @@
 //
 //   kept on this device   the AI's suggested orders. They are asked with the
 //                         player's own key, are nobody else's business, and are
-//                         for one round: the next round clears them.
-//   asked of the host     the player's own Projects board (request "board"):
-//                         what their advisor put on it, or the board's own
-//                         buttons changed. The host keeps one for each country.
-//
+//                         for one round: the next round clears them. And how
+//                         this screen shows the game: the GDP display currency,
+//                         a field of the game document in single player, which
+//                         in a shared game is this device's own for as long as
+//                         the game is open, whatever the host's says.
 // Everything else in the document stays as the host's view has it. What a
-// player does with forces, agents and their own approximately placed
-// structures never comes this way: those screens ask the host themselves
-// (requests "deploy", "disband", "order", "agent" and "settle").
+// player does to the world never comes this way: each screen asks the host
+// itself, by the request for what it does ("deploy", "disband", "order",
+// "agent", "settle", the Projects board's "projectOps", and the rest). The
+// board came this way, whole, until 2026-11-18: the host kept the page's
+// entries as they came, their progress and what their plans do included.
 //
 // Import-free: plain data in, a plan out, tested under bare node.
 
@@ -23,20 +25,86 @@ const list = (value) => (Array.isArray(value) ? value : []);
 const differs = (left, right) => JSON.stringify(left ?? null) !== JSON.stringify(right ?? null);
 
 export const DEVICE_WORLD_KEYS = Object.freeze(["actionSuggestions"]);
+export const DEVICE_GAME_KEYS = Object.freeze(["economicDisplayCurrency"]);
 
-// What a world the page wants to save would change, against the one it holds:
+// What a document the page wants to save would change of this device's own
+// fields, against the one it holds:
 //   device   fields kept on this device (field → value)
-//   board    the player's Projects board to ask the host to keep, or null
-export const planWorldWrite = (held, wanted) => {
-  const plan = { device: {}, board: null };
+const planDeviceWrite = (keys, held, wanted) => {
+  const plan = { device: {} };
   if (!isRecord(wanted)) return plan;
   const before = isRecord(held) ? held : {};
-  for (const key of DEVICE_WORLD_KEYS) {
+  for (const key of keys) {
     if (key in wanted && differs(before[key], wanted[key])) plan.device[key] = wanted[key];
   }
-  if (Array.isArray(wanted.projects) && differs(list(before.projects), wanted.projects)) plan.board = wanted.projects;
   return plan;
 };
+export const planWorldWrite = (held, wanted) => planDeviceWrite(DEVICE_WORLD_KEYS, held, wanted);
+export const planGameWrite = (held, wanted) => planDeviceWrite(DEVICE_GAME_KEYS, held, wanted);
+
+// WHAT NO DOOR TAKES (the map's rule 6: one door for every change a screen
+// makes). A page saves whole documents, and the host never sees a save: what
+// of it is the player's own is picked out above, and every other change has a
+// request of its own. A change a save holds beyond those is one some screen made
+// that the host never heard: it was answered "saved" and dropped, which is how
+// each such bug was found, by a player. Listed here, by document and field, so
+// it is said (client/sharedGame.js) instead of passing for saved.
+//
+// Two fields are equal when they hold the same JSON, a missing one counting as
+// empty (null, [], {} or ""): a page fills in the empty defaults of fields its
+// view leaves out, and those are no change. In `chat`, a bubble the screen shows
+// of its own (role "error": a refusal, a failed reply) is the screen's, and so
+// is the place in the inbox such a bubble moves its thread to
+// (runtime/chatInboxOrder.js activityOrdinal): the host's view sets the order.
+const empty = (value) => value === undefined || value === null || value === ""
+  || (Array.isArray(value) && value.length === 0)
+  || (isRecord(value) && Object.keys(value).length === 0);
+const same = (left, right) => (empty(left) && empty(right)) || !differs(left, right);
+const ROUTED_KEYS = { world: new Set(DEVICE_WORLD_KEYS), game: new Set(DEVICE_GAME_KEYS) };
+const withoutOwnBubbles = (thread) => (isRecord(thread)
+  ? { ...thread, activityOrdinal: undefined, messages: list(thread.messages).filter((message) => message?.role !== "error") }
+  : thread);
+export const unroutedChanges = (key, held, wanted) => {
+  if (ROUTED_KEYS[key]) {
+    const before = isRecord(held) ? held : {};
+    const after = isRecord(wanted) ? wanted : {};
+    return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+      .filter((field) => !ROUTED_KEYS[key].has(field) && !same(before[field], after[field]))
+      .sort();
+  }
+  if (key === "chat") {
+    const byId = new Map(list(held).map((thread) => [String(thread?.id ?? ""), withoutOwnBubbles(thread)]));
+    return list(wanted)
+      .map(withoutOwnBubbles)
+      .filter((thread) => {
+        const was = byId.get(String(thread?.id ?? ""));
+        return !was || differs(was, thread);
+      })
+      .map((thread) => `thread ${String(thread?.id ?? "?")}`);
+  }
+  return same(held, wanted) ? [] : [key];
+};
+
+// What becomes of a save that holds such a change (client/sharedGame.js): it is
+// never passed for saved. The player is told on the round bar (UNROUTED_NOTICE)
+// and the diagnostics log names the document and fields; and the save is
+// refused outright (409, client/remoteRuntime.js), so the screen that made it
+// fails where its player acted, and every screen is shown the document as the
+// page holds it. The tests that drive the game's writers through a shared page
+// fail with it (client/oneDoor.test.js), and so does the two-browser run.
+//
+// It was refused in development only, and in a player's game answered 200 with
+// the document the page holds (the follow-ups of 2026-11-18, C8): the screen
+// went on as though its change were kept, cleared its form or said "saved",
+// and only the round bar said otherwise. That is the whole class of bug the one
+// door is for (every such writer was found by a player), and it is closed at
+// the one place every save of the game reaches, whatever screen made it, rather
+// than by each of some seventy screens remembering to ask first.
+export const UNROUTED_NOTICE = "A change on this screen did not reach the host, and was not kept.";
+export const unroutedRefusal = (key, fields) => Object.assign(
+  new Error(`In a shared game, changes go to the host as requests; this save of ${key} changed ${list(fields).slice(0, 8).join(", ")}, which no request carries.`),
+  { refusal: true },
+);
 
 // The AI's suggestions are for the round they were asked in.
 export const suggestionsOutlived = (heldRound, viewRound) => {

@@ -344,9 +344,22 @@ test("the war room's orders: only the asker's own air units, at what an enemy ha
   const w = world();
   assert.deepEqual(airUnitsOf(w, "Aland").map((unit) => [unit.id, unit.pending]), [["bombers", false], ["new", true]]);
   assert.deepEqual(strikableStructures(w, "Aland").map((marker) => marker.name), ["Fort Brod"]);
-  const city = ask({ op: "airstrike", unit: "bombers", kind: "city", to: [25, 51], target: "Brod", country: "borduria", people: 50000 });
+  // A city: how many live there is never the asker's to say. Without the map's cities, the place and name asked
+  // and its people unknown (a share of its country's when it flies).
+  const city = ask({ op: "airstrike", unit: "bombers", kind: "city", to: [25, 51], target: "Brod", country: "borduria", people: 50000000 });
   assert.equal(city.error, undefined);
-  assert.deepEqual([city.order.kind, city.order.target, city.order.country, city.order.people, city.order.owner], ["city", "Brod", "Borduria", 50000, "Aland"]);
+  assert.deepEqual([city.order.kind, city.order.target, city.order.country, city.order.people, city.order.owner], ["city", "Brod", "Borduria", 0, "Aland"]);
+  // With them, the map's own city of that name nearest the place asked: where it stands, and its people.
+  const cities = [
+    { name: "Brod", lng: 25.01, lat: 51.002, population: 180000 },
+    { name: "Brod", lng: 31, lat: 51, population: 9 },
+    { name: "Nova", lng: 25, lat: 51, population: 7000000 },
+  ];
+  const mapped = ask({ op: "airstrike", unit: "bombers", kind: "city", to: [25, 51], target: "brod", country: "Borduria", people: 50000000 }, { cities });
+  assert.deepEqual([mapped.order.target, mapped.order.people, mapped.order.lng, mapped.order.lat], ["Brod", 180000, 25.01, 51.002]);
+  // A city the map does not have there is no city to strike.
+  assert.match(ask({ op: "airstrike", unit: "bombers", kind: "city", to: [28, 51], target: "Brod", country: "Borduria" }, { cities }).error, /which city of a country you are at war with/);
+  assert.match(ask({ op: "airstrike", unit: "bombers", kind: "city", to: [25, 51], target: "Atlantis", country: "Borduria" }, { cities }).error, /which city of a country you are at war with/);
   const structure = ask({ op: "airstrike", unit: "bombers", kind: "structure", marker: "m1" });
   assert.deepEqual([structure.order.target, structure.order.country, structure.order.lng], ["Fort Brod", "Borduria", 25]);
   // One strike a unit: a second replaces the first; and it can be called off.
@@ -371,7 +384,7 @@ test("the war room's orders: only the asker's own air units, at what an enemy ha
   const chart = { holds: (country) => country !== "Borduria" };
   assert.match(ask({ op: "airstrike", unit: "bombers", kind: "city", to: [25, 51], target: "Brod", country: "Borduria" }, { chart }).error, /not held by a country you are at war with/);
   // What crosses the wire is an op's own fields and nothing else.
-  assert.deepEqual(cleanAirStrikeOp({ op: "airstrike", unit: "u", kind: "city", to: [1, 2, 3], target: "T", extra: 1, people: -5 }), { op: "airstrike", unit: "u", kind: "city", to: [1, 2], target: "T" });
+  assert.deepEqual(cleanAirStrikeOp({ op: "airstrike", unit: "u", kind: "city", to: [1, 2, 3], target: "T", extra: 1, people: 5000 }), { op: "airstrike", unit: "u", kind: "city", to: [1, 2], target: "T" });
   assert.equal(cleanAirStrikeOp({ op: "bomb" }), null);
 });
 
@@ -388,7 +401,7 @@ test("strikes measure by the map's projection, as the rest of the engine does", 
 // country with no air unit on the map still flies its air arm over its fronts (air.js AIR ARMS), and the war room
 // strikes with it.
 test("a country with no air unit of its own strikes with its front's air arm, and one with an air unit does not", async () => {
-  const { airArmsOf, airArmsForOrders, AIR_ARM_UNIT } = await import("./airStrikeOps.js");
+  const { airArmsOf, airArmsForOrders, airArmId } = await import("./airStrikeOps.js");
   const { battlefieldOn } = await import("./testKit.js");
   const { decodeTroops } = await import("./codec.js");
   const { projectorOf } = await import("./frame.js");
@@ -400,7 +413,7 @@ test("a country with no air unit of its own strikes with its front's air arm, an
   const world = { wars: [WAR], battlefields: [front], units: [] };
   // Its air arm over the front, based among its troops there.
   const [arm] = airUnitsOf(world, "Aland");
-  assert.equal(arm.id, `${AIR_ARM_UNIT}${front.name}`);
+  assert.equal(arm.id, airArmId(front.name, "Aland"));
   assert.equal(arm.name, `${front.name} air arm`);
   assert.equal(arm.strength, 100);
   assert.ok(arm.lng > 20 && arm.lng < 22 && arm.lat > 49 && arm.lat < 51, `${arm.lng}, ${arm.lat}`);
@@ -420,6 +433,54 @@ test("a country with no air unit of its own strikes with its front's air arm, an
   // Nor one whose air arm is worth nothing, nor one not fighting there.
   assert.deepEqual(airArmsOf({ ...world, polityOverrides: { Aland: { name: "Aland", military: { air: 0 } } } }, "Aland"), []);
   assert.deepEqual(airArmsOf(world, "Cisland"), []);
+});
+
+// The gap audit of 2026-11-18: every country's air arm on a front had one id, so the two sides' strikes there
+// took each other's place, and a strike flew with whichever arm came last.
+test("each country on a front strikes with its own air arm: two sides' orders there both stand and both fly", async () => {
+  const { airArmsForOrders } = await import("./airStrikeOps.js");
+  const { battlefieldOn } = await import("./testKit.js");
+  const { decodeTroops } = await import("./codec.js");
+  const { projectorOf } = await import("./frame.js");
+  const legend = { A: "Aland", B: "Borduria", "~": null };
+  const sheet = syntheticMap({ layout: ["ABBBBB", "ABBBBB"], legend, west: 20, north: 51, step: 1, stepLat: 1 });
+  const row = (lng, count) => Array.from({ length: count }, (_, index) => ({ lng, lat: 49 + ((index + 0.5) * 2) / count }));
+  const record = battlefieldOn(sheet, { troops: [row(20.9, 8), row(21.1, 5)], pool: [100, 100] });
+  const [front] = runFronts(frontInput(sheet, { battlefields: [record], days: 2, steering: { even: true, wander: 0 } })).battlefields;
+  let world = { wars: [WAR], battlefields: [front], units: [] };
+  const [aland] = airUnitsOf(world, "Aland");
+  const [borduria] = airUnitsOf(world, "Borduria");
+  assert.notEqual(aland.id, borduria.id, "each country's arm is its own");
+  const { toLngLat } = projectorOf(front.frame);
+  const troopOf = (side) => decodeTroops(front.troops[side]).find((troop) => troop.strength > 0);
+  for (const [arm, player, side] of [[aland, "Aland", 1], [borduria, "Borduria", 0]]) {
+    const done = applyAirStrikeOp(world, { op: "airstrike", unit: arm.id, kind: "troops", to: toLngLat(troopOf(side).x, troopOf(side).y), battlefield: front.name, target: "their line" }, { player, date: "2024-03-01", round: 2 });
+    assert.equal(done.error, undefined, done.error);
+    world = done.world;
+  }
+  assert.deepEqual(world.airStrikeOrders.map((entry) => entry.owner).sort(), ["Aland", "Borduria"]);
+  // Calling one off leaves the other's.
+  const calledOff = applyAirStrikeOp(world, { op: "unairstrike", unit: aland.id }, { player: "Aland" }).world;
+  assert.deepEqual(calledOff.airStrikeOrders.map((entry) => entry.owner), ["Borduria"]);
+  // Both fly, each with its own country's arm.
+  const flown = fly(airArmsForOrders(world), world.airStrikeOrders);
+  assert.deepEqual(flown.strikes.map((strike) => strike.owner).sort(), ["Aland", "Borduria"]);
+});
+
+test("an order kept from before an air arm named its country is its owner's arm's", async () => {
+  const { airArmId } = await import("./airStrikeOps.js");
+  const [kept] = normalizeAirStrikeOrders([order({ unit: "air-arm:Battle of the Line", owner: "Aland" })]);
+  assert.equal(kept.unit, airArmId("Battle of the Line", "Aland"));
+  assert.equal(normalizeAirStrikeOrders([{ ...kept }])[0].unit, kept.unit, "an id as it now is stays");
+});
+
+test("each country keeps its own waiting strikes: seven players' orders never push out each other's", () => {
+  const owners = ["Aland", "Borduria", "Cisland", "Dorland", "Esland", "Ferland", "Gotland"];
+  const many = owners.flatMap((owner) => Array.from({ length: 10 }, (_, at) => order({ id: `${owner}-${at}`, unit: `${owner}-wing-${at}`, owner })));
+  assert.equal(normalizeAirStrikeOrders(many).length, 70);
+  // One country's own bound still holds: its last 12.
+  const one = Array.from({ length: 14 }, (_, at) => order({ id: `a-${at}`, unit: `wing-${at}`, owner: "Aland" }));
+  assert.deepEqual(normalizeAirStrikeOrders(one).map((entry) => entry.id), one.slice(-12).map((entry) => entry.id));
 });
 
 test("the strike radius in the war room's orders: carried by the op, held to its range and steps, none for the default", () => {

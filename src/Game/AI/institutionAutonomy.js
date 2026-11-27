@@ -16,9 +16,16 @@ const recordedBallotPolities = (proposal) => new Set([
   ...values(proposal?.voting?.ballots).map((ballot) => lower(ballot?.polity)),
 ].filter(Boolean));
 
-export const unresolvedNpcVotersForProposal = (institution, proposal, playerCountry = "") => {
+// `people`: the countries humans play (runtime/humanPolities.js
+// humanCountriesWith), or one name. None of them is ever an AI voter: each
+// casts its own ballot. Only the acting seat was spared, so a guest's ballot
+// was cast for it by the AI and the host was told to vote in a guest's call.
+const peopleKeys = (people) => new Set((Array.isArray(people) ? people : [people]).map(lower).filter(Boolean));
+
+export const unresolvedNpcVotersForProposal = (institution, proposal, people = []) => {
   if (lower(proposal?.status) !== "voting" || !proposal?.voting) return [];
   const recorded = recordedBallotPolities(proposal);
+  const humans = peopleKeys(people);
   const activeMembers = new Set(
     list(institution?.members)
       .filter((member) => lower(member?.status || "member") !== "suspended")
@@ -28,21 +35,21 @@ export const unresolvedNpcVotersForProposal = (institution, proposal, playerCoun
   return list(proposal.voting.eligibleVoters)
     .map(clean)
     .filter(Boolean)
-    .filter((polity) => lower(polity) !== lower(playerCountry))
+    .filter((polity) => !humans.has(lower(polity)))
     .filter((polity) => activeMembers.has(lower(polity)))
     .filter((polity) => !recorded.has(lower(polity)))
     // Asked enough times already: no more requests are spent on that seat.
     .filter((polity) => institutionBallotAskCount(proposal, polity) < INSTITUTION_BALLOT_MAX_ASKS);
 };
 
-export const institutionBallotWorkForProposal = (world = {}, institutionId = "", proposalId = "", playerCountry = "", {
+export const institutionBallotWorkForProposal = (world = {}, institutionId = "", proposalId = "", people = [], {
   maxVoters = 48,
 } = {}) => {
   const institution = resolveInstitutionRecord(world, institutionId);
   if (!institution || lower(institution?.status || "active") === "dissolved") return null;
   const proposal = values(institution?.proposals).find((entry) => lower(entry?.id) === lower(proposalId));
   if (!proposal || lower(proposal?.status) !== "voting" || !proposal?.voting) return null;
-  const actors = unresolvedNpcVotersForProposal(institution, proposal, playerCountry).slice(0, maxVoters);
+  const actors = unresolvedNpcVotersForProposal(institution, proposal, people).slice(0, maxVoters);
   if (!actors.length) return null;
   return {
     institutionId: clean(institution.id),
@@ -53,13 +60,17 @@ export const institutionBallotWorkForProposal = (world = {}, institutionId = "",
   };
 };
 
-// Every open ballot in the player's institutions that still has an AI
+// Every open ballot in the people's institutions that still has an AI
 // government to ask, oldest first within each institution, for the ONE
-// post-turn ballot request. A ballot whose remaining voters have all been asked
-// enough drops out, so it can neither cost a request every turn nor hold up the
-// ballots behind it. `maxBallots` bounds the request as a whole; what does not
-// fit waits for the next turn.
-export const collectAutonomousInstitutionBallotWork = (world = {}, playerCountry = "", {
+// post-turn ballot request: every person's, in the one request a skip already
+// makes. After a skip AI members voted only in the host's institutions. A
+// ballot whose remaining voters have all been asked enough drops out, so it
+// can neither cost a request every turn nor hold up the ballots behind it.
+// `maxBallots` bounds the request as a whole; what does not fit waits for the
+// next turn. `people`: the countries humans play (humanCountriesWith), the
+// host's first, or one name. Each item names the `person` whose institution
+// it is, whose seat its business is written for.
+export const collectAutonomousInstitutionBallotWork = (world = {}, people = [], {
   maxInstitutions = 4,
   maxVotersPerInstitution = 32,
   maxBallots = 48,
@@ -67,26 +78,34 @@ export const collectAutonomousInstitutionBallotWork = (world = {}, playerCountry
   const work = [];
   let institutions = 0;
   let ballots = 0;
-  // The player's institutions, and any institution where the player has a
+  const humans = (Array.isArray(people) ? people : [people]).map(clean).filter(Boolean);
+  // Each person's institutions, and any institution where a person has a
   // membership case still open (an applicant is no member yet, but the ballot
-  // on its accession still needs the members' votes).
+  // on its accession still needs the members' votes). The people's are taken
+  // in turn, one of each person's before the second of anyone's, so the
+  // bounded request is not every round the first person's alone.
   const relevant = new Map();
-  for (const entry of institutionsForPolity(world, playerCountry, { includeSuspended: false, includeDissolved: false })) {
-    const institution = entry?.institution || entry;
-    if (institution?.id) relevant.set(clean(institution.id), institution);
+  const memberships = humans.map((person) => institutionsForPolity(world, person, { includeSuspended: false, includeDissolved: false })
+    .map((entry) => entry?.institution || entry)
+    .filter((institution) => institution?.id));
+  for (let index = 0; memberships.some((rows) => index < rows.length); index += 1) {
+    memberships.forEach((rows, at) => {
+      const institution = rows[index];
+      if (institution && !relevant.has(clean(institution.id))) relevant.set(clean(institution.id), { institution, person: humans[at] });
+    });
   }
   const source = world?.institutions?.byId && typeof world.institutions.byId === "object"
     ? world.institutions.byId
     : (world?.institutions && typeof world.institutions === "object" ? world.institutions : {});
   for (const institution of Object.values(source || {})) {
     if (!institution || typeof institution !== "object" || !institution.id) continue;
-    const lifecycleRelevant = values(institution.lifecycleCases).some((entry) => (
-      [entry?.polity, entry?.initiatedBy].some((name) => lower(name) === lower(playerCountry))
+    const person = humans.find((name) => values(institution.lifecycleCases).some((entry) => (
+      [entry?.polity, entry?.initiatedBy].some((party) => lower(party) === lower(name))
       && ["pending", "negotiating", "pending-approval"].includes(lower(entry?.status))
-    ));
-    if (lifecycleRelevant) relevant.set(clean(institution.id), institution);
+    )));
+    if (person) relevant.set(clean(institution.id), { institution, person: relevant.get(clean(institution.id))?.person || person });
   }
-  for (const institution of relevant.values()) {
+  for (const { institution, person } of relevant.values()) {
     if (institutions >= maxInstitutions || ballots >= maxBallots) break;
     if (lower(institution?.status || "active") === "dissolved") continue;
     const votingProposals = values(institution?.proposals)
@@ -96,7 +115,7 @@ export const collectAutonomousInstitutionBallotWork = (world = {}, playerCountry
     for (const proposal of votingProposals) {
       const room = Math.min(maxVotersPerInstitution, maxBallots - ballots);
       if (room <= 0) break;
-      const actors = unresolvedNpcVotersForProposal(institution, proposal, playerCountry).slice(0, room);
+      const actors = unresolvedNpcVotersForProposal(institution, proposal, humans).slice(0, room);
       if (!actors.length) continue;
       work.push({
         institutionId: clean(institution.id),
@@ -105,6 +124,7 @@ export const collectAutonomousInstitutionBallotWork = (world = {}, playerCountry
         proposalTitle: clean(proposal.title || proposal.id),
         proposalSummary: clean(proposal.summary).slice(0, 600),
         actors,
+        person,
       });
       ballots += actors.length;
       counted = true;

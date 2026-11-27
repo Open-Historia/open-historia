@@ -212,3 +212,9 @@ The history shows every entry, whatever the device has seen.
 | Keyframes | `ohUpdRise`, `ohUpdFade`, `ohUpdTurn`, `ohUpdDraw` (a line drawing itself: set `strokeDasharray` and `--oh-upd-length`), `ohUpdPulse`, `ohUpdDrift` (`--oh-upd-from`, `--oh-upd-to`), `ohUpdTwinkle`, `ohUpdStamp`, `ohUpdFall` (`--oh-upd-fall`), `ohUpdSway`, `ohUpdBob` (`--oh-upd-tilt`), `ohUpdRing` and `ohUpdStrike`. |
 
 Inside a theme's SVG, add `className="oh-upd-svg"` so each part turns and scales about its own middle.
+
+## Map Editor V2 major-notice preview (Beta, 2026-11-21)
+
+The Map Editor V2's new staged major entry is `2026-11-map-editor-v2` in `notes.js`, with three illustrated `mapEditorV2` scenes: `draft` (regions, precise borders and the task-first editor), `polities` (country identity, alternative names and starting governments), and `publish` (an independent generated-world scenario, recoverable source map and Save/Apply). The theme is `themes/MapEditorV2.jsx` with independent brass/parchment controls in `themes/mapEditorV2Chrome.js`, registered as a lazy theme in `themes/index.js`. An interactive polity-border preview affects only the explanatory SVG, **never** the user's actual game or scenario. It follows the shared `useStill`/mobile notice layout and existing once-per-device seen logic.
+
+The local desktop QA server at `http://localhost:3001` will show it once on ordinary login to returning clients with an older notice remembered. For unconditional repeated design preview, use `http://localhost:3001/?updateNotice=2026-11-map-editor-v2`: preview mode bypasses history without marking seen. **No change to the platform's website suppression, onboarding, release notice, or persistence behavior.** The dated Beta entry is a **staged preview**, not evidence that N022's M4 gates or an installer are published. Reconfirm the delivery date and shipped feature scope before distributing it.

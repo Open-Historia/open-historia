@@ -22,6 +22,8 @@ const array = (value) => Array.isArray(value) ? value : [];
 const CONDITION_DEFINITIONS = [
   { type: "polity_exists", label: "Polity exists", fields: ["polityId"] },
   { type: "polity_not_exists", label: "Polity does not exist", fields: ["polityId"] },
+  { type: "polity_player_controlled", label: "Polity is player-controlled", fields: ["polityId"] },
+  { type: "polity_not_player_controlled", label: "Polity is not player-controlled", fields: ["polityId"] },
   { type: "political_actor_exists", label: "Polity has Political World data", fields: ["polityId"] },
   { type: "political_actor_not_exists", label: "Polity has no Political World data", fields: ["polityId"] },
   { type: "institution_exists", label: "Institution exists", fields: ["institutionId"] },
@@ -450,6 +452,7 @@ const ScriptedEventsEditor = ({
             idPrefix={`scripted-${event?.id || index}`}
             rows={event?.impactRows}
             polityOptions={polityOptions}
+            citySource={{scenarioId,customCities:Boolean(world?.customCities),renames:world?.cityRenames}}
             styles={styles}
             onChange={(rows) => patchEvent(index, impactPatch(rows))}
             onPickRegions={(rowIndex) => setRegionPicker({ kind: "impact", eventIndex: index, outcomeIndex: null, rowIndex })}
@@ -643,6 +646,7 @@ const ScriptedEventsEditor = ({
                       idPrefix={`scripted-${event?.id || index}-${outcome.id || outcomeIndex}`}
                       rows={outcome?.impactRows}
                       polityOptions={polityOptions}
+                      citySource={{scenarioId,customCities:Boolean(world?.customCities),renames:world?.cityRenames}}
                       styles={styles}
                       onChange={(rows) => patchOutcome(index, outcomeIndex, impactPatch(rows))}
                       onPickRegions={(rowIndex) => setRegionPicker({ kind: "impact", eventIndex: index, outcomeIndex, rowIndex })}

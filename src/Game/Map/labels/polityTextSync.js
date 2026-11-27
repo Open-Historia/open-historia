@@ -134,6 +134,7 @@ export const createPolityTextRuntime = ({
   mapInstance,
   mode = "ptr1",
   getRecords,
+  getVisibility = null,
   fontFamilies,
   textColor,
   haloColor,
@@ -344,6 +345,7 @@ export const createPolityTextRuntime = ({
           runtime.layer = createLayer({
             records: snapshot,
             preparedEntries: nextEntries,
+            getVisibility,
             fontFamilies,
             fillStyle: textColor || "rgba(250, 249, 244, 0.995)",
             haloStyle: haloColor || "rgba(3, 4, 8, 0.98)",

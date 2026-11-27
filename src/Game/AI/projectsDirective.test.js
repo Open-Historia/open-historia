@@ -88,10 +88,36 @@ test("the people who play are named, so the skip opens nothing for them", () => 
 });
 
 test("the rules can stand in the cached opening, the live block pointing at them", () => {
-  const pointed = buildJumpProjectsDirective(BOARD, { folded: true, rulesAbove: true, doubted: "- a doubted entry" });
+  const pointed = buildJumpProjectsDirective(BOARD, { folded: true, rulesAbove: true });
   assert.ok(!pointed.includes(buildJumpProjectsRules({ folded: true })));
   assert.ok(pointed.includes(`Kept as ${JUMP_PROJECTS_RULES_HEADING} above says.`));
-  assert.match(pointed, /These doubted entries can now be settled/);
+});
+
+// A doubted entry is the engine's to settle, for every service (runtime/agentBoards.js):
+// the model was told to refute one "and fail it", which ended an AI country's real work,
+// and only the host's service was ever offered one.
+test("the skip is never asked for a verdict on doubted intelligence, and a planted programme is a belief", () => {
+  const rules = buildJumpProjectsRules({ folded: true });
+  assert.doesNotMatch(rules, /settle[^.]*confirmed|refuted|fail it/);
+  assert.doesNotMatch(buildJumpProjectsDirective(BOARD, { folded: true }), /can now be settled/);
+  assert.match(rules, /"believedBy":"<that service's country>"/);
+  assert.match(rules, /A doubted entry is the game's to settle/);
+});
+
+// The skip's answer is held to what was planted: a belief whose service had no
+// turned agent in that country is left out (never opened as the country's real
+// work, and never a second request), with a player's line that keeps the secret;
+// the Game Master's word opens work, never a belief.
+test("the skip's create of a belief is held to a turned agent of a person's service", () => {
+  const here = path.dirname(url.fileURLToPath(import.meta.url));
+  const gameplay = fs.readFileSync(path.join(here, "gameplay.js"), "utf8").split("\r\n").join("\n");
+  const at = gameplay.indexOf("if (normalizeString(project?.believedBy)) {");
+  assert.ok(at > gameplay.indexOf("export const validateGeneratedWorldChanges") && at < gameplay.indexOf("const refusal = admitWorldCreate(project);"), "checked before the world's caps");
+  const check = gameplay.slice(at, gameplay.indexOf("const refusal = admitWorldCreate(project);"));
+  assert.match(check, /plantedOn\(named, \{ spies: world\?\.spies, players: players \?\? \[playerCountry\] \}\)/);
+  assert.match(check, /drop\(path, [^\n]*"projectNotOpened"\);\n\s*continue;/);
+  assert.doesNotMatch(check, /return\s/);
+  assert.match(check, /else delete project\.believedBy;/);
 });
 
 test("the old must-move and HIGH PRIORITY rules are gone from the game master, the defaults and the advisor", () => {

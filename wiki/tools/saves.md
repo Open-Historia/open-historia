@@ -139,6 +139,12 @@ archiving or deleting the game you have open takes you back to the main menu. In
 Games</b>, the <b>Active</b>, <b>All</b> and <b>Archived</b> buttons choose which games are
 shown.</p>
 
+## Exporting campaign lore (beta)
+
+In an active single-player campaign, open the Game menu and choose **Campaign Lore** below Game Management. Choose the history scope and dates, optionally include your orders, conversations and completed interactive transcripts, then generate a preview. Download Markdown or JSON, or copy the record. This is an account of retained history, not a reloadable save. Private material is optional and excluded by default; review the exported text before sharing. Intelligence and hidden shared-seat records are excluded. Earlier retained events are included even when no longer in the recent-turn index.
+
+An optional AI chronicle summarizes the selected record through your configured provider. It is clearly labeled as generated, includes source references and does not edit the game. Large selections need a narrower date range or fewer optional sections. Native exports do not need an AI provider.
+
 ## What a save contains
 
 For the curious: five documents per game — the world, the game state, the events, the actions

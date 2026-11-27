@@ -37,6 +37,7 @@
 
 import { addGameDays, diffGameDays, gameDateDayNumber, normalizeGameDate } from "./gameDates.js";
 import { treasuryFactor } from "./militaryFunding.js";
+import { openProjectFinanceClock } from "./projectFinance.js";
 import { nameKey, sameName } from "../../server/nameKey.js";
 
 // ---- the vocabulary ---------------------------------------------------------
@@ -435,13 +436,82 @@ export const boundPlanForOwner = (plan, sheet, { sheetFor = () => sheet } = {}) 
   };
 };
 
+// ---- what a plan does, paid for --------------------------------------------------
+//
+// An AI writes a plan's days and cost as what the effort would really take
+// (gameplay.js PROJECT_PLAN_RULES), and the bounds above hold the size of each
+// effect and the most it may cost. Nothing held what it may cost at LEAST: a
+// plan written anywhere else (a player's device in a shared game,
+// multiplayer/host/seatProjects.js) could do the most an effect may do, for
+// nothing, in the fortnight a plan takes at least, as many times as it liked.
+// Here the engine prices what a plan does from its own measures, so that the
+// owner's own project budget bounds how much it can do, as it bounds an
+// honest plan.
+//
+// Its worth: each completion effect its change over the most one project may
+// move that figure (1 for one at its bound), and a structure, a unit type or a
+// region 1 each; a programme's yields the same, over the same once-bound, for
+// every month it runs. Its price: PLAN_WORTH_BUDGET_MONTHS of the owner's
+// monthly project budget for each unit of worth, over the whole work at normal
+// funding, and a programme's yields' worth each month it is paid for. At most
+// COST_SHARE_OF_BUDGET_MOST of the budget a month as ever, so a plan that does
+// more takes longer: never less than the days that price takes at that most,
+// whether or not the owner's economy is on record.
+export const PLAN_WORTH_BUDGET_MONTHS = 1;
+
+const effectWorth = (effect, sheet) => {
+  if (effect?.type === "stat") {
+    const most = boundOf(statMeasure(effect.stat), "once", statValueOf(sheet, effect.stat));
+    return most > 0 ? Math.min(1, Math.abs(Number(effect.change) || 0) / most) : 0;
+  }
+  if (effect?.type === "relation") return Math.min(1, Math.abs(Number(effect.change) || 0) / RELATION_BOUNDS.once);
+  return ["structure", "unitType", "territory"].includes(effect?.type) ? 1 : 0;
+};
+
+// { once, monthly }: what a plan's completion and its monthly yields are worth.
+export const planWorth = (plan, sheet = null) => ({
+  once: roundProgress(asArray(plan?.effects).reduce((sum, effect) => sum + effectWorth(effect, sheet), 0)),
+  monthly: roundProgress(asArray(plan?.yields).reduce((sum, effect) => sum + effectWorth(effect, sheet), 0)),
+});
+
+// A plan held to its owner's means (boundPlanForOwner) and priced by what it
+// does: its monthly cost raised to its price, as far as the most a project may
+// cost a month, and its days lengthened for the rest. null for no plan.
+export const pricePlanForOwner = (plan, sheet, options = {}) => {
+  const bounded = boundPlanForOwner(plan, sheet, options);
+  if (!bounded) return null;
+  const worth = planWorth(bounded, sheet);
+  const share = PLAN_WORTH_BUDGET_MONTHS / COST_SHARE_OF_BUDGET_MOST;
+  let days = Math.max(bounded.durationDays, Math.ceil(worth.once * share * DAYS_PER_MONTH));
+  let cost = bounded.monthlyCost;
+  const budget = monthlyProjectBudget(sheet);
+  if (budget !== null) {
+    const most = budget * COST_SHARE_OF_BUDGET_MOST;
+    const whole = worth.once * PLAN_WORTH_BUDGET_MONTHS * budget;
+    const monthly = worth.monthly * PLAN_WORTH_BUDGET_MONTHS * budget;
+    cost = Math.min(most, Math.max(cost, (whole * DAYS_PER_MONTH) / days, monthly));
+    if (whole > 0 && cost > 0) days = Math.max(days, Math.ceil((whole * DAYS_PER_MONTH) / cost));
+  }
+  return { ...bounded, durationDays: Math.min(DURATION_MOST, days), monthlyCost: round2(cost) };
+};
+
 // ---- a project's place on the clock ----------------------------------------------
 
 export const projectOwnerOf = (project, host = "") => asText(project?.ownerCode, 120) || asText(host, 120);
 const isOpen = (project) => OPEN_ENGINE_STATUSES.includes(asText(project?.status) || "active");
+
+// A BELIEF is no country's work: a programme a service was made to believe in
+// by material planted on its turned agent. It is that service's knowledge, kept
+// on its own board (`belief`; `believedBy` names the service while a time skip
+// that opened it carries it home, runtime/seatBoards.js returnBoards). The
+// engine never runs one, no cap counts it, and nobody but its believer is shown
+// it. A programme opened from planted material used to be the country's real
+// work, and ran to completion with its effects.
+export const isBelief = (project) => project?.belief === true || Boolean(asText(project?.believedBy, 120));
+
 // Is the engine working on it: open, planned, and not paused, and for a
-// programme that runs on, whether it is set up or not.
-const ticks = (project) => isOpen(project) && Boolean(project?.plan) && asText(project?.status) !== "planning" && asText(project?.status) !== "paused" && !(asText(project?.status) === "stalled" && asText(project?.stallReason) !== "funds");
+// programme that runs on, whether it is set up or not. Never a belief.
+const ticks = (project) => isOpen(project) && !isBelief(project) && Boolean(project?.plan) && asText(project?.status) !== "planning" && asText(project?.status) !== "paused" && !(asText(project?.status) === "stalled" && asText(project?.stallReason) !== "funds");
 // What a project is due a day at its funding, overruns included.
 export const dailyCostOf = (project) => {
   const cost = Number(project?.plan?.monthlyCost) || 0;
@@ -497,7 +567,10 @@ export const normalizeAdjustment = (value) => {
 //
 // Nothing here applies an effect: the caller does that, once, from the
 // outcomes (gameState.js applyProjectOutcomesToWorld).
-export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate = "", host = "", round = 0 } = {}) => {
+// Finance is an explicit receipt-ledger input, not an unchecked world field.
+// The live turn writer must supply an authorized ledger and commit its result
+// atomically. Until that authority seam is connected, ordinary turns are unchanged.
+export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate = "", host = "", round = 0, finance } = {}) => {
   const start = gameDateDayNumber(fromDate);
   const end = gameDateDayNumber(toDate);
   // A copy deep enough to work on: the tick dates checkpoints and appends to
@@ -511,7 +584,12 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
     }
     : project));
   const outcomes = [];
-  if (start === null || end === null || end <= start) return { projects: board, outcomes, days: 0 };
+  const nonmonetary = projectFundingMode(world) === "nonmonetary";
+  const hasFinanceReceipts = Boolean(finance?.receipts?.length);
+  if (hasFinanceReceipts && nonmonetary) throw new Error("Project Finance is not available in non-monetary scenarios.");
+  const financeClock = finance === undefined || nonmonetary ? null : openProjectFinanceClock(finance, { fromDate, toDate });
+  const financeOwners = new Set(financeClock?.borrowers ?? []);
+  if (start === null || end === null || end <= start) return { projects: board, outcomes, days: 0, ...(financeClock?{finance:financeClock.finish()}: {}) };
   const days = end - start;
 
   // The adjustments told before this turn take hold now, in the order told.
@@ -541,7 +619,6 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
 
   // Each owner's projects, in board order, with its means for the period.
   // Explicit non-monetary scenarios never book money; time/capacity govern work.
-  const nonmonetary = projectFundingMode(world) === "nonmonetary";
   const owners = new Map();
   board.forEach((project, index) => {
     if (!isRecord(project) || !ticks(project)) return;
@@ -557,6 +634,22 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
     owners.get(key).indexes.push(index);
   });
 
+  // Debt service is owed even when the borrower has no running project. The
+  // finance intake must use the same exact owner token as the board/sheets.
+  for (const owner of financeOwners) {
+    const key=nameKey(owner);
+    if (owners.has(key) && owners.get(key).owner!==owner) throw new Error("Project Finance borrower identity does not match the canonical board.");
+    if (!owners.has(key)) {
+      const sheet=sheetOf(world,owner), monthly=monthlyProjectBudget(sheet);
+      owners.set(key,{owner,daily:monthly===null?null:monthly/DAYS_PER_MONTH,capacity:capacityOf(sheet),indexes:[]});
+    }
+  }
+  const toMinor = amount => {
+    const cents=Math.floor(amount*100);
+    if(!Number.isSafeInteger(cents)||cents<0)throw new Error("Project Finance amount exceeds safe minor-unit accounting.");
+    return cents;
+  };
+  const hasFinance = owner => financeClock && financeOwners.has(owner);
   const paidThisPeriod = new Map();
   const dueThisPeriod = new Map();
   const note = (map, index, amount) => map.set(index, (map.get(index) ?? 0) + amount);
@@ -567,6 +660,10 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
       // Unknown GDP is not proof of unlimited public funds. With no assessed
       // allowance only work explicitly costing zero may advance.
       let pool = nonmonetary ? Infinity : daily === null ? 0 : daily;
+      const financed=hasFinance(owner);
+      // Service consumes only the already-authorized recurring envelope.
+      // No loan proceeds or unknown GDP can create a repayment.
+      if(financed)pool=Math.max(0,pool-financeClock.service(owner,date,toMinor(pool))/100);
       const working = indexes.filter((index) => {
         const project = board[index];
         return isOpen(project) && asText(project.status) === "active";
@@ -574,9 +671,15 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
       // The budget pays the best funded first, and shares what is left between
       // projects of one level by what each is due.
       const shareOf = new Map();
+      const creditOf = new Map();
+      if(financed)for(const index of working){
+        const project=board[index];
+        if(projectOwnerOf(project,host)!==owner)throw new Error("Project Finance project owner identity mismatch.");
+        creditOf.set(index,financeClock.fund(owner,project.id,date,toMinor(dailyCostOf(project)))/100);
+      }
       for (const level of PAYING_ORDER) {
         const tier = working.filter((index) => resolveFunding(board[index].funding) === level || (!resolveFunding(board[index].funding) && level === "normal"));
-        const due = tier.reduce((sum, index) => sum + dailyCostOf(board[index]), 0);
+        const due = tier.reduce((sum, index) => sum + Math.max(0,dailyCostOf(board[index])-(creditOf.get(index) ?? 0)), 0);
         const share = due <= 0 ? 1 : Math.min(1, pool / due);
         for (const index of tier) shareOf.set(index, share);
         if (due > 0) pool = Math.max(0, pool - due * share);
@@ -584,8 +687,10 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
       for (const index of working) {
         const project = board[index];
         const due = dailyCostOf(project);
-        const share = shareOf.get(index) ?? 1;
-        const paid = nonmonetary ? 0 : due * share;
+        const baseShare = shareOf.get(index) ?? 1;
+        const credit=creditOf.get(index) ?? 0;
+        const paid = nonmonetary ? 0 : credit + (due-credit)*baseShare;
+        const share = financed && due>0 ? within(paid/due,0,1) : baseShare;
         project.spent = round2((Number(project.spent) || 0) + paid);
         note(paidThisPeriod, index, paid);
         note(dueThisPeriod, index, due);
@@ -597,9 +702,13 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
         const project = board[index];
         if (asText(project.status) !== "stalled" || asText(project.stallReason) !== "funds") continue;
         const due = dailyCostOf(project);
-        if (due > 0 && pool < due * RESUME_SHARE) continue;
-        const paid = nonmonetary ? 0 : Math.min(due, pool);
-        pool = Math.max(0, pool - paid);
+        if(financed && projectOwnerOf(project,host)!==owner)throw new Error("Project Finance project owner identity mismatch.");
+        const available=financed?Math.min(toMinor(due),financeClock.available(owner,project.id,date))/100:0;
+        if (due > 0 && pool+available < due * RESUME_SHARE) continue;
+        const credit=financed?financeClock.fund(owner,project.id,date,toMinor(due))/100:0;
+        const basePaid = nonmonetary ? 0 : Math.min(Math.max(0,due-credit), pool);
+        const paid=basePaid+credit;
+        pool = Math.max(0, pool - basePaid);
         project.status = "active";
         project.stallReason = "";
         project.starvedDays = 0;
@@ -622,14 +731,16 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
     const project = board[index];
     project.paidShare = nonmonetary ? 1 : due > 0 ? round2(within((paidThisPeriod.get(index) ?? 0) / due, 0, 1)) : 1;
   }
-  for (const { capacity, indexes } of owners.values()) {
+  for (const { owner, capacity, indexes } of owners.values()) {
     for (const index of indexes) {
       const project = board[index];
       if (!isOpen(project) || project.plan?.ongoing) continue;
-      project.targetDate = expectedFinish(project, { from: toDate, capacity, share: Number(project.paidShare ?? 1) }) || "";
+      // A temporary credit stock cannot be extrapolated as a recurring flow.
+      // The live finance UI must calculate a bounded depletion forecast.
+      project.targetDate = hasFinance(owner) ? "" : expectedFinish(project, { from: toDate, capacity, share: Number(project.paidShare ?? 1) }) || "";
     }
   }
-  return { projects: board, outcomes, days };
+  return { projects: board, outcomes, days, ...(financeClock?{finance:financeClock.finish()}: {}) };
 };
 
 // One day's work on one project. Mutates the copy tickProjects made.
@@ -899,11 +1010,13 @@ export const mergeTickedBoard = ({ base = [], ticked = [], current = [] } = {}) 
 // countries people play open their own, from the Projects tab. A gate over the
 // board as it stands and the people who play; each call says whether one more
 // create may land ("" when it may, else why not: "theirs", "plan" or "cap"), and
-// counts it when it does.
+// counts it when it does. A belief (isBelief) is no country's work: it is
+// counted among what the answer opens, never as its country's running work,
+// and may be of any country, a played one too.
 export const worldProjectGate = ({ board = [], players = [] } = {}) => {
   const played = asArray(players).map((name) => asText(name, 120)).filter(Boolean);
   const isPlayed = (owner) => played.some((name) => sameName(name, owner));
-  const open = asArray(board).filter((project) => isRecord(project) && isOpen(project) && asText(project.ownerCode));
+  const open = asArray(board).filter((project) => isRecord(project) && isOpen(project) && !isBelief(project) && asText(project.ownerCode));
   const openOf = new Map();
   for (const project of open) {
     if (isPlayed(project.ownerCode)) continue;
@@ -914,6 +1027,12 @@ export const worldProjectGate = ({ board = [], players = [] } = {}) => {
   let opened = 0;
   return (project) => {
     const owner = asText(project?.ownerCode || project?.owner, 120);
+    if (owner && isBelief(project)) {
+      if (!normalizeProjectPlan(project?.plan)) return "plan";
+      if (opened >= SKIP_CREATES_MOST) return "cap";
+      opened += 1;
+      return "";
+    }
     if (!owner || isPlayed(owner)) return "theirs";
     if (!normalizeProjectPlan(project?.plan)) return "plan";
     const key = nameKey(owner);

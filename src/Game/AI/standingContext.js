@@ -68,13 +68,40 @@ export const otherRecordedReputations = (world, exclude = [], limit = OTHER_REPU
     .slice(0, Math.max(0, limit));
 };
 
+// The polities people play, each once, `player` first: a shared game's world
+// task is told of every one of them (rule 9 of a shared game: what the
+// simulation gives "the player" it gives each seat). One name, or none, is
+// single player's, told exactly as it always was.
+const peopleWith = (player, people) => {
+  const names = [];
+  for (const value of [player, ...(Array.isArray(people) ? people : [])]) {
+    const name = asText(value);
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names;
+};
+
 // The player's reputation line, then the other polities whose reputation has
 // been recorded: the skip and the suggestion tasks write absolute values on
 // polityChanges.reputation for any polity, and were never shown another's
-// current value to move from.
-export const describeReputationStanding = (world, player, { fallback = null } = {}) => {
+// current value to move from. With several people (`people`, a shared game's
+// world task) each player's is told by name: only the host's was, unnamed,
+// so a guest's standing moved only if it was already among the recorded ten.
+export const describeReputationStanding = (world, player, { fallback = null, people = [] } = {}) => {
   const name = asText(player);
   if (!name) return "No player polity is currently set.";
+  const players = peopleWith(name, people);
+  if (players.length > 1) {
+    const own = players.map((polity) => {
+      const value = reputationOf(world, polity, polity === name ? fallback : null);
+      return `${polity} ${value}/100 (${reputationBand(value)})`;
+    });
+    const others = otherRecordedReputations(world, players);
+    return [
+      `International reputation of the players' polities: ${own.join(", ")}.`,
+      ...(others.length ? [`Other recorded reputations: ${others.map(([other, score]) => `${other} ${score}/100`).join(", ")}. Every polity not listed stands at 50.`] : []),
+    ].join("\n");
+  }
   const value = reputationOf(world, name, fallback);
   const lines = [`International reputation: ${value}/100 (${reputationBand(value)}).`];
   const others = otherRecordedReputations(world, [name]);
@@ -90,15 +117,21 @@ export const intelligenceBand = (value) => (value >= 75 ? "formidable" : value >
 
 // The player's service, then the other services the AI has actually rated.
 // Unrated is "ordinary", not "none": every polity runs a service whether or not
-// the AI has ever put a number on it (spycraft.js DEFAULT_INTELLIGENCE).
-export const describeIntelligenceStanding = (world, player) => {
+// the AI has ever put a number on it (spycraft.js DEFAULT_INTELLIGENCE). With
+// several people (`people`) every player's service is told, each by name: a
+// guest who built a spy academy for years was shown no rating to move, unless
+// theirs was already among the eight rated.
+export const describeIntelligenceStanding = (world, player, { people = [] } = {}) => {
   const name = asText(player);
   if (!name) return "";
-  const rating = intelligenceOf(world, name);
-  const lines = [`${name}'s intelligence service: ${rating}/100 (${intelligenceBand(rating)}).`];
+  const players = peopleWith(name, people);
+  const lines = players.map((polity) => {
+    const rating = intelligenceOf(world, polity);
+    return `${polity}'s intelligence service: ${rating}/100 (${intelligenceBand(rating)}).`;
+  });
   const rated = Object.entries(asObject(world?.intelligence))
     .map(([code, value]) => [asText(code), Number(value)])
-    .filter(([code, value]) => code && code !== name && Number.isFinite(value))
+    .filter(([code, value]) => code && !players.includes(code) && Number.isFinite(value))
     .sort((left, right) => right[1] - left[1])
     .slice(0, 8);
   if (rated.length > 0) {

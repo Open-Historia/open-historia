@@ -38,14 +38,19 @@ const ALLOWED = {
     // alpha: mergeChatKnowledgeCursors reads and writes inside the queue itself.
     "writeWorldState": 2, "writeJson(actions)": 1, "writeJson(advisor)": 1, "writeJson(chat)": 2,
     "writeJson(events)": 1, "writeJson(game)": 1, "writeJson(intercepts)": 1, "writeJson(world)": 1,
+    // The shared game's session: its one write is the seam's own (RUNTIME_DOCUMENTS.shared).
+    "writeJson(shared)": 1,
+    // The flags: setPolityFlag's and the Game Master's go through the seam (RUNTIME_DOCUMENTS.flags).
+    "writeJson(flags)": 1,
   },
   // The turn's commit and the rollback's restore replace the canonical state on
   // purpose, under the busy lock (the jump re-reads the chats); the rollback
   // archive is written only by those two; flags are presentation data a rename
   // or the GM changes beside the commit.
   // alpha: a rollback puts back the flags an undone rename moved (a fourth).
+  // The Game Master's two go through the seam (mutateFlagsState).
   "Game/AI/gameplay.js": {
-    "writeCanonicalTurnState": 2, "writeJson(snapshots)": 2, "writeJson(flags)": 4,
+    "writeCanonicalTurnState": 2, "writeJson(snapshots)": 2, "writeJson(flags)": 2,
   },
   // The player's own panels. Phase 0 step 2 turns these into intents.
   // alpha: annexing by hand goes through annexByHand (one more world write).
@@ -60,11 +65,10 @@ const ALLOWED = {
   // Keep both forbidden; Project edits now use the canonical world write queue.
   "Game/GameUI/chat.jsx": { "writeChatsState": 1, "writeWorldState": 1 },
   "Game/GameUI/stats.jsx": { "writeWorldState": 1 },
-  "Game/GameUI/actions.jsx": { "writeActionsState": 1, "writeWorldState": 1 },
+  "Game/GameUI/actions.jsx": { "writeWorldState": 1 },
   // Projects now use mutateWorldState. No direct write is allowed (default 0).
   // alpha: starting a game as a group gives it its colour and flag, as a faction's does.
   "Game/GameUI/libraryBar.jsx": { "writeJson(colors)": 2, "writeJson(flags)": 2 },
-  "runtime/polityFlags.js": { "writeJson(flags)": 1 },
 };
 
 // Comments name these functions all the time; only code counts. Line by line on

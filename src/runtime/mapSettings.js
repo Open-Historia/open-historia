@@ -8,6 +8,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { logDebugEvent, logSettingChange } from "./debugLog.js";
 import { isConstrainedDevice } from "./deviceProfile.js";
 import { AI_TRANSLATION_SETTING } from "./aiTranslation.js";
+import { normalizePolityLabelMaxZoom } from "./polityLabelVisibility.js";
 
 // Immediate source of truth for string-valued settings. This also keeps a
 // runtime override functional in privacy/file contexts where localStorage
@@ -29,6 +30,8 @@ export const MAP_SETTING_KEYS = {
     // read is a reason to change it, and until now the only way to was through
     // the game editor.
     labelFont: "map_label_font",
+    // Local presentation preference; never part of world or scenario state.
+    polityLabelMaxZoom: "map_polity_label_max_zoom",
     // Empty/unset shows a scenario's relief tiles when it ships them; "painted"
     // keeps its vector background only (Map/scenarioTerrain.js). Local to this
     // browser, like the default basemap.
@@ -241,6 +244,7 @@ export function getMapSettingValue(key, fallback = "") {
 const VALUE_SETTING_LABELS = {
     [MAP_SETTING_KEYS.defaultBasemap]: "Default basemap",
     [MAP_SETTING_KEYS.labelFont]: "Label font",
+    [MAP_SETTING_KEYS.polityLabelMaxZoom]: "Polity name visibility",
     [MAP_SETTING_KEYS.musicVolume]: "Music volume",
     [MAP_SETTING_KEYS.scenarioTerrain]: "Scenario terrain",
 };
@@ -350,3 +354,8 @@ export function useMapSettingValue(key, fallback = "") {
 
     return value;
 }
+
+// Numeric local preference: absent/invalid storage retains the shipped default.
+export const getPolityLabelMaxZoom = () => normalizePolityLabelMaxZoom(getMapSettingValue(MAP_SETTING_KEYS.polityLabelMaxZoom));
+export const setPolityLabelMaxZoom = (value) => setMapSettingValue(MAP_SETTING_KEYS.polityLabelMaxZoom, String(normalizePolityLabelMaxZoom(value)));
+export const usePolityLabelMaxZoom = () => normalizePolityLabelMaxZoom(useMapSettingValue(MAP_SETTING_KEYS.polityLabelMaxZoom));

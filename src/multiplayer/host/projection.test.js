@@ -8,6 +8,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { WORLD_DEFAULTS, normalizeChats, normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { projectChatThread } from "../../runtime/chatThreads.js";
@@ -52,14 +55,18 @@ const state = () => ({
     // The host's own board, as single player keeps it: its own work, and what
     // its services have learned of Russia's.
     projects: [
-      { id: "proj-lv", name: "CANARY-LV-PROJECT", kind: "operation", ownerCode: "", summary: "x", status: "active" },
-      { id: "proj-lv-on-ru", name: "CANARY-LV-FILE-ON-RU", kind: "operation", ownerCode: RUSSIA, summary: "x", status: "active" },
+      { id: "proj-lv", name: "CANARY-LV-PROJECT", kind: "operation", ownerCode: "", summary: "x", status: "active", secrecy: "covert" },
+      { id: "proj-lv-on-ru", name: "CANARY-LV-FILE-ON-RU", kind: "operation", ownerCode: RUSSIA, summary: "x", status: "active", secrecy: "covert" },
+      // Estonia's own covert work, which Russia's agent there has learned of.
+      { id: "proj-est", name: "Estonian Shield", kind: "project", ownerCode: ESTONIA, summary: "x", status: "active", secrecy: "covert", knownBy: { [RUSSIA]: { spyIds: ["spy-ru-in-est"], verification: "doubted" } } },
     ],
     // The second person's board.
     seatBoards: {
       [RUSSIA]: [
-        { id: "proj-ru", name: "CANARY-RU-PROJECT", kind: "operation", ownerCode: "", summary: "x", status: "active" },
+        { id: "proj-ru", name: "CANARY-RU-PROJECT", kind: "operation", ownerCode: "", summary: "x", status: "active", secrecy: "covert" },
         { id: "proj-ru-on-lv", name: "CANARY-RU-FILE-ON-LV", kind: "operation", ownerCode: LATVIA, summary: "x", status: "active" },
+        // What nobody hides, everybody sees.
+        { id: "proj-ru-public", name: "Moscow Metro Extension", kind: "project", ownerCode: "", summary: "x", status: "active", secrecy: "public" },
       ],
     },
     actionSuggestions: [{ id: "topic-1", title: "CANARY-LV-SUGGESTION", actions: [] }],
@@ -125,7 +132,11 @@ const state = () => ({
         projectOps: [{ op: "update", projectId: "proj-ru", note: "CANARY-PROJECTOP" }],
         politicalActorOps: [{ op: "set-strategy", polityKey: RUSSIA, argsJson: "{\"summary\":\"CANARY-ACTOROP\"}" }],
         reports: [{ op: "create", title: "t", body: "CANARY-EVENT-DOCUMENT" }],
-        createdChats: [{ countries: [ESTONIA], openingMessage: "CANARY-LV-OPENING" }],
+        // A letter to each player (AI/sharedLetters.js): each is its addressee's.
+        createdChats: [
+          { to: LATVIA, countries: [ESTONIA], openingMessage: "CANARY-LV-OPENING" },
+          { to: RUSSIA, countries: [ESTONIA], openingMessage: "CANARY-RU-LETTER" },
+        ],
         regionControlOps: [{ op: "control", regionId: "Ida-Viru", toCode: RUSSIA }],
       },
       npcReaction: { enabled: true, chatId: "CANARY-NPC-CHAT" },
@@ -179,6 +190,8 @@ test("nothing private of the second player reaches the host's view", () => {
     "CANARY-RU-GOAL", "CANARY-RU-STRATEGY", "CANARY-RU-TO-EST", "CANARY-RU-ORDER",
     "order-ru-1", "order-ru-march", "CANARY-MOVE-NOTE", "CANARY-ACTOROP", "CANARY-LEADER-MEMORY",
     "spy-ru-in-est", "pup-covert",
+    // The letter the skip wrote to the second player (the gap audit's N7).
+    "CANARY-RU-LETTER",
   ]) assert.equal(view.includes(canary), false, `${canary} leaked to the host's view`);
   // Numbers are checked where they live: a bare "88" can turn up in any timestamp.
   // How good Russia's service is, is Russia's to know: everyone else has an estimate.
@@ -218,7 +231,7 @@ test("each player sees all of its own, as single player shows it", () => {
   assert.deepEqual(ru.actions.map((action) => action.id), ["order-ru-1"]);
   assert.deepEqual(ru.world.pendingUnitOrders.map((order) => order.id), ["order-ru-march"]);
   assert.equal(ru.world.units.find((entry) => entry.id === "ru-1").orderId, "order-ru-march");
-  assert.deepEqual(ru.world.projects.map((project) => project.id), ["proj-ru", "proj-ru-on-lv"], "its own board, whole");
+  assert.deepEqual(ru.world.projects.map((project) => project.id), ["proj-ru", "proj-ru-on-lv", "proj-ru-public", "proj-est"], "its own board, whole, and what it knows of abroad");
   // The newest turn, for its Events panel: when it ran, what it wrote, its own orders.
   assert.deepEqual(ru.world.simulationHistory, [{
     date: "2014-03-30", fromDate: "2014-03-01", toDate: "2014-03-30", round: 3, mode: "jump", source: "fallback",
@@ -238,7 +251,7 @@ test("each player sees all of its own, as single player shows it", () => {
   assert.equal(ru.events[0].playerRelated, true);
 
   const lv = projectForViewer(state(), LATVIA);
-  assert.deepEqual(lv.world.projects.map((project) => project.id), ["proj-lv", "proj-lv-on-ru"], "the game's own board, as single player keeps it");
+  assert.deepEqual(lv.world.projects.map((project) => project.id), ["proj-lv", "proj-lv-on-ru", "proj-est", "proj-ru-public"], "the game's own board, as single player keeps it, and the work nobody hides");
   assert.deepEqual(lv.world.simulationHistory[0].plannedActions.map((action) => action.id), ["order-lv-0"]);
   assert.equal(lv.world.simulationHistory[0].fallbackReason, "CANARY-HOST-PROVIDER-ERROR", "the host's own model failed: the host is told why");
   assert.equal(lv.world.spySeal, SEAL);
@@ -270,6 +283,38 @@ test("the game's own rules hold inside a view: turned agents, caught agents, sto
   assert.equal(text(est).includes("CANARY-COVER-STORY"), false);
   assert.equal(est.world.puppets.length, 1, "the puppet knows its overlord");
   assert.equal("loyalty" in est.world.puppets[0], false, "but not its own loyalty score");
+});
+
+// The review of 2026-11-18, views 2: a guest's board showed nothing abroad, and
+// nobody saw a guest's public work. Each board now shows another country's work
+// as single player shows it, with what the viewer's own service knows of it.
+test("every board shows the work abroad nobody hides, and what the viewer's own service knows, nothing anyone else's does", () => {
+  const ru = projectForViewer(state(), RUSSIA).world.projects;
+  const shield = ru.find((project) => project.id === "proj-est");
+  assert.deepEqual([shield.ownerCode, shield.linkedSpyIds, shield.verification, shield.known, "knownBy" in shield], [ESTONIA, ["spy-ru-in-est"], "doubted", true, false]);
+  const lv = projectForViewer(state(), LATVIA).world.projects;
+  const metro = lv.find((project) => project.id === "proj-ru-public");
+  assert.deepEqual([metro.ownerCode, metro.known, metro.linkedSpyIds], [RUSSIA, false, []]);
+  assert.equal("knownBy" in lv.find((project) => project.id === "proj-est"), false, "the host's board never says what Russia knows");
+  const est = projectForViewer(state(), ESTONIA).world.projects;
+  assert.deepEqual(est.map((project) => project.id), ["proj-ru-public"], "a country nobody plays here sees only what nobody hides");
+});
+
+// The review of 2026-11-18, views 9: an agent's id is made from its owner's
+// name, so one caught whose sender was never learned still named its sender.
+test("an agent caught without its sender ever being learned reaches the country that caught it under a name of the view's own", () => {
+  const s = state();
+  s.world.spies.push(
+    { id: "spy-russian-federation-republic-of-latvia-2", owner: RUSSIA, target: LATVIA, status: "dead", identified: false, deployedAt: "2014-02-01", exposedAt: "2014-03-15" },
+    { id: "spy-republic-of-estonia-republic-of-latvia-1", owner: ESTONIA, target: LATVIA, status: "dead", identified: false, deployedAt: "2014-02-10", exposedAt: "2014-03-20" },
+  );
+  const lv = projectForViewer(s, LATVIA);
+  const dead = lv.world.spies.filter((spy) => spy.status === "dead");
+  assert.deepEqual(dead.map((spy) => [spy.id, spy.owner]), [["agent-unknown-1", ""], ["agent-unknown-2", ""]]);
+  for (const id of ["spy-russian-federation-republic-of-latvia-2", "spy-republic-of-estonia-republic-of-latvia-1"]) assert.equal(text(lv).includes(id), false);
+  assert.ok(lv.world.spies.some((spy) => spy.id === "spy-ru-in-lv"), "one caught and known keeps its id: it is held, and orders name it");
+  const ru = projectForViewer(s, RUSSIA);
+  assert.ok(ru.world.spies.some((spy) => spy.id === "spy-russian-federation-republic-of-latvia-2"), "its owner knows its own agent");
 });
 
 test("threads read from each side: the viewer is the implicit player, and its own words are its own", () => {
@@ -475,4 +520,235 @@ test("a player's advisor brings them their government's secrets, in a thread of 
   assert.deepEqual(Object.keys(lv.world.seatAdvice), [LATVIA]);
   assert.equal(JSON.stringify(lv).includes("CANARY-RU-ADVICE"), false);
   assert.equal(JSON.stringify(projectForViewer(docs, ESTONIA)).includes("CANARY-CAUGHT"), false);
+});
+
+// Every key the game's code reads of the world, read from the code itself:
+// a key the views do not classify is in no view, and a key that only some
+// scenarios have (a map's projection, its seas) slipped past a check that knew
+// only the keys every world has. Names read off something else called "world"
+// are listed here, each with what it is.
+const NOT_THE_WORLD = new Map([
+  // runtime/fronts/syntheticMap.js and testKit.js: a test map's own helpers.
+  ["controller", "fronts test map"], ["controllerOf", "fronts test map"], ["sovereignOf", "fronts test map"],
+  ["frame", "fronts test map"], ["map", "fronts test map, the Editor's search results"], ["regions", "fronts test map"],
+  // Editor/exportPreset.js and AI/gameplay.js: a scenario's world.json file, by name.
+  ["json", "world.json, a file name"],
+  // Editor/SearchBar.jsx: a list of places.
+  ["length", "the Editor's search results"],
+  // Game/Map/seasonTint.js: a colour and how strongly it tints.
+  ["rgb", "a season's tint"], ["strength", "a season's tint"],
+]);
+
+test("every key of the world the game's code reads is public, filtered for the viewer, or the host's alone", () => {
+  const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const read = new Set();
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "node_modules") walk(full);
+      } else if (/\.(?:js|jsx)$/.test(entry.name) && !/\.test\.(?:js|jsx)$/.test(entry.name)) {
+        for (const match of fs.readFileSync(full, "utf8").matchAll(/\bworld\??\.([A-Za-z_]\w*)/g)) read.add(match[1]);
+      }
+    }
+  };
+  walk(SRC);
+  const classified = new Set([...PUBLIC_WORLD_KEYS, ...FILTERED_WORLD_KEY_NAMES, ...HOST_ONLY_WORLD_KEYS]);
+  const unclassified = [...read].filter((key) => !classified.has(key) && !NOT_THE_WORLD.has(key)).sort();
+  assert.deepEqual(unclassified, [], "classify these world keys in projection.js (or name what else they are read off)");
+  assert.ok(read.has("projection") && read.has("seas"), "the code was read");
+});
+
+test("the map as the scenario draws it reaches every view: its projection, region types and seas", () => {
+  const docs = state();
+  docs.world = {
+    ...docs.world,
+    projection: { kind: "flat", noGlobe: true },
+    regionTypes: [{ id: "sea", name: "Sea", water: true }],
+    seas: [{ name: "Inner Sea", point: [10, 10] }],
+    customGeometry: true,
+    prehistory: { events: [{ title: "CANARY-PREHISTORY" }] },
+    canonContext: { referencePacks: ["CANARY-CANON"] },
+  };
+  for (const viewer of [LATVIA, RUSSIA]) {
+    const world = projectForViewer(docs, viewer).world;
+    assert.deepEqual(world.projection, { kind: "flat", noGlobe: true });
+    assert.equal(world.regionTypes[0].id, "sea");
+    assert.equal(world.seas[0].name, "Inner Sea");
+    assert.equal(world.customGeometry, true);
+    assert.equal(JSON.stringify(world).includes("CANARY-PREHISTORY"), false, "the Workshop's own record stays the host's");
+    assert.equal(JSON.stringify(world).includes("CANARY-CANON"), false);
+  }
+});
+
+// ---- What is only ordered stays private until the skip (decision 6, "A only") ----
+
+test("another country's formation raised this round is not seen until the skip; one it stood down still is", () => {
+  const docs = state();
+  docs.world.units = [
+    unit("ru-raised", RUSSIA, { status: "pending" }),
+    unit("ru-standing", RUSSIA),
+    unit("lv-raised", LATVIA, { status: "pending" }),
+  ];
+  const disbanded = unit("ru-gone", RUSSIA, { strength: 40 });
+  docs.actions = [
+    { id: "order-ru-disband", kind: "action", source: "order", status: "planned", ownerCode: RUSSIA, text: "Stand down ru-gone", unitRevert: { unitId: "ru-gone", restore: disbanded } },
+  ];
+  const latvia = projectForViewer(docs, LATVIA).world.units.map((entry) => entry.id).sort();
+  assert.deepEqual(latvia, ["lv-raised", "ru-gone", "ru-standing"], "its own pending formation, and Russia's as the world last saw them");
+  const russia = projectForViewer(docs, RUSSIA).world.units.map((entry) => entry.id).sort();
+  assert.deepEqual(russia, ["ru-raised", "ru-standing"], "its own as they now are: raised, and the stood-down one gone");
+  const gone = projectForViewer(docs, LATVIA).world.units.find((entry) => entry.id === "ru-gone");
+  assert.equal(gone.orderId, "", "another's unit never carries its order");
+  // After the skip the order is no longer planned: the formation is gone for everyone.
+  docs.actions = [{ ...docs.actions[0], status: "resolved" }];
+  assert.equal(projectForViewer(docs, LATVIA).world.units.some((entry) => entry.id === "ru-gone"), false);
+});
+
+test("a fleet's new posture is seen by others only as it stood before it was ordered, until the skip", () => {
+  const docs = state();
+  docs.world.units = [unit("ru-fleet", RUSSIA, { type: "naval", posture: "blockade", status: "idle" })];
+  // Ordered on the game's date (host/onlyOrdered.js withFleetOrdered).
+  docs.world.seenFleetPostures = { "ru-fleet": { posture: "patrol", status: "idle", since: "2014-04-01", ordered: { posture: "blockade", status: "idle" } } };
+  assert.equal(projectForViewer(docs, LATVIA).world.units[0].posture, "patrol");
+  assert.equal(projectForViewer(docs, RUSSIA).world.units[0].posture, "blockade", "its own as ordered");
+  assert.equal("seenFleetPostures" in projectForViewer(docs, LATVIA).world, false, "the host's bookkeeping");
+});
+
+test("a convoy only ordered is its owner's, and whom a country's ships hunt is that country's own", () => {
+  const docs = state();
+  const convoy = (id, owner, status, hunters = []) => ({ id, medium: "sea", owner, to: { lng: 24, lat: 59, name: "Tallinn" }, from: { lng: 30, lat: 60 }, status, hunters, load: [] });
+  docs.world.transports = [convoy("t1", RUSSIA, "ordered"), convoy("t2", RUSSIA, "moving", [LATVIA, ESTONIA]), convoy("t3", LATVIA, "ordered")];
+  const latvia = projectForViewer(docs, LATVIA).world.transports;
+  assert.deepEqual(latvia.map((entry) => entry.id).sort(), ["t2", "t3"]);
+  assert.deepEqual(latvia.find((entry) => entry.id === "t2").hunters, [LATVIA], "its own hunt only");
+  const russia = projectForViewer(docs, RUSSIA).world.transports;
+  assert.deepEqual(russia.map((entry) => entry.id).sort(), ["t1", "t2"]);
+  assert.deepEqual(russia.find((entry) => entry.id === "t2").hunters, [], "not who hunts its convoy");
+});
+
+test("a line ordered since the last skip is its owner's; once time has passed everyone sees it, built or not", () => {
+  const docs = state();
+  const line = (id, owner, since) => ({ id, name: id, owner, level: 5, points: [[24, 57], [25, 58]], building: { since, days: 60 } });
+  docs.world.fortifications = [line("ru-new", RUSSIA, "2014-04-01"), line("ru-rising", RUSSIA, "2014-03-01"), { id: "ru-old", name: "ru-old", owner: RUSSIA, level: 5, points: [[26, 57], [27, 58]] }];
+  assert.deepEqual(projectForViewer(docs, LATVIA).world.fortifications.map((entry) => entry.id).sort(), ["ru-old", "ru-rising"]);
+  assert.deepEqual(projectForViewer(docs, RUSSIA).world.fortifications.map((entry) => entry.id).sort(), ["ru-new", "ru-old", "ru-rising"]);
+});
+
+// An invited player was sent only an institution's public face, no case: its
+// hearing and its Institutions tab had nothing to accept (the gap audit of
+// 2026-11-18, D5c). A case is its subject's and its opener's to see in full.
+test("a country an institution's case is about, or that opened it, sees that case; its business stays the members'", () => {
+  const docs = state();
+  docs.world.institutions.byId["baltic-council"].lifecycleCases = {
+    "invite-ru": { id: "invite-ru", kind: "invitation", status: "pending", polity: RUSSIA, initiatedBy: LATVIA, requestedStatus: "member", reason: "CANARY-RU-INVITE" },
+    "apply-ru": { id: "apply-ru", kind: "application", status: "pending-approval", polity: "Republic of Poland", initiatedBy: RUSSIA, reason: "CANARY-RU-SPONSORS" },
+    "invite-pl": { id: "invite-pl", kind: "invitation", status: "pending", polity: "Republic of Poland", initiatedBy: ESTONIA, reason: "CANARY-PL-INVITE" },
+  };
+  const ru = projectForViewer(docs, RUSSIA).world.institutions.byId["baltic-council"];
+  assert.deepEqual(Object.keys(ru.lifecycleCases).sort(), ["apply-ru", "invite-ru"]);
+  assert.equal(ru.lifecycleCases["invite-ru"].reason, "CANARY-RU-INVITE", "in full");
+  assert.equal(ru.proposals, undefined, "the members' business is theirs");
+  const lv = projectForViewer(docs, LATVIA).world.institutions.byId["baltic-council"];
+  assert.equal(Object.keys(lv.lifecycleCases).length, 3, "a member sees every case");
+  // A country with no case there sees none.
+  docs.world.institutions.byId["baltic-council"].lifecycleCases = { "invite-pl": docs.world.institutions.byId["baltic-council"].lifecycleCases["invite-pl"] };
+  assert.equal(projectForViewer(docs, RUSSIA).world.institutions.byId["baltic-council"].lifecycleCases, undefined);
+});
+
+test("an event written for a player's own order and kept off the timeline is told to that player, with why, and to nobody else", () => {
+  const docs = state();
+  const card = (title, actionIds, route = "UNSUPPORTED_REVERSAL") => ({ title, description: `${title}, as written`, date: "2014-03-20", route, actionIds });
+  docs.world.simulationHistory[0].filedEvents = [
+    card("CANARY-RU-REFUSED", ["order-ru-0"]),
+    card("Talks refused", ["order-lv-0"], "EXACT_DUPLICATE"),
+    card("Both at once", ["order-ru-0", "order-lv-0"]),
+    card("CANARY-NOBODYS-ORDER", []),
+  ];
+  const ru = projectForViewer(docs, RUSSIA).world.simulationHistory[0].filedEvents;
+  assert.deepEqual(ru.map((entry) => entry.title), ["CANARY-RU-REFUSED", "Both at once"]);
+  assert.deepEqual(ru[0].actionIds, ["order-ru-0"]);
+  assert.equal(ru[0].fate, "not-recorded");
+  assert.match(ru[0].note, /Contradicts what is already on the record/, "the engine's reason, in the player's words");
+  assert.deepEqual(ru[1].actionIds, ["order-ru-0"], "another player's order id is theirs");
+  const lv = projectForViewer(docs, LATVIA).world.simulationHistory[0].filedEvents;
+  assert.deepEqual(lv.map((entry) => entry.title), ["Talks refused", "Both at once"], "the host's own orders (no owner named) are the host's");
+  const est = projectForViewer(docs, ESTONIA).world.simulationHistory[0];
+  assert.equal("filedEvents" in est, false, "a seat with no order in the turn is told of none");
+  for (const viewer of [RUSSIA, LATVIA, ESTONIA]) {
+    const view = text(projectForViewer(docs, viewer));
+    assert.equal(view.includes("CANARY-NOBODYS-ORDER"), false, "a card that answered nobody's order stays with the host");
+    if (viewer !== RUSSIA) assert.equal(view.includes("CANARY-RU-REFUSED"), false, `${viewer} is not told of another's refused order`);
+  }
+});
+
+// A person's terms of peace to another person were in every player's view (the gap audit of 2026-11-18, N2): the
+// screens showed them to the two alone, the network to everyone.
+test("terms of peace are the two parties' own until they are taken, and a call to arms the defender's and its ally's until answered", () => {
+  const docs = state();
+  const offer = (id, from, to, status) => ({ id, warId: "war-1", from, to, terms: { territory: "restored" }, date: "2014-04-01", round: 4, status, source: "player" });
+  docs.world.peaceOffers = [
+    offer("open-ru-lv", RUSSIA, LATVIA, "open"),
+    offer("declined-lv-ru", LATVIA, RUSSIA, "declined"),
+    offer("open-est-ru", ESTONIA, RUSSIA, "open"),
+    offer("taken-est-lv", ESTONIA, LATVIA, "accepted"),
+  ];
+  const call = (id, defender, ally, status) => ({ id, warId: "war-1", defender, ally, attackers: [ESTONIA], date: "2014-04-01", round: 4, status });
+  docs.world.callsToArms = [call("ask-ru-lv", RUSSIA, LATVIA, "open"), call("ask-est-ru", ESTONIA, RUSSIA, "lapsed"), call("joined-ru-est", RUSSIA, ESTONIA, "honoured")];
+  const offers = (viewer) => projectForViewer(docs, viewer).world.peaceOffers.map((entry) => entry.id).sort();
+  const calls = (viewer) => projectForViewer(docs, viewer).world.callsToArms.map((entry) => entry.id).sort();
+  assert.deepEqual(offers(LATVIA), ["declined-lv-ru", "open-ru-lv", "taken-est-lv"]);
+  assert.deepEqual(offers(RUSSIA), ["declined-lv-ru", "open-est-ru", "open-ru-lv", "taken-est-lv"]);
+  assert.deepEqual(offers(ESTONIA), ["open-est-ru", "taken-est-lv"], "a peace taken is everyone's to know");
+  assert.deepEqual(calls(LATVIA), ["ask-ru-lv", "joined-ru-est"]);
+  assert.deepEqual(calls(ESTONIA), ["ask-est-ru", "joined-ru-est"]);
+  assert.ok(!text(projectForViewer(docs, ESTONIA)).includes("open-ru-lv"), "not a byte of another's terms");
+});
+
+// The review of 2026-11-18, views 6, 7, 8 and 11: what each view carried beyond, or short of, what its government knows.
+test("an event's new intelligence rating is exact for its own government only, as world.intelligence is", () => {
+  const docs = state();
+  docs.events[0].impacts.polityChanges = [
+    { operation: "update", code: RUSSIA, intelligence: 83 },
+    { operation: "update", code: LATVIA, intelligence: 47, reputation: 61 },
+  ];
+  const ratings = (viewer) => Object.fromEntries(projectForViewer(docs, viewer).events[0].impacts.polityChanges.map((change) => [change.code, change.intelligence]));
+  assert.deepEqual(ratings(RUSSIA), { [RUSSIA]: 83, [LATVIA]: 50 });
+  assert.deepEqual(ratings(LATVIA), { [RUSSIA]: 80, [LATVIA]: 47 });
+  assert.deepEqual(ratings(ESTONIA), { [RUSSIA]: 80, [LATVIA]: 50 });
+  assert.equal(projectForViewer(docs, ESTONIA).events[0].impacts.polityChanges[1].reputation, 61, "reputation is public");
+});
+
+test("a document's holders are told they hold it and who sent it, never who else holds it", () => {
+  const docs = state();
+  docs.world.reports.push(
+    { id: "rep-shared", title: "Memo", body: "b", from: RUSSIA, visibleTo: [RUSSIA, LATVIA, ESTONIA] },
+    { id: "rep-stolen", title: "Note", body: "b", visibleTo: [ESTONIA, "Kingdom of Sweden"], interceptedBy: [LATVIA] },
+  );
+  const holders = (viewer, id) => projectForViewer(docs, viewer).world.reports.find((report) => report.id === id)?.visibleTo;
+  assert.deepEqual(holders(LATVIA, "rep-shared"), [RUSSIA, LATVIA], "the sender and itself");
+  assert.deepEqual(holders(ESTONIA, "rep-shared"), [RUSSIA, ESTONIA]);
+  assert.deepEqual(holders(RUSSIA, "rep-shared"), [RUSSIA]);
+  assert.deepEqual(holders(LATVIA, "rep-stolen"), [ESTONIA], "a stolen copy is still nobody's published paper");
+  assert.equal(holders(LATVIA, "rep-public"), null);
+});
+
+test("how any two governments stand is in every view; the narrator's account of it only in the parties'", () => {
+  const relations = (viewer) => projectForViewer(state(), viewer).world.relations;
+  const lv = relations(LATVIA);
+  assert.deepEqual(lv.map((relation) => relation.id).sort(), ["rel-lv-ru", "rel-ru-est"]);
+  const theirs = lv.find((relation) => relation.id === "rel-ru-est");
+  assert.equal(theirs.score, -61);
+  assert.equal(theirs.status, "rival");
+  assert.equal("summary" in theirs, false);
+  assert.equal(lv.find((relation) => relation.id === "rel-lv-ru").summary, "a relation both know");
+  assert.equal(relations(RUSSIA).find((relation) => relation.id === "rel-ru-est").summary, "CANARY-RU-EST-RELATION");
+});
+
+test("the Game Master's standing reminders reach every view, so every device's AI is bound by them", () => {
+  const docs = state();
+  docs.world.simulationReminders = [{ id: "r1", text: "The Baltic is frozen this winter.", createdRound: 2 }];
+  const whole = normalizeWorldState(docs.world).simulationReminders;
+  assert.ok(Array.isArray(whole) && whole.length === 1, "the save keeps them");
+  for (const viewer of [LATVIA, RUSSIA, ESTONIA]) assert.deepEqual(projectForViewer(docs, viewer).world.simulationReminders, whole);
 });

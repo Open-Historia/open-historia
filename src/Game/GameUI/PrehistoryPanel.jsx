@@ -490,6 +490,7 @@ const PrehistoryPanel = ({ details, onDetailsChange }) => {
         <div style={{ ...hintStyle, marginBottom: "0.5rem" }}>
           Add or edit the diplomatic relationships, treaties and ongoing processes that already exist on the start date.
           They become canonical game records when a new campaign opens. Use the exact scenario country names.
+          {" "}{draft.updates.canonicalUpdates.length} / {MAX_SEMANTIC_DAY_ONE_FACTS} semantic facts.
           Existing wars and subordinations remain removable; the native war and puppet authoring contracts are unchanged.
         </div>
         {polities.length ? <datalist id="oh-prehistory-polities">{polities.map((name) => <option key={name} value={name} />)}</datalist> : null}

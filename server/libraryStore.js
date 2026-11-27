@@ -1,7 +1,9 @@
 /*! Open Historia — portions (regions.geojson scenario asset + custom-map seeding) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import fs from "fs";
+import { scenarioFilesFingerprint } from "./scenarioFingerprint.js";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "./gameFeatures.js";
 import { assertEconomicDisplayCurrencyChoice } from "./economicDisplayCurrency.js";
+import { standInOf } from "./sharedGameStandIn.js";
 import { layOutScenarioBundle } from "./mapProjection.js";
 import path from "path";
 import url from "url";
@@ -452,6 +454,11 @@ const RUNTIME_ONLY_JSON_ASSET_FILES = {
   // file on purpose: it is refreshed AFTER a jump's world write lands, and a
   // second writer on world.json would race it.
   intercepts: "storage/intercepts.json",
+  // A shared game's session (src/multiplayer/host/sessionRecord.js): who plays
+  // which country, on which device, and the round, so the game can be shared
+  // again another day. Written by the host's engine window only; never part of
+  // an export, and a copy of the game is a new campaign it does not apply to.
+  shared: "storage/shared.json",
 };
 const RESTORE_POINT_DIR = "storage/snapshots";
 
@@ -528,6 +535,7 @@ const JSON_ASSET_DEFAULTS = {
   snapshots: [],
   snapshotsIndex: { entries: [] },
   intercepts: {},
+  shared: {},
 };
 
 // The world keys a fresh game inherits from its scenario. MIRRORED in
@@ -1920,6 +1928,9 @@ const readGameFigures = (gameId) => {
       Number.isFinite(Number(gameData?.round)) && Number(gameData.round) > 0
         ? Math.trunc(Number(gameData.round))
         : 1,
+    // A shared game's frame on this device, which the library never lists
+    // (server/sharedGameStandIn.js).
+    standIn: standInOf(gameData),
   };
   gameFiguresCache.set(gameId, { stamp, figures });
   return figures;
@@ -1977,6 +1988,7 @@ const buildGameCatalog = () => {
        ownCoverImageUrl,
        pendingActions: figures.pendingActions,
        round: figures.round,
+       ...(figures.standIn ? { standIn: figures.standIn } : {}),
        scenarioAccentColor: scenario?.accentColor ?? meta.accentColor,
        // The first client reader of `missing`: pressing Play on a game whose map
        // is not here has to offer to go and get it rather than open a blank world.
@@ -3066,7 +3078,12 @@ const deleteGame = (gameId) => {
   // Deleting the open game opens the next one: not under a game being hosted.
   if (getGameManifest().activeGameId === gameId) assertActiveGameMayChange("");
 
-  moveDirectoryToTrash(resolved, "game", gameId);
+  // A shared game's stand-in held nothing of the player's (its documents were
+  // the host's view): gone for good, and never a "Recently deleted" entry
+  // among the player's own (server/sharedGameStandIn.js). Tried again a few
+  // times, as the trash's own move is, while a handle on Windows lets go.
+  if (standInOf(readJsonFile(getGameJsonPath(gameId, "game"), {}))) fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 4, retryDelay: 150 });
+  else moveDirectoryToTrash(resolved, "game", gameId);
   invalidateOwnerSchemaCache("game", gameId);
   gameFiguresCache.delete(gameId);
 
@@ -3593,6 +3610,43 @@ const resolveRuntimeGeojsonAsset = (assetKey) => {
     }
   }
   return { contentType: "application/json; charset=utf-8", sourcePath };
+};
+
+// A scenario's map as one checksum (scenarioFingerprint.js), which a shared
+// game's host states in its lobby and each guest checks its own copy against:
+// the files the runtime draws the map from (resolveRuntimeGeojsonAsset: the
+// scenario's own, or the stock world's regions where it has none), each first
+// brought to the owners' schema the runtime serves it in, so two copies of one
+// map agree wherever they were first opened; and the scenario's own tiles, by
+// size.
+const scenarioMapFingerprint = (scenarioId) => {
+  ensureScenarioStore();
+  const id = String(scenarioId ?? "").trim();
+  if (!id || !fs.existsSync(getScenarioMetaPath(id))) throw new Error(`The scenario "${id}" is not in this library.`);
+  ensureScenarioOwnerSchema(id);
+  const servedPath = (assetKey) => {
+    const own = getScenarioUploadPath(id, assetKey);
+    if (fs.existsSync(own)) return own;
+    // The stock world's regions, for a scenario with none of its own, exactly as
+    // resolveRuntimeGeojsonAsset serves it: never for the built-in scenario.
+    if (assetKey !== "regionsGeojson" || id === DEFAULT_SCENARIO_ID) return null;
+    const stockPath = resolveStockRegionsPath();
+    if (stockPath && stockPath !== STOCK_REGIONS_PATH) ensureScenarioOwnerSchema(DEFAULT_SCENARIO_ID);
+    return stockPath || null;
+  };
+  const tilePath = (assetKey) => {
+    const own = getScenarioUploadPath(id, assetKey);
+    return fs.existsSync(own) ? own : null;
+  };
+  return scenarioFilesFingerprint({
+    files: {
+      regions: servedPath("regionsGeojson"),
+      cities: servedPath("citiesGeojson"),
+      background: servedPath("backgroundData"),
+      ownBasemaps: servedPath("ownBasemapsData"),
+    },
+    tiles: { cities: tilePath("cities"), countries: tilePath("countries"), regions: tilePath("regions") },
+  });
 };
 
 // Restore points, one file each (server/restorePoints.js): storage/snapshots/
@@ -4991,6 +5045,7 @@ const removeGameParkedTurn = (gameId) => {
 };
 
 export {
+  scenarioMapFingerprint,
   createGame,
   createScenario,
   deleteGame,

@@ -96,11 +96,12 @@ test("a player's typed order reaches their troops through the function the skip'
   assert.equal(read("./frontApply.js").includes("COMMAND_WORDS"), false);
   assert.match(skip, /const foughtBefore = await forecastTurnFronts\(\{\s*world: bundle\.world,/);
   assert.match(skip, /if \(frontsForecast\) frontsForecast\.orderFunction = segmentCount === 1 && plannedActionCount > 0;/);
-  assert.match(skip, /lookups: withFrontOrderFunction\(buildTaskLookups\(segmentBundle\), frontOrderCall\(context\)\),/);
+  // (Its lookups are declared as whoever pays for the round says: gameplay.js skipRules.)
+  assert.match(skip, /lookups: withFrontOrderFunction\(buildTaskLookups\(segmentBundle(?:, \{ enabled: skipRules\(\)\.lookups \})?\), frontOrderCall\(context\)\),/);
   assert.match(skip, /frontsGiven: normalizeArray\(context\.variables\?\.frontsForecast\?\.given\),/);
   assert.match(skip, /givenOrders: normalizeArray\(result\.frontsGiven\),/);
   // (It is no lookup: the lookup directive is not said for it alone.)
-  assert.match(skip, /lookups\.tools\.some\(\(tool\) => tool\?\.name !== FRONT_ORDER_FUNCTION\)\) blocks\.push\(activeLookupDirective\(\)\);/);
+  assert.match(skip, /lookups\.tools\.some\(\(tool\) => tool\?\.name !== FRONT_ORDER_FUNCTION\)\) blocks\.push\(activeLookupDirective\((?:skipRules\(\)\.unlimited)?\)\);/);
 
   // The lines of a call: the player's own, each with the day it is given.
   const read2 = (text) => readGivenOrders(text, { players: ["Aland"], fromDate: "2024-03-01", days: 10 });

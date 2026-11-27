@@ -227,18 +227,81 @@ test("the advisor opens and steers the player's work and reports on any; it neit
   assert.equal(rocket.status, "active");
 });
 
-test("the engine's own ops may stall an entry whose intelligence is in doubt; a confirmation takes it up", () => {
+test("a doubt about where intelligence came from never stops the work: an entry a save stalled for it works again", () => {
+  // The doubt is the knower's (projects.js spyIntelDoubtOps): a stall for it
+  // ("blocked") stopped another country's own programme for good.
   const theirs = normalizeProjectEntry({ name: "Rocket Programme", ownerCode: "Germany", plan: PLAN, linkedSpyIds: ["spy-1"] });
   const doubted = applyProjectOpsToWorld({
     actor: "engine",
     world: worldWith([theirs]),
-    ops: [{ op: "update", name: "Rocket Programme", verification: "doubted", status: "stalled", stallReason: "blocked" }],
+    ops: [{ op: "update", name: "Rocket Programme", verification: "doubted" }],
   }).world.projects[0];
-  assert.equal(doubted.status, "stalled");
-  assert.equal(doubted.stallReason, "blocked");
-  const confirmed = applyProjectOps([doubted], [{ op: "update", name: "Rocket Programme", verification: "confirmed" }])[0];
-  assert.equal(confirmed.status, "active");
-  assert.equal(confirmed.verification, "confirmed");
+  assert.deepEqual([doubted.status, doubted.stallReason, doubted.verification], ["active", "", "doubted"]);
+  const saved = normalizeProjectEntry({ ...theirs, status: "stalled", stallReason: "blocked", verification: "doubted" });
+  assert.deepEqual([saved.status, saved.stallReason, saved.verification], ["active", "", "doubted"]);
+  assert.equal(normalizeProjectEntry({ ...theirs, status: "stalled", stallReason: "funds" }).status, "stalled", "a stall for want of money is the owner's own");
+  const confirmed = applyProjectOps([doubted], [{ op: "update", name: "Rocket Programme", verification: "confirmed" }], { engine: true })[0];
+  assert.deepEqual([confirmed.status, confirmed.verification], ["active", "confirmed"]);
+});
+
+// The verdict is the engine's (projects.js spyVerdictOps): told to refute an
+// entry "and fail it", the model ended an AI country's real work, so no other
+// writer gives one, whatever its op says.
+test("a verdict on doubted intelligence is the engine's alone: the story and the advisor give none", () => {
+  const doubted = normalizeProjectEntry({ name: "Rocket Programme", ownerCode: "Germany", plan: PLAN, linkedSpyIds: ["spy-1"], verification: "doubted" });
+  const told = applyProjectOps([doubted], [{ op: "update", name: "Rocket Programme", verification: "refuted", lastUpdate: "The yards are busy." }])[0];
+  assert.deepEqual([told.verification, told.lastUpdate, told.status], ["doubted", "The yards are busy.", "active"]);
+  const advised = applyProjectOpsToWorld({ actor: "ai", world: worldWith([doubted]), ops: [{ op: "update", name: "Rocket Programme", verification: "confirmed" }] }).world.projects[0];
+  assert.equal(advised.verification, "doubted");
+});
+
+// What other players lent a time skip's copy of the board is theirs (seatBoards.js):
+// counted, it took the room of the board's own history, or was left out of the skip.
+// Its own entries past the limit are never dropped either: the save is refused
+// whole, for a recovery that loses nothing (projectRecovery.js).
+test("what other players lent a skip counts toward no limit of the board, and is never dropped", () => {
+  const own = Array.from({ length: 120 }, (_, n) => ({ id: `h-${n}`, name: `Host ${n}`, plan: PLAN, status: n % 2 ? "complete" : "active" }));
+  const lent = [{ id: "g-1", name: "Guest work", ownerCode: "Russia", lentFrom: "Russia", plan: PLAN }];
+  const board = normalizeWorldState({ projects: [...own, ...lent] }).projects;
+  assert.equal(board.length, 121);
+  assert.ok(board.some((row) => row.lentFrom === "Russia"), "the lent entry stays");
+  assert.throws(
+    () => normalizeWorldState({ projects: [...own, { id: "h-new", name: "One more", plan: PLAN }, ...lent] }),
+    (error) => error.code === "PROJECT_BOARD_OVER_CAPACITY" && error.count === 121,
+    "the board's own entries are held to the limit, and none is dropped",
+  );
+  // A create on a full board is refused, whatever is lent beside it.
+  const created = applyProjectOps(board, [{ op: "create", name: "One more", plan: PLAN }]);
+  assert.equal(created.length, 121);
+  const roomy = applyProjectOps([...own.slice(1), ...lent], [{ op: "create", name: "One more", plan: PLAN }]);
+  assert.equal(roomy.length, 121, "the lent entry takes no room of the board's own");
+});
+
+// A belief (projectEngine.js isBelief): a programme a service was made to believe
+// in by material planted on its turned agent. Only a time skip's create opens one.
+test("a belief is kept as one and runs no setback; it is a time skip's alone to open", () => {
+  const made = applyProjectOps([], [{ op: "create", name: "Phantom Fleet", ownerCode: "Germany", plan: PLAN, believedBy: "France" }])[0];
+  assert.equal(made.believedBy, "France");
+  assert.equal(normalizeProjectEntry({ ...made, believedBy: "", belief: true }).belief, true);
+  assert.equal("belief" in normalizeProjectEntry({ name: "Plain", plan: PLAN, belief: "yes" }), false);
+  const kept = applyProjectOps([made], [{ op: "setback", name: "Phantom Fleet", days: 30 }])[0];
+  assert.deepEqual(kept.adjustments, [], "nobody works on it to set back");
+  // A restatement of real work never makes it a belief.
+  const real = normalizeProjectEntry({ name: "Rocket Programme", ownerCode: "Germany", plan: PLAN });
+  assert.equal("believedBy" in applyProjectOps([real], [{ op: "create", name: "Rocket Programme", ownerCode: "Germany", believedBy: "France" }])[0], false);
+  // The panel's and the advisor's door opens no belief.
+  const own = applyProjectOpsToWorld({ actor: "ai", playerCountry: "France", world: worldWith([]), ops: [{ op: "create", name: "Our Own", plan: PLAN, believedBy: "France" }] }).world.projects[0];
+  assert.deepEqual([own.name, "believedBy" in own], ["Our Own", false]);
+});
+
+test("what other governments know of an entry, and where a skip lent it from, are kept, and never a create's to say", () => {
+  const known = normalizeProjectEntry({ name: "Rocket Programme", ownerCode: "Germany", plan: PLAN, knownBy: { France: { spyIds: ["spy-1"], verification: "doubted" }, Italy: { spyIds: [] }, "": { spyIds: ["x"] } }, lentFrom: "Germany" });
+  assert.deepEqual(known.knownBy, { France: { spyIds: ["spy-1"], verification: "doubted" } });
+  assert.equal(known.lentFrom, "Germany");
+  assert.equal("knownBy" in normalizeProjectEntry({ name: "Plain", plan: PLAN }), false);
+  const made = applyProjectOps([], [{ op: "create", name: "Planted", plan: PLAN, knownBy: { France: { spyIds: ["spy-1"] } }, lentFrom: "Spain" }])[0];
+  assert.equal("knownBy" in made, false);
+  assert.equal("lentFrom" in made, false);
 });
 
 // ---- the event path ---------------------------------------------------------------

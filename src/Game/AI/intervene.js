@@ -44,6 +44,8 @@ export const journalTurn = ({
     mode = "jump",
     receipt = null,
     covertOperations = [],
+    scriptedNativeOutcomes = [],
+    scriptedEventState = null,
 } = {}) => {
     const excluded = new Set(asArray(excludeEventIds).map(asText).filter(Boolean));
     return {
@@ -71,6 +73,8 @@ export const journalTurn = ({
         // still true of the kept prefix, and told again with the intervention.
         receipt: receipt && typeof receipt === "object" ? receipt : null,
         covertOperations: asArray(covertOperations),
+        scriptedNativeOutcomes: asArray(scriptedNativeOutcomes),
+        ...(scriptedEventState && typeof scriptedEventState === "object" ? {scriptedEventState} : {}),
     };
 };
 
@@ -117,6 +121,15 @@ export const truncateTurn = (journal, keptCount, { originDate = "", minimumDate 
     const keptIds = new Set(kept.map((event) => asText(event?.id)).filter(Boolean));
     const keepUpdates = (updates) => asArray(updates).filter((update) => referencesKept(update, journalIds, keptIds));
     const closingDate = closingDateAfterIntervene({ keptEvents: kept, originDate, minimumDate });
+    const nativeOutcomes = asArray(journal?.scriptedNativeOutcomes);
+    // Do not roll back and then discard an authored event on a day the new
+    // origin has already reached: the next skip could never fire it again.
+    if(nativeOutcomes.some(req=>!keptIds.has(req.eventId)&&compareGameDates(req.date,closingDate)<=0)){
+        throw new Error("Intervene cannot split a day containing a pending scripted native outcome. Reveal that outcome first, or use Undo.");
+    }
+    const receipts = journal?.scriptedEventState;
+    const scriptedEventState = receipts && typeof receipts === "object"
+        ? Object.fromEntries(Object.entries(receipts).filter(([,entry])=>isGameDate(entry?.date)&&compareGameDates(entry.date,closingDate)<=0)) : undefined;
     return {
         result: {
             events: kept,
@@ -139,6 +152,8 @@ export const truncateTurn = (journal, keptCount, { originDate = "", minimumDate 
             clearActions: journal?.clearActions !== false,
             mode: asText(journal?.mode) || "jump",
             covertOperations: asArray(journal?.covertOperations),
+            scriptedNativeOutcomes: nativeOutcomes.filter(req=>keptIds.has(req.eventId)),
+            ...(scriptedEventState ? {scriptedEventState} : {}),
         },
         kept,
         dropped,

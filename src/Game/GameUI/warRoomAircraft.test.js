@@ -172,16 +172,21 @@ test("on the map: the reach of the air unit picked out, and rings where the bomb
 test("the seam: the host in a shared game, the write queue otherwise, never while a turn runs; the map read for a city", () => {
   assert.match(writes, /export const sendAirStrikeOp = async \(op, \{ turnRunning = \(\) => false, readChart = async \(\) => null \} = \{\}\) => \{/);
   assert.match(writes, /const apply = \(world, given, context\) => applyAirStrikeOp\(world, given, \{ \.\.\.context, air: activeWars\(\)\.air \}\);/);
-  assert.match(writes, /await sendHeldToMap\(sent, \{ request: "airstrike", apply, needsChart: sent\.op === "airstrike" && sent\.kind === "city" \}, \{ turnRunning, readChart \}\);/);
+  assert.match(writes, /const city = sent\.op === "airstrike" && sent\.kind === "city";\s*await sendHeldToMap\(sent, \{ request: "airstrike", apply, needsChart: city, needsCities: city \}, \{ turnRunning, readChart \}\);/);
   assert.equal(writes.split("if (turnRunning()) throw new Error(TURN_RUNNING_REFUSAL);").length - 1, 3, "the strike goes the fleets' way: no seam of its own");
-  // The host: the seat's own country, its own map, not while a round is resolved, and not in a scenario without air units.
-  assert.match(host, /airstrike: async \(connection, \{ op \}, seat\) => \{\s*if \(round\.status\(\)\.phase === "resolving"\)/);
-  assert.match(host, /applyAirStrikeOp\(world, sent, \{ player: seat\.country, date: clean\(game\?\.gameDate\), round: game\?\.round, chart, air: activeWars\(\)\.air \}\)/);
+  // The host: the seat's own country, its own map, and not in a scenario without
+  // air units; in the host's one order, so a strike given while a round is
+  // resolved waits behind it and is the next round's (host/worldQueue.js).
+  assert.match(host, /airstrike: async \(connection, \{ op \}, seat, \{ store, hold \}\) => \{\s*const sent = cleanAirStrikeOp\(op\);/);
+  assert.doesNotMatch(host, /const (?:AT_ONCE|THINKING) = new Set\(\[[^\]]*"airstrike"/, "applied in the queue, as every change to the world is");
+  // (The queue's entry names the device it came from, so a player's waiting entries are bounded: host/seatBounds.js.)
+  assert.match(host, /queue\.run\(message\.t, \(entry\) => apply\(entry\)(?:, \{ owner: connection\.device \})?\)/);
+  assert.match(host, /applyAirStrikeOp\(world, sent, \{ player: seat\.country, date: clean\(game\?\.gameDate\), round: game\?\.round, chart, cities, air: activeWars\(\)\.air \}\)/);
 });
 
 test("a shared game carries a strike as a request of its own, held to its size; a strike waiting is its owner's to see", () => {
   const ask = (op) => validate(PLAYER_REQUESTS.airstrike, { t: "airstrike", id: "00000000000000a1", op });
-  assert.equal(ask({ op: "airstrike", unit: "u1", kind: "city", to: [21, 57.5], target: "Riga", country: "Latvia", people: 600000 }).ok, true);
+  assert.equal(ask({ op: "airstrike", unit: "u1", kind: "city", to: [21, 57.5], target: "Riga", country: "Latvia" }).ok, true);
   assert.equal(ask({ op: "unairstrike", unit: "u1" }).ok, true);
   assert.equal(ask({ op: "airstrike", unit: "u1", to: [[[21]]] }).ok, false, "nothing nested past what an order has");
   assert.equal(validate(PLAYER_REQUESTS.airstrike, { t: "airstrike", id: "00000000000000a1", op: { op: "unairstrike", unit: "u1" }, extra: 1 }).ok, false, "and nothing beside it");

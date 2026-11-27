@@ -42,9 +42,11 @@ export const seatsByCountry = ({ cities = [], records = [], ownerOf = () => "" }
     }
     const key = holder ? diplomaticKeyOf(ownerOf(String(holder.id))) : "";
     if (!key) continue;
-    const population = Number(city.population) || 0;
-    if (best.has(key) && best.get(key) >= population) continue;
-    best.set(key, population);
+    if(city.capitalOwner&&diplomaticKeyOf(city.capitalOwner)!==key)continue;
+    const candidate={priority:city.capitalOwner?1:0,population:Number(city.population)||0};
+    const previous=best.get(key);
+    if(previous&&(previous.priority>candidate.priority||(previous.priority===candidate.priority&&previous.population>=candidate.population)))continue;
+    best.set(key,candidate);
     seats.set(key, { lng, lat, name: String(city.name ?? "") });
   }
   // Countries with no capital on the map: the middle of their largest region.

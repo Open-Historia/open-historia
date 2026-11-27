@@ -9,7 +9,7 @@ import { HELPERS, buildSpeechHelper } from "./build-speech-helpers.mjs";
 const ROOT = path.join(path.dirname(url.fileURLToPath(import.meta.url)), "..");
 
 // What server/ and electron/ import as they run: server/desktopPackaging.test.js keeps this list true.
-export const RUNTIME_DEPENDENCIES = ["electron-updater", "express", "jszip", "pmtiles"];
+export const RUNTIME_DEPENDENCIES = ["@noble/hashes", "electron-updater", "express", "jszip", "pmtiles"];
 
 export const packagedManifest = (manifest) => {
   const { dependencies = {}, devDependencies = {}, optionalDependencies = {}, ...rest } = manifest;

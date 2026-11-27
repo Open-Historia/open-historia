@@ -53,7 +53,7 @@ test("nextEvents is built AFTER espionage has appended its events", () => {
   // it cannot see an exposure, and that copy is what writeEventsState persists —
   // so the events are never written anywhere and the player never sees them.
   const espionageAppend = at("freshEvents.push(entry);", "the espionage event append");
-  const nextEvents = at("const nextEvents = [...priorEvents, ...freshEvents];", "the nextEvents copy");
+  const nextEvents = at("let nextEvents = [...priorEvents, ...freshEvents];", "the nextEvents copy");
   assert.ok(
     espionageAppend < nextEvents,
     "nextEvents must be built after the espionage loop, or espionage events are never persisted",
@@ -74,9 +74,10 @@ test("the board runs BEFORE anything is written", () => {
 test("covert operations are synced to the board before the board is asked about them", () => {
   // Otherwise the model is shown an entry describing an agent that was caught a
   // moment ago, and asked to reason about it as though it were still in place.
-  const sync = at("spyOperationOps(", "the covert-operation sync");
+  // (Every service's, each on its own board: runtime/agentBoards.js.)
+  const sync = at("syncBoardsWithAgents(", "the covert-operation sync");
   const board = at("if (projects) {", "the projects/board call");
-  assert.ok(sync < board, "spyOperationOps must run before the board task sees the entries");
+  assert.ok(sync < board, "syncBoardsWithAgents must run before the board task sees the entries");
 });
 
 // --- The Board reads every Canonical event ----------------------------------

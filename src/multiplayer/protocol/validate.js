@@ -29,9 +29,17 @@
 
 const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
-class Invalid extends Error {}
-const invalid = (path, reason) => {
-  throw new Invalid(`${path || "$"}: ${reason}`);
+// `longest`: for a string longer than its node allows, the most it may be,
+// which a player's own screen says in words (client/gameClient.js): the
+// schema's words ("$.text: longer than 1500") are for the log.
+class Invalid extends Error {
+  constructor(message, { longest = 0 } = {}) {
+    super(message);
+    this.longest = longest;
+  }
+}
+const invalid = (path, reason, detail) => {
+  throw new Invalid(`${path || "$"}: ${reason}`, detail);
 };
 
 const isPlainObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -39,7 +47,7 @@ const isPlainObject = (value) => Boolean(value) && typeof value === "object" && 
 
 const checkString = (node, value, path) => {
   if (typeof value !== "string") invalid(path, "expected a string");
-  if (value.length > node.max) invalid(path, `longer than ${node.max}`);
+  if (value.length > node.max) invalid(path, `longer than ${node.max}`, { longest: node.max });
   if (value.length < (node.min ?? 0)) invalid(path, `shorter than ${node.min}`);
   if (node.pattern && !node.pattern.test(value)) invalid(path, "does not match its pattern");
   if (node.enum && !node.enum.includes(value)) invalid(path, "not an allowed value");
@@ -134,12 +142,13 @@ const check = (node, value, path) => {
   }
 };
 
-// { ok: true, value } with a checked copy, or { ok: false, error }.
+// { ok: true, value } with a checked copy, or { ok: false, error }, and with
+// `longest` when what failed was a string longer than its schema allows.
 export const validate = (schema, value) => {
   try {
     return { ok: true, value: check(schema, value, "$") };
   } catch (error) {
-    if (error instanceof Invalid) return { ok: false, error: error.message };
+    if (error instanceof Invalid) return { ok: false, error: error.message, ...(error.longest ? { longest: error.longest } : {}) };
     throw error;
   }
 };

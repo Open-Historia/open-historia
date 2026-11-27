@@ -17,14 +17,16 @@ import { MAP_SETTING_KEYS, getMapSettingDefaultOn } from "./mapSettings.js";
 export const PRESENCE_DEBOUNCE_MS = 1500;
 
 // What to show: the main menu, or who the player is playing, in which scenario
-// and on which in-game date.
-export const presenceFor = ({ activeGame, playerName = "", scenarioName = "", inMenu = false } = {}) => {
+// and on which in-game date. The open game's canonical date wins over the
+// library's last-read date; gameId distinguishes saves only on the local wire.
+export const presenceFor = ({ activeGame, playerName = "", scenarioName = "", gameDate = "", inMenu = false } = {}) => {
   if (!activeGame || inMenu) return { scene: "menu" };
   return {
     scene: "game",
+    ...(activeGame.id ? { gameId: String(activeGame.id) } : {}),
     player: String(playerName || ""),
     scenario: String(scenarioName || ""),
-    date: formatGameDateReadable(activeGame.currentDate) || "",
+    date: formatGameDateReadable(gameDate || activeGame.currentDate) || "",
   };
 };
 

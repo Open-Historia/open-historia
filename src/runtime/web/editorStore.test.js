@@ -90,3 +90,15 @@ test("a new document never takes an existing id", async () => {
   assert.equal(again.body.id, "europe-2");
   assert.deepEqual((await list()).map((d) => d.id), ["europe-2", "europe"]);
 });
+
+test("new map documents round-trip authored bilateral baselines and pending edits in web storage", async () => {
+  fake.clear();
+  const relations = [{ id: "rel-1", a: "Vinland", b: "Markland", score: 0, status: "neutral" }];
+  const relationEdits = [{ a: "Vinland", b: "Markland", score: -37 }];
+  const created = await call("POST", null, { name: "Diplomacy Map", relations, relationEdits });
+  assert.equal(created.status, 201);
+  const reopened = await call("GET", created.body.id);
+  assert.equal(reopened.status, 200);
+  assert.deepEqual(reopened.body.relations, relations);
+  assert.deepEqual(reopened.body.relationEdits, relationEdits);
+});

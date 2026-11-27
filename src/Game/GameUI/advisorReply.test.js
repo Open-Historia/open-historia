@@ -64,10 +64,16 @@ test("removing an order a skip already resolved keeps its outcome", () => {
   assert.deepEqual(reverts, []);
 });
 
-test("an update changes only the fields it names", () => {
+test("an update changes only the fields it names, and what the old words alone made follows the new", () => {
+  // "Raise taxes" was titled by its words: the new words title it, and are its
+  // raw input (runtime/actionEdit.js), as the player's own Edit does.
   const { next, items } = planAdvisorActionEdits(queue(), [{ id: "a1", text: "Raise taxes by 2%", kind: "chat" }], normalize);
-  assert.deepEqual(next[0], { id: "a1", title: "Raise taxes", text: "Raise taxes by 2%", kind: "chat", status: "planned" });
-  assert.deepEqual(items, [{ change: "updated", title: "Raise taxes" }]);
+  assert.deepEqual(next[0], { id: "a1", title: "Raise taxes by 2%", text: "Raise taxes by 2%", rawInput: "Raise taxes by 2%", kind: "chat", status: "planned" });
+  assert.deepEqual(items, [{ change: "updated", title: "Raise taxes by 2%" }]);
+  // A title of its own is kept when only the words change.
+  const titled = [{ id: "b1", title: "Fiscal plan", text: "Raise taxes", kind: "action", status: "planned" }];
+  const kept = planAdvisorActionEdits(titled, [{ id: "b1", text: "Cut spending" }], normalize);
+  assert.deepEqual(kept.next[0], { id: "b1", title: "Fiscal plan", text: "Cut spending", rawInput: "Cut spending", kind: "action", status: "planned" });
 });
 
 test("a stale id is queued as a new action, and the advisor is told", () => {
@@ -205,6 +211,32 @@ test("a reply's fences are stripped and each becomes what the panel draws", () =
   assert.deepEqual(parsed.institutionDraftProblems, []);
   assert.equal(parsed.deployProblems.length, 1);
   assert.match(parsed.deployProblems[0], /1st Air Wing/);
+});
+
+test("1912 December 6: Tangier Action and diplomatic draft survive fused quoted fences", () => {
+  const raw = [
+    "The Tangier protocol is ready for your Proceed.",
+    "> Monsieur,",
+    "> France is prepared to settle the signature date with Madrid.",
+    "```actions",
+    JSON.stringify([{ title: "Tangier Protocol Signature and Ratification Coordination",
+      text: "Finalize the protocol with Madrid and coordinate signature and ratification." }]),
+    '```"```senddraft',
+    JSON.stringify([{ country: "Kingdom of Spain" }]),
+    '```"',
+  ].join("\n");
+  const parsed = parseAdvisorReply(raw);
+  assert.deepEqual(parsed.actionsProposal?.map((op) => op.title),
+    ["Tangier Protocol Signature and Ratification Coordination"]);
+  assert.deepEqual(parsed.actionBlockProblems, []);
+  assert.deepEqual(parsed.draftProblems, []);
+  assert.equal(parsed.messageDrafts?.length, 1);
+  assert.equal(parsed.messageDrafts[0].country, "Kingdom of Spain");
+  assert.match(parsed.messageDrafts[0].text, /France is prepared/);
+  assert.doesNotMatch(parsed.text, /```actions|```senddraft|Tangier Protocol Signature and Ratification Coordination/);
+  const reviewed = actionProposalsFromReply(parsed.actionsProposal, "advisor-reply-tangier-19121206");
+  assert.equal(reviewed.proposals.length, 1);
+  assert.equal(reviewed.proposals[0].operation, "create");
 });
 
 test("separate Action fences are all hidden and returned in stable review order", () => {

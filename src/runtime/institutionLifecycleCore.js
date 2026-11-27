@@ -25,6 +25,7 @@ import { resolvePolityIdentity } from "./polityIdentity.js";
 import { addGameDays, compareGameDatesNewestFirst, diffGameDays, isGameDate } from "./gameDates.js";
 import { stableAsciiId } from "./stableId.js";
 import { lookedUp } from "./worldLookups.js";
+import { ownedByPerson, sharedGameHostCountry } from "./humanPolities.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -61,6 +62,15 @@ const canonicalPolity = (value, world = {}) => {
 };
 
 const samePolity = (a, b) => lower(a) === lower(b);
+// Who acts now (`player`) and the people (humanPolities.js humanCountriesWith):
+// the countries humans play, as this world names them, the one acting first.
+// No AI or native authority decides for any of them, and a lifecycle thread is
+// made for whichever of them it concerns. Not given (single player, and every
+// caller that has only the one), the people are the one acting.
+const peopleOf = (people, player = "", world = {}) => unique([player, ...list(people).map((name) => canonicalPolity(name, world))]);
+// The person a lifecycle thread is for, among the polities it concerns: the one
+// acting if it is one of them, or else the first person who is; "" for none.
+const personAmong = (names, persons) => list(persons).find((person) => list(names).some((name) => samePolity(name, person))) || "";
 const memberByPolity = (institution, polity) => list(institution?.members).find((member) => samePolity(member?.polity, polity)) || null;
 const caseMap = (institution) => institution?.lifecycleCases && typeof institution.lifecycleCases === "object" ? institution.lifecycleCases : {};
 
@@ -195,7 +205,20 @@ const lifecycleEventDescription = (action, { founder, polity, name, reason }) =>
   return `${polity} ${String(action).toLocaleLowerCase()} ${name}${reason ? `: ${reason}` : "."}`;
 };
 
-const lifecycleEvent = ({ institution, action, polity = "", actor = "", date = "", reason = "", playerCountry = "" } = {}) => {
+// `playerRelated` is the game country's mark (single player's player, the
+// host's seat in a shared game), whoever acts: a guest's own business, which
+// the host runs for the guest's seat, was the host's own event on the host's
+// screen (FOLLOWUPS A8). Each other player's screen marks an event its
+// own by the polities the event says it concerns (runtime/eventConcerns.js,
+// multiplayer/host/projection.js), and a lifecycle event said none: a guest's
+// accession or withdrawal was "about the player" for the host alone (the
+// review of 2026-11-18, simulation 6). Where several people play (`people`),
+// it names the people it concerns. With one person nothing is added.
+const lifecycleEvent = ({ institution, action, polity = "", actor = "", date = "", reason = "", playerCountry = "", people = [] } = {}) => {
+  const persons = list(people).length > 1
+    ? unique([polity, actor].filter((name) => clean(name) && list(people).some((person) => samePolity(person, name))))
+    : [];
+  const gameCountry = sharedGameHostCountry() || playerCountry;
   const subject = polity || institution?.name || "Institution";
   const title = lifecycleEventTitle(action, subject, institution.name);
   const description = lifecycleEventDescription(action, { founder: actor || polity || "A founding government", polity, name: institution.name, reason });
@@ -211,7 +234,8 @@ const lifecycleEvent = ({ institution, action, polity = "", actor = "", date = "
     kind: "diplomacy",
     tags: ["Diplomacy", "Politics", "Institutions"],
     notable: ["founded", "joined", "left", "expelled", "dissolved"].includes(action),
-    playerRelated: samePolity(polity, playerCountry) || samePolity(actor, playerCountry),
+    playerRelated: samePolity(polity, gameCountry) || samePolity(actor, gameCountry),
+    ...(persons.length ? { concerns: persons } : {}),
     source: "institution-lifecycle",
     agency: {
       principal: institution?.name || institution?.id || "Institution",
@@ -283,16 +307,16 @@ const withdrawLifecycleProposal = (institution, proposalId, date) => {
   institution.proposals = { ...institution.proposals, [proposal.id]: { ...proposal, status: "withdrawn", lastUpdatedDate: clean(date) || proposal.lastUpdatedDate || "" } };
 };
 
-const foundingChat = ({ institution, invitees, founder, playerCountry, caseIds, date }) => {
-  const player = clean(playerCountry);
+const foundingChat = ({ institution, invitees, founder, persons = [], caseIds, date }) => {
   const actor = clean(founder);
-  if (!invitees.length || !player || (!samePolity(actor, player) && !invitees.some((name) => samePolity(name, player)))) return null;
+  const player = personAmong([actor, ...invitees], persons);
+  if (!invitees.length || !player) return null;
   const counterparts = samePolity(actor, player)
     ? invitees.filter((name) => !samePolity(name, player))
     : unique([actor, ...invitees.filter((name) => !samePolity(name, player) && !samePolity(name, actor))], 24);
   if (!counterparts.length) return null;
   const playerFounded = samePolity(actor, player);
-  return {
+  return ownedByPerson({
     id: `institution-founding-${institution.id}-${slug(date || "now")}`,
     countries: counterparts.map((name) => ({ name, code: "" })),
     messages: [{
@@ -308,13 +332,13 @@ const foundingChat = ({ institution, invitees, founder, playerCountry, caseIds, 
     title: `${institution.name} founding invitation`,
     lifecycleInstitutionId: institution.id,
     lifecycleCaseIds: caseIds,
-  };
+  }, player);
 };
 
-const accessionHearingChat = ({ institution, lifecycleCase, applicant = "", playerCountry = "", date = "", existingChats = [] } = {}) => {
-  const player = clean(playerCountry);
+const accessionHearingChat = ({ institution, lifecycleCase, applicant = "", persons = [], date = "", existingChats = [] } = {}) => {
   const polity = clean(applicant || lifecycleCase?.polity);
   if (!institution?.id || !lifecycleCase?.id || !polity) return null;
+  const player = personAmong([polity, ...list(institution.members).map((entry) => clean(entry?.polity))], persons);
   const playerIsApplicant = player && samePolity(player, polity);
   const playerIsMember = player && Boolean(memberByPolity(institution, player));
   if (!playerIsApplicant && !playerIsMember) return null;
@@ -334,12 +358,12 @@ const accessionHearingChat = ({ institution, lifecycleCase, applicant = "", play
       : `${polity} accepts the invitation and seeks ${lifecycleCase.requestedStatus || "member"} status in ${institution.name}.`,
     time: clean(date),
   };
-  const base = existing || {
+  const base = existing || ownedByPerson({
     id: `institution-accession-${slug(institution.id)}-${slug(polity)}-${slug(lifecycleCase.id)}`,
     messages: [initialMessage],
     status: "open",
     source: "institution-lifecycle",
-  };
+  }, player);
   return {
     ...base,
     institutionId: institution.id,
@@ -405,7 +429,7 @@ export const ensureInstitutionLifecycleNegotiationChatCore = ({
         institution,
         invitees: unique(foundingCases.map((entry) => entry?.polity), 24),
         founder,
-        playerCountry: player,
+        persons: [player],
         caseIds: openCaseIds,
         date: originalDate,
       });
@@ -420,7 +444,7 @@ export const ensureInstitutionLifecycleNegotiationChatCore = ({
     if (playerInvolved) {
       const counterpart = samePolity(inviter, player) ? target : inviter;
       const originalDate = clean(lifecycleCase.createdDate || date);
-      channel = {
+      channel = ownedByPerson({
         id: `institution-invite-${institution.id}-${slug(target)}-${slug(originalDate || "now")}`,
         countries: counterpart ? [{ name: counterpart, code: "" }] : [],
         messages: [{
@@ -434,7 +458,7 @@ export const ensureInstitutionLifecycleNegotiationChatCore = ({
         title: `${institution.name} invitation`,
         lifecycleInstitutionId: institution.id,
         lifecycleCaseIds: [lifecycleCase.id],
-      };
+      }, player);
     }
   }
 
@@ -449,18 +473,25 @@ export const ensureInstitutionLifecycleNegotiationChatCore = ({
   };
 };
 
-const lifecycleAuthority = ({ actor = "", player = "", authority = "" } = {}) => {
+// `player` is who acts now; `people` every person (peopleOf). The seat acting
+// now decides for itself with its player's authority; no AI or native
+// authority decides for any person: a hearing's answer, or a skip, accepted,
+// applied or withdrew for a guest, because only the acting seat was spared.
+const lifecycleAuthority = ({ actor = "", player = "", people = [], authority = "" } = {}) => {
   const auth = lower(authority);
   const isPlayer = Boolean(player) && samePolity(actor, player);
-  if (isPlayer && !["player", "admin"].includes(auth || "player")) return { allowed: false, reason: "AI/native authority cannot manufacture a sovereign player institution decision." };
+  const isPerson = isPlayer || list(people).some((person) => samePolity(actor, person));
+  if (isPerson && !["player", "admin"].includes(auth || (isPlayer ? "player" : "npc"))) return { allowed: false, reason: "AI/native authority cannot manufacture a sovereign player institution decision." };
   if (!isPlayer && auth === "player") return { allowed: false, reason: "Player authority cannot act for another sovereign government." };
   return { allowed: true, authority: auth || (isPlayer ? "player" : "npc") };
 };
 
 // i18n-ignore: the model's context for a membership decision, never shown.
 export const buildInstitutionLifecycleDecisionContext = (world = {}, {
-  institutionId = "", caseIds = [], actorPolities = [], playerCountry = "",
+  institutionId = "", caseIds = [], actorPolities = [], playerCountry = "", people = null,
 } = {}) => {
+  // Every person, not one: the model was told of the one asking alone.
+  const humans = unique([playerCountry, ...list(people)]);
   const institution = resolveInstitutionRecord(world, institutionId);
   if (!institution) return { text: "", institution: null, cases: [] };
   const wanted = new Set(list(caseIds).map(clean).filter(Boolean));
@@ -514,7 +545,7 @@ export const buildInstitutionLifecycleDecisionContext = (world = {}, {
     "- Consider geographic/political scope, obligations, current members, rivalries and the institution's stated threat model. A regional identity can make observer/partnership status more plausible than full accession.",
     "- If the actor itself is explicitly the institution's stated adversary/threat, full accession is ordinarily incompatible unless current canonical context clearly describes a transformation or negotiated change; do not accept just because an invitation exists.",
     `- Put membership decisions in the top-level lifecycleResponsesJson field as JSON array text. Each object must use the exact acting government and exact case id: {actorName, caseId, decision, reason?, terms?}. Valid decisions: ${INSTITUTION_LIFECYCLE_DECISIONS.join(", ")}. Use [] if nobody decides now. Never act for the human player.`,
-    playerCountry ? `Human-controlled polity: ${playerCountry}.` : "",
+    humans.length > 1 ? `Human-controlled polities: ${humans.join(", ")}.` : humans.length ? `Human-controlled polity: ${humans[0]}.` : "",
   ].filter(Boolean).join("\n");
   return { text: text.slice(0, 7000), institution, cases };
 };
@@ -610,9 +641,11 @@ export const institutionLifecycleConfirmText = (institution = {}, type = "", pol
 
 export const applyInstitutionLifecycleCommandCore = ({
   world: worldInput = {}, chats: chatsInput = [], events: eventsInput = [], playerCountry = "", date = "", command = {},
+  people = null,
 } = {}) => {
   const type = lower(command.type).replace(/[\s_]+/g, "-");
   const player = canonicalPolity(playerCountry, worldInput);
+  const persons = peopleOf(people, player, worldInput);
   let world = clone(worldInput || {});
   let chats = clone(chatsInput || []);
   let events = clone(eventsInput || []);
@@ -622,7 +655,7 @@ export const applyInstitutionLifecycleCommandCore = ({
     const id = canonicalInstitutionIdentity({ id: command.id, name, shortName: command.shortName }).id;
     const founder = canonicalPolity(command.founder || command.initiatedBy || player, world);
     if (!founder) throw new Error("Founding an institution requires a canonical founding polity.");
-    const authority = lifecycleAuthority({ actor: founder, player, authority: command.authority });
+    const authority = lifecycleAuthority({ actor: founder, player, people: persons, authority: command.authority });
     if (!authority.allowed) throw new Error(authority.reason);
     if (!name || !id) throw new Error("Institution name is required.");
     const institutions = normalizeInstitutions(world.institutions, world);
@@ -694,9 +727,9 @@ export const applyInstitutionLifecycleCommandCore = ({
     }
     institutions.byId[id] = normalizeInstitutionRecord(institution, id, { ...world, institutions });
     world = { ...world, institutions };
-    const chat = foundingChat({ institution: institutions.byId[id], invitees, founder, playerCountry: player, caseIds, date });
+    const chat = foundingChat({ institution: institutions.byId[id], invitees, founder, persons, caseIds, date });
     if (chat) chats = [chat, ...chats];
-    events = dedupeEvents(events, [lifecycleEvent({ institution: institutions.byId[id], action: "founded", polity: founder, actor: founder, date, reason: list(command.purpose).join("; "), playerCountry: player })]);
+    events = dedupeEvents(events, [lifecycleEvent({ institution: institutions.byId[id], action: "founded", polity: founder, actor: founder, date, reason: list(command.purpose).join("; "), playerCountry: player, people: persons })]);
     return { world, chats, events, institution: institutions.byId[id], createdChat: chat, caseIds, action: "founded" };
   }
 
@@ -711,7 +744,7 @@ export const applyInstitutionLifecycleCommandCore = ({
     if (player && command.polity && !samePolity(applicant, player) && !clean(command.authority)) {
       throw new Error("The player cannot submit an accession application for another sovereign government.");
     }
-    const authority = lifecycleAuthority({ actor: applicant, player, authority: command.authority });
+    const authority = lifecycleAuthority({ actor: applicant, player, people: persons, authority: command.authority });
     if (!authority.allowed) throw new Error(authority.reason);
     const requestedStatus = ["member", "observer", "associate", "participant"].includes(lower(command.requestedStatus)) ? lower(command.requestedStatus) : "member";
     // An observer may apply for full membership; nobody applies for what it
@@ -758,13 +791,13 @@ export const applyInstitutionLifecycleCommandCore = ({
     world = result.world;
     const hearing = result.proposal ? accessionHearingChat({
       institution: result.institution, lifecycleCase: result.lifecycleCase, applicant,
-      playerCountry: player, date, existingChats: chats,
+      persons, date, existingChats: chats,
     }) : null;
     if (hearing) {
       chats = [hearing, ...chats.filter((chat) => clean(chat?.id) !== clean(hearing.id))];
     }
     if (result.directMembership) {
-      events = dedupeEvents(events, [lifecycleEvent({ institution: result.institution, action: requestedStatus === "observer" ? "observer" : "joined", polity: applicant, actor: applicant, date, reason: clean(command.reason), playerCountry: player })]);
+      events = dedupeEvents(events, [lifecycleEvent({ institution: result.institution, action: requestedStatus === "observer" ? "observer" : "joined", polity: applicant, actor: applicant, date, reason: clean(command.reason), playerCountry: player, people: persons })]);
     }
     return { world, chats, events, institution: result.institution, lifecycleCase: result.lifecycleCase, proposal: result.proposal, createdChat: hearing, action: result.directMembership ? (requestedStatus === "observer" ? "observer" : "joined") : "applied" };
   }
@@ -773,7 +806,7 @@ export const applyInstitutionLifecycleCommandCore = ({
     const inviter = canonicalPolity(command.initiatedBy || command.actorPolity || player, world);
     const target = canonicalPolity(command.polity || command.targetPolity, world);
     if (!inviter || !target) throw new Error("Institution invitation requires inviter and target polity.");
-    const authority = lifecycleAuthority({ actor: inviter, player, authority: command.authority });
+    const authority = lifecycleAuthority({ actor: inviter, player, people: persons, authority: command.authority });
     if (!authority.allowed) throw new Error(authority.reason);
     const inviterMember = memberByPolity(baseInstitution, inviter);
     if (!inviterMember || lower(inviterMember.status) === "suspended") throw new Error(`${inviter} is not an active participant in ${baseInstitution.name}.`);
@@ -799,19 +832,21 @@ export const applyInstitutionLifecycleCommandCore = ({
     });
     if (result.error) throw new Error(result.error);
     world = result.world;
-    const playerInvolved = player && (samePolity(inviter, player) || samePolity(target, player));
-    const chat = playerInvolved ? {
+    // The invitation's thread, for the person it concerns: the inviter acting
+    // now, or the person invited. An AI's invitation of a guest opened none.
+    const person = personAmong([inviter, target], persons);
+    const chat = person ? ownedByPerson({
       id: `institution-invite-${baseInstitution.id}-${slug(target)}-${slug(date || "now")}`,
-      countries: [{ name: samePolity(inviter, player) ? target : inviter, code: "" }],
+      countries: [{ name: samePolity(inviter, person) ? target : inviter, code: "" }],
       messages: [{
-        role: samePolity(inviter, player) ? "user" : "leader",
+        role: samePolity(inviter, person) ? "user" : "leader",
         speaker: inviter,
         text: `${inviter} invites ${target} to seek ${result.lifecycleCase.requestedStatus} status in ${baseInstitution.name}.`,
         time: clean(date),
       }],
       status: "open", source: "institution-lifecycle", title: `${baseInstitution.name} invitation`,
       lifecycleInstitutionId: baseInstitution.id, lifecycleCaseIds: [result.lifecycleCase.id],
-    } : null;
+    }, person) : null;
     if (chat) chats = [chat, ...chats];
     return { world, chats, events, institution: result.institution, lifecycleCase: result.lifecycleCase, createdChat: chat, action: "invited" };
   }
@@ -821,7 +856,7 @@ export const applyInstitutionLifecycleCommandCore = ({
     const caseId = clean(command.caseId);
     const decision = lower(command.decision).replace(/[\s_]+/g, "-");
     if (!actor || !caseId) throw new Error("Lifecycle response requires actorPolity and caseId.");
-    const authority = lifecycleAuthority({ actor, player, authority: command.authority });
+    const authority = lifecycleAuthority({ actor, player, people: persons, authority: command.authority });
     if (!authority.allowed) throw new Error(authority.reason);
     if (!INSTITUTION_LIFECYCLE_DECISIONS.includes(decision)) throw new Error(`Unsupported lifecycle decision ${decision || "<blank>"}.`);
     const result = mutateInstitution(world, baseInstitution.id, (institution, localWorld) => {
@@ -887,11 +922,11 @@ export const applyInstitutionLifecycleCommandCore = ({
     world = result.world;
     const action = result.resolutionAction || decision;
     if (["joined", "observer", "rejected"].includes(action)) {
-      events = dedupeEvents(events, [lifecycleEvent({ institution: result.institution, action: action === "observer" ? "observer" : action, polity: actor, actor, date, reason: result.lifecycleCase?.reason, playerCountry: player })]);
+      events = dedupeEvents(events, [lifecycleEvent({ institution: result.institution, action: action === "observer" ? "observer" : action, polity: actor, actor, date, reason: result.lifecycleCase?.reason, playerCountry: player, people: persons })]);
     }
     const hearing = result.proposal ? accessionHearingChat({
       institution: result.institution, lifecycleCase: result.lifecycleCase, applicant: actor,
-      playerCountry: player, date, existingChats: chats,
+      persons, date, existingChats: chats,
     }) : null;
     if (hearing) chats = [hearing, ...chats.filter((chat) => clean(chat?.id) !== clean(hearing.id))];
     return { world, chats, events, institution: result.institution, lifecycleCase: result.lifecycleCase, proposal: result.proposal, createdChat: hearing, action };
@@ -901,7 +936,7 @@ export const applyInstitutionLifecycleCommandCore = ({
     const actor = canonicalPolity(command.polity || command.actorPolity || player, world);
     const caseId = clean(command.caseId);
     if (!actor || !caseId) throw new Error("Cancelling an application requires the applicant and lifecycle case id.");
-    const authority = lifecycleAuthority({ actor, player, authority: command.authority || "player" });
+    const authority = lifecycleAuthority({ actor, player, people: persons, authority: command.authority || "player" });
     if (!authority.allowed) throw new Error(authority.reason);
     const current = baseInstitution.lifecycleCases?.[caseId];
     if (!current || lower(current.kind) !== "application" || lower(current.polity) !== lower(actor)) {
@@ -933,7 +968,7 @@ export const applyInstitutionLifecycleCommandCore = ({
     const polity = canonicalPolity(command.polity || player, world);
     const member = memberByPolity(baseInstitution, polity);
     if (!member) throw new Error(`${polity} is not a member of ${baseInstitution.name}.`);
-    const authority = lifecycleAuthority({ actor: polity, player, authority: command.authority });
+    const authority = lifecycleAuthority({ actor: polity, player, people: persons, authority: command.authority });
     if (!authority.allowed) throw new Error(authority.reason);
     const mode = lower(baseInstitution.charter?.lifecycle?.withdrawal?.mode || "unilateral");
     if (mode === "not-permitted") throw new Error(`${baseInstitution.name} charter does not permit unilateral withdrawal.`);
@@ -962,7 +997,7 @@ export const applyInstitutionLifecycleCommandCore = ({
     const membership = applyInstitutionMembershipResolution({ world, institutionId: baseInstitution.id, op: "leave", polity, date, note: clean(command.reason) || "Voluntary withdrawal" });
     if (membership.error) throw new Error(membership.error);
     world = membership.world;
-    events = dedupeEvents(events, [lifecycleEvent({ institution: membership.institution, action: "left", polity, actor: polity, date, reason: clean(command.reason), playerCountry: player })]);
+    events = dedupeEvents(events, [lifecycleEvent({ institution: membership.institution, action: "left", polity, actor: polity, date, reason: clean(command.reason), playerCountry: player, people: persons })]);
     return { world, chats, events, institution: membership.institution, action: "withdrawn" };
   }
 
@@ -973,7 +1008,7 @@ export const applyInstitutionLifecycleCommandCore = ({
     const actor = canonicalPolity(command.initiatedBy || command.actorPolity || player, world);
     const caseId = clean(command.caseId);
     if (!actor || !caseId) throw new Error("Retracting a lifecycle case requires the initiating polity and caseId.");
-    const authority = lifecycleAuthority({ actor, player, authority: command.authority });
+    const authority = lifecycleAuthority({ actor, player, people: persons, authority: command.authority });
     if (!authority.allowed) throw new Error(authority.reason);
     const result = mutateInstitution(world, baseInstitution.id, (institution) => {
       const current = caseMap(institution)[caseId];
@@ -1000,7 +1035,7 @@ export const applyInstitutionLifecycleCommandCore = ({
     const initiator = canonicalPolity(command.initiatedBy || command.actorPolity || player, world);
     const initiatorMember = memberByPolity(baseInstitution, initiator);
     if (!initiatorMember || lower(initiatorMember.status) === "suspended") throw new Error(`${initiator} is not an active participant in ${baseInstitution.name}.`);
-    const authority = lifecycleAuthority({ actor: initiator, player, authority: command.authority });
+    const authority = lifecycleAuthority({ actor: initiator, player, people: persons, authority: command.authority });
     if (!authority.allowed) throw new Error(authority.reason);
     const kind = type === "expel" ? "expulsion" : type === "suspend" ? "suspension" : type === "reinstate" ? "reinstate" : "dissolution";
     const caseId = lifecycleCaseId(baseInstitution.id, kind, target || baseInstitution.id, date);
@@ -1089,10 +1124,13 @@ export const normalizeInstitutionLifecycleImpactOp = (entry) => {
 // Event-path lifecycle operations. The simulator may act only for AI polities;
 // a foreign institution may INVITE or discipline the player, but it may never
 // invent the player's acceptance, application, founding act or withdrawal.
+// "The player" is every person (`people`, humanPolities.js
+// humanCountriesWith): a skip run with the host as the only player could
+// accept, apply or withdraw for a guest's country.
 // Every accepted operation still passes through the exact same native lifecycle
 // command core used by the UI and diplomacy chat path.
 export const applyInstitutionLifecycleImpactBatchCore = ({
-  world = {}, chats = [], playerCountry = "", date = "", ops = [], authority = "npc",
+  world = {}, chats = [], playerCountry = "", date = "", ops = [], authority = "npc", people = null,
 } = {}) => {
   let nextWorld = world;
   let nextChats = chats;
@@ -1132,6 +1170,7 @@ export const applyInstitutionLifecycleImpactBatchCore = ({
         chats: nextChats,
         events: [],
         playerCountry,
+        people,
         date,
         command,
       });
@@ -1147,7 +1186,7 @@ export const applyInstitutionLifecycleImpactBatchCore = ({
 };
 
 export const applyInstitutionLifecycleChatBatchCore = ({
-  world = {}, chats = [], events = [], playerCountry = "", date = "", institutionId = "", lifecycleActions = [],
+  world = {}, chats = [], events = [], playerCountry = "", date = "", institutionId = "", lifecycleActions = [], people = null,
 } = {}) => {
   let nextWorld = world;
   let nextChats = chats;
@@ -1157,7 +1196,7 @@ export const applyInstitutionLifecycleChatBatchCore = ({
   for (const action of list(lifecycleActions)) {
     try {
       const result = applyInstitutionLifecycleCommandCore({
-        world: nextWorld, chats: nextChats, events: nextEvents, playerCountry, date,
+        world: nextWorld, chats: nextChats, events: nextEvents, playerCountry, people, date,
         command: { type: "respond", institutionId, caseId: action.caseId, actorPolity: action.actorName, decision: action.decision, reason: action.reason, terms: action.terms, authority: "npc" },
       });
       nextWorld = result.world;
@@ -1201,10 +1240,13 @@ const lapsedAction = (kind) => (["invitation", "founding-invitation"].includes(k
   : kind === "application" ? "application-lapsed"
     : "motion-lapsed");
 
-export const advanceInstitutionLifecycleCore = ({ world: worldInput = {}, date = "", playerCountry = "" } = {}) => {
+// `people`: the polities people play (runtime/humanPolities.js), whose events
+// say they concern them (lifecycleEvent).
+export const advanceInstitutionLifecycleCore = ({ world: worldInput = {}, date = "", playerCountry = "", people = null } = {}) => {
   let world = clone(worldInput || {});
   world = { ...world, institutions: normalizeInstitutions(world.institutions, world) };
   const player = canonicalPolity(playerCountry, world);
+  const persons = peopleOf(people, player, world);
   const applied = [];
   const events = [];
   for (const institutionId of Object.keys(world.institutions.byId)) {
@@ -1222,7 +1264,7 @@ export const advanceInstitutionLifecycleCore = ({ world: worldInput = {}, date =
       institutions.byId[institutionId] = normalizeInstitutionRecord({ ...refreshed, lifecycleCases: cases }, institutionId, result.world);
       world = { ...result.world, institutions };
       applied.push({ institutionId, caseId: lifecycleCase.id, polity: lifecycleCase.polity, action: "withdrawn" });
-      events.push(lifecycleEvent({ institution: institutions.byId[institutionId], action: "left", polity: lifecycleCase.polity, actor: lifecycleCase.polity, date: lifecycleCase.effectiveDate, reason: lifecycleCase.reason, playerCountry: player }));
+      events.push(lifecycleEvent({ institution: institutions.byId[institutionId], action: "left", polity: lifecycleCase.polity, actor: lifecycleCase.polity, date: lifecycleCase.effectiveDate, reason: lifecycleCase.reason, playerCountry: player, people: persons }));
     }
     const current = world.institutions.byId[institutionId];
     const lapsed = institutionPendingLifecycleCases(current).filter((entry) => caseHasLapsed(current, entry, date));
@@ -1232,7 +1274,7 @@ export const advanceInstitutionLifecycleCore = ({ world: worldInput = {}, date =
       institution.lifecycleCases = { ...caseMap(institution), [lifecycleCase.id]: { ...lifecycleCase, status: "expired", resolvedDate: clean(date), updatedDate: clean(date) } };
       withdrawLifecycleProposal(institution, lifecycleCase.proposalId, date);
       applied.push({ institutionId, caseId: lifecycleCase.id, polity: lifecycleCase.polity, action: "expired" });
-      events.push(lifecycleEvent({ institution, action: lapsedAction(lifecycleCase.kind), polity: lifecycleCase.polity, actor: lifecycleCase.initiatedBy, date, playerCountry: player }));
+      events.push(lifecycleEvent({ institution, action: lapsedAction(lifecycleCase.kind), polity: lifecycleCase.polity, actor: lifecycleCase.initiatedBy, date, playerCountry: player, people: persons }));
     }
     const institutions = { ...world.institutions, byId: { ...world.institutions.byId } };
     institutions.byId[institutionId] = normalizeInstitutionRecord(institution, institutionId, world);

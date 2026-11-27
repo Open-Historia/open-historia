@@ -19,6 +19,7 @@
 // war is over" and "END THE WAR RIGHT NOW" were both thrown away.
 
 import { treatyFromSkip } from "../../runtime/peaceTerms.js";
+import { orderOwner } from "../../runtime/humanPolities.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLowerCase();
@@ -48,10 +49,6 @@ const eventIdsOf = (update) => [
   update?.eventId,
 ].map(clean).filter(Boolean);
 
-// The country an order was given for, where the order says (a shared game's
-// seat); "" where it does not, as a game with one player's never does.
-const orderCountryOf = (order) => clean(order?.country ?? order?.seatCountry ?? order?.polity);
-
 // A player's offer of peace that waits for its answer IS the peace the war
 // may end by. The skip is told to accept one with a peaceTreaties line, and a
 // skip that ends the war instead is the other side saying yes: a player's 1973
@@ -68,11 +65,16 @@ const orderCountryOf = (order) => clean(order?.country ?? order?.seatCountry ?? 
 
 // updates: the skip's war records, bound to their events. events: the turn's
 // events. wars: world.wars before the turn. players: the countries people play.
-// orders: the players' orders the turn carried out ({ id, country? }).
-// offers: world.peaceOffers before the turn.
+// orders: the players' orders the turn carried out (the actions, { id,
+// ownerCode? }), and game: the game, which says whose each is as the whole game
+// reads it (runtime/humanPolities.js orderOwner: its ownerCode, a shared game's
+// seat; or the player's in a game with one). An order is never put in the name
+// of anyone else: one shared game's order read a field none has, and every end
+// any player's order brought about was offered as peace by whichever person
+// the war listed first. offers: world.peaceOffers before the turn.
 // Hands back what is kept, what was refused, the offers of peace the players' orders make
 // ([{ warId, from, update }]) and the players' offers the skip's end accepts ([{ warId, from, to, update }]).
-export const holdPlayersWars = ({ updates = [], events = [], wars = [], players = [], orders = [], offers = [] } = {}) => {
+export const holdPlayersWars = ({ updates = [], events = [], wars = [], players = [], orders = [], offers = [], game = null } = {}) => {
   const played = new Set(list(players).map(fold).filter(Boolean));
   if (!played.size) return { updates: list(updates), events: list(events), refused: [], proposals: [], accepted: [] };
   const warOf = new Map(list(wars).map((war) => [fold(war?.id), war]));
@@ -81,14 +83,15 @@ export const holdPlayersWars = ({ updates = [], events = [], wars = [], players 
   const eventOf = new Map(list(events).map((event) => [clean(event?.id), event]));
   const orderOf = new Map(list(orders).map((order) => [clean(order?.id), order]).filter(([id]) => id));
   // The player whose order one of the events telling it carries out, of those who fight in the war: "" for none.
+  // (An order of someone who does not fight in it, a neutral's mediation, makes nobody's peace.)
   const orderedBy = (update, war) => {
     const fighting = sidesOf(war).filter((name) => played.has(fold(name)));
     for (const id of eventIdsOf(update)) {
       for (const cited of list(eventOf.get(id)?.impacts?.actionIds)) {
         const order = orderOf.get(clean(cited));
         if (!order) continue;
-        const country = orderCountryOf(order);
-        const by = country ? fighting.find((name) => fold(name) === fold(country)) : fighting[0];
+        const owner = fold(orderOwner(order, game));
+        const by = owner ? fighting.find((name) => fold(name) === owner) : "";
         if (by) return clean(by);
       }
     }
