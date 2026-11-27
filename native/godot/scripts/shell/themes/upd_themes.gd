@@ -13,9 +13,10 @@ const AiOverhaul := preload("res://scripts/shell/themes/theme_ai_overhaul.gd")
 const ProjectsTheme := preload("res://scripts/shell/themes/theme_projects.gd")
 const DiplomaticAtlas := preload("res://scripts/shell/themes/theme_diplomatic_atlas.gd")
 const CampaignRecords := preload("res://scripts/shell/themes/theme_campaign_records.gd")
+const SharedWorlds := preload("res://scripts/shell/themes/theme_shared_worlds.gd")
 
 const BackChannels := preload("res://scripts/shell/themes/theme_back_channels.gd")
-const REGISTERED := ["backChannels", "campaignRecords", "diplomaticAtlas", "projects", "aiOverhaul", "themes", "rostra", "airRaid", "espionage2", "swarms", "warsAndFronts2", "seasonsAndWeather", "music", "chronicle"]
+const REGISTERED := ["sharedWorlds", "backChannels", "campaignRecords", "diplomaticAtlas", "projects", "aiOverhaul", "themes", "rostra", "airRaid", "espionage2", "swarms", "warsAndFronts2", "seasonsAndWeather", "music", "chronicle"]
 
 
 static func px(value: float) -> float:
@@ -37,6 +38,8 @@ static func page(banner: Dictionary, update: Dictionary, ctx: Dictionary) -> Con
 	if str(update.get("kind", "")) != "major":
 		return minor_banner(banner, update, ctx)
 	match str(banner.get("theme", "")):
+		"sharedWorlds":
+			return SharedWorlds.page(banner, update, ctx)
 		"backChannels":
 			return BackChannels.page(banner, update, ctx)
 		"campaignRecords":
@@ -77,6 +80,8 @@ static func chrome(banner: Dictionary, update: Dictionary) -> Dictionary:
 			"skip": {},
 		}
 	match str(banner.get("theme", "")):
+		"sharedWorlds":
+			return SharedWorlds.chrome(banner)
 		"backChannels":
 			return BackChannels.chrome()
 		"campaignRecords":
