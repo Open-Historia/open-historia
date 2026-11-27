@@ -12,8 +12,9 @@ const Themes := preload("res://scripts/shell/themes/theme_themes.gd")
 const AiOverhaul := preload("res://scripts/shell/themes/theme_ai_overhaul.gd")
 const ProjectsTheme := preload("res://scripts/shell/themes/theme_projects.gd")
 const DiplomaticAtlas := preload("res://scripts/shell/themes/theme_diplomatic_atlas.gd")
+const CampaignRecords := preload("res://scripts/shell/themes/theme_campaign_records.gd")
 
-const REGISTERED := ["diplomaticAtlas", "projects", "aiOverhaul", "themes", "rostra", "airRaid", "espionage2", "swarms", "warsAndFronts2", "seasonsAndWeather", "music", "chronicle"]
+const REGISTERED := ["campaignRecords", "diplomaticAtlas", "projects", "aiOverhaul", "themes", "rostra", "airRaid", "espionage2", "swarms", "warsAndFronts2", "seasonsAndWeather", "music", "chronicle"]
 
 
 static func px(value: float) -> float:
@@ -35,6 +36,8 @@ static func page(banner: Dictionary, update: Dictionary, ctx: Dictionary) -> Con
 	if str(update.get("kind", "")) != "major":
 		return minor_banner(banner, update, ctx)
 	match str(banner.get("theme", "")):
+		"campaignRecords":
+			return CampaignRecords.page(banner, update, ctx)
 		"diplomaticAtlas":
 			return DiplomaticAtlas.page(banner, update, ctx)
 		"projects":
@@ -71,6 +74,8 @@ static func chrome(banner: Dictionary, update: Dictionary) -> Dictionary:
 			"skip": {},
 		}
 	match str(banner.get("theme", "")):
+		"campaignRecords":
+			return CampaignRecords.chrome()
 		"diplomaticAtlas":
 			return DiplomaticAtlas.chrome()
 		"projects":
