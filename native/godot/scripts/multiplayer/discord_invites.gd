@@ -25,6 +25,9 @@ var error := ""
 var _reading := false
 var _timer: Timer
 var _holder: CenterContainer
+var _name := ""
+var _name_max := 40
+var _join_button: Button
 
 
 func _init() -> void:
@@ -67,6 +70,12 @@ func read() -> void:
 	if join is Dictionary and not str((join as Dictionary).get("token", "")).is_empty():
 		error = ""
 		invite = {"token": str((join as Dictionary).get("token", ""))}
+		var state := await engine.request("multiplayer.state")
+		if not is_instance_valid(self):
+			return
+		var result: Dictionary = state.get("result", {}) if state.get("ok", false) and typeof(state.get("result")) == TYPE_DICTIONARY else {}
+		_name = str(result.get("name", ""))
+		_name_max = int(result.get("nameMax", 40))
 	busy = inbox.get("busy", false) == true
 	var next: Array = inbox.get("requests", []) if inbox.get("requests") is Array else []
 	if next != requests or join is Dictionary:
@@ -104,6 +113,26 @@ func _render() -> void:
 		column.add_child(_gap(6))
 		column.add_child(_body("Leave the shared game you are in first, then join this one." if busy else "You were invited on Discord. You will need the lobby's scenario in your library.", SOFT))
 		column.add_child(_gap(13))
+		if not busy:
+			var title := UI.label("YOUR NAME IN THE GAME", 12, Color(1, 1, 1, 0.72), 600, "Arial", 1)
+			column.add_child(title)
+			column.add_child(_gap(6))
+			var field := LineEdit.new()
+			field.text = _name
+			field.placeholder_text = "Pick a name"
+			field.max_length = _name_max
+			field.custom_minimum_size.y = 40
+			var field_style := UI.box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.12), 9, 1, Vector4(12, 0, 12, 0))
+			field.add_theme_stylebox_override("normal", field_style)
+			field.add_theme_stylebox_override("focus", field_style)
+			field.add_theme_font_override("font", UI.font(400))
+			field.add_theme_font_size_override("font_size", 14)
+			field.add_theme_color_override("font_color", Color("#f8fafc"))
+			field.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.42))
+			field.add_theme_color_override("caret_color", Color("#f8fafc"))
+			field.text_changed.connect(_name_typed)
+			column.add_child(field)
+			column.add_child(_gap(13))
 		if not error.is_empty():
 			column.add_child(_body(error, PROBLEM))
 			column.add_child(_gap(11))
@@ -113,8 +142,9 @@ func _render() -> void:
 			_render())
 		buttons.add_child(later)
 		var join := _button("Joining…" if joining else "Join", true)
-		join.disabled = busy or joining
+		join.disabled = busy or joining or _clean_name(_name).is_empty()
 		join.pressed.connect(_join)
+		_join_button = join
 		buttons.add_child(join)
 	else:
 		var asker := _title("%s asks to join your shared game" % str(request.get("name", "Someone")))
@@ -174,15 +204,23 @@ func _button(caption: String, primary: bool) -> Button:
 	return node
 
 
+func _clean_name(value: String) -> String:
+	return " ".join(value.split(" ", false)).strip_edges()
+
+
+func _name_typed(value: String) -> void:
+	_name = value
+	if is_instance_valid(_join_button):
+		_join_button.disabled = busy or joining or _clean_name(_name).is_empty()
+
+
 func _join() -> void:
-	if invite.is_empty() or joining:
+	if invite.is_empty() or joining or _clean_name(_name).is_empty():
 		return
 	joining = true
 	error = ""
 	_render()
-	var state := await engine.request("multiplayer.state")
-	var remembered := str((state.get("result", {}) as Dictionary).get("name", "")) if state.get("ok", false) else ""
-	var reply := await engine.request("multiplayer.join", {"token": str(invite.get("token", "")), "name": remembered if not remembered.is_empty() else "Player"})
+	var reply := await engine.request("multiplayer.join", {"token": str(invite.get("token", "")), "name": _clean_name(_name)})
 	joining = false
 	if not is_instance_valid(self):
 		return
