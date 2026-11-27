@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { runtimePackageNames } from "../runtimePackages.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const native = path.resolve(here, "..");
@@ -56,16 +57,9 @@ const ON_DEVICE_FILES = {
   "onnxruntime-web": (relative) => relative === "package.json" || relative.startsWith("node_modules/") || ["dist/ort.node.min.js", "dist/ort.node.min.mjs", "dist/ort-wasm-simd-threaded.mjs", "dist/ort-wasm-simd-threaded.wasm"].includes(relative),
   "@huggingface/transformers": (relative) => relative === "package.json" || ["dist/transformers.node.mjs", "dist/transformers.node.cjs"].includes(relative),
 };
-const builtins = new Set((await import("node:module")).builtinModules);
-for (const name of fs.readdirSync(path.join(sidecar, "handlers")).filter((entry) => entry.endsWith(".mjs"))) {
-  const source = fs.readFileSync(path.join(sidecar, "handlers", name), "utf8");
-  for (const match of source.matchAll(/(?:from|import\()\s*["']([^"'./][^"']*)["']/g)) {
-    const specifier = match[1];
-    if (specifier.startsWith("node:") || builtins.has(specifier)) continue;
-    const packageName = specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
-    if (ANDROID_SKIP.some((skip) => packageName === skip || packageName.startsWith(`${skip}/`))) continue;
-    if (!wanted.includes(packageName)) wanted.push(packageName);
-  }
+for (const packageName of runtimePackageNames(repo, sidecar)) {
+  if (ANDROID_SKIP.some((skip) => packageName === skip || packageName.startsWith(`${skip}/`))) continue;
+  if (!wanted.includes(packageName)) wanted.push(packageName);
 }
 const seen = new Set();
 const packageDir = (name, from) => {

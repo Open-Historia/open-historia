@@ -4,6 +4,7 @@ import os from "node:os";
 import readline from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { runtimePackageNames } from "./runtimePackages.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "..");
@@ -148,16 +149,7 @@ copy(path.join(repo, "server"), path.join(stage, "server"), (file, isDir) => {
 fs.writeFileSync(path.join(stage, "package.json"), `${JSON.stringify({ name: "open-historia-native", private: true, type: "module" }, null, 2)}\n`);
 
 const wanted = ["express", "jszip", "pmtiles"];
-const builtins = new Set((await import("node:module")).builtinModules);
-for (const name of fs.readdirSync(path.join(sidecar, "handlers")).filter((entry) => entry.endsWith(".mjs"))) {
-  const source = fs.readFileSync(path.join(sidecar, "handlers", name), "utf8");
-  for (const match of source.matchAll(/(?:from|import\()\s*["']([^"'./][^"']*)["']/g)) {
-    const specifier = match[1];
-    if (specifier.startsWith("node:") || builtins.has(specifier)) continue;
-    const packageName = specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
-    if (!wanted.includes(packageName)) wanted.push(packageName);
-  }
-}
+for (const packageName of runtimePackageNames(repo, sidecar)) if (!wanted.includes(packageName)) wanted.push(packageName);
 const seen = new Set();
 const packageDir = (name, from) => {
   let dir = from;
