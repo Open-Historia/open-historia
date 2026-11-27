@@ -4,7 +4,6 @@ import path from "node:path";
 import util from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const NAME_KEY = "oh:mp:name";
 const NO_WEBRTC = "This device cannot make WebRTC connections.";
 const DESKTOP_ONLY = "Only the desktop app can host a shared game.";
 const HOSTING_HOLDS_THE_GAME = "This computer is hosting a shared game, and the game it hosts stays its open game. Stop sharing first.";
@@ -123,21 +122,12 @@ export const register = (ctx) => {
   const progress = engine.mpJoin;
   const hostSettings = engine.mpSettings;
   const bridge = engine.mpBridge;
+  const bar = engine.mpRoundBar;
+  const notes = engine.mpThreadNotes;
+  const names = engine.mpPlayerName;
 
-  const rememberedName = () => {
-    try {
-      return storage.getItem(NAME_KEY) || "";
-    } catch {
-      return "";
-    }
-  };
-  const rememberName = (name) => {
-    try {
-      storage.setItem(NAME_KEY, String(name ?? ""));
-    } catch {
-      return;
-    }
-  };
+  const rememberedName = () => names.rememberedPlayerName(storage);
+  const rememberName = (name) => names.rememberPlayerName(name, storage);
 
   const webrtc = () => typeof globalThis.RTCPeerConnection === "function";
 
@@ -339,6 +329,14 @@ export const register = (ctx) => {
     return pageFetch(input, init);
   };
   engine.mpRemote.installRemoteRuntime();
+  if (globalThis.location && typeof globalThis.location.reload !== "function") {
+    globalThis.location.reload = () => {
+      const state = shared.getSharedGame();
+      if (state?.mode !== "ended") return;
+      reloadedEnded = clean(state.error) || "The connection closed.";
+      emit("multiplayer.shared", sharedView(state));
+    };
+  }
 
   let viewReady = false;
 
@@ -351,11 +349,66 @@ export const register = (ctx) => {
     }
   };
 
+  let reloadedEnded = "";
+  const asked = { seat: 0, gm: 0 };
+
+  const screenOf = (state, lobby) => {
+    const mine = list(lobby?.seats).find((seat) => seat?.you) ?? null;
+    const me = mine && !["ai", "watching"].includes(mine.status) ? clean(mine.country) : "";
+    const watching = mine?.status === "watching" ? clean(mine.country) : "";
+    const role = clean(state?.role);
+    const round = state?.round ?? null;
+    const settings = lobby?.settings ?? null;
+    const busyLine = role === "host" ? engine.mpHostBusy.hostBusyLine(state?.engine?.busy) : "";
+    const cutOff = role === "guest" && state?.cutOff ? engine.mpHostGone.RECONNECTING : "";
+    const watchingText = watching ? `${watching} is gone: you are watching. Take a free country under Players.` : "";
+    const status = bar.barStatus({ round, role, cutOff, watching: watchingText, busyLine });
+    const dates = engine.mpRoundDates.roundDatesOf(state?.date, settings?.daysPerRound);
+    const phase = clean(round?.phase);
+    const waits = bar.waitsForTheHost(round);
+    const gmAllowed = engine.mpSettings.gameMasterAllowed(settings);
+    const gmCount = list(lobby?.gameMaster).length;
+    const unread = notes.unreadNotices(state?.notices, state?.noticesReadAt);
+    return {
+      me,
+      watching,
+      watchingText,
+      cutOff,
+      busyLine,
+      status: status ? plain(status) : null,
+      waitsForTheHost: waits,
+      clockInWords: waits || Boolean(round?.paused && round?.hostAway && phase !== "resolving"),
+      clockWords: phase === "resolving" ? "" : bar.roundClockText({ round, role, remaining: 0, elapsed: 0 }),
+      readyText: round ? bar.readyText(round) : "",
+      failureText: round?.failed ? bar.failureText(round) : "",
+      dates: dates ? plain(dates) : null,
+      unread,
+      unreadLabel: bar.unreadLabel(unread),
+      askingLabel: bar.askingLabel(list(lobby?.changes).length),
+      payerLine: engine.mpCostRules.payerLineOf({ payer: round?.payer ?? "", me, phase }),
+      gameMaster: gmAllowed,
+      gameMasterMark: !gmAllowed ? "" : !gmCount ? "Game Master on" : gmCount === 1 ? "Game Master on: 1 change" : `Game Master on: ${gmCount} changes`,
+      gameMasterLog: list(lobby?.gameMaster).slice().reverse().map((entry) => ({
+        head: entry?.date ? `Round ${entry.round}, ${entry.date}:` : `Round ${entry?.round}:`,
+        summary: String(entry?.summary ?? ""),
+        lines: plain(engine.mpGameMaster.gameMasterChangeLines(entry)),
+      })),
+      gameMasterMax: engine.mpGameMaster.GAME_MASTER_COMMAND_MAX,
+      seatAnswer: asked.seat ? plain(notes.latestNoticeAbout(state?.notices, "seat", asked.seat)) : null,
+      gmAnswer: asked.gm ? plain(notes.latestNoticeAbout(state?.notices, "gm", asked.gm)) : null,
+      peopleLines: role === "host" ? list(progress.hostLines(state?.engine)).map((line) => ({ text: clean(line?.text), problem: Boolean(line?.problem), people: clean(progress.peopleOf(line)) })) : [],
+      hostAnswerChoices: plain(engine.mpCostRules.HOST_ANSWER_CHOICES),
+    };
+  };
+
   const sharedView = (state = shared.getSharedGame()) => {
+    if (reloadedEnded && state?.mode === "ended") return { mode: "ended", error: reloadedEnded, role: "", leaving: false, reloaded: true, active: false, viewReady: false, people: [], notices: [] };
+    if (reloadedEnded) reloadedEnded = "";
     const lobby = state?.lobby ?? null;
     const me = list(lobby?.seats).find((seat) => seat?.you && seat?.status !== "ai")?.country ?? "";
     return {
       ...plain(state),
+      screen: screenOf(state, lobby),
       me,
       active: bridge.inSharedGame(),
       viewReady: viewReady && bridge.inSharedGame(),
@@ -430,7 +483,26 @@ export const register = (ctx) => {
 
   const activeGameView = () => {
     const game = engine.getLibraryState()?.activeGame ?? null;
-    return game ? { id: clean(game.id), name: String(game.name ?? "") } : null;
+    return game ? { id: clean(game.id), name: String(game.name ?? ""), standIn: Boolean(game.standIn), language: String(game.language ?? "") } : null;
+  };
+
+  const keptSettings = async () => {
+    const campaign = clean(engine.getLibraryState()?.activeGame?.id);
+    if (!campaign) return null;
+    try {
+      const record = await engine.readJson(engine.JSON_URLS.shared, { defaultValue: {}, force: true });
+      return plain(engine.mpSessionRecord.keptSettingsOf(record, { campaign }));
+    } catch {
+      return null;
+    }
+  };
+
+  const aiForHosting = () => {
+    try {
+      return { refusal: engine.providerConfig.sharedRoundRefusal(), answerer: plain(engine.providerConfig.sharedRoundAnswerer()) };
+    } catch {
+      return { refusal: "", answerer: null };
+    }
   };
 
   return {
@@ -446,14 +518,41 @@ export const register = (ctx) => {
         seatsNow: hostSettings.SEATS_AVAILABLE_NOW,
         publicServer: engine.mpPublic.configuredServer(),
         shared: sharedView(),
+        kept: await keptSettings(),
+        ai: aiForHosting(),
+        standInNote: engine.library.STAND_IN_NOT_SHARED,
+        nameMax: names.PLAYER_NAME_MAX,
+        postsMax: hostSettings.POSTS_PER_ROUND_MAX,
+        hostAnswerChoices: plain(engine.mpCostRules.HOST_ANSWER_CHOICES),
+        answersPerRoundChoices: plain(engine.mpCostRules.ANSWERS_PER_ROUND_CHOICES),
+        languages: plain(engine.shellI18n.LANGUAGES),
+        playLanguage: engine.shellI18n.readingLanguageName(activeGameView()?.language || ""),
       };
+    },
+    "multiplayer.settings.check": async ({ settings = {} } = {}) => ({
+      problems: plain(hostSettings.settingsProblems(settings ?? {})),
+      costRules: plain(engine.mpCostRules.costRulesOf(settings ?? {})),
+    }),
+    "multiplayer.notices.read": async () => {
+      shared.markNoticesRead();
+      return true;
+    },
+    "multiplayer.dismiss": async () => {
+      if (reloadedEnded) {
+        reloadedEnded = "";
+        emit("multiplayer.shared", { mode: "off", role: "", active: false, viewReady: false, people: [], notices: [] });
+        return true;
+      }
+      const done = shared.dismissEndedNotice();
+      emit("multiplayer.shared", sharedView());
+      return done;
     },
     "multiplayer.active": async () => ({ active: bridge.inSharedGame(), role: bridge.sharedGameRole(), viewReady: viewReady && bridge.inSharedGame() }),
     "multiplayer.revealed": async () => ({ told: await tellHostRevealed().catch(() => false) }),
     "multiplayer.join": async ({ token = "", name = "" } = {}) => {
       if (!webrtc()) throw new Error(NO_WEBRTC);
       rememberName(name);
-      await shared.joinSharedGame({ token: String(token), name: clean(name) || "Player" });
+      await shared.joinSharedGame({ token: String(token), name: names.cleanPlayerName(name) });
       return sharedView();
     },
     "multiplayer.host": async ({ settings = {}, name = "" } = {}) => {
@@ -462,7 +561,7 @@ export const register = (ctx) => {
       const checked = hostSettings.normalizeSettings(settings ?? {});
       hostDays = checked.ok ? Number(checked.settings.daysPerRound) || 30 : 30;
       try {
-        await shared.hostSharedGame({ settings, name: clean(name) || "Host" });
+        await shared.hostSharedGame({ settings, name: names.cleanPlayerName(name) || "Host" });
       } catch (error) {
         retireEngine();
         throw error;
@@ -471,12 +570,18 @@ export const register = (ctx) => {
       emit("multiplayer.shared", view);
       return view;
     },
-    "multiplayer.request": async ({ t = "", fields = {}, timeoutMs = 0 } = {}) => plain(await shared.sharedRequest(
-      String(t),
-      fields ?? {},
-      Number(timeoutMs) > 0 ? { timeoutMs: Number(timeoutMs) } : {},
-    )),
+    "multiplayer.request": async ({ t = "", fields = {}, timeoutMs = 0 } = {}) => {
+      if (String(t) === "pick") asked.seat = Date.now();
+      const answer = plain(await shared.sharedRequest(
+        String(t),
+        fields ?? {},
+        Number(timeoutMs) > 0 ? { timeoutMs: Number(timeoutMs) } : {},
+      ));
+      if (String(t) === "pick") emit("multiplayer.shared", sharedView());
+      return answer;
+    },
     "multiplayer.control": async ({ action = "", args = null } = {}) => {
+      if (String(action) === "gm") asked.gm = Date.now();
       shared.hostControl(String(action), args);
       return true;
     },

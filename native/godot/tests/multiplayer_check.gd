@@ -58,6 +58,10 @@ func _shoot(name: String) -> void:
 	await _frames(4)
 	await RenderingServer.frame_post_draw
 	root.get_viewport().get_texture().get_image().save_png(shots.path_join(name + ".png"))
+	var state := FileAccess.open(shots.path_join(name + ".json"), FileAccess.WRITE)
+	if state:
+		state.store_string(JSON.stringify({"shared": _shared(), "open": _overlay()._open if _overlay() else ""}))
+		state.close()
 	_say("screenshot " + name)
 
 
@@ -89,6 +93,16 @@ func _has_text(node: Node, wanted: String) -> bool:
 		if value.contains(wanted):
 			return true
 	return false
+
+
+func _field_under(node: Node, title: String) -> LineEdit:
+	if node is VBoxContainer and node.get_child_count() >= 2 and node.get_child(1) is LineEdit and _has_text(node.get_child(0), title):
+		return node.get_child(1) as LineEdit
+	for child in node.get_children():
+		var found := _field_under(child, title)
+		if found:
+			return found
+	return null
 
 
 func _find_button(node: Node, wanted: String) -> Button:
@@ -152,6 +166,44 @@ func _lobbies_page() -> LobbiesPage:
 	return menu._lobbies as LobbiesPage
 
 
+func _round_one() -> String:
+	return "Round 1" if UI.phone() else "Round 1 · Planning"
+
+
+func _menu_open(which: String) -> void:
+	var overlay := _overlay()
+	if overlay._open != which:
+		overlay._toggle(which)
+	await _frames(3)
+
+
+func _menu_close() -> void:
+	var overlay := _overlay()
+	if not overlay._open.is_empty():
+		overlay._toggle(overlay._open)
+	await _frames(2)
+
+
+func _press_in_menu(which: String, caption: String) -> bool:
+	await _menu_open(which)
+	var button := _find_button(_overlay(), caption)
+	if button == null:
+		return false
+	button.pressed.emit()
+	await _frames(2)
+	return true
+
+
+func _stop_sharing() -> bool:
+	if not await _press_in_menu("host", "Stop sharing"):
+		return false
+	var sure := _find_button(_overlay(), "Stop sharing for everyone")
+	if sure == null:
+		return false
+	sure.pressed.emit()
+	return true
+
+
 func _view() -> Dictionary:
 	var reply: Dictionary = await main.engine.request("game.view")
 	return reply.get("result", {}) if reply.get("ok", false) else {}
@@ -169,7 +221,9 @@ func _run() -> void:
 	main.engine.engine_event.connect(_on_event)
 	await _clear_shell()
 	var mode := OS.get_environment("OH_MP_MODE")
-	if mode == "host":
+	if not OS.get_environment("OH_MP_STATES").is_empty():
+		await _staged()
+	elif mode == "host":
 		await _as_host()
 	elif mode == "duo-host":
 		await _duo_host()
@@ -178,6 +232,52 @@ func _run() -> void:
 	else:
 		await _as_guest()
 	_finish()
+
+
+func _staged() -> void:
+	var folder := OS.get_environment("OH_MP_STATES")
+	await main._start_scenario("default")
+	main.picker._choose("France")
+	await main._on_country_chosen("France", "medium")
+	await _until(func() -> bool: return bool(main.get("in_game")), 90.0)
+	await _wait(2.0)
+	var page := LobbiesPage.new()
+	page.setup(main.engine, {})
+	if UI.phone():
+		_check("staged: the phone app keeps shared games off", page._off and _overlay() == null)
+	page.free()
+	var names := ["duo-h01-lobby", "duo-h02-lobby-guest", "duo-h03-bar", "duo-h04-host-menu", "duo-h05-game-master", "duo-h06-players-menu", "duo-g00-lobby", "duo-g01-in-game", "duo-g01b-players-menu", "duo-g05-ended"]
+	for shot_name in names:
+		var text := FileAccess.get_file_as_string(folder.path_join(shot_name + ".json"))
+		var parsed: Variant = JSON.parse_string(text)
+		if typeof(parsed) != TYPE_DICTIONARY:
+			_check("staged: %s has a state" % shot_name, false)
+			continue
+		var overlay := SharedGameOverlay.new()
+		overlay.engine = main.engine
+		main.ui.add_child(overlay)
+		overlay.show_state((parsed as Dictionary).get("shared", {}))
+		var wanted := str((parsed as Dictionary).get("open", ""))
+		if shot_name == "duo-h05-game-master":
+			wanted = "host"
+			overlay._gm_open = true
+		if not wanted.is_empty():
+			overlay._open = wanted
+			overlay._render()
+		await _wait(0.6)
+		_check("staged: %s shows" % shot_name, overlay.visible)
+		await _shoot_plain("staged-" + shot_name)
+		overlay.queue_free()
+		await _frames(2)
+
+
+func _shoot_plain(shot_name: String) -> void:
+	if shots.is_empty():
+		return
+	await _frames(4)
+	await RenderingServer.frame_post_draw
+	root.get_viewport().get_texture().get_image().save_png(shots.path_join(shot_name + ".png"))
+	_say("screenshot " + shot_name)
 
 
 func _seen(name: String) -> bool:
@@ -236,19 +336,53 @@ func _duo_host() -> void:
 	page._settings["name"] = "Two networks" if remote else "Two windows"
 	page._settings["daysPerRound"] = 7
 	page._settings["countdownSeconds"] = 0
+	page._settings["cheats"] = "host"
 	page._render()
-	await _until(func() -> bool: return _find_button(page, "Open the lobby") != null, 20.0)
+	await _until(func() -> bool: return _find_button(page, "Open the lobby") != null and _has_text(page, "WHO PAYS, AS EVERY PLAYER IS TOLD") and _has_text(page, "The host's AI makes each round's request."), 20.0)
+	_check("host: the form has beta's new fields and says who pays", _has_text(page, "YOUR NAME IN THE GAME") and _has_text(page, "ROSTRA POSTS A PLAYER MAY MAKE EACH ROUND") and _has_text(page, "THE WORLD IS WRITTEN IN") and _has_text(page, "EACH ROUND'S AI REQUEST IS PAID BY") and _has_text(page, "GAME MASTER") and _has_text(page, "Every change it makes is told to every player and listed in the lobby."))
+	var form_open := _find_button(page, "Open the lobby")
+	_check("host: Open the lobby is offered", form_open != null and not form_open.disabled)
+	await _wait(1.5)
+	await _shoot("duo-h00-host-form")
+	var round_field := _field_under(page, "ROUND LENGTH (MINUTES)")
+	_check("host: the round length field is found", round_field != null)
+	if round_field:
+		round_field.text = ""
+		round_field.text_changed.emit("")
+		var said := await _until(func() -> bool: return _has_text(page, "Round length must be a whole number of minutes from 1 to 10080.") and _find_button(page, "Open the lobby").disabled, 10.0)
+		_check("host: a cleared number is said under its field, and the lobby cannot open", said)
+		await _shoot("duo-h00a-host-form-problem")
+		round_field.text = "20"
+		round_field.text_changed.emit("20")
+		await _until(func() -> bool: return not _find_button(page, "Open the lobby").disabled, 10.0)
 	_find_button(page, "Open the lobby").pressed.emit()
 	var overlay := _overlay()
 	var lobby_open := await _until(func() -> bool: return overlay.visible and _has_text(overlay, "Invite code"), 180.0)
 	_check("host: the lobby opens", lobby_open, str(_shared().get("error", "")))
+	await _until(func() -> bool: return _has_text(overlay, "Relays: 1 of 1 connected"), 30.0)
+	await _shoot("duo-h01-lobby")
 	await _until(func() -> bool: return bool(main.get("in_game")) and main.get("_screen") == "game", 30.0)
 	_signal("token", str(_shared().get("token", "")))
 	_say("host: invite code ready")
 	var guest_in := await _until(func() -> bool: return _guest_seated() if remote else _has_text(overlay, "Germany"), 3000.0 if remote else 300.0)
 	_check("host: the guest's seat shows", guest_in)
+	await _shoot("duo-h02-lobby-guest")
 	_find_button(overlay, "Start the game").pressed.emit()
-	await _until(func() -> bool: return _has_text(overlay, "Round 1 · Planning"), 60.0)
+	await _until(func() -> bool: return _has_text(overlay, _round_one()), 60.0)
+	await _wait(1.0)
+	_check("host: the round bar is one line with Players and Host", _find_button(overlay, "Host") != null and overlay._menu == null and (_has_text(overlay, "Lands on") or UI.phone()))
+	await _shoot("duo-h03-bar")
+	await _menu_open("host")
+	_check("host: Host holds the round's controls, the invite, the replies setting, the Game Master and Stop sharing", _find_button(overlay, "End round now") != null and _find_button(overlay, "Pause") != null and _has_text(overlay, "Invite code") and _has_text(overlay, "AI countries answer with") and _find_button(overlay, "Game Master") != null and _find_button(overlay, "Stop sharing") != null)
+	await _shoot("duo-h04-host-menu")
+	_find_button(overlay, "Game Master").pressed.emit()
+	await _frames(3)
+	_check("host: the Game Master box opens under Host", _has_text(overlay, "It changes the world at once, and every player is told what it changed."))
+	await _shoot("duo-h05-game-master")
+	await _menu_open("players")
+	_check("host: Players lists the seats and where the round is", _has_text(overlay, "Germany") and _has_text(overlay, "ready") and _has_text(overlay, "Game Master on"))
+	await _shoot("duo-h06-players-menu")
+	await _menu_close()
 	await _skip_refused("host")
 	var queue_file := OS.get_environment("OH_NATIVE_ROOT").path_join("server/data/games").path_join(str(main.get("game_id"))).path_join("storage/actions.json")
 	var asked := false
@@ -271,7 +405,7 @@ func _duo_host() -> void:
 	_check("host: the guest's order is in the hosted game's queue, as Germany's", orders_arrived, order_text)
 	_check("host: both of the guest's chat lines are in the host's threads", chat_arrived)
 	var date_before := _hud_date()
-	_find_button(overlay, "End round now").pressed.emit()
+	_check("host: End round now is under Host", await _press_in_menu("host", "End round now"))
 	var landed := await _until(func() -> bool: return _count("multiplayer.round") > 0, 240.0)
 	_check("host: the round lands on the host's screen", landed)
 	var followed := await _until(func() -> bool: return _hud_date() != date_before and not _hud_date().is_empty(), 30.0)
@@ -288,7 +422,7 @@ func _duo_host() -> void:
 		_check("host: the guest's leaving shows on the host", gone, JSON.stringify(_shared().get("lobby", {}).get("seats", []) if typeof(_shared().get("lobby")) == TYPE_DICTIONARY else []))
 	else:
 		await _until(func() -> bool: return _seen("guest-done"), 600.0)
-	_find_button(overlay, "Stop").pressed.emit()
+	_check("host: Stop sharing asks once more", await _stop_sharing())
 	var stopped := await _until(func() -> bool: return not overlay.visible and main.menu.visible, 60.0)
 	_check("host: stopping closes the box", stopped)
 	_signal("stopped")
@@ -330,6 +464,7 @@ func _duo_guest() -> void:
 	var overlay := _overlay()
 	var lobby_ready := await _until(func() -> bool: return _has_text(overlay, "Choose your country…"), 180.0)
 	_check("guest: the lobby arrives", lobby_ready)
+	await _shoot("duo-g00-lobby")
 	overlay._choice = "Germany"
 	overlay._render()
 	await _frames(2)
@@ -339,12 +474,16 @@ func _duo_guest() -> void:
 	var view := await _view()
 	var hud_country := await _until(func() -> bool: return str(main.hud.date_widget.status.get("playerCountry", "")).contains("Germany"), 30.0)
 	_check("guest: the HUD shows the guest's country", str(view.get("country", "")) == "Germany" and hud_country, str(main.hud.date_widget.status.get("playerCountry", "")))
-	var planning := await _until(func() -> bool: return _has_text(overlay, "Round 1 · Planning"), 300.0)
+	var planning := await _until(func() -> bool: return _has_text(overlay, _round_one()), 300.0)
 	_check("guest: round 1 begins", planning)
 	var shell: ShellBoot = main.get("shell") as ShellBoot
 	var lifted := await _until(func() -> bool: return shell == null or not shell.loading.is_open(), 60.0)
 	_check("guest: the loading cover lifts", lifted)
 	await _shoot("duo-g01-in-game")
+	await _menu_open("players")
+	_check("guest: Players says who plays what, the round in words, and offers another country and Leave", _has_text(overlay, "Native host") and _has_text(overlay, "ready") and _has_text(overlay, "Ask to play another country…") and _find_button(overlay, "Leave") != null and _find_button(overlay, "Host") == null)
+	await _shoot("duo-g01b-players-menu")
+	await _menu_close()
 	await _skip_refused("guest")
 	var chat: ChatPanel = main.hud.panels.get("chat") as ChatPanel
 	main.hud.set_active_panel("chat")
@@ -377,7 +516,7 @@ func _duo_guest() -> void:
 	await _shoot("duo-g02-chat")
 	var peace: Dictionary = await main.engine.request("country.answer", {"op": "propose", "ref": "war-that-does-not-exist", "territory": "restored", "money": "none", "theirs": "France"})
 	var said := str((peace.get("result", {}) as Dictionary).get("said", "")) if peace.get("ok", false) else str(peace.get("error", ""))
-	_check("guest: a peace request is answered by the host", said == "This is no longer open.", said)
+	_check("guest: a peace request is answered by the host", said == "That war is over.", said)
 	main.hud.set_active_panel("actions")
 	var actions: Node = main.hud.panels.get("actions")
 	var order_text := ORDER_TEXT
@@ -408,21 +547,20 @@ func _duo_guest() -> void:
 	_check("guest: the host is told the round was read, once", told and _count("multiplayer.revealed") == revealed_before + 1, "%d" % (_count("multiplayer.revealed") - revealed_before))
 	_signal("guest-done")
 	if remote:
-		var leave := _find_button(overlay, "Leave")
-		_check("guest: Leave is offered", leave != null)
-		if leave:
-			leave.pressed.emit()
+		_check("guest: Leave is offered under Players", await _press_in_menu("players", "Leave"))
 		var gone := await _until(func() -> bool: return not overlay.visible and main.menu.visible, 60.0)
 		_check("guest: leaving closes the box and shows the menu", gone)
 		return
-	var ended := await _until(func() -> bool: return _has_text(overlay, "The shared game ended"), 300.0)
-	_check("guest: the guest is told the host stopped", ended)
+	var ended := await _until(func() -> bool: return _has_text(overlay, "The shared game ended") and _find_button(overlay, "OK") != null, 300.0)
+	_check("guest: the guest is told the host stopped", ended, str(_shared().get("error", "")))
+	var taken_out := await _until(func() -> bool: return main.menu.visible and not bool(main.get("in_game")), 60.0)
+	_check("guest: the guest is taken out of the game at once, to the menu", taken_out)
 	await _shoot("duo-g05-ended")
-	var back := _find_button(overlay, "Back to my games")
-	if back:
-		back.pressed.emit()
+	var ok := _find_button(overlay, "OK")
+	if ok:
+		ok.pressed.emit()
 	var left := await _until(func() -> bool: return not overlay.visible and main.menu.visible, 30.0)
-	_check("guest: back to the menu", left)
+	_check("guest: OK puts the word away", left)
 
 
 func _as_guest() -> void:
@@ -469,10 +607,10 @@ func _as_guest() -> void:
 	var view := await _view()
 	_check("the game shows the guest's country", str(view.get("country", "")) == "Germany", str(view.get("country", "")))
 	var first_date := str(view.get("gameDate", ""))
-	var planning := await _until(func() -> bool: return _has_text(overlay, "Round 1 · Planning"), 90.0)
+	var planning := await _until(func() -> bool: return _has_text(overlay, _round_one()), 90.0)
 	_check("the round bar shows round 1", planning)
 	await _shoot("g03-round")
-	var ready := _find_button(overlay, "I'm ready")
+	var ready := _find_button(overlay, "Ready" if UI.phone() else "I'm ready")
 	_check("I'm ready is offered", ready != null)
 	if ready:
 		ready.pressed.emit()
@@ -497,10 +635,7 @@ func _as_guest() -> void:
 	_check("the library names the guest's country for the shared game", entry_country == "Germany", entry_country)
 	await _wait(1.0)
 	await _shoot("g04-after-round")
-	var leave := _find_button(overlay, "Leave")
-	_check("Leave is offered", leave != null)
-	if leave:
-		leave.pressed.emit()
+	_check("Leave is offered", await _press_in_menu("players", "Leave"))
 	var left := await _until(func() -> bool: return not overlay.visible and main.menu.visible, 30.0)
 	_check("leaving closes the box and shows the menu", left)
 	await _shoot("g05-left")
@@ -550,15 +685,12 @@ func _as_host() -> void:
 	_check("Start the game is offered", start != null)
 	if start:
 		start.pressed.emit()
-	var planning := await _until(func() -> bool: return _has_text(overlay, "Round 1 · Planning"), 60.0)
+	var planning := await _until(func() -> bool: return _has_text(overlay, _round_one()), 60.0)
 	_check("the round bar shows round 1", planning)
 	await _shoot("h03-round")
 	var refused: Dictionary = await main.engine.request("game.open", {"id": "another-game"})
 	_check("the hosted game stays open", not refused.get("ok", false) and str(refused.get("error", "")).contains("hosting a shared game"), str(refused.get("error", "")))
-	var end_now := _find_button(overlay, "End round now")
-	_check("End round now is offered", end_now != null)
-	if end_now:
-		end_now.pressed.emit()
+	_check("End round now is offered", await _press_in_menu("host", "End round now"))
 	var landed := await _until(func() -> bool: return _has_text(overlay, "Round 2"), 240.0)
 	_check("the round resolves", landed)
 	var after := await _view()
@@ -566,10 +698,7 @@ func _as_host() -> void:
 	await _wait(1.0)
 	await _shoot("h04-after-round")
 	_signal("resolved", str(after.get("gameDate", "")))
-	var stop := _find_button(overlay, "Stop")
-	_check("Stop is offered", stop != null)
-	if stop:
-		stop.pressed.emit()
+	_check("Stop is offered", await _stop_sharing())
 	var stopped := await _until(func() -> bool: return not overlay.visible and main.menu.visible, 30.0)
 	_check("stopping closes the box and shows the menu", stopped)
 	var freed := false
